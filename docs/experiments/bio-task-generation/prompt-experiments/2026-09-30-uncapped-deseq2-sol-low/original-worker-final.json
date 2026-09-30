@@ -1,0 +1,5 @@
+{
+  "path": "worker-final.txt",
+  "sha256": "af9ea2d89b97ac2f830b86271f384b8780930156aba47187ad1d69eeb77c64be",
+  "content": "Completed the inventory and validated its JSONL structure and references.\n\n- [units.jsonl](units.jsonl)\n- [datasets.jsonl](datasets.jsonl)\n- [inspection.md](inspection.md)\n\nMapped accessible scientific scope is covered; unresolved provenance and missing-asset leads are documented. Elapsed time was approximately 29 minutes. No scientific executions or additional agents were used."
+}

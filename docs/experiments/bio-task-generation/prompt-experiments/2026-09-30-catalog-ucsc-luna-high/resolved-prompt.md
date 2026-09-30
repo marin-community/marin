@@ -1,6 +1,6 @@
-You are identifying scientific units in **{{REPO}}**.
+You are identifying scientific units in **ucscGenomeBrowser/kent**.
 
-Repository URL: {{REPO_URL}}
+Repository URL: https://github.com/ucscGenomeBrowser/kent
 
 Produce a source inventory for another LLM worker that will author computational
 biology tasks. Those tasks give an AI agent input data and a scientific objective,

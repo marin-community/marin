@@ -38,3 +38,7 @@ The parent did not run R, retrieve the external packages, or validate resulting
 tasks. Finer unit boundaries and output counts are not quality verdicts.
 
 Artificial conditions are explicit in the [pinned vignette](https://github.com/thelovelab/DESeq2/blob/c62c60c6ff83fd84ce115cacd1c49827533f85a7/vignettes/DESeq2.Rmd#L313), immediately before `txiSetup`.
+
+A later parent check of the pinned annotation CSV also found that sample IDs
+end in `fb` (for example, `treated1fb`); the unit incorrectly calls this a prefix.
+The sample-alignment requirement is preserved, but that identifier detail is wrong.

@@ -1,0 +1,12 @@
+[
+  {
+    "type": "error",
+    "message": "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request. We are continuously refining our work in detecting biological risk, and you can read more about our approach in our blog post: https://openai.com/index/preparing-for-future-ai-capabilities-in-biology"
+  },
+  {
+    "type": "turn.failed",
+    "error": {
+      "message": "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request. We are continuously refining our work in detecting biological risk, and you can read more about our approach in our blog post: https://openai.com/index/preparing-for-future-ai-capabilities-in-biology"
+    }
+  }
+]

@@ -1,0 +1,68 @@
+{
+  "run_id": "2026-09-30-round4-ucsc-luna",
+  "status": "completed and parent-reviewed",
+  "question": "Does the shorter inspect-record-check loop preserve scientific caveats and improve identity, roles and final-state consistency?",
+  "comparison_round": 4,
+  "repository": "https://github.com/ucscGenomeBrowser/kent",
+  "source_revision": "ad6dd2177ad20bea9e32563ee76a1c598bccb6d5",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "cd842438e9da744f5f87dc985c809b7916b120a8c505554e3c8c20359fe6f8f7",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "af22413fa88ee9a34e6a38fba70a38424c826f8ab1a2e09b0f1e95b9ff076698",
+    "base_commit": "ee7878c383ed5aad15a9398659f1db6e6da6c6b6",
+    "working_tree_revision": "round4 shared loop prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null,
+    "effective_reasoning_effort": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "launch_message": "launch-message.txt",
+    "source_access": "source-access.txt",
+    "outputs": "outputs/",
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T15:26:51.177647+00:00",
+    "deadline_utc": "2026-09-30T15:36:51.177647+00:00",
+    "launch_message_sha256": "dae4f5a31148288c01c329b79be6b976cbcbbe535bdc04d493dac6e985eccbc7",
+    "source_access_sha256": "224b3242866f8a0879b8459ef6434c117cb743c33c9627b987f5067d04419527",
+    "deadline_enforcement": "Instruction only; no runner-enforced timeout.",
+    "agent_task": "/root/round4_ucsc_luna",
+    "launch_observed_at_utc": "2026-09-30T15:27:25.328249+00:00",
+    "cutoff_withdrawn_at_utc": "2026-09-30T15:37:55.353547+00:00",
+    "cutoff_withdrawal_reason": "User explicitly rejects artificial per-run time cutoffs; elapsed time is an outcome, not a stopping condition.",
+    "correction_delivery": "collaboration.send_message; original launch instructions preserved as historical inputs",
+    "completion_observed_at_utc": "2026-09-30T16:03:56.314043+00:00",
+    "completion_timestamp_precision": "Parent observation after result arrival; not measured model runtime."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "comparison_eligibility": "Historical/transitional pilot; exclude from clean uncapped model/effort comparison.",
+  "outputs": {
+    "counts": {
+      "units": 20,
+      "datasets": 4
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "5c5f9ebef017ec9c744e4d06143bf20e1972386284fbacbbaeba583d26d8f4a2",
+      "outputs/inspection.md": "0228d1f23031b1321a951fced1f1010c4d421497471bec7c9c9ee07fef32293d",
+      "outputs/units.jsonl": "5f1b6625fb18afd76b1376556e2b7cd4f8253bb87779e6952d9254ba58d23d82",
+      "worker-final.txt": "a1d2c77bed47c176b85c9e9db886c7cccfa1a85315f388ac318b1a450c5e7ad6",
+      "structural-review.json": "ad433bbc8a8ccd8fa372343163824186b3dba7d534851a7bd9898e88c48d2253"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T16:03:56.314043+00:00"
+}

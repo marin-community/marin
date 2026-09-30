@@ -1,0 +1,113 @@
+{
+  "run_id": "2026-09-30-uncapped-deseq2-sol-high",
+  "status": "service-blocked; partial artifacts parent-reviewed",
+  "question": "Compare model and requested reasoning effort with no artificial per-run cutoff.",
+  "comparison_round": "uncapped-model-effort",
+  "repository": "https://github.com/thelovelab/DESeq2",
+  "source_revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "3afe65a5c79fc86ace04f50953d9c8e072a62ab0142911db0c3734d5b37f25b9",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "3db5d991bb5b5041b9f80960064f1302251758115b8479619216f5ba5843ea71",
+    "base_commit": "ee7878c383ed5aad15a9398659f1db6e6da6c6b6",
+    "working_tree_revision": "User-corrected general prompt without artificial cutoffs"
+  },
+  "model": {
+    "requested": "gpt-6.1-sol",
+    "reported_version": null,
+    "reasoning_effort": "high",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null,
+    "effective_reasoning_effort": null
+  },
+  "execution": {
+    "runner": "codex exec 0.159.2",
+    "history": "fresh CLI exec, user config ignored and memories disabled",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": null,
+    "deadline_utc": null,
+    "stopping_rule": "Useful mapped scope covered, repeated leads, or genuine access/resource blocker; no artificial time cutoff or unit quota.",
+    "prepared_at_utc": "2026-09-30T15:38:51.806427+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "654fb0641ed3029ad3674729e42f3ac23536501f076fe6376c65d0819e2baa2d",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "c3ef467be0d2b063c3f689087292c0bb13bb84311bb8b846aabe772fb512228b",
+    "outputs": "outputs/",
+    "launch_observed_at_utc": "2026-09-30T15:48:53.321832+00:00",
+    "command": [
+      "codex",
+      "exec",
+      "--ignore-user-config",
+      "--disable",
+      "memories",
+      "--approve-for-me",
+      "--json",
+      "--model",
+      "gpt-6.1-sol",
+      "--config",
+      "model_reasoning_effort=\"high\"",
+      "--cd",
+      "/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-sol-high/outputs",
+      "--output-last-message",
+      "/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-sol-high/worker-final.txt",
+      "-"
+    ],
+    "prompt": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-sol-high/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, prior outputs, or conversation history. Write only the three assigned output files. There is no artificial time cutoff or unit quota. The parent holds the shared-node heavy-command lock for this runner; perform only lightweight source retrieval and file edits, with no heavy scientific executions or further agents.",
+    "working_set_estimate_mib": 400,
+    "trace_location": "artifacts/bio-task-generation/cli-runs/2026-09-30-uncapped-deseq2-sol-high/attempt-1",
+    "time_cutoff": null,
+    "start_utc": "2026-09-30T15:48:53.321832+00:00",
+    "end_utc": "2026-09-30T16:41:55.809231+00:00",
+    "elapsed_seconds": 3182.487427412998,
+    "exit_status": 1,
+    "peak_child_rss_kib": 328028,
+    "sampled_codex_rss_kib": 254808,
+    "resource_samples": 432,
+    "completion_observed_at_utc": "2026-09-30T16:42:43+00:00",
+    "completion_timestamp_precision": "Parent observation of runner failure; measured execution end is recorded separately."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": {
+    "artifact": "runner-events.jsonl.gz",
+    "scope": "CLI emitted events except reasoning items; command, tool-result, public message and failure events retained",
+    "removed_reasoning_events": 0,
+    "credential_pattern_scan": "No configured credential markers found; no credential source requested by parent."
+  },
+  "parent_observations": [
+    {
+      "kind": "retrieval envelope deviation",
+      "source": "https://github.com/galaxyproject/tools-iuc/blob/be1a2422b9ec3e792325bb1a6aa8008614674a86/tools/deseq2/test-data/GSM461176_untreat_single.counts",
+      "evidence": "CLI event stream contains an unrestricted gh API raw-file request. Captured result has 60678 characters and 4005 lines; no request-level row/range bound.",
+      "scope": "One public count fixture request; not scientific execution. Exact remote file size and completeness of displayed result not independently established."
+    }
+  ],
+  "failure": {
+    "classification": "service biological-risk gate",
+    "details": "runner-failure.json",
+    "final_response": null,
+    "retry": false
+  },
+  "outputs": {
+    "counts": {
+      "units": 44,
+      "datasets": 10
+    },
+    "structural_errors": [],
+    "scope": "Partial checkpoint only; no worker final or final source-map audit. Structural checks are not a completion verdict.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "3ac2b3761b2b22e24417d798bb45453c5ad4b814694837c5600eefeccd9a5bf7",
+      "outputs/inspection.md": "0852f1140912b4da8a7229c78199015521cbe1ef8072ca70e173a4fd29abca75",
+      "outputs/units.jsonl": "4b4fc06c0c07be73873f6ac7b23b1ae02ce268b6610de5b7569f1c07ed125701",
+      "structural-review.json": "b77a296cafb733bc5e33b1e0342c02f18290f1167aacd55fc296c58dd239d819",
+      "runner-events.jsonl.gz": "f16d066817bb092cd789940c66321904e82c0f40aeb0cd8f42641cfe418d1669",
+      "runner-metrics.json": "a235cfe105e24c5b2ed3c5803c74c05283889394eb229ddbe2565c8448b4dea3",
+      "runner-failure.json": "79c774ccb3ffbfa8259a7180bd1b5ebab6123f42c9de561b1b27b6b39d5fed87"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T16:45:08.868942+00:00"
+}

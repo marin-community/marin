@@ -1,0 +1,107 @@
+{
+  "run_id": "2026-09-30-uncapped-deseq2-luna-high",
+  "status": "completed and parent-reviewed",
+  "question": "Compare model and requested reasoning effort with no artificial per-run cutoff.",
+  "comparison_round": "uncapped-model-effort",
+  "repository": "https://github.com/thelovelab/DESeq2",
+  "source_revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "3afe65a5c79fc86ace04f50953d9c8e072a62ab0142911db0c3734d5b37f25b9",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "3db5d991bb5b5041b9f80960064f1302251758115b8479619216f5ba5843ea71",
+    "base_commit": "ee7878c383ed5aad15a9398659f1db6e6da6c6b6",
+    "working_tree_revision": "User-corrected general prompt without artificial cutoffs"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "high",
+    "context_output_compaction_limits": null,
+    "tokens": {
+      "input_tokens": 3075341,
+      "cached_input_tokens": 2917120,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 53275,
+      "reasoning_output_tokens": 23479
+    },
+    "cost": null,
+    "effective_reasoning_effort": null
+  },
+  "execution": {
+    "runner": "codex exec 0.159.2",
+    "history": "fresh CLI exec, user config ignored and memories disabled",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": null,
+    "deadline_utc": null,
+    "stopping_rule": "Useful mapped scope covered, repeated leads, or genuine access/resource blocker; no artificial time cutoff or unit quota.",
+    "prepared_at_utc": "2026-09-30T15:38:51.806427+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "66b1955a73e1a55291dce745e9b26077935b57cac818553a85ccfa1ac149841a",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "c3ef467be0d2b063c3f689087292c0bb13bb84311bb8b846aabe772fb512228b",
+    "outputs": "outputs/",
+    "launch_observed_at_utc": "2026-09-30T16:43:17.452613+00:00",
+    "command": [
+      "codex",
+      "exec",
+      "--ignore-user-config",
+      "--disable",
+      "memories",
+      "--approve-for-me",
+      "--json",
+      "--model",
+      "gpt-6-luna",
+      "--config",
+      "model_reasoning_effort=\"high\"",
+      "--cd",
+      "/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-luna-high/outputs",
+      "--output-last-message",
+      "/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-luna-high/worker-final.txt",
+      "-"
+    ],
+    "prompt": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-luna-high/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, prior outputs, or conversation history. Write only the three assigned output files. There is no artificial time cutoff or unit quota. The parent holds the shared-node heavy-command lock for this runner; perform only lightweight source retrieval and file edits, with no heavy scientific executions or further agents.",
+    "working_set_estimate_mib": 400,
+    "trace_location": "artifacts/bio-task-generation/cli-runs/2026-09-30-uncapped-deseq2-luna-high/attempt-1",
+    "time_cutoff": null,
+    "start_utc": "2026-09-30T16:43:17.452613+00:00",
+    "end_utc": "2026-09-30T17:07:31.240121+00:00",
+    "elapsed_seconds": 1453.787534329109,
+    "exit_status": 0,
+    "peak_child_rss_kib": 314580,
+    "sampled_codex_rss_kib": 265516,
+    "resource_samples": 115,
+    "completion_observed_at_utc": "2026-09-30T17:09:47.643233+00:00",
+    "completion_timestamp_precision": "Parent observation after result arrival; not measured model runtime."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": {
+    "artifact": "runner-events.jsonl.gz",
+    "scope": "CLI events excluding reasoning items",
+    "removed_reasoning_events": 0,
+    "credential_and_private_context_marker_scan": "No configured markers found."
+  },
+  "outputs": {
+    "counts": {
+      "units": 23,
+      "datasets": 5
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "e19cef3a021999d232aefe43bc210ed137f93f2e0476854054dd5a9d662e1189",
+      "outputs/inspection.md": "cb95df05e23e326b098cef3876de8f3fa97175f237f267f18731e0a70d7e9ef2",
+      "outputs/units.jsonl": "79de313d64307d9a0289be2895a4d3db05851e93450c38c87dfbab9e58141dc7",
+      "worker-final.txt": "a8b76511f31f9eeb7ffa1a7962c4c979c0571d3103827483c08370de5c94c680",
+      "structural-review.json": "acb146114723f769c9ebb6673549132f0a51b0a9c6bd26c3b82d7cda52f7659c",
+      "runner-metrics.json": "317c1cdb46eef72f14368e735d7b4e85dcf29a752643d34cc0343e0733bbd9a7",
+      "runner-events.jsonl.gz": "98bbf3b56f6c9cc12940780821c6bcff7d27318ab3b1cd6bcb8acacbe35eb72f",
+      "original-worker-final.json": "25b6277625d0fef47deb686ca9cf1a4624d1fff98d9ad607fd9187babf6e66ad"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T17:09:47.643233+00:00",
+  "normalization": "Worker-final EOF newline added by required formatter; exact original bytes retained in original-worker-final.json."
+}

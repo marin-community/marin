@@ -1,0 +1,80 @@
+{
+  "recorded_at_utc": "2026-09-30T15:22:20.549680+00:00",
+  "status": "superseded by user instruction; capped/transitional pilots only",
+  "question": "How do requested model and reasoning effort affect this fixed source-inventory assignment?",
+  "repository": "https://github.com/thelovelab/DESeq2",
+  "source_revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7",
+  "prompt_sha256": "cd842438e9da744f5f87dc985c809b7916b120a8c505554e3c8c20359fe6f8f7",
+  "prompt_snapshot": "2026-09-30-round4-deseq2-luna/template.md",
+  "factors": {
+    "model": [
+      "gpt-6-luna",
+      "gpt-6.1-sol"
+    ],
+    "reasoning_effort": [
+      "low",
+      "high"
+    ]
+  },
+  "attempts_per_cell": 1,
+  "budget_minutes": 8,
+  "budget_note": "Equal instructed wall-clock maxima within this comparison; separate from 10-minute prompt-development runs. Actual stop time and any enforcement intervention must be reported.",
+  "controls": [
+    "Identical resolved prompt and pinned source revision",
+    "Fresh fork_turns=none contexts",
+    "Same generic GitHub and web retrieval envelope",
+    "No scientific execution, biological dataset downloads, builds or additional agents",
+    "Same predeclared review probes, withheld from workers"
+  ],
+  "review": [
+    "Source-supported scientific operations and data coverage; counts alone are not quality scores.",
+    "Artificial condition labels retained when tximport example reached; otherwise report not assessed.",
+    "Quantifications and independent transcript-to-gene reference have separate identities.",
+    "Sample ordering, sequencing-type design, raw versus transformed state, model comparison and hidden chunks match inspected sources.",
+    "Exact identifiers and source revisions are supported.",
+    "Tool-use/creation labels match actual work.",
+    "Final source map, IDs, counts and stop evidence agree.",
+    "Report structural errors, scientific errors, coverage gaps and access/budget limitations separately."
+  ],
+  "limitations": [
+    "One fresh run per cell on one repository is exploratory, not a reliable global model ranking.",
+    "Requested model and effort are recorded from spawn arguments; served settings cannot be independently confirmed through this interface.",
+    "Full trace, tokens, reasoning usage, cache usage and billed cost are unavailable; do not infer cost efficiency or equal token budget.",
+    "Earlier runs left reasoning_effort unspecified, so do not relabel them low or medium for this comparison.",
+    "Launch order was selected operationally, not randomized. Shared-node conditions and mutable linked documentation may vary between cells."
+  ],
+  "official_configuration_sources": [
+    "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "https://developers.openai.com/api/docs/models/gpt-6-luna"
+  ],
+  "source_note": "Official pages and collaboration tool metadata permit low/high for these exact model names. API defaults do not establish inherited runner settings.",
+  "launch_order": [
+    "luna-low",
+    "sol-high",
+    "luna-high",
+    "sol-low"
+  ],
+  "runs": [
+    "2026-09-30-knobs-deseq2-luna-low",
+    "2026-09-30-knobs-deseq2-sol-high"
+  ],
+  "superseded_at_utc": "2026-09-30T15:37:55.353547+00:00",
+  "reason": "User rejects artificial per-run time cutoffs. Use fresh uncapped runs for model/effort comparison; preserve old outputs without pooling.",
+  "never_launched_cells": [
+    "luna-high",
+    "sol-low"
+  ],
+  "results": {
+    "luna-low": {
+      "units": 5,
+      "datasets": 2,
+      "review": "Early partial completion with independent annotation grouped and unsupported two-sample inference"
+    },
+    "sol-high": {
+      "units": 57,
+      "datasets": 12,
+      "review": "Separate annotation, artificial labels and six-sample provenance retained; mixed implementations supported, but custom-filter correction method misdescribed",
+      "comparison_eligibility": "Cutoff withdrawn mid-run; not a clean uncapped cell"
+    }
+  }
+}

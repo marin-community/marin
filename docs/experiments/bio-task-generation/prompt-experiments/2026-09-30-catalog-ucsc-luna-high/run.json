@@ -1,0 +1,62 @@
+{
+  "run_id": "2026-09-30-catalog-ucsc-luna-high",
+  "status": "completed and parent-reviewed",
+  "question": "Does the general catalog-accounting revision recover public scientific operations without repository-specific worker hints?",
+  "repository": "https://github.com/ucscGenomeBrowser/kent",
+  "source_revision": "ad6dd2177ad20bea9e32563ee76a1c598bccb6d5",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "a080223248fe84b6a10e91ca654b9e933e4230e8bb1cced6ab80fe8631059781",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "41dbff89cfa3b00b9fa7d1f390eb6b2b6ab3acce058b6754e7d98ba37e00614e",
+    "base_commit": "ee7878c383ed5aad15a9398659f1db6e6da6c6b6"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reasoning_effort": "high",
+    "reported_version": null,
+    "effective_reasoning_effort": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "prepared_at_utc": "2026-09-30T16:17:07.178542+00:00",
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": null,
+    "deadline_utc": null,
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "d7ffc366f27a12ca2f5f048904dc27eb912c77e677fd998b145838c6a3d94caf",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "224b3242866f8a0879b8459ef6434c117cb743c33c9627b987f5067d04419527",
+    "outputs": "outputs/",
+    "agent_task": "/root/catalog_ucsc_luna_high",
+    "launch_observed_at_utc": "2026-09-30T16:17:34.116050+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-catalog-ucsc-luna-high/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, prior outputs, or conversation history. Write only the three assigned output files. There is no artificial time cutoff or unit quota. Perform lightweight source research only; a separate local CLI research worker holds the shared heavy-command lock. Do not run substantial local commands or further agents.",
+    "completion_observed_at_utc": "2026-09-30T17:15:00+00:00",
+    "completion_timestamp_precision": "Approximate parent observation at final response; not instrumented model runtime."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full execution events unavailable through collaboration interface; final response preserved in worker-final.txt.",
+  "comparison_eligibility": "Separate prompt-development probe; excluded from frozen DESeq2 model/effort matrix.",
+  "outputs": {
+    "counts": {
+      "units": 60,
+      "datasets": 21
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "a0b900ad6cceb2111009a56e0482bd16d820f6d1bececc8eeaaab58886b19083",
+      "outputs/inspection.md": "222aede5e833453c03c81666016c58dd1b6a27e4dc384de15ec8f7c38ab1e7e0",
+      "outputs/units.jsonl": "b2ed7cde3e3f78e95fdfcf67b3c84b94b8768a79c62091edf72d607f50ff3eb1",
+      "worker-final.txt": "52cb812e3584ee1b47ee7717a414be01f30ff0c41c82f5cba4e809bcef51ace9",
+      "structural-review.json": "a6e4d058851992dc6fdb774f7d4ee962a2f932b440d8e16aea1638bb75329362",
+      "catalog-review.json": "adaa8e268344639b00f77ef94b03ecf1c317af55063a2e2a6b332a4babfd7bb3"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T17:20:18.848514+00:00"
+}

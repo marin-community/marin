@@ -1,0 +1,8 @@
+{
+  "counts": {
+    "units": 10,
+    "datasets": 2
+  },
+  "structural_errors": [],
+  "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate."
+}

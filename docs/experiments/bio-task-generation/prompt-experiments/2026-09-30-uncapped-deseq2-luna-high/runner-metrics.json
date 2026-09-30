@@ -1,0 +1,29 @@
+{
+  "start_utc": "2026-09-30T16:43:17.452613+00:00",
+  "working_set_estimate_mib": 400,
+  "command": [
+    "codex",
+    "exec",
+    "--ignore-user-config",
+    "--disable",
+    "memories",
+    "--approve-for-me",
+    "--json",
+    "--model",
+    "gpt-6-luna",
+    "--config",
+    "model_reasoning_effort=\"high\"",
+    "--cd",
+    "/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-luna-high/outputs",
+    "--output-last-message",
+    "/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-luna-high/worker-final.txt",
+    "-"
+  ],
+  "time_cutoff": null,
+  "end_utc": "2026-09-30T17:07:31.240121+00:00",
+  "elapsed_seconds": 1453.787534329109,
+  "exit_status": 0,
+  "peak_child_rss_kib": 314580,
+  "sampled_codex_rss_kib": 265516,
+  "resource_samples": 115
+}

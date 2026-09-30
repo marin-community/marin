@@ -1,6 +1,6 @@
-You are identifying scientific units in **{{REPO}}**.
+You are identifying scientific units in **thelovelab/DESeq2**.
 
-Repository URL: {{REPO_URL}}
+Repository URL: https://github.com/thelovelab/DESeq2
 
 Produce a source inventory for another LLM worker that will author computational
 biology tasks. Those tasks give an AI agent input data and a scientific objective,
@@ -23,21 +23,15 @@ or a unit quota. A saved partial inventory is a checkpoint while useful accessib
 sources remain.
 
 1. **Map source collections.** Read repository orientation, package manifests,
-   documentation configuration and indexes as useful. Locate public command/API
-   catalogs through references, entry-point and build/install manifests, exported
-   interfaces, distribution/download listings, and shared help collections. Also
-   locate tutorials, notebooks, analysis scripts, workflow definitions, tests, and
-   linked scientific examples or data. Follow relevant sources outside the repository.
+   documentation configuration and indexes as useful. Locate command/API references,
+   tutorials, notebooks, analysis scripts, workflow definitions, tests, and linked
+   scientific examples or data. Follow relevant sources outside the repository.
    Use the repository's organization and documentation conventions to choose routes.
 2. **Make an inspection queue in `inspection.md`.** Enumerate entries in bounded
    collections and outline sections of long documents, including Jupyter, R Markdown,
    Sweave, and Quarto sources. Record a location and status for each entry: pending,
    inspected with unit IDs, partly inspected with named remaining portions, or skipped
-   with a reason. Account for each entry in a public operation catalog: link its
-   inspected unit, identify the canonical operation for an alias or duplicate,
-   explain an exclusion, or keep it pending. Do not replace uninspected commands
-   with an "other utilities" category. Record the catalog's revision/date and any
-   gaps in enumeration. Spread inspection across distinct uses before variants.
+   with a reason. Spread inspection across distinct uses before exploring variants.
 3. **Inspect one operation or analysis in context.** Read semantics and usage, relevant
    code, setup, prior cells, configuration, and input sources. A heading, filename, or
    API signature alone is a lead. If rendered material is blocked or truncated, try
@@ -65,15 +59,6 @@ A unit is a coherent scientific operation or analysis: a documented command or
 API operation, function or method use, example, notebook section, workflow stage,
 or complete analysis. A documented operation needs no paper-specific workflow or
 ready dataset to qualify. Record missing context for later authoring.
-
-Treat each distinct public scientific command or API operation as a candidate
-unit. Data extraction, conversion, filtering, indexing, and validation qualify
-even when they are simple or support another analysis. Do not screen them out
-for apparent task difficulty; task selection happens later. Inspect semantics
-before promoting a catalog entry to a unit. Aliases, platform builds, and repeated
-documentation of the same operation share a unit. Internal helpers, packaging,
-and service administration may be excluded when they expose no scientific
-operation; state the source-backed reason in the map.
 
 Choose boundaries by scientific purpose, inputs, decisions, and useful outputs.
 Link component operations and compositions. A composed example can be a separate
@@ -200,9 +185,7 @@ Verify that independent data products remain separate and linked stages preserve
 their identity. Scope any suspected source contradiction to the same entity, version,
 and processing stage before reporting it.
 
-Refresh the source map from the final records. Check that every enumerated public
-operation resolves to a unit, a specific alias/exclusion, or a remaining lead.
-Remove obsolete IDs and pending
+Refresh the source map from the final records. Remove obsolete IDs and pending
 statuses for work already inspected; name remaining portions of partly inspected
 sources. Report counts once, computed from the final JSONL files. Read the final
 `inspection.md` for contradictions with those records. Record the stopping reason and remaining leads consistently.

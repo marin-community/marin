@@ -1,0 +1,64 @@
+{
+  "run_id": "2026-09-30-round4-deseq2-luna",
+  "status": "completed and parent-reviewed",
+  "question": "Does the shorter inspect-record-check loop preserve scientific caveats and improve identity, roles and final-state consistency?",
+  "comparison_round": 4,
+  "repository": "https://github.com/thelovelab/DESeq2",
+  "source_revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "cd842438e9da744f5f87dc985c809b7916b120a8c505554e3c8c20359fe6f8f7",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "412f9dfee1358a2af0c86022148b2a348828a0cd16c6a67c96cd8b9f72309c42",
+    "base_commit": "ee7878c383ed5aad15a9398659f1db6e6da6c6b6",
+    "working_tree_revision": "round4 shared loop prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T15:14:50.634831+00:00",
+    "deadline_utc": "2026-09-30T15:24:50.634831+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "034e1b298fcdde6cad8c833240724e072d96c20ae393b293b7e881486c23c925",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "c3ef467be0d2b063c3f689087292c0bb13bb84311bb8b846aabe772fb512228b",
+    "outputs": "outputs/",
+    "agent_task": "/root/round4_deseq2_luna",
+    "launch_observed_at_utc": "2026-09-30T15:15:32.138910+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round4-deseq2-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "parent_deadline_reminder_utc": "2026-09-30T15:27:00+00:00 (approximate observation)",
+    "completion_observed_at_utc": "2026-09-30T15:30:15.423610+00:00",
+    "completion_timestamp_precision": "Parent observation after result arrival; not measured model runtime."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 8,
+      "datasets": 3
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "c0acaf59fa834498a72b298230dfaca4dd7efd7cf8aebe4c29b969d6fb8f8d1e",
+      "outputs/inspection.md": "fc58954d0d23f9e55a2c6d9fa086e41c68db1c08ffa001f346bc4cc9edb6d967",
+      "outputs/units.jsonl": "abcd484ed28ac3a18c7feb7513e2b1ab0d835a12827519c198e73b577efe641c",
+      "worker-final.txt": "9479b0d626432f800e71b1da23f3b3191f8d0ffb691c0816de501aacd30365b6",
+      "structural-review.json": "28e0f44b2bcbc4f22e3d234479c32dc56a3b7a4286f8cf511bbba7001f069b0c"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T15:30:15.423610+00:00"
+}

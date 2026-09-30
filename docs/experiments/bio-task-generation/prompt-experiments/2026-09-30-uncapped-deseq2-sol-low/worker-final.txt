@@ -1,0 +1,7 @@
+Completed the inventory and validated its JSONL structure and references.
+
+- [units.jsonl](units.jsonl)
+- [datasets.jsonl](datasets.jsonl)
+- [inspection.md](inspection.md)
+
+Mapped accessible scientific scope is covered; unresolved provenance and missing-asset leads are documented. Elapsed time was approximately 29 minutes. No scientific executions or additional agents were used.

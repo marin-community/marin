@@ -1,0 +1,71 @@
+{
+  "run_id": "2026-09-30-knobs-deseq2-sol-high",
+  "status": "completed and parent-reviewed",
+  "question": "Effect of requested model and reasoning effort with identical prompt and source pin.",
+  "comparison_round": "model-effort",
+  "repository": "https://github.com/thelovelab/DESeq2",
+  "source_revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "cd842438e9da744f5f87dc985c809b7916b120a8c505554e3c8c20359fe6f8f7",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "412f9dfee1358a2af0c86022148b2a348828a0cd16c6a67c96cd8b9f72309c42",
+    "base_commit": "ee7878c383ed5aad15a9398659f1db6e6da6c6b6",
+    "working_tree_revision": "round4 shared loop prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6.1-sol",
+    "reported_version": null,
+    "reasoning_effort": "high",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null,
+    "effective_reasoning_effort": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "launch_message": "launch-message.txt",
+    "source_access": "source-access.txt",
+    "outputs": "outputs/",
+    "budget_minutes": 8,
+    "prepared_at_utc": "2026-09-30T15:31:50.627096+00:00",
+    "deadline_utc": "2026-09-30T15:39:50.627096+00:00",
+    "launch_message_sha256": "6e53ddb017e215986e1e751854904540f08b24c8c1f50dd4af09bf351c44e6ce",
+    "source_access_sha256": "c3ef467be0d2b063c3f689087292c0bb13bb84311bb8b846aabe772fb512228b",
+    "deadline_enforcement": "Instruction only; no runner-enforced timeout.",
+    "agent_task": "/root/knobs_deseq2_sol_high",
+    "launch_observed_at_utc": "2026-09-30T15:31:50.627096+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-knobs-deseq2-sol-high/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "envelope_correction": "Deadline refreshed immediately after spawning to give eight minutes rather than the stale queued preparation deadline; worker informed before substantive inspection.",
+    "cutoff_withdrawn_at_utc": "2026-09-30T15:37:55.353547+00:00",
+    "cutoff_withdrawal_reason": "User explicitly rejects artificial per-run time cutoffs; elapsed time is an outcome, not a stopping condition.",
+    "correction_delivery": "collaboration.send_message; original launch instructions preserved as historical inputs",
+    "worker_reported_completion_at_utc": "2026-09-30T16:07:59+00:00",
+    "completion_observed_at_utc": "2026-09-30T16:09:41+00:00",
+    "completion_timestamp_precision": "Parent observation after result arrival; not measured model runtime."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "comparison_eligibility": "Historical/transitional pilot; exclude from clean uncapped model/effort comparison.",
+  "outputs": {
+    "counts": {
+      "units": 57,
+      "datasets": 12
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "751415ed8708c8ad28caa9bcf1289e5994c7ad35d51d4933267001ced117146a",
+      "outputs/inspection.md": "b7e865bc1c85609d8942b2f0455938ce906e0e4a150be415a7227de5ad843180",
+      "outputs/units.jsonl": "5873da0846eca93da08b87ae1d9cfe7f3155a489a0be6bdf8f14ef2983946d18",
+      "worker-final.txt": "ec58c4f9c66d9ebfb62561564ce5a6399f7c82276026adf1c2f85a0502f29c15",
+      "structural-review.json": "f30a4b73c3df5373756c5f0b68a20575ab02a3731afb6405164684b22c0881ea"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T16:12:59.861619+00:00"
+}

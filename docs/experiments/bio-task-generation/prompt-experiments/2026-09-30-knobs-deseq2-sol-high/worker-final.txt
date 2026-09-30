@@ -1,0 +1,7 @@
+Completed the DESeq2 source inventory: 57 units and 12 dataset/reference records. JSON structure and references passed validation; no scientific execution occurred.
+
+- [units.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-knobs-deseq2-sol-high/outputs/units.jsonl)
+- [datasets.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-knobs-deseq2-sol-high/outputs/datasets.jsonl)
+- [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-knobs-deseq2-sol-high/outputs/inspection.md)
+
+Inspection records the withdrawn cutoff, source gaps, historical API incompatibilities, and stopping reason.

@@ -1,0 +1,140 @@
+{
+  "recorded_at_utc": "2026-09-30T15:38:51.806427+00:00",
+  "status": "Finished: three completed and reviewed runs; Sol-high service-blocked with reviewed partial artifacts",
+  "question": "How do requested model and reasoning effort affect this fixed source-inventory assignment?",
+  "repository": "https://github.com/thelovelab/DESeq2",
+  "source_revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7",
+  "prompt_sha256": "3afe65a5c79fc86ace04f50953d9c8e072a62ab0142911db0c3734d5b37f25b9",
+  "prompt_snapshot": "2026-09-30-uncapped-deseq2-luna-low/template.md",
+  "factors": {
+    "model": [
+      "gpt-6-luna",
+      "gpt-6.1-sol"
+    ],
+    "reasoning_effort": [
+      "low",
+      "high"
+    ]
+  },
+  "attempts_per_cell": 1,
+  "budget_minutes": null,
+  "controls": [
+    "Identical resolved prompt and pinned source revision",
+    "Fresh CLI exec contexts with memories disabled and user config ignored",
+    "Same generic GitHub and web retrieval envelope through CLI tools",
+    "No scientific execution, biological dataset downloads, builds or additional agents",
+    "Same predeclared review probes, withheld from workers",
+    "Same CLI runner and serial execution under shared-node resource lock for all four cells."
+  ],
+  "review": [
+    "Source-supported scientific operations and data coverage; counts alone are not quality scores.",
+    "Artificial condition labels retained when tximport example reached; otherwise report not assessed.",
+    "Quantifications and independent transcript-to-gene reference have separate identities.",
+    "Sample ordering, sequencing-type design, raw versus transformed state, model comparison and hidden chunks match inspected sources.",
+    "Exact identifiers and source revisions are supported.",
+    "Tool-use/creation labels match actual work.",
+    "Final source map, IDs, counts and stop evidence agree.",
+    "Report structural errors, scientific errors, coverage gaps and access/budget limitations separately."
+  ],
+  "limitations": [
+    "One fresh run per cell on one repository is exploratory, not a reliable global model ranking.",
+    "Requested model and effort are recorded from the CLI launch configuration; served settings cannot be independently confirmed through this interface.",
+    "Earlier runs left reasoning_effort unspecified, so do not relabel them low or medium for this comparison.",
+    "Launch order was selected operationally, not randomized. Shared-node conditions and mutable linked documentation may vary between cells.",
+    "Repository scope completion remains judged by each worker; review retained leads independently. Elapsed time is observed, not constrained.",
+    "CLI event stream and reported token usage are captured when available; billed cost and independently verified served settings remain unavailable. Do not pool with collaboration-runner trials.",
+    "The DESeq2 revision is fixed, but independently discovered dependency revisions can differ. The two-versus-six GEUVADIS sample count depends on tximportData version; judge source support at each cited revision."
+  ],
+  "official_configuration_sources": [
+    "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "https://developers.openai.com/api/docs/models/gpt-6-luna"
+  ],
+  "source_note": "Official pages and collaboration tool metadata permit low/high for these exact model names. API defaults do not establish inherited runner settings.",
+  "launch_order": [
+    "luna-low",
+    "sol-high",
+    "luna-high",
+    "sol-low"
+  ],
+  "runs": [
+    "2026-09-30-uncapped-deseq2-luna-low",
+    "2026-09-30-uncapped-deseq2-sol-high",
+    "2026-09-30-uncapped-deseq2-luna-high",
+    "2026-09-30-uncapped-deseq2-sol-low"
+  ],
+  "stopping_rule": "No artificial per-run cutoff; same source-completion rule for all cells.",
+  "historical_pilots": "2026-09-30-model-effort-comparison.json",
+  "runner": "codex exec 0.159.2",
+  "runner_reason": "Two collaboration.spawn_agent calls failed with agent thread limit reached. CLI exec provides fresh contexts through the documented noninteractive interface.",
+  "runner_sources": [
+    "https://developers.openai.com/codex/noninteractive",
+    "https://developers.openai.com/codex/config-reference"
+  ],
+  "runner_preflight": [
+    {
+      "attempt": 1,
+      "exit_status": 2,
+      "reason": "--approve-for-me and --sandbox are mutually exclusive; no model work started."
+    },
+    {
+      "attempt": 2,
+      "change": "Use --approve-for-me alone, which selects workspace-write sandboxing and automatic approval review.",
+      "status": "completed; corrected Luna-low model attempt succeeded"
+    }
+  ],
+  "results": {
+    "luna-low": {
+      "units": 6,
+      "datasets": 3,
+      "structural_errors": [],
+      "wall_seconds": 251.2688603370916,
+      "reported_tokens": {
+        "input_tokens": 465464,
+        "cached_input_tokens": 354048,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 11199,
+        "reasoning_output_tokens": 313
+      },
+      "review": "Stops with accessible useful leads despite no cutoff; independent annotation grouped, unsupported two-sample claim and fb prefix error."
+    },
+    "sol-high": {
+      "status": "service-blocked",
+      "units_at_checkpoint": 44,
+      "datasets_at_checkpoint": 10,
+      "structural_errors": [],
+      "wall_seconds": 3182.487427412998,
+      "reported_tokens": null,
+      "review": "Service biological-risk flag before finalization. Partial records separate annotation, preserve artificial labels, and source the version-specific two-sample fixture. One full fixture request exceeds retrieval envelope. Exclude from completed-run ranking."
+    },
+    "luna-high": {
+      "units": 23,
+      "datasets": 5,
+      "structural_errors": [],
+      "wall_seconds": 1453.787534329109,
+      "reported_tokens": {
+        "input_tokens": 3075341,
+        "cached_input_tokens": 2917120,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 53275,
+        "reasoning_output_tokens": 23479
+      },
+      "review": "Separates independent annotation and broadens operations, but stops with useful sources pending; archived sample counts overqualified as current and browser display lines used as source locators."
+    },
+    "sol-low": {
+      "units": 90,
+      "datasets": 19,
+      "structural_errors": [],
+      "wall_seconds": 1827.9234324579593,
+      "reported_tokens": {
+        "input_tokens": 5500840,
+        "cached_input_tokens": 5271680,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 32134,
+        "reasoning_output_tokens": 2951
+      },
+      "review": "Broad core source and linked workflow coverage with coherent source map; shared scientific-state probes retained. Copied source-kind/dependency fields and grouped independent generated fixtures remain. No exhaustive field audit or task validation."
+    }
+  },
+  "finished_at_utc": "2026-09-30T17:40:55.824475+00:00",
+  "conclusion": "Luna-high improves selected coverage and reference identity over Luna-low but both stop with accessible operations pending. Sol-low covers the mapped package-centered scope and retained state probes, while metadata accuracy still needs repair. Sol-high was service-blocked and cannot complete the effort comparison. One run per setting and one repository do not support a general model or effort ranking."
+}

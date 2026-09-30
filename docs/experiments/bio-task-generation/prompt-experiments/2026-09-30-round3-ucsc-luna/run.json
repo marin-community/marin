@@ -1,0 +1,66 @@
+{
+  "run_id": "2026-09-30-round3-ucsc-luna",
+  "status": "completed and reviewed; variability and recurring failures observed",
+  "question": "How stable are the round 2 findings in a fresh repeat with the identical prompt and source access?",
+  "comparison_round": 3,
+  "repository": "https://github.com/ucscGenomeBrowser/kent",
+  "source_revision": "ad6dd2177ad20bea9e32563ee76a1c598bccb6d5",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "f7622c7d89ea92bbc740ed10b47f5ae7c7261b653f241686377a45a02a763fa6",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "b67f55ab201e52d9e77b2064a62e60528b48badfdc04734c3cb63c53fc0ef04f",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41",
+    "working_tree_revision": "round2 shared prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T14:59:19.382920+00:00",
+    "deadline_utc": "2026-09-30T15:09:19.382920+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "b7dcf29603a4f2aacbda04445c4ff6209613de47345a9878c74ecd21bddb243c",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "224b3242866f8a0879b8459ef6434c117cb743c33c9627b987f5067d04419527",
+    "outputs": "outputs/",
+    "agent_task": "/root/round3_ucsc_luna",
+    "launch_observed_at_utc": "2026-09-30T14:59:48.558011+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round3-ucsc-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T15:11:00+00:00",
+    "completion_timestamp_precision": "Approximate parent observation; worker-stated clock information is separate.",
+    "deadline_enforcement": "Instruction only; no runner-enforced timeout."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 7,
+      "datasets": 2
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "normalization": {
+      "outputs/inspection.md": "Trailing spaces removed; exact original UTF-8 content and hash in original-inspection.json."
+    },
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "ee9f9e666bb6881f18721ef12934f7b12bdb35a1576d9b46f16c67f08d4e557f",
+      "outputs/inspection.md": "84f51950adb58cfae5253570ab2498cabdffb7b558a25df37f83280be1f4c7eb",
+      "outputs/units.jsonl": "d453de5623b54bbefd354ee3383fd7604ef4c5f2f3339246f4a88b88dc6cc10a",
+      "original-inspection.json": "f7ea6349c74eefd20102af733b736b34bd5fa31800e6d655a7504bbd8d5a1edd"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T15:12:37.846538+00:00"
+}

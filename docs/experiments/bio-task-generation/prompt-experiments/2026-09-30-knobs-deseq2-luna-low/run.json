@@ -1,0 +1,69 @@
+{
+  "run_id": "2026-09-30-knobs-deseq2-luna-low",
+  "status": "completed and parent-reviewed",
+  "question": "Effect of requested model and reasoning effort with identical prompt and source pin.",
+  "comparison_round": "model-effort",
+  "repository": "https://github.com/thelovelab/DESeq2",
+  "source_revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "cd842438e9da744f5f87dc985c809b7916b120a8c505554e3c8c20359fe6f8f7",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "412f9dfee1358a2af0c86022148b2a348828a0cd16c6a67c96cd8b9f72309c42",
+    "base_commit": "ee7878c383ed5aad15a9398659f1db6e6da6c6b6",
+    "working_tree_revision": "round4 shared loop prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "low",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null,
+    "effective_reasoning_effort": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "launch_message": "launch-message.txt",
+    "source_access": "source-access.txt",
+    "outputs": "outputs/",
+    "budget_minutes": 8,
+    "prepared_at_utc": "2026-09-30T15:29:06.452683+00:00",
+    "deadline_utc": "2026-09-30T15:37:06.452683+00:00",
+    "launch_message_sha256": "2c0b08d256ccaa46fd03daeec9e5a0c6e5358bd2bfad1cfe12c019b12e5225a3",
+    "source_access_sha256": "c3ef467be0d2b063c3f689087292c0bb13bb84311bb8b846aabe772fb512228b",
+    "deadline_enforcement": "Instruction only; no runner-enforced timeout.",
+    "agent_task": "/root/knobs_deseq2_luna_low",
+    "launch_observed_at_utc": "2026-09-30T15:29:06.452683+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-knobs-deseq2-luna-low/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "cutoff_withdrawn_at_utc": "2026-09-30T15:37:55.353547+00:00",
+    "cutoff_withdrawal_reason": "User explicitly rejects artificial per-run time cutoffs; elapsed time is an outcome, not a stopping condition.",
+    "correction_delivery": "collaboration.send_message; original launch instructions preserved as historical inputs",
+    "completion_observed_at_utc": "2026-09-30T15:42:09.759999+00:00",
+    "completion_timestamp_precision": "Parent observation after result arrival; not measured model runtime."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "comparison_eligibility": "Historical/transitional pilot; exclude from clean uncapped model/effort comparison.",
+  "outputs": {
+    "counts": {
+      "units": 5,
+      "datasets": 2
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "5787fb4127ca10ab9ad108fc767872f0cb2ad90dec3890209d2543e10de4c0eb",
+      "outputs/inspection.md": "87a1a1c3396931420b9d565a6890583b687126eca399dc946cdb5861f845795c",
+      "outputs/units.jsonl": "4181b6128abf98e282bfd7e898220291e1e137c23ebf51044f80d5996a3eb07b",
+      "worker-final.txt": "54ea4f141c2f4e4c9909b96ab095909d77b1c2f44e29767c8e0662e41f799dfb",
+      "structural-review.json": "d2eadc511e0817207eb052da99d5a47ea7b67594a501156fb7d30bad88a88be6"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T15:42:09.759999+00:00"
+}

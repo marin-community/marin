@@ -1,0 +1,1 @@
+Completed the assigned inventory with 20 units and 4 dataset records. I added the BLAT sequence-alignment unit and corrected the report’s count and grouping. JSONL fields, IDs, roles, and dataset references validate. I wrote only the three assigned output files; no scientific tools were run.

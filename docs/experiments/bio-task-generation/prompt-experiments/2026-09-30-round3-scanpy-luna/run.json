@@ -1,0 +1,64 @@
+{
+  "run_id": "2026-09-30-round3-scanpy-luna",
+  "status": "completed and parent-reviewed",
+  "question": "How stable are the round 2 findings in a fresh repeat with the identical prompt and source access?",
+  "comparison_round": 3,
+  "repository": "https://github.com/scverse/scanpy",
+  "source_revision": "8c1463d5d97272d5811ad3f4efb57483e23b4c7e",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "f7622c7d89ea92bbc740ed10b47f5ae7c7261b653f241686377a45a02a763fa6",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "b0b989d9f87407747340d24f609d9509304498b07bac2464f46cfdcd37e62f85",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41",
+    "working_tree_revision": "round2 shared prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T15:09:22.091677+00:00",
+    "deadline_utc": "2026-09-30T15:19:22.091677+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "6c2ef29d2f1fd9b639b2df7711bb2f97c8981e62636e9668bdf39121fbe8a595",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "fe5db60183849183b4374eb0dcaa616724bca0da991c113a55022caa3fe208a9",
+    "outputs": "outputs/",
+    "deadline_enforcement": "Instruction only; no runner-enforced timeout.",
+    "agent_task": "/root/round3_scanpy_luna",
+    "launch_observed_at_utc": "2026-09-30T15:09:56.302832+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round3-scanpy-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T15:28:44.548805+00:00",
+    "completion_timestamp_precision": "Parent observation after result arrival; not measured model runtime."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 7,
+      "datasets": 7
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "41c3b86481e4a38c325c5424ca1e6ccd84706c05ba17d907bd487bb392f659e9",
+      "outputs/inspection.md": "a63eb13c97dfce6500996d85927c7b3ba93b2510be27e7fc7505a76fbdf13024",
+      "outputs/units.jsonl": "63971fdb66f8e85a9e7a6c2ce308ed7b8599797b7540dc0d421fb5e015e8043e",
+      "worker-final.txt": "6a07f9e324038385902d30fa8e0530f7bb8fc188a87b1e160d29b62c57ea9090",
+      "structural-review.json": "e3e0bdf5f98a268e12998dd0e1777bd6bc26550d077be9964ca421f41694671f"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T15:28:44.548805+00:00"
+}

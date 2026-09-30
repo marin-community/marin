@@ -1,0 +1,9 @@
+Completed a partial source inventory in:
+
+- [units.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-catalog-ucsc-luna-high/outputs/units.jsonl)
+- [datasets.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-catalog-ucsc-luna-high/outputs/datasets.jsonl)
+- [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-catalog-ucsc-luna-high/outputs/inspection.md)
+
+The inventory has 60 units and 21 dataset records. It maps the 328-entry UCSC utility catalog to 45 unit records and lists the other 283 entries individually as pending, alongside pending API and tutorial leads. JSONL parsing, required fields, unique IDs, roles, and references all validate.
+
+This is a partial checkpoint: substantial accessible catalog and tutorial scope remains. No scientific tools were run or datasets downloaded.

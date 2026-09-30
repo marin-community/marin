@@ -1,0 +1,7 @@
+Completed the assigned partial MMseqs2 inventory:
+
+- [units.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round3-mmseqs2-luna/outputs/units.jsonl) — 11 units
+- [datasets.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round3-mmseqs2-luna/outputs/datasets.jsonl) — 7 records
+- [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round3-mmseqs2-luna/outputs/inspection.md) — source map, coverage gaps, and stopping details
+
+Final JSON validation passed: identifiers are unique and all dataset and unit references resolve. The pass remains partial; two Wiki pages returned browser errors, and other workflows and tutorial sections remain queued. Source inspection only; no scientific workflow was run.

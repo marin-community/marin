@@ -1,0 +1,7 @@
+Completed the assigned inventory:
+
+- [units.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round3-deseq2-luna/outputs/units.jsonl): 10 source-backed units.
+- [datasets.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round3-deseq2-luna/outputs/datasets.jsonl): 2 dataset records, with unresolved provenance and terms called out.
+- [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round3-deseq2-luna/outputs/inspection.md): source map, findings, and remaining leads.
+
+The JSONL files parsed; identifiers were unique and all unit/dataset references resolved. No scientific execution or data download was performed. The pass remains partial because the inspection window expired; I checked at 15:08:36 UTC, nine seconds past the supplied deadline.

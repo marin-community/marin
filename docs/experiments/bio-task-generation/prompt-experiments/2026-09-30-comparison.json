@@ -130,6 +130,12 @@
       "remote_verified_at_utc": "2026-09-30T14:24:00+00:00",
       "scope": "Five reviewed round 1 runs and shared round 2 prompt revision",
       "pull_request": null
+    },
+    {
+      "commit": "ee7878c383ed5aad15a9398659f1db6e6da6c6b6",
+      "branch": "codex/bio-tasks-authoring",
+      "scope": "Five reviewed round 2 runs, observed regressions and execution limitations",
+      "pull_request": null
     }
   ],
   "execution_gap": {
@@ -147,10 +153,43 @@
       "ucsc",
       "scanpy",
       "bedtools"
-    ]
+    ],
+    "first_reviews": {
+      "deseq2": {
+        "units": 10,
+        "datasets": 2,
+        "recovered": "Artificial-label warning",
+        "recurring": "Independent annotation grouped; upstream dataset link missing"
+      },
+      "mmseqs2": {
+        "units": 11,
+        "datasets": 7,
+        "recovered": "Named and dated reference products",
+        "regressed": "Composed tool use classified mixed; independent taxonomy products grouped"
+      },
+      "ucsc": {
+        "units": 7,
+        "datasets": 2,
+        "useful": "Current CLI and format/ploidy constraints",
+        "regressed": "Exclusion annotation grouped with calls; stale pending status"
+      },
+      "bedtools": {
+        "units": 12,
+        "datasets": 9,
+        "recovered": "Tutorial study and reference assets",
+        "recurring": "Mixed role error, stale counts and copied limitations"
+      },
+      "scanpy": {
+        "units": 7,
+        "datasets": 7,
+        "recovered": "Counts layer; coherent final source map",
+        "regressed": "Independent cell-cycle gene-list record omitted",
+        "budget": "At least 2m53s over deadline; parent stop reminder"
+      }
+    }
   },
   "candidate_next_revision": {
-    "status": "not implemented or tested",
+    "status": "implemented as round4; tested separately below",
     "hypotheses": [
       "Tie each handoff-critical claim to a inspected source locator and preserve demonstration-only changes to scientific metadata.",
       "Treat missing release, terms or downloadable assets as limitations rather than admission gates for identified data products.",
@@ -158,5 +197,182 @@
       "Separate partial source states and remove unsupported negative claims about absent state or data."
     ],
     "decision_after": "Review identical-prompt repeats before changing the live prompt."
-  }
+  },
+  "round4": {
+    "status": "DESeq2, MMseqs2 and transitional UCSC completed and reviewed; prepared bedtools/Scanpy runs withdrawn before launch",
+    "prompt_sha256": "cd842438e9da744f5f87dc985c809b7916b120a8c505554e3c8c20359fe6f8f7",
+    "word_count": 1628,
+    "previous_word_count": 2080,
+    "decision_basis": "Round 2 reviews and first three identical-prompt repeats (DESeq2, MMseqs2, UCSC); round 3 bedtools and Scanpy still running against frozen round 2 snapshots.",
+    "changes": [
+      "Inspect-record-check loop with checks before proceeding and budget checks during discovery.",
+      "Preserve demonstration metadata changes and follow input state through setup.",
+      "Require implementation evidence for mixed roles.",
+      "Admit identifiable incomplete data products; group by lineage and separate independently sourced references.",
+      "Report counts once and refresh final source states.",
+      "Use package and documentation metadata as generic discovery routes."
+    ],
+    "controls": "Same five pins, fresh Luna, same retrieval envelope and instructed 10-minute maximum; no repository-specific scientific hints. Bundled changes cannot isolate clause effects.",
+    "reviews": {
+      "deseq2": {
+        "units": 8,
+        "datasets": 3,
+        "retained": "Artificial-label warning and raw versus transformed state",
+        "remaining": "Independent GENCODE reference still grouped",
+        "budget": "About 3m16s overrun, parent reminder"
+      },
+      "mmseqs2": {
+        "units": 7,
+        "datasets": 6,
+        "improved": "Composed workflows tool_use; named incomplete references retained",
+        "remaining": "SRA landing page as asset; stale abundance continuation text",
+        "budget": "About 54s overrun, parent reminder"
+      },
+      "ucsc": {
+        "units": 20,
+        "datasets": 4,
+        "scope": "Cutoff withdrawn while running; transitional pilot",
+        "remaining": "Misses public command catalog linked from README; converter exclusion and incomplete source map; bedPileUps adjacency caveat omitted"
+      }
+    }
+  },
+  "runner_interventions": [
+    {
+      "agent": "/root/round3_scanpy_luna",
+      "at_utc": "2026-09-30T15:21:35+00:00",
+      "message": "Deadline passed; stop new inspection, save partial outputs, finish integrity check and report actual stop plus parent reminder.",
+      "reason": "Worker still running more than two minutes past supplied deadline."
+    },
+    {
+      "agent": "/root/round4_deseq2_luna",
+      "at_utc": "2026-09-30T15:27:00+00:00 (approximate)",
+      "reason": "Deadline passed",
+      "effect": "Worker final check 15:28:07, about 3m16s over deadline"
+    },
+    {
+      "agent": "/root/round4_mmseqs2_luna",
+      "at_utc": "2026-09-30T15:30:24+00:00 (approximate)",
+      "reason": "Deadline passed and stopping evidence referenced earlier checkpoint",
+      "effect": "Worker final clock 15:30:42, about 54s over deadline"
+    }
+  ],
+  "model_effort_comparison": "2026-09-30-model-effort-comparison.json",
+  "record_validation": [
+    {
+      "start_utc": "2026-09-30T15:35:22.394401+00:00",
+      "working_set_estimate_mib": 150,
+      "files": 90,
+      "load": 0.30224609375,
+      "available_bytes": 4654215168,
+      "end_utc": "2026-09-30T15:35:22.827172+00:00",
+      "lint_exit_status": 0,
+      "source_links_exit_status": 0,
+      "peak_child_rss_kib": 33016,
+      "formatter_changed_files": [],
+      "scope": "Completed round3 and first two round4 records, prompt and comparison indexes"
+    },
+    {
+      "start_utc": "2026-09-30T17:41:00.551766+00:00",
+      "working_set_estimate_mib": 150,
+      "files": 197,
+      "load": 0.08935546875,
+      "available_bytes": 4624658432,
+      "end_utc": "2026-09-30T17:41:01.160693+00:00",
+      "lint_exit_status": 1,
+      "source_links_exit_status": 0,
+      "peak_child_rss_kib": 33416,
+      "formatter_changed_files": [
+        "docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-luna-high/worker-final.txt",
+        "docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-luna-low/worker-final.txt",
+        "docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-sol-low/worker-final.txt"
+      ],
+      "scope": "Completed round3/round4/pilot/uncapped/catalog records, prompt and comparison indexes"
+    },
+    {
+      "start_utc": "2026-09-30T17:41:32.037408+00:00",
+      "working_set_estimate_mib": 150,
+      "files": 200,
+      "load": 0.09765625,
+      "available_bytes": 4631777280,
+      "end_utc": "2026-09-30T17:41:32.618004+00:00",
+      "lint_exit_status": 0,
+      "source_links_exit_status": 0,
+      "peak_child_rss_kib": 33588,
+      "formatter_changed_files": [],
+      "scope": "Completed round3/round4/pilot/uncapped/catalog records, prompt and comparison indexes",
+      "artifact_hashes_checked": 215,
+      "local_review_links_checked": 363,
+      "integrity_errors": [],
+      "same_matrix_prompt": true,
+      "live_catalog_prompt_matches_trial": true
+    }
+  ],
+  "user_correction": {
+    "at_utc": "2026-09-30T15:37:55.353547+00:00",
+    "instruction": "No artificial per-run time cutoffs; repository exploration may take a while.",
+    "action": "Withdraw active deadlines; remove artificial time stopping rules from live prompt and future envelopes. Preserve timed historical trials separately. Fresh uncapped model/effort runs follow."
+  },
+  "catalog_revision": {
+    "basis": "User-provided UCSC binary catalog, post-hoc coverage probe; distribution already linked from pinned README",
+    "prompt_sha256": "a080223248fe84b6a10e91ca654b9e933e4230e8bb1cced6ab80fe8631059781",
+    "status": "completed and parent-reviewed; coverage remains partial",
+    "changes": [
+      "Enumerate public command/API catalogs and follow distribution, manifest and combined-help leads",
+      "Account for each operation as inspected unit, alias, specific exclusion or pending lead",
+      "Admit simple extraction, conversion, indexing, filtering and validation operations; task selection happens later"
+    ],
+    "comparison_note": "Uncapped model/effort snapshots remain frozen before this revision",
+    "run": "2026-09-30-catalog-ucsc-luna-high",
+    "controls": "Same UCSC source pin, generic source access, no catalog URL supplied; effort explicit high and no cutoff, so not an isolated prompt effect",
+    "parent_catalog_snapshot": {
+      "retrieved_on": "2026-09-30",
+      "index_url": "https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/",
+      "top_level_file_links": 328,
+      "help_file_links": [
+        "FOOTER",
+        "FOOTER.txt"
+      ],
+      "unit_count": null,
+      "interpretation": "Download entries are discovery candidates, not verified distinct scientific units; subdirectories and semantic classification are not included in this count.",
+      "index_sha256": "070288097a79319d3d0d5439bfa46c3cef70468766a81adb8951d0d730167f79",
+      "usage_sha256": "cbc17187c1aaaa5250d32bc7f7bcf61aba0268b2a4429e7a433253adb51c1df6",
+      "usage_version_labels": {
+        "index_appended_help": 362,
+        "FOOTER.txt": 503,
+        "scope": "Source-version labels in retrieved help; binary/source-commit correspondence not verified."
+      },
+      "usage_command_names": 327,
+      "download_entries_without_same_named_usage": [
+        "genePredCompare",
+        "hgsql",
+        "lastz-1.04.00",
+        "lastz_D-1.04.00",
+        "tabQuery",
+        "udr"
+      ],
+      "usage_names_without_top_level_download": [
+        "blat",
+        "blatHuge",
+        "gfClient",
+        "gfPcr",
+        "gfServer",
+        "gfServerHuge",
+        "isPcr"
+      ],
+      "subdirectories": [
+        "blat/",
+        "multiz/"
+      ]
+    },
+    "result": {
+      "units": 60,
+      "datasets": 21,
+      "catalog_entries": 328,
+      "inspected_catalog_entries": 45,
+      "pending_catalog_entries": 283,
+      "catalog_accounting_errors": [],
+      "review": "Finds catalog and all three withheld command examples; stops with accessible leads, confuses appended and linked help versions, and retains a stale prose unit reference."
+    }
+  },
+  "session_timing_note": "session_deadline_utc records the initial two-hour planning mark only. Work continued beyond it after the user rejected artificial cutoffs; it is not an active worker or session limit."
 }

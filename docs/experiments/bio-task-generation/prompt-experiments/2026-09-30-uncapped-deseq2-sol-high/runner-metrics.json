@@ -1,0 +1,29 @@
+{
+  "start_utc": "2026-09-30T15:48:53.321832+00:00",
+  "working_set_estimate_mib": 400,
+  "command": [
+    "codex",
+    "exec",
+    "--ignore-user-config",
+    "--disable",
+    "memories",
+    "--approve-for-me",
+    "--json",
+    "--model",
+    "gpt-6.1-sol",
+    "--config",
+    "model_reasoning_effort=\"high\"",
+    "--cd",
+    "/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-sol-high/outputs",
+    "--output-last-message",
+    "/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-uncapped-deseq2-sol-high/worker-final.txt",
+    "-"
+  ],
+  "time_cutoff": null,
+  "end_utc": "2026-09-30T16:41:55.809231+00:00",
+  "elapsed_seconds": 3182.487427412998,
+  "exit_status": 1,
+  "peak_child_rss_kib": 328028,
+  "sampled_codex_rss_kib": 254808,
+  "resource_samples": 432
+}
