@@ -29,4 +29,10 @@ python -m experiments.post_training.taskcompendium.ingest_tasktrove
 
 The current public candidate cohorts are `laion__nemotron-gym-knowledge-mcqa-v2`, `laion__nemotron-gym-math-openmathreasoning-v2`, and `laion__nemo-prism-math-v3`. All-puzzles and other deferred sources remain private. The `sft/` split is excluded from the candidate projection even when its source name matches an eligible cohort. Candidate rows omit verifier specifications and gold answers. Route and converter provenance remain in the private catalog and should be joined by task ID when packaging RL and SFT cohorts. The candidate file is not a public release; packaging owns attribution, lineage caveats, and any eventual upload.
 
+After an ingestion run has status `complete`, run `audit_tasktrove_ingest.py` in the same region with `TASKTROVE_OUTPUT_URI` pointing at its durable prefix. It reads only the manifest, ledger, candidate JSONL, and proof JSONL; it does not read private catalog specifications or source archive bytes. It writes `ingestion-audit.json` beside the run and a small Iris output summary. The report counts each ledger disposition by split, source, mode, family, converter, and original tag; tag counts increment once per distinct tag on a row. It also checks that every eligible imported task has exactly one allowlisted PublicTask-v1 candidate and one matching source-proof row, including the archive SHA256, and verifies artifact hashes against the ingestion manifest. A failed audit blocks the candidate handoff.
+
+```bash
+python -m experiments.post_training.taskcompendium.audit_tasktrove_ingest
+```
+
 The default internal runtime cap is 840 seconds (`TASKTROVE_INGEST_RUNTIME_SECONDS`). If the scan reaches that cap or hits an unexpected input/storage error, the runner closes its Parquet writers, writes an `ingestion-manifest.json` with `status: partial` and completed-row counts, then exits with an error. The ledger count is the completed prefix; a partial run never implies full-release counts.
