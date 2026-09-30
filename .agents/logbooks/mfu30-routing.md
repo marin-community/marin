@@ -288,3 +288,17 @@ On four GPUs the pipelining costs 8.7 ms per 3-layer step inside D (it helps +2.
 parameters are neutral (their saving is per-rank latency of two offset all-to-alls, larger at EP64). Branch head
 6a6bb78853 keeps the mirror parameters and sequential chunks; a1d699e67e is the pipelined variant if the rack
 says otherwise. Gate for 6a6bb78853: `m30b-gate-mirror-01`.
+
+## M30B-016 Gates: D + mirror (6a6bb78853) passes; E (SwiGLU backward in the dh GEMM epilogue) built
+
+`m30b-gate-mirror-01` (6a6bb78853 = D + mirror params, sequential chunks): single layer identical to D (out,
+drops, dx, dW13, dW2 equal to main; dS within rounding); scan main 341.2 / D 299.4 / D+mirror 298.8 ms;
+pytest 86 passed + the same 3 GPU-only failures. This is the version for C's stack.
+
+E (12643e682c): QuACK's grouped dh GEMM with a custom `packed_cd_b16x2` epilogue (`_dswiglu_row_dot_epilogue`,
+QuACK's `dswiglu` + a scaled `ColVecReduce` for <h, dh>) replaces dh + the XLA SwiGLU-backward pass.
+Single GB200, one chunk at hero per-shard shapes (C=301466, 262144 active rows, H=I=3072), `m30b-dswiglu-01`:
+fused 3.54 ms vs dh GEMM + XLA pass 5.10 ms (dh GEMM alone 3.04 ms): -1.56 ms per call, ~-0.15 s/step at
+96 calls. d_gate_up max 0.83% of the largest value (mean 5e-5), row dot max 0.17%: rounding level (fp32
+SwiGLU backward on the unrounded accumulator). Changes dx and dW13 at rounding level, so the gate now
+compares those to rounding (median and max) and keeps out/drops/dW2 exact. Gate `m30b-gate-epi-02`.
