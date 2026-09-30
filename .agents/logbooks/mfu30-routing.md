@@ -107,3 +107,23 @@ custom-call output cannot be cloned, so the clone and the original share it and 
   expert MLP) and an accepted-prefix reference test. Gate adds `quack_contract.py` (each QuACK grouped
   GEMM with NaN vs zero rows past `cu[-1]`) and `scan_compare.py` (control / chain / candidate in a
   rematted scan: fills, copies, temp bytes, step time).
+
+## M30B-007 Candidate C gate: exact, no fills, +1.5-3% per MoE layer over B (2026-09-30)
+
+Job `/mwittmann/m30b-gate-unfilled-01` (GB200x4, hero env), branch 2c.. (candidate C).
+
+- Routing gate, all six cases (drops, padding, one-hot, hero shapes): candidate C is bitwise equal to main
+  in the output, drop count and all four gradients. Main repeatable.
+- One MoE layer fwd+bwd at hero per-shard shapes, main / chain (A+B) / C: uniform 87.74 / 84.83 / 83.73 ms
+  (C +4.8% vs main); skewed with drops 83.50 / 81.57 / 79.95 ms (+4.4%).
+- `quack_contract.py`: gated forward, down forward, dh, dx, dw2 and dw13 give identical finite active
+  rows (weight gradients: identical) with NaN or zero rows past `cu[-1]`.
+- `scan_compare.py` (3 rematted layers, T/shard 32768, H=I=2048): main has 7 fills in the backward loop
+  and 3 in the forward loop, chain 6 + 3, C none and no copies (10 no-op kernels). Temp 8.419 / 8.393 /
+  8.394 GB. Final loss identical. Step 91.25 / 88.48 / 85.96 ms: chain +3.1%, C +6.1% vs main.
+- GPU pytest (`test_grugformer_moe.py`): 79 passed, 3 failed, the same three that fail with the inverse-only
+  and chain branches: `test_moe_ep_path_lowers_on_abstract_mesh[ragged_all_to_all]`,
+  `test_moe_mlp_runs_with_ep_axis_when_available`,
+  `test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity`. All three feed float32
+  activations into the SM100 QuACK path, which asserts "gated aux output must be 16-bit". CI runs these on
+  CPU, where the ragged path is skipped, so they are GPU-only failures independent of this branch.
