@@ -7,7 +7,7 @@ python autoresearch/loop-260930-mfu30/b/routing_gate.py "$@"
 gate_status=$?
 python autoresearch/loop-260930-mfu30/b/quack_contract.py
 contract_status=$?
-python autoresearch/loop-260930-mfu30/b/scan_compare.py
+python autoresearch/loop-260930-mfu30/b/scan_compare.py control sonic candidate
 scan_status=$?
 uv pip install --quiet pytest >/dev/null 2>&1 || echo "pytest install failed"
 python -m pytest -o addopts="" -p no:cacheprovider -q -rf --tb=short lib/levanter/tests/grug/test_grugformer_moe.py lib/levanter/tests/kernels/test_quack_expert_mlp.py 2>&1 | tail -80
