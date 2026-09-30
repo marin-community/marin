@@ -181,10 +181,18 @@ def test_retraction_puts_scaled_updates_back_on_the_sphere(per_expert):
 
 def test_consistency_metrics_report_the_per_expert_multipliers():
     opt = scale_by_expert_consistency(optax.identity(), momentum=0.9, beta2=0.99)
-    state = opt.init(jnp.zeros((2, 6, 5)))
-    for step in range(40):
-        noise = jax.random.normal(jax.random.PRNGKey(step), (6, 5))
-        _, state = opt.update(jnp.stack([jnp.ones((6, 5)), noise]), state)
-    metrics = expert_consistency_metrics(state)
+
+    @jax.jit
+    def run(ones, noise_keys):
+        # Expert-sharded like the model's [L, E, in, out] stacks, so the metrics must flatten a sharded leaf.
+        grads = reshard(jnp.stack([ones, ones]), P(None, "expert", None, None))
+        state = opt.init(grads)
+        for key in noise_keys:
+            noisy = jnp.stack([ones, jax.random.normal(key, ones.shape)])
+            _, state = opt.update(reshard(noisy, P(None, "expert", None, None)), state)
+        return expert_consistency_metrics(state)
+
+    with jax.set_mesh(t._mesh()):
+        metrics = run(jnp.ones((2, 6, 5)), list(jax.random.split(jax.random.PRNGKey(0), 40)))
     assert float(metrics["train/expert_consistency_p90"]) > 0.9
     assert float(metrics["train/expert_consistency_p10"]) < 0.3

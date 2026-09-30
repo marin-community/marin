@@ -911,7 +911,12 @@ def expert_consistency_metrics(opt_state) -> dict[str, jax.Array]:
         for x in jax.tree.leaves(opt_state, is_leaf=lambda x: isinstance(x, ExpertConsistencyState))
         if isinstance(x, ExpertConsistencyState)
     ]
-    scales = [s.reshape(-1) for state in states for s in jax.tree.leaves(state.scale)]
+    # The multipliers keep the expert axis sharding; replicate them before flattening.
+    scales = [
+        jax.sharding.reshard(s, jax.sharding.PartitionSpec()).reshape(-1)
+        for state in states
+        for s in jax.tree.leaves(state.scale)
+    ]
     if not scales:
         return {}
     flat = jnp.concatenate(scales)
