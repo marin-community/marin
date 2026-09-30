@@ -166,10 +166,17 @@ class AnswerCall(Convention):
 class FinalAction(Convention):
     answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
 
+    require_call: bool = False
+    max_calls: int | None = Field(default=None, gt=0)
+
     async def extract(self, attempt: GradingAttempt) -> ActionSubmission:
         final = attempt.conversation.events[-1]
         if not isinstance(final, (TextMessage, AssistantToolCalls)):
             raise SubmissionFailure("Final action requires an assistant message")
+        if self.require_call and not isinstance(final, AssistantToolCalls):
+            raise SubmissionFailure("Final action requires a function call")
+        if isinstance(final, AssistantToolCalls) and self.max_calls is not None and len(final.calls) > self.max_calls:
+            raise SubmissionFailure(f"Final action permits at most {self.max_calls} function calls")
         return ActionSubmission(final)
 
 
@@ -236,29 +243,19 @@ def submission_compatible(specification: TaskSpec, convention: SubmissionConvent
         )
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
         reasons = []
-        if not specification.final_tools.functions:
+        if not specification.final_tools:
             reasons.append("final action requires at least one final tool")
-        if specification.final_tools.tool_choice == "none":
-            reasons.append("final action conflicts with tool_choice=none")
         return SubmissionCompatibility(tuple(reasons))
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         reasons = []
-        if specification.final_tools.tool_choice == "none":
-            reasons.append("answer call conflicts with tool_choice=none")
-        if any(function.name == ANSWER_CALL_NAME for function in specification.final_tools.functions):
+        if any(function.name == ANSWER_CALL_NAME for function in specification.final_tools):
             reasons.append("final tool name collides with submit_answer")
         return SubmissionCompatibility(tuple(reasons))
     if convention.answer_format == AnswerFormat.STATE:
         reasons = []
-        if specification.final_tools.functions:
+        if specification.final_tools:
             reasons.append("state submission does not carry final tools")
-        if specification.final_tools.tool_choice is not None:
-            reasons.append("state submission does not carry final tool choice")
-        if specification.final_tools.parallel_tool_calls is not None:
-            reasons.append("state submission does not carry final tool parallel policy")
         return SubmissionCompatibility(tuple(reasons))
-    if specification.final_tools.tool_choice == "required":
-        return SubmissionCompatibility(("text submission conflicts with tool_choice=required",))
     return SubmissionCompatibility(())
 
 
@@ -329,16 +326,16 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     request: dict[str, Any] = {"messages": messages}
     tools: list[dict[str, object]] = [
         {"type": "function", "function": function.model_dump(exclude_none=True)}
-        for function in specification.final_tools.functions
+        for function in specification.final_tools
     ]
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         tools.append(answer_call_tool())
-        if not specification.final_tools.functions:
-            request.update(tool_choice="required", parallel_tool_calls=False)
+        request.update(tool_choice="required", parallel_tool_calls=False)
     if tools:
         request["tools"] = tools
-    if specification.final_tools.tool_choice is not None:
-        request["tool_choice"] = specification.final_tools.tool_choice
-    if specification.final_tools.parallel_tool_calls is not None:
-        request["parallel_tool_calls"] = specification.final_tools.parallel_tool_calls
+    if isinstance(convention, FinalAction):
+        if convention.require_call:
+            request["tool_choice"] = "required"
+        if convention.max_calls == 1:
+            request["parallel_tool_calls"] = False
     return request
