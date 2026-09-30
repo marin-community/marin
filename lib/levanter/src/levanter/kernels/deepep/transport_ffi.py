@@ -23,6 +23,7 @@ import jax
 import jax.numpy as jnp
 import jaxlib
 import numpy as np
+from shape_extensions import Int, IntVar
 
 from levanter.kernels.deepep.availability import (
     BUILD_WITH_TORCH_EXTENSION_ENV,
@@ -815,9 +816,9 @@ def run_host_dispatch_round(
     return result
 
 
-def _resolve_runtime(
+def _resolve_runtime[T: IntVar, H: IntVar](
     *,
-    x: jax.Array,
+    x: jax.Array[[T, H]],
     num_ranks: int,
     dispatch_config: IntranodeConfig | None,
     combine_config: IntranodeConfig | None,
@@ -833,13 +834,13 @@ def _resolve_runtime(
     return dispatch_config or _default_dispatch_config(num_ranks)
 
 
-def _dispatch_intranode_impl(
-    x: jax.Array,
-    topk_idx: jax.Array,
-    topk_weights: jax.Array,
-    num_tokens_per_rank: jax.Array,
-    num_tokens_per_expert: jax.Array,
-    is_token_in_rank: jax.Array,
+def _dispatch_intranode_impl[T: IntVar, H: IntVar, K: IntVar, R: IntVar, E: IntVar](
+    x: jax.Array[[T, H]],
+    topk_idx: jax.Array[[T, K]],
+    topk_weights: jax.Array[[T, K]],
+    num_tokens_per_rank: jax.Array[[R]],
+    num_tokens_per_expert: jax.Array[[E]],
+    is_token_in_rank: jax.Array[[T, R]],
     *,
     num_experts: int,
     dispatch_config: IntranodeConfig | None,
@@ -848,6 +849,18 @@ def _dispatch_intranode_impl(
 ) -> tuple[
     jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
 ]:
+    """Run the DeepEP intranode dispatch FFI target.
+
+    Returns a 10-tuple: ``recv_x [max_recv_tokens, H]``, ``recv_topk_idx``/``recv_topk_weights``
+    ``[max_recv_tokens, topk]``, ``recv_src_idx [max_recv_tokens]``, ``rank_prefix_matrix
+    [num_ranks, num_ranks]``, two channel prefix matrices ``[num_ranks, num_channels]``,
+    ``send_head [T, num_ranks]``, ``num_recv_tokens_per_expert_list [local_experts]``, and
+    ``num_recv_tokens [1]``. ``max_recv_tokens`` and ``num_channels``/``local_experts`` are
+    runtime-computed capacities (an optional argument resolved to a default, and
+    ``num_sms // 2`` / ``num_experts // num_ranks``), not expressible as bound type
+    parameters, and `jax.ffi.ffi_call`'s result is unchecked past `Sequence[Array]` regardless
+    -- so the return stays bare `jax.Array` rather than a shape claim pyrefly cannot verify.
+    """
     num_ranks = int(num_tokens_per_rank.shape[0])
     resolved_dispatch_config = _resolve_runtime(
         x=x,
@@ -910,17 +923,23 @@ def _dispatch_intranode_impl(
     )
 
 
-def _dispatch_intranode_cached_impl(
-    x: jax.Array,
-    is_token_in_rank: jax.Array,
-    rank_prefix_matrix: jax.Array,
+def _dispatch_intranode_cached_impl[T: IntVar, H: IntVar, R: IntVar, M: IntVar](
+    x: jax.Array[[T, H]],
+    is_token_in_rank: jax.Array[[T, R]],
+    rank_prefix_matrix: jax.Array[[R, R]],
     channel_prefix_matrix: jax.Array,
     num_recv_tokens: jax.Array,
     *,
     dispatch_config: IntranodeConfig | None,
     combine_config: IntranodeConfig | None,
-    max_recv_tokens: int,
-) -> jax.Array:
+    max_recv_tokens: Int[M],
+) -> jax.Array[[M, H]]:
+    """Re-run intranode dispatch from a cached routing decision (used for the combine VJP).
+
+    The declared `[M, H]` return shape follows from `max_recv_tokens` (bound as `Int[M]`) and
+    `x`'s hidden dim, but is not checker-verified: `jax.ffi.ffi_call` returns bare/gradual
+    `Array`s regardless of the `jax.ShapeDtypeStruct`s passed to it.
+    """
     if max_recv_tokens <= 0:
         raise ValueError(f"max_recv_tokens must be positive, got {max_recv_tokens}")
     num_ranks = int(rank_prefix_matrix.shape[0])
@@ -943,7 +962,7 @@ def _dispatch_intranode_cached_impl(
         jax.ShapeDtypeStruct((num_ranks, num_channels), jnp.int32),
         jax.ShapeDtypeStruct((x_bf16.shape[0], num_ranks), jnp.int32),
     )
-    recv_x, _, _, _ = jax.ffi.ffi_call(
+    recv_x_raw, _, _, _ = jax.ffi.ffi_call(
         _DISPATCH_CACHED_TARGET,
         result_shape_dtypes,
         has_side_effect=True,
@@ -955,20 +974,28 @@ def _dispatch_intranode_cached_impl(
         channel_prefix_matrix_i32,
         num_recv_tokens_i32,
     )
+    # Unshaped, the FFI result would make the masked `where` below come out as [M, 1].
+    # pyrefly: ignore[bad-assignment]  # ffi_call returns real jax Arrays, a distinct class from the stubs' Array.
+    recv_x: jax.Array[[M, H]] = recv_x_raw
     recv_token_limit = jnp.squeeze(num_recv_tokens_i32, axis=0)
     recv_valid = jnp.arange(max_recv_tokens, dtype=jnp.int32) < recv_token_limit
     return jnp.where(recv_valid[:, None], recv_x, 0)
 
 
-def _combine_intranode_impl(
-    recv_x: jax.Array,
-    recv_topk_weights: jax.Array,
+def _combine_intranode_impl[M: IntVar, H: IntVar, K: IntVar, R: IntVar, T: IntVar](
+    recv_x: jax.Array[[M, H]],
+    recv_topk_weights: jax.Array[[M, K]],
     recv_src_idx: jax.Array,
-    rank_prefix_matrix: jax.Array,
+    rank_prefix_matrix: jax.Array[[R, R]],
     channel_prefix_matrix: jax.Array,
-    send_head: jax.Array,
+    send_head: jax.Array[[T, R]],
     num_recv_tokens: jax.Array,
 ) -> tuple[jax.Array, jax.Array]:
+    """Run the DeepEP intranode combine FFI target.
+
+    Returns ``(combined_x [T, H], combined_topk_weights [T, topk])``; not checker-verified
+    against `send_head`'s `T`, for the same `jax.ffi.ffi_call` reason as the dispatch impls.
+    """
     _register_targets()
     recv_x_bf16 = jnp.asarray(recv_x, dtype=jnp.bfloat16)
     recv_topk_weights_f32 = jnp.asarray(recv_topk_weights, dtype=jnp.float32)
@@ -1002,13 +1029,13 @@ def _combine_intranode_impl(
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(6, 7, 8, 9))
-def _dispatch_intranode_with_vjp(
-    x: jax.Array,
-    topk_idx: jax.Array,
-    topk_weights: jax.Array,
-    num_tokens_per_rank: jax.Array,
-    num_tokens_per_expert: jax.Array,
-    is_token_in_rank: jax.Array,
+def _dispatch_intranode_with_vjp[T: IntVar, H: IntVar, K: IntVar, R: IntVar, E: IntVar](
+    x: jax.Array[[T, H]],
+    topk_idx: jax.Array[[T, K]],
+    topk_weights: jax.Array[[T, K]],
+    num_tokens_per_rank: jax.Array[[R]],
+    num_tokens_per_expert: jax.Array[[E]],
+    is_token_in_rank: jax.Array[[T, R]],
     num_experts: int,
     dispatch_config: IntranodeConfig | None,
     combine_config: IntranodeConfig | None,
@@ -1120,16 +1147,16 @@ _dispatch_intranode_with_vjp.defvjp(
 
 
 @jax.custom_vjp
-def _combine_intranode_with_vjp(
-    recv_x: jax.Array,
-    recv_topk_weights: jax.Array,
+def _combine_intranode_with_vjp[M: IntVar, H: IntVar, K: IntVar, R: IntVar, T: IntVar](
+    recv_x: jax.Array[[M, H]],
+    recv_topk_weights: jax.Array[[M, K]],
     recv_src_idx: jax.Array,
-    rank_prefix_matrix: jax.Array,
+    rank_prefix_matrix: jax.Array[[R, R]],
     dispatch_channel_prefix_matrix: jax.Array,
     recv_channel_prefix_matrix: jax.Array,
-    send_head: jax.Array,
+    send_head: jax.Array[[T, R]],
     num_recv_tokens: jax.Array,
-    is_token_in_rank: jax.Array,
+    is_token_in_rank: jax.Array[[T, R]],
 ) -> tuple[jax.Array, jax.Array]:
     return _combine_intranode_impl(
         recv_x,
@@ -1218,13 +1245,13 @@ _combine_intranode_with_vjp.defvjp(
 )
 
 
-def deepep_dispatch_intranode(
-    x: jax.Array,
-    topk_idx: jax.Array,
-    topk_weights: jax.Array,
-    num_tokens_per_rank: jax.Array,
-    num_tokens_per_expert: jax.Array,
-    is_token_in_rank: jax.Array,
+def deepep_dispatch_intranode[T: IntVar, H: IntVar, K: IntVar, R: IntVar, E: IntVar](
+    x: jax.Array[[T, H]],
+    topk_idx: jax.Array[[T, K]],
+    topk_weights: jax.Array[[T, K]],
+    num_tokens_per_rank: jax.Array[[R]],
+    num_tokens_per_expert: jax.Array[[E]],
+    is_token_in_rank: jax.Array[[T, R]],
     *,
     num_experts: int,
     dispatch_config: IntranodeConfig | None = None,
@@ -1233,6 +1260,11 @@ def deepep_dispatch_intranode(
 ) -> tuple[
     jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
 ]:
+    """Dispatch tokens to experts across local GPUs via DeepEP's intranode FFI kernel.
+
+    See `_dispatch_intranode_impl` for the returned 10-tuple's fields; the return type
+    stays bare `jax.Array` because `jax.ffi.ffi_call`'s result is unchecked (see there).
+    """
     return _dispatch_intranode_with_vjp(
         x,
         topk_idx,
@@ -1247,17 +1279,22 @@ def deepep_dispatch_intranode(
     )
 
 
-def deepep_combine_intranode(
-    recv_x: jax.Array,
-    recv_topk_weights: jax.Array,
+def deepep_combine_intranode[M: IntVar, H: IntVar, K: IntVar, R: IntVar, T: IntVar](
+    recv_x: jax.Array[[M, H]],
+    recv_topk_weights: jax.Array[[M, K]],
     recv_src_idx: jax.Array,
-    rank_prefix_matrix: jax.Array,
+    rank_prefix_matrix: jax.Array[[R, R]],
     dispatch_channel_prefix_matrix: jax.Array,
     recv_channel_prefix_matrix: jax.Array,
-    send_head: jax.Array,
+    send_head: jax.Array[[T, R]],
     num_recv_tokens: jax.Array,
-    is_token_in_rank: jax.Array,
+    is_token_in_rank: jax.Array[[T, R]],
 ) -> tuple[jax.Array, jax.Array]:
+    """Combine per-rank partial outputs back to the original token order.
+
+    Returns ``(combined_x [T, H], combined_topk_weights [T, topk])``; the return type
+    stays bare `jax.Array` for the same `jax.ffi.ffi_call` reason as `_combine_intranode_impl`.
+    """
     return _combine_intranode_with_vjp(
         recv_x,
         recv_topk_weights,

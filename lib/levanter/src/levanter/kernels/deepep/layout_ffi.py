@@ -18,6 +18,8 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import jaxlib
+from shape_extensions import IntVar
+
 from levanter.kernels.deepep.availability import (
     LAYOUT_REQUIRED_FILES,
     deepep_cache_root,
@@ -117,13 +119,21 @@ def _register_target() -> None:
     _register_target._done = True
 
 
-def deepep_get_dispatch_layout(
-    topk_idx: jax.Array,
+def deepep_get_dispatch_layout[T: IntVar, K: IntVar](
+    topk_idx: jax.Array[[T, K]],
     *,
     num_ranks: int,
     num_experts: int,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Run DeepEP's CUDA dispatch-layout kernel via JAX FFI."""
+    """Run DeepEP's CUDA dispatch-layout kernel via JAX FFI.
+
+    Returns ``(num_tokens_per_rank[num_ranks], num_tokens_per_expert[num_experts],
+    is_token_in_rank[tokens, num_ranks])``; a fourth kernel output (per-token rank/expert
+    indices, ``[tokens, topk * 2]``) is computed but discarded here. The declared return
+    type is not checker-verified: ``jax.ffi.ffi_call`` is untyped past `Sequence[Array]`
+    regardless of the `jax.ShapeDtypeStruct`s passed in, so these shapes are asserted by the
+    docstring/caller contract, not by pyrefly.
+    """
     _register_target()
     topk_idx_i32 = jnp.asarray(topk_idx, dtype=jnp.int32)
     tokens, topk = topk_idx_i32.shape

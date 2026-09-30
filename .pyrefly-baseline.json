@@ -5461,13 +5461,6 @@
       "severity": "error"
     },
     {
-      "column": 43,
-      "path": "lib/levanter/src/levanter/kernels/deepep/transport_ffi.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `jax._src.basearray.Array` is not assignable to parameter `x` with type `jax._array.Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
-      "severity": "error"
-    },
-    {
       "column": 12,
       "path": "lib/levanter/src/levanter/kernels/deepep/transport_ffi.py",
       "name": "bad-return",
