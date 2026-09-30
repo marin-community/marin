@@ -117,14 +117,14 @@ def save_hf_shards(
 ) -> list[HFShardRecord]:
     """Gather and save a fixed HF shard layout on all initialized JAX processes.
 
-    All ranks supply the same layout and load the same keys in the same order.
-    Replicate one tensor at a time, then split its first axis on the host when
-    tensor_names maps it to multiple output names. This avoids device copies of
-    entire expert layers. Only process zero retains a shard's host arrays or writes.
+    All ranks supply the same layout and load matching keys, shapes and dtypes.
+    Device staging requires space for one full tensor. tensor_names expands a
+    tensor's first axis into named outputs. Only process zero retains host shards or writes.
 
     Reserve twice each shard's payload for host arrays and serialization buffers;
     an oversized shard runs alone. One writer bounds staging to one shard plus
-    serialization buffers. Writer failures reach every rank before further gathers.
+    serialization buffers. One writer finishes before inspecting the next shard.
+    Concurrent writer failures propagate to every rank through matched collectives.
 
     Without progress, existing shard files are overwritten. With progress, verify
     identity, names, size and freshly computed SHA-256 before skipping any gather.

@@ -24,7 +24,6 @@ from experiments.grug.moe_hero_ep.model import GrugModelConfig, grugmoe_inferenc
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.weights import restore_weights
 
-logger = logging.getLogger(__name__)
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"

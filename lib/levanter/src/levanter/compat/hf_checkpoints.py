@@ -1117,7 +1117,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
         All initialized JAX processes must call this with the same model and options.
-        Shard and metadata writer failures propagate to every process before further gathers.
+        Shard and metadata writer failures propagate to every process through matched collectives.
         """
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
