@@ -273,3 +273,18 @@ D+mirror+E 290.3 (-2.8 ms/layer, ~-0.13 s/step).
 Arms queued: `m30b-unfilled-02` (A+B+C), `m30b-sonic-01` (D + H-A4 flag, remat VLOG, doubles as smoke).
 Next: C integrates 12643e682c into the stack (plus #9481's model commits, pgle_profile, norm kernel)
 and queues the stacked trace arm now.
+
+## M30-013 Agent B: idle and exposed-collective classification of the baseline (2026-09-30)
+
+Tool `autoresearch/loop-260930-mfu30/b/exposure.py` (per-instance time above the fastest instance of the
+same instruction ~ waiting). Device idle 0.346 s/step: 0.323 step tail (last kernel -> next launch;
+outside `throughput/duration`), 0.007 dispatch-to-first-kernel, 0.017 internal gaps (all < 50 us), so it
+is not an MFU lever. Exposed collectives 1.681 s/step: chunk-0 ragged transports 0.669 (fwd dispatch
+0.183, fwd return 0.153, recompute dispatch 0.153, recompute return 0.181; min ~ median, so this is
+transfer, not skew). The scheduler spends each layer's ~10 ms of shared-expert GEMMs on chunk 1 and leaves
+chunk 0's ~6.9 ms bare; D removes the recompute return; pipelining (#9481) targets the rest. Rank-skew
+waits ~0.40 (u32 drop-count all-reduce 0.241, QB pmin/pmax 0.04, recompute group-size all-gather 0.048, norm
+all-reduce 0.019): structural. XLA remat clones 0.246 (A's flag). FSDP gathers + gradient reduce-scatter
+~0.27, mostly waits (PGLE). Offset all-to-alls 0.010 (mirror params). Pipelined D variant
+`research/mcwitt/mfu30-routing-pipelined` @ 64909b24d0 (values identical). C to queue two stacked trace
+arms, pipelined first, then sequential; the winner gets the PGLE build.
