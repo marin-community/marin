@@ -1,0 +1,58 @@
+# mfu30 agent A: host-offload exposure
+
+Branch `research/mcwitt/mfu30-offload` (worktree `~/projects/marin.mfu30-offload`), based on
+`research/mcwitt/mfu30` (main `f38da1173d`). Parent logbook: `.agents/logbooks/mfu30.md`. Runs `m30a-*`,
+ports 33100-33149.
+
+## M30A-001 Memory picture from the baseline trace (2026-09-30)
+
+Source: `overlap-remeasure-main-144k` xplane (main `8d70d9cbb0`). The xplane's train-step `HloProto`
+carries the full `BufferAssignmentProto` (field 3), so the arena layout is readable offline
+(`bufassign.py`, `instr_ids.py`, `liveness2.py` in the session scratchpad).
+
+Per-device entry I/O: device inputs 35.09 GiB (fp32 params), pinned-host inputs 38.55 GiB (optimizer
+state). The host state is three f32[48,6,3072,3072] expert momentum shards (3 x 10.125 GiB), Adam m/v of
+the replicated f32[128256,6144] token embedding (2 x 2.94 GiB), router Adam m/v (2 x 0.42 GiB), and ~1.5
+GiB of small leaves.
+
+Allocations: device temp arena 67.49 GiB (color 0), host temp 36.0 GiB (color 5, the offloaded layer
+carry stack bf16[48,16,4096,6144]), collective buffers 18.9 GiB (color 1). Peak 103.09 GiB = 35.6
+persistent + 67.5 arena, which matches W&B `memory/peak_gib`.
+
+Arena usage over the schedule (buffer offsets + HLO liveness): forward loop ~35 GiB, backward loop ~63.5
+GiB (bf16 expert weight casts 15.2 + bf16 expert grad accumulators 15.2 + body temps), optimizer phase
+peak 67.49 GiB when the three momentum H2D copies have landed (copy-start.44 -> .43 -> .42 at 38 -> 48 ->
+58 -> 67.5 GiB).
+
+H-A1 (all optimizer state resident) estimate: persistent 35.6 + 38.55 = 74.2 GiB; the optimizer phase
+loses its 30 GiB of momentum copies, so the arena becomes the backward peak (~63.5 GiB, more once remat
+is relaxed). Peak ~137-142 GiB against the 138.2 GiB release threshold, and the scheduler limit
+`(0.8 x 184.3 - device_io) x 0.85` drops from ~95.5 to ~62.7 GiB. Does not fit at 0.75 without
+raising both the fraction and the slop factor. Parked behind the cheaper finding below.
+
+Schedule: the three momentum D2H copies (`copy-start.97/.98/.99`) sit 10 instructions before their
+`copy-done` at the very end of the step, although the new momentum is ready ~2,700 instructions earlier.
+The GPU LHS falls back to the T-shirt `GpuLatencyEstimator` (the SOL estimator rejects ragged
+all-to-all), which gives every async copy 5,000 units regardless of 10 GiB size. PGLE (another session)
+may move them; code-level ties are the fallback.
+
+## M30A-002 XLA remat counts the host carry stack as device memory (2026-09-30)
+
+`HloRematerialization` (post-scheduling) zeroes host-memory-space buffers only when
+`--xla_gpu_enable_host_memory_offloading` is set (`AllocatedSize` in hlo_rematerialization.cc, checked at
+the pinned PJRT commit `708c3a4ec79c`). The hero leaves it false, so remat sees the 36 GiB pinned-host
+carry stack as device temps in main and charges it against the backward body's limit
+(`limit - caller usage at the while`).
+
+Evidence in the baseline HLO: 143 `*.remat*` instructions, 84 of them in the backward body
+`region_81.191_spmd` (10.6 GiB of recomputed values), including a synchronous `all-gather.127.remat`
+per layer. Trace cost: **0.633 s/step on the compute stream** (0.630 in the backward body; 0.227 of it is
+the sync all-gather remat, mostly rank-skew wait; 0.11 overlaps collectives).
+
+The LHS memory tracker also counts host bytes (`ShapeSizeBytesFunction` without a memory-space filter)
+and is unaffected by the flag, so the schedule stays as conservative as today; only the remat clones go.
+
+H-A4: `XLA_FLAGS=--xla_gpu_enable_host_memory_offloading=true`. Prediction: remat count -> ~0, compute
+stream -0.4 s, step -0.3 to -0.5 s, arena +5-10 GiB (peak ~110 GiB). Numerics unchanged (remat recomputes
+identical values). Engagement: TF_CPP remat logs (dispatch.py now forwards `TF_CPP_*`) and the profile's
+`*.remat*` kernel count.
