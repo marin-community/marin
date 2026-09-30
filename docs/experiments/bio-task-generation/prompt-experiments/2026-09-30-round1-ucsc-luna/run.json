@@ -1,0 +1,60 @@
+{
+  "run_id": "2026-09-30-round1-ucsc-luna",
+  "status": "completed and reviewed; targeted semantic findings remain",
+  "question": "How does the current single-worker inventory prompt transfer across five repository types?",
+  "comparison_round": 1,
+  "repository": "https://github.com/ucscGenomeBrowser/kent",
+  "source_revision": "ad6dd2177ad20bea9e32563ee76a1c598bccb6d5",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "57ab760e85f2be34a0169883cc5cb82cf87fd432632222b88795eabd1afdf018",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "c1e77ffbd1031b49c39ec96bc0dc71e7269c65e2cf1e37edad39f5d86ca846f1",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T14:07:59.456063+00:00",
+    "deadline_utc": "2026-09-30T14:17:59.456063+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "834691b4110c70de6a5a7514c4dfd93c39cba37dcc6a94b008b440e515de6b9f",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "224b3242866f8a0879b8459ef6434c117cb743c33c9627b987f5067d04419527",
+    "outputs": "outputs/",
+    "agent_task": "/root/round1_ucsc_luna",
+    "launch_observed_at_utc": "2026-09-30T14:08:45.223505+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round1-ucsc-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T14:14:46+00:00",
+    "completion_timestamp_precision": "Parent observation approximate to the minute; worker stop time, where supplied, is separate."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 4,
+      "datasets": 2
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; scientific claims and source-map prose reviewed separately.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "31828b0c5e63ed306de996616cce5adcfb673f56ac52c0ba3cc529c0652eae0b",
+      "outputs/inspection.md": "4f8f9a24c8e6019f109efe894900ba1a4ad18f5ce1840edaf0c5487502dbbf9c",
+      "outputs/units.jsonl": "77bbd77f10d758b58a13af1aae1e85d4b46d8eb84ddc8b0e63745785ee3f0a59"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T14:17:28.531746+00:00"
+}

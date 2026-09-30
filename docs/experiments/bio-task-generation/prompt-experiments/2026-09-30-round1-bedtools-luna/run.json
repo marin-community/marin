@@ -1,0 +1,59 @@
+{
+  "run_id": "2026-09-30-round1-bedtools-luna",
+  "status": "completed and reviewed; targeted semantic findings remain",
+  "question": "How does the current single-worker inventory prompt transfer across five repository types?",
+  "comparison_round": 1,
+  "repository": "https://github.com/arq5x/bedtools2",
+  "source_revision": "614e9a5c5935ab86e873dab9072fbbaf003c1b7e",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "57ab760e85f2be34a0169883cc5cb82cf87fd432632222b88795eabd1afdf018",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "a51ce1ea75761d93791215b61a6b37287ce4489409ed46727c90a2501a035446",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T13:57:30.910630+00:00",
+    "deadline_utc": "2026-09-30T14:07:30.910630+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "0c00b4e42db503622a76343b3c6c716b84ea82377eedd0368093fa0f9250013c",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "4da38d07943a1ab90d7955b9c33001296e4bd0dba861bd1cde6d5cf39f579f3f",
+    "outputs": "outputs/",
+    "agent_task": "/root/round1_bedtools_luna",
+    "launch_observed_at_utc": "2026-09-30T13:58:42.245088+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round1-bedtools-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T14:07:59.456786+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "review_recorded_at_utc": "2026-09-30T14:10:46.532540+00:00",
+  "outputs": {
+    "counts": {
+      "units": 18,
+      "datasets": 5
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; scientific claims and source-map prose reviewed separately.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "8928535995191f0576d2819cac8b86da23ea846360e9c6f9880ddb6bab1fe7db",
+      "outputs/inspection.md": "01cc761b58858920517ee4b2b312d4e1c88c9b29002bfc0110ff8a7e7e47caab",
+      "outputs/units.jsonl": "e61b4e1b268f51f5b744e727786ea99615361675bcea994565ff7c816216b4b3"
+    }
+  }
+}

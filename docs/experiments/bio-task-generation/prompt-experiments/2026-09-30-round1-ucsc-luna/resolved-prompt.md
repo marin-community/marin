@@ -1,7 +1,7 @@
 You are identifying scientific units in one computational biology repository:
-**{{REPO}}**.
+**ucscGenomeBrowser/kent**.
 
-Repository URL: {{REPO_URL}}
+Repository URL: https://github.com/ucscGenomeBrowser/kent
 
 Your job is to identify scientific operations and analyses in this repository
 that could become computational biology tasks for an AI agent. Each task will
@@ -20,9 +20,6 @@ relevant sources and data. Record the repository revision you inspect.
 Use source revisions that identify the content actually inspected. Resolve them
 from available metadata; record retrieval dates and revision gaps for sources
 without an immutable version.
-Copy identifiers, accessions, DOIs, URLs, and numeric claims from inspected
-evidence, or verify them at an authoritative source. Do not complete them from
-memory. Keep unresolved values unknown and retain the source lead for follow-up.
 
 ## Map the repository
 
@@ -118,14 +115,11 @@ record whether an asset serves as study data, reference material, an annotation,
 or a demonstration fixture. A fixture can contain observed data; its size and
 purpose still need inspection.
 
-Use one record per identifiable dataset or reference product. Before grouping
-assets, identify the evidence that they represent the same observations or the
-same curated product. Group its raw data, processed representations, and subsets
-as linked assets. Keep independently sourced study inputs, annotations, and
-references in separate records, including reference/query pairs and assets in
-the same archive. When shared identity is unknown, keep records separate and
-describe the unresolved relationship. A documented combined product can have
-one record that preserves its constituent study provenance.
+Use one record per identifiable dataset or reference product. Group raw data,
+processed representations, and subsets from the same observations as linked
+assets. Give independently sourced annotations and references their own records,
+even when used together. Shared packaging or use in one analysis does not
+establish shared observations. Keep uncertain relationships explicit.
 
 An example filename or required input format alone does not identify a dataset.
 Describe such input requirements in the unit's `inputs` and leave `dataset_ids`
@@ -166,8 +160,7 @@ Write one JSON object per inspected unit with these fields:
 - `dependencies`: required software, setup, upstream artifacts, and hidden state.
 - `dataset_ids` and `related_unit_ids`: references to inventory records.
   Link only data used by the unit or supported as a candidate input by the cited
-  source. Explain the required asset and processing stage in `inputs`, including
-  any upstream transformation needed before this unit can consume it. An operation with no
+  source, explaining that relationship in `inputs`. An operation with no
   identified data can have an empty `dataset_ids` list.
 - `evidence`: source locations supporting the claimed use, interfaces, and data links.
 - `limitations`: missing context, portability or resource concerns, and questions
@@ -206,12 +199,9 @@ limits. An empty inventory is valid when no suitable units are found.
 Use remaining budget on the most useful uninspected leads in the source map.
 End the pass when the mapped scope is inspected, further leads repeat recorded
 work, or an actual time, access, or resource limit prevents useful progress.
-Budget for inspection and a final consistency check. While useful accessible
-entries and inspection time remain, saved partial outputs are checkpoints:
-continue with the next entry. Preparing a handoff or obtaining representative
-examples is not a stopping condition. Before finalizing, check the clock or
-other supplied limit against the pending queue and report the actual limit or
-completion evidence. If interrupted, save the inventory and queue as a partial pass.
+Before finalizing, check the remaining budget against the pending queue. A few
+representative examples do not complete a pass while useful entries and budget
+remain. If interrupted, save the current inventory and queue as a partial pass.
 For a partial pass, identify the next source locations to inspect and what
 remains to be learned from them.
 
@@ -219,10 +209,7 @@ remains to be learned from them.
 
 Check that both JSONL files parse, identifiers are unique within each inventory,
 and every dataset and unit reference resolves in the inventories and source map.
-Rewrite `inspection.md` to describe the final records and actual inspection
-state. Replace obsolete statuses and explanations instead of appending corrections
-that contradict them. An entry can be partly inspected, but name the inspected
-and pending portions. Recompute counts from the final records and queue.
+Recompute reported counts from the final records and inspection queue.
 
 Review each unit against its cited sources: scientific use, tool role and its
 explanation, inputs, outputs, dependencies, and limitations must agree. After

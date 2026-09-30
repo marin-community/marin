@@ -1,0 +1,29 @@
+# UCSC kent source inventory
+
+Inspected repository `ucscGenomeBrowser/kent` at pinned revision `ad6dd2177ad20bea9e32563ee76a1c598bccb6d5` on 2026-09-30. Discovery shows a broad C/C++/Perl/Python tool and Genome Browser suite, with web display, command-line interval/variant/signal utilities, track and database workflows, and user tutorials. Root README says directory licenses differ and points commercial users to separate terms; no general data reuse permission is inferred.
+
+The inventory records four supported units: assembly alignment and annotation projection (`kent-doc-liftover-chain-and-annotation-projection`), per-BED signal summarization (`kent-utils-bigwig-average-over-bed`), VCF filtering/recode (`kent-utils-vcffilter-frequency-and-exclusion`), and hosted track query/intersection/export (`kent-doc-table-browser-query-export`). Only the VCF regression materials gave a dataset that could be identified from the inspected sources; the two fixture assets remain separate because one is sample variant calls and the other is a selected coordinate mask.
+
+## Source map and queue
+
+| Collection / location | Status and inspected scope | Units | Pending leads |
+|---|---|---|---|
+| Root `README` | Inspected repository purpose, build overview, source layout and license caveat | — | Directory-specific license files and userApps documentation |
+| `docs/tutorials/index.md` and `docs/tutorials/` | Index inspected; Table Browser, Gateway, Custom Tracks and GB101 files fetched. Table Browser walkthrough inspected; Gateway/GB101 source text only partially read from bounded output; Custom Track walkthrough inspected for assembly, browser/track lines, formats and load/manage steps | `kent-doc-table-browser-query-export` | Inspect remaining GB101 sections, particularly search/track sets and variant-context examples; inspect further Table Browser walkthrough sections if added |
+| `docs/browserSlideDecks.md`, `docs/slideDecks/tutorial2-cancer/presentation/index.html` | Collection index inspected; cancer deck headings and bounded source excerpts inspected. It presents CIViC, COSMIC, ClinVar, TCGA, GenCC, OMIM, gnomAD, UniProt and REVEL around BRAF V600E | — | Strong next lead: inspect full cancer deck's BRAF workflow, then tutorial3 clinical examples and tutorial4 case studies. These may support a distinct evidence-integration unit; dataset versions and live session content remain unverified. Decks 1, 3, 4 and 5 are uninspected. |
+| `src/hg/doc/liftOver.txt` | Inspected chain naming, same/cross-species construction, annotation projection example, caveats | `kent-doc-liftover-chain-and-annotation-projection` | Inspect `src/hg/liftOver/liftOver.c`, command help and any current tested examples; source doc warns itself is untested. |
+| `src/utils/bigWigAverageOverBed/` | Inspected command usage/options, BED block behavior, output fields, unique-name check and both aggregation paths | `kent-utils-bigwig-average-over-bed` | Inspect tests/fixtures and identify an openly usable biological bigWig/BED example. |
+| `src/utils/vcfFilter/` | Inspected command implementation/usage, regression makefile and bounded input fixture previews | `kent-utils-vcffilter-frequency-and-exclusion` | Inspect expected outputs and upstream callset/mask provenance and terms; test currently covers six distinct transformation paths. |
+| Repository-wide `src/utils/`, `src/hg/utils/`, `src/hg/` | Tree enumerated at pinned revision; it is large. Only targeted commands above were inspected semantically | — | Candidate independent units include liftOver utilities, interval overlap selection, VCF conversion/annotation, bigWig transforms, genePred/GFF conversion and assembly hub workflows. Enumerate one bounded utility family at a time. |
+
+## Data and relationships
+
+The VCF test fixture header reports VCFv4.2, `NC_045512v2`, and generation from `refPlus.unmapped.aligned.fasta` using `faToVcf`. The test input includes named/date-stamped sample labels and genotype columns, but this pass did not establish the upstream study, assay or full cohort. `exclude.vcf` is a separate VCFv4.3 coordinate exclusion list with comments citing a public SARS-CoV-2 masking-strategies discussion. The vcfFilter implementation matches exclusion sites by CHROM and POS; it does not establish biological validity of those annotations.
+
+The Table Browser tutorial describes generic UCSC-hosted tracks and gives SNP/coding-exon and region/peak overlap as examples, but it does not identify exact track releases, studies or stable dataset identifiers. The bigWig utility source has no named biological input. The liftOver workflow names historical assemblies and an `ensGene` table example but does not identify a specific accessible assembly asset. These units therefore have empty dataset references.
+
+## Access, omissions and stop reason
+
+Repository files were read from GitHub's contents/tree API at the supplied immutable revision; the recursive tree response reported `truncated: false`. A request for guessed `src/hg/utils/liftOver/liftOver.c` returned HTTP 404; tree lookup then identified the correct source path `src/hg/liftOver/liftOver.c`, but that implementation was not inspected in this pass. No biological data files were downloaded or executed. External masking discussion was identified from a fixture comment but not opened. No claim of successful execution, task validity, release eligibility or Harbor compatibility is made.
+
+This is a partial discovery pass. It stopped after establishing representative distinct operations and source-specific follow-up leads, not because the time deadline or access budget was reached. The mapped repository scope remains broad; the clinical slide decks and command families above are material continuation targets. No source-backed contradiction was found. The clinical deck's BRAF interpretations and linked browser sessions would need direct source/data verification before task authoring.

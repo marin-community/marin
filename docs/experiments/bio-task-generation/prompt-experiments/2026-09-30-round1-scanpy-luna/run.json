@@ -1,0 +1,64 @@
+{
+  "run_id": "2026-09-30-round1-scanpy-luna",
+  "status": "completed and reviewed; targeted semantic findings remain",
+  "question": "How does the current single-worker inventory prompt transfer across five repository types?",
+  "comparison_round": 1,
+  "repository": "https://github.com/scverse/scanpy",
+  "source_revision": "8c1463d5d97272d5811ad3f4efb57483e23b4c7e",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "57ab760e85f2be34a0169883cc5cb82cf87fd432632222b88795eabd1afdf018",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "44b53d97d031c3b37290c13e8be44c88ef5ba4aff12f11ab1ff3dced5e173292",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T14:05:14.879376+00:00",
+    "deadline_utc": "2026-09-30T14:15:14.879376+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "e831be83db263b73dccad0461baa138380203f39df5f965fdc924e08b9ba8121",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "fe5db60183849183b4374eb0dcaa616724bca0da991c113a55022caa3fe208a9",
+    "outputs": "outputs/",
+    "agent_task": "/root/round1_scanpy_luna",
+    "launch_observed_at_utc": "2026-09-30T14:06:19.302161+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round1-scanpy-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T14:16:00+00:00",
+    "completion_timestamp_precision": "Parent observation approximate to the minute; worker stop time, where supplied, is separate."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 5,
+      "datasets": 6
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; scientific claims and source-map prose reviewed separately.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "93a46e846064167b0119eef9aa2361b4da7667f1898edffcd6ba693e0a03e43f",
+      "outputs/inspection.md": "80bb5e4f5ea2c922fbecca58a390094351619242e559913e3910f4008b9fc251",
+      "outputs/units.jsonl": "f34e5ca85814fa505fbfd55f6a663a587c0174b0a1f61b6c0bb7cfcea976ff29",
+      "original-inspection.json": "de1c2383bb6cd8b9235636b4ef9c136fc3ce20b80872ad28849c2cb56c41ec1a"
+    },
+    "normalization": {
+      "outputs/inspection.md": "Required formatter removed two Markdown hard-break trailing spaces. Exact original bytes are retained as the UTF-8 content string in original-inspection.json with their original SHA-256. No semantic edits."
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T14:17:28.532423+00:00"
+}

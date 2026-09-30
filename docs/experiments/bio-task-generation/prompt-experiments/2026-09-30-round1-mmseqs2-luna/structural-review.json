@@ -1,0 +1,8 @@
+{
+  "counts": {
+    "units": 12,
+    "datasets": 5
+  },
+  "structural_errors": [],
+  "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; scientific claims and source-map prose reviewed separately."
+}

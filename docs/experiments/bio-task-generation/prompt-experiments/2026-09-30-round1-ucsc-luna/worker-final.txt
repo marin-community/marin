@@ -1,0 +1,7 @@
+Completed the assigned partial source inventory in `docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round1-ucsc-luna/outputs/`:
+
+- `units.jsonl`: 4 units covering liftOver, bigWig interval summaries, VCF filtering, and Table Browser queries.
+- `datasets.jsonl`: 2 SARS-CoV-2 regression-fixture records, with their source and reuse limits.
+- `inspection.md`: source map, inspected scope, and continuation leads.
+
+JSONL parsing, identifier uniqueness, and inventory references passed. This was a partial pass; the inspection notes identify useful sources left to examine. I stopped before the deadline, not because access or resources prevented further inspection.

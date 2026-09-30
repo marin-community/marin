@@ -1,0 +1,3 @@
+Completed the partial inventory at the pinned bedtools2 revision. It contains 18 units and 5 data/reference records, with source coverage gaps and continuation leads recorded in [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round1-bedtools-luna/outputs/inspection.md).
+
+The JSONL files parse, identifiers are unique, and unit/data references resolve. I did not download or execute biological data or tools. The pass stopped at 14:06:49 UTC with about 41 seconds left; the documentation index and tutorial still have pending entries.

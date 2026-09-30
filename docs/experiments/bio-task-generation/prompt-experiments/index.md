@@ -8,6 +8,63 @@ exact prompt and outputs. Keep proposed changes separate from measured results.
 Small text artifacts can accompany the record; link large traces or datasets
 from their storage location.
 
+## Cross-repository comparison on 2026-09-30
+
+The [comparison configuration](2026-09-30-comparison.json) records a two-hour
+iteration session across bedtools, Scanpy, MMseqs2, DESeq2, and the UCSC Kent
+repository. The first round uses the unchanged single-worker prompt from
+`37f8a601d2` in five fresh Luna contexts. Each worker receives a repository and
+pinned revision, generic retrieval instructions, and up to ten minutes. Up to
+three workers perform lightweight source inspection concurrently; scientific
+execution, biological data downloads, and child delegation are excluded.
+
+Reviews compare source coverage, evidence, unit boundaries, tool roles, data
+identity, dependencies, and handoff consistency. Repository-specific probes are
+saved before launch and withheld from workers. Later rounds will rerun a shared
+revision against the same source revisions; any changed setup will be recorded.
+Results below from 2026-09-29 remain historical baselines.
+
+The [Bioconductor documentation conventions](https://contributions.bioconductor.org/docs.html)
+provide reusable discovery routes: vignette sources in `vignettes/` use R
+Markdown, Sweave, or Quarto; exported functions have manual pages and examples;
+bundled data have documentation. These conventions locate evidence but do not
+define scientific unit boundaries or establish execution in a task environment.
+The [package-vignette guide](https://bioconductor.org/help/package-vignettes/)
+also describes compiled documents and extracted R scripts. Source and rendered
+versions must be matched before combining their evidence.
+
+Independent source inspection, before reading worker outputs, found two useful
+probes. In the pinned
+[DESeq2 vignette](https://github.com/thelovelab/DESeq2/blob/c62c60c6ff83fd84ce115cacd1c49827533f85a7/vignettes/DESeq2.Rmd#L304),
+observed transcript abundances are paired with artificially assigned condition
+labels in an import demonstration; this does not establish a real experimental
+contrast. The source also contains hidden and unevaluated chunks. The
+[MMseqs2 tutorials](https://github.com/soedinglab/MMseqs2/wiki/Tutorials) include
+pathogen investigation, contig taxonomy, and a gut-metagenome workflow that
+combines multiple tools. The specific MMseqs2 tutorial probes were identified
+after launch and supplement the frozen review criteria. Workers receive neither
+these observations nor repository-specific source-selection instructions.
+
+## Round 1 results
+
+| Repository | Units / data records | Parent review |
+| --- | --- | --- |
+| [bedtools](2026-09-30-round1-bedtools-luna/index.md) | 18 / 5 | Broad command coverage; inconsistent command queue statuses |
+| [Scanpy](2026-09-30-round1-scanpy-luna/index.md) | 5 / 6 | Useful tutorial state; PBMC products combined without established shared observations; stale BBKNN status |
+| [MMseqs2](2026-09-30-round1-mmseqs2-luna/index.md) | 12 / 5 | Finds pathogen and gut workflows; wrong uninspected paper DOI; stale wiki access statement |
+| [DESeq2](2026-09-30-round1-deseq2-luna/index.md) | 8 / 4 | Finds literate sources and artificial labels; combines GENCODE reference with observations; stops early |
+| [UCSC Kent](2026-09-30-round1-ucsc-luna/index.md) | 4 / 2 | Preserves utility semantics and separate fixtures; stops early with useful accessible leads |
+
+All five pass structural checks. These checks do not establish semantic accuracy.
+The second-round revision requires evidence for exact identifiers and grouped
+assets, exact input stages, a coherent final source map, and continuation from
+saved checkpoints while inspection time remains. These are general instructions;
+no repository names, source hints, or review findings enter worker prompts.
+The next round tests the combined revision, so individual clause effects cannot
+be isolated. Its output counts will not be used as quality scores.
+
+## Earlier trials
+
 | Date | Experiment | Result | Status |
 | --- | --- | --- | --- |
 | 2026-09-29 | [Fresh Luna worker finds units in bedtools](2026-09-29-bedtools-luna/index.md) | Three units and one data record; valid structure, incomplete coverage and incorrect data grouping | Completed exploratory baseline |
@@ -67,10 +124,9 @@ and consistent references and counts. It also clarifies that discovery classifie
 the source work as tool use, creation, or mixed; the author separately defines
 what the solver must do. The separate active reconciliation prompt
 has been removed; its trial snapshots and results remain unchanged. The earlier
-proposal for a narrower reconciliation worker is superseded. This revision of
-find-units has not been trialed. The next prompt experiment should test this
-single-worker version on the testbed with the same saved inputs and review
-criteria, recording any changes to source access or budget.
+proposal for a narrower reconciliation worker is superseded. The five round 1 runs above now test this single-worker revision. They preserve
+useful coverage but still expose errors in data identity, evidence, and final
+source-map consistency.
 
 Record checks on 2026-09-29: scoped `./infra/pre-commit.py` passed for 162
 files, the repository documentation-source-link check passed, 242 local Markdown
@@ -88,4 +144,4 @@ check passed. Saved experiment artifacts were unchanged by formatting. The stric
 build with the isolated `marin-core` docs dependency group stops in the unchanged
 `references/default-steps.md`: the configured `ignore_init_summary` option is
 unsupported by `PythonOptions`. Lint and source-link checks used 33,120 KiB peak
-RSS; the strict build used 83,100 KiB. No new worker trial was run for this revision.
+RSS; the strict build used 83,100 KiB. These checks preceded the five round 1 worker trials above.

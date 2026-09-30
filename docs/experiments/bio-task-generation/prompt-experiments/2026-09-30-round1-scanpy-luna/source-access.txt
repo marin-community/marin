@@ -1,0 +1,19 @@
+# Source access supplied by the runner
+
+Repository: scverse/scanpy
+Repository URL: https://github.com/scverse/scanpy
+Resolved revision: 8c1463d5d97272d5811ad3f4efb57483e23b4c7e
+Resolved through the GitHub commits API before launch. Inspect repository files
+at this revision; external sources have their own revisions.
+
+Use the available gh CLI for GitHub file access, through exec_command with
+sandbox_permissions=require_escalated. Never inspect credentials. Discover the
+paths yourself. Generic examples (replace OWNER/REPO, REVISION, and PATH):
+
+    gh api 'repos/OWNER/REPO/git/trees/REVISION?recursive=1' --jq '{truncated, tree: [.tree[] | select(.type == "blob") | {path, size}]}'
+    gh api -H 'Accept: application/vnd.github.raw+json' 'repos/OWNER/REPO/contents/PATH?ref=REVISION'
+
+Check tree truncation; use subtree or directory listing requests if necessary.
+Choose small text files by their reported size. Do not download biological
+assets. External sources can be read through web tools or bounded HTTP requests.
+Record failed commands and nonsecret errors; do not guess replacement revisions.

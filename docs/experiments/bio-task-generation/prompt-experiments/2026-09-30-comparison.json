@@ -1,0 +1,107 @@
+{
+  "session_start_utc": "2026-09-30T13:55:21+00:00",
+  "session_deadline_utc": "2026-09-30T15:55:21+00:00",
+  "baseline_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41",
+  "prompt_sha256": "57ab760e85f2be34a0169883cc5cb82cf87fd432632222b88795eabd1afdf018",
+  "repositories": {
+    "mmseqs2": {
+      "repo": "soedinglab/MMseqs2",
+      "revision": "564f40d8857f4eca4e1dfe100c67c155b1933e70"
+    },
+    "deseq2": {
+      "repo": "thelovelab/DESeq2",
+      "revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7"
+    },
+    "bedtools": {
+      "repo": "arq5x/bedtools2",
+      "revision": "614e9a5c5935ab86e873dab9072fbbaf003c1b7e"
+    },
+    "scanpy": {
+      "repo": "scverse/scanpy",
+      "revision": "8c1463d5d97272d5811ad3f4efb57483e23b4c7e"
+    },
+    "ucsc": {
+      "repo": "ucscGenomeBrowser/kent",
+      "revision": "ad6dd2177ad20bea9e32563ee76a1c598bccb6d5"
+    }
+  },
+  "design": "Same unmodified single-worker prompt across five repositories; fresh Luna contexts; 10-minute maximum per run; at most three lightweight workers concurrently; no execution or biological data downloads. Review before revising the shared prompt.",
+  "prior_work_search": {
+    "command": "uv run --no-sync infra/marina/apps/echo/cli.py search \"biology task generation repository tutorial unit discovery prompt\" --limit 5",
+    "outcome": "unavailable: ModuleNotFoundError: No module named requests",
+    "fallback": "Current checkout, prior saved experiments, and official upstream documentation."
+  },
+  "independent_source_review": {
+    "recorded_at_utc": "2026-09-30T14:02:24.870066+00:00",
+    "before_worker_output_inspection": true,
+    "sources": [
+      {
+        "url": "https://contributions.bioconductor.org/docs.html",
+        "finding": "Ecosystem conventions identify vignette sources, manual examples, and documented data; they do not determine scientific task boundaries."
+      },
+      {
+        "url": "https://bioconductor.org/packages/3.23/bioc/html/DESeq2.html",
+        "finding": "Package page reports 1.52.0 on RELEASE_3_23, while pinned repository DESCRIPTION reports 1.53.5. Do not silently equate their documentation."
+      },
+      {
+        "url": "https://github.com/thelovelab/DESeq2/blob/c62c60c6ff83fd84ce115cacd1c49827533f85a7/vignettes/DESeq2.Rmd#L304",
+        "finding": "tximportData example has artificial A/B condition labels on observed abundances; hidden and unevaluated chunks supply further prerequisites and execution caveats."
+      },
+      {
+        "url": "https://github.com/soedinglab/MMseqs2/wiki/Tutorials",
+        "finding": "Separate pathogen, contig-taxonomy and human-gut workflows; scientific uses compose tools. Specific tutorial probes were identified after launch and supplement frozen criteria."
+      }
+    ]
+  },
+  "round1_review_status": {
+    "mmseqs2": "reviewed: wrong uninspected DOI and stale wiki-access statement",
+    "deseq2": "reviewed: external reference grouped with observations; early handoff with accessible leads",
+    "bedtools": "reviewed: command source-map statuses conflict",
+    "scanpy": "reviewed: independent PBMC products combined; stale BBKNN inspection status",
+    "ucsc": "reviewed: useful utility semantics and separate references; early stop with accessible leads"
+  },
+  "candidate_general_revisions": [
+    {
+      "change": "Use package/document metadata as discovery routes, while verifying actual contents and source versions.",
+      "status": "candidate; baseline DESeq2 already discovers sources without this instruction, so no special Bioconductor branch is justified."
+    },
+    {
+      "change": "Require identifiers to come from inspected evidence; leave unresolved identifiers unknown.",
+      "basis": "MMseqs2 unsupported paper DOI."
+    },
+    {
+      "change": "Finish by rewriting a coherent inspection map from final record IDs and actual inspected evidence.",
+      "basis": "Stale pending/access claims in bedtools and MMseqs2."
+    },
+    {
+      "change": "Record each dataset link with the exact required processing stage and keep independently sourced references separate.",
+      "basis": "DESeq2 combines observed quantifications and GENCODE annotation despite acknowledging separate provenance."
+    },
+    {
+      "change": "Keep a partial saved inventory as a checkpoint while useful accessible leads and budget remain.",
+      "basis": "DESeq2 stops more than two minutes before deadline with explicitly pending accessible leads."
+    }
+  ],
+  "round2": {
+    "prompt_sha256": "f7622c7d89ea92bbc740ed10b47f5ae7c7261b653f241686377a45a02a763fa6",
+    "changes": [
+      "Require inspected evidence for exact identifiers and numeric claims.",
+      "Require affirmative identity evidence before grouping data; preserve curated composite products.",
+      "Explain exact input asset and processing stage.",
+      "Treat saved outputs as checkpoints until scope or real budget limit.",
+      "Rewrite coherent final inspection state instead of appending conflicting corrections."
+    ],
+    "controls": "Same pinned repositories, fresh Luna contexts, generic source access, 10-minute maximum, no scientific execution; bundled prompt changes cannot establish individual clause effects.",
+    "ecosystem_special_cases": false
+  },
+  "checks": [
+    {
+      "round": 1,
+      "lint": "pass after whitespace normalization; 65 scoped files",
+      "source_links": "pass",
+      "environment": "Initial sandboxed uv cache write refused; elevated checks used existing cache under resource gate and shared lock.",
+      "peak_rss_kib": 33772,
+      "end_utc": "2026-09-30T14:22:59.155336+00:00"
+    }
+  ]
+}

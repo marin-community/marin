@@ -1,0 +1,7 @@
+Completed the DESeq2 source inventory in the assigned outputs directory:
+
+- `units.jsonl`: 8 units
+- `datasets.jsonl`: 4 dataset/reference records
+- `inspection.md`: source map, inspected coverage, open leads, and stopping reason
+
+JSONL parsing, identifier uniqueness, and unit/dataset reference resolution passed. No analyses or scientific tools were executed.
