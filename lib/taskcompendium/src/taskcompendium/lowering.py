@@ -9,7 +9,6 @@ import importlib.util
 import inspect
 import json
 import shutil
-import stat
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -26,16 +25,6 @@ from taskcompendium.provider_sources import (
     stage_git_provider,
     validate_git_provider_checkout,
 )
-from taskcompendium.resources import (
-    MAX_RESOURCE_BYTES,
-    MAX_TOTAL_RESOURCE_BYTES,
-    ResourceResolver,
-    ResourceVisibility,
-    decode_base64_content,
-    materialize_resources,
-    validate_resource_path,
-    validate_resources,
-)
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
     AnswerFormat,
@@ -49,8 +38,6 @@ from taskcompendium.verifier_registry import validate_verifier
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
-AGENT_RESOURCES_DIR = "inputs"
-PRIVATE_RESOURCES_DIR = "private_resources"
 
 
 class ToolBinding(BaseModel):
@@ -138,6 +125,7 @@ def selected_tool_definitions(definitions: Sequence[dict[str, Any]], tool_names:
 def validate_provider_surface(binding: ToolBinding, provider_source: Path | None = None) -> None:
     """Check provider identity and action schemas before an export or launch."""
     provider = provider_class(binding, provider_source)
+    # Providers are composed into a Harbor environment; they do not implement one.
     if importlib.util.find_spec("harbor") is not None:
         harbor_base = importlib.import_module("harbor.environments.base").BaseEnvironment
         if issubclass(provider, harbor_base):
@@ -244,8 +232,6 @@ def _required_state_provider(
     requirements = specification.environment_requirements
     if requirements.capabilities:
         raise ValueError("Host chat cannot satisfy workspace capability requirements")
-    if any(resource.visibility == ResourceVisibility.AGENT for resource in specification.resources):
-        raise ValueError("Host chat cannot expose agent-visible files")
     if not bindings:
         if specification.tool_providers:
             raise ValueError("Chat without tools cannot satisfy provider requirements")
@@ -335,53 +321,12 @@ def read_submission_convention(path: Path) -> SubmissionConvention:
     return TypeAdapter(SubmissionConvention).validate_json(path.read_text())
 
 
-def validate_exported_resources(specification: TaskSpec, task_dir: Path) -> None:
-    """Recheck pinned payloads and path safety in the exported task before launch."""
-    total_bytes = 0
-    for resource in specification.resources:
-        root = (
-            task_dir / "environment" / AGENT_RESOURCES_DIR
-            if resource.visibility == ResourceVisibility.AGENT
-            else task_dir / PRIVATE_RESOURCES_DIR
-        )
-        relative = validate_resource_path(resource.path)
-        if root.is_symlink() or root.parent.is_symlink():
-            raise ValueError(f"Exported resource root is a symlink: {root}")
-        current = root
-        for part in relative.parts:
-            current = current / part
-            if current.is_symlink():
-                raise ValueError(f"Exported resource symlink: {current}")
-        if not current.is_file():
-            raise ValueError(f"Missing exported resource: {resource.path}")
-        if current.stat().st_size > MAX_RESOURCE_BYTES:
-            raise ValueError("Exported resources exceed size limits")
-        payload = current.read_bytes()
-        total_bytes += len(payload)
-        if len(payload) > MAX_RESOURCE_BYTES or total_bytes > MAX_TOTAL_RESOURCE_BYTES:
-            raise ValueError("Exported resources exceed size limits")
-        if resource.reference is not None:
-            digest = resource.reference.sha256
-        else:
-            if resource.content is not None:
-                source_content = resource.content.encode()
-            else:
-                assert resource.content_base64 is not None
-                source_content = decode_base64_content(resource.content_base64)
-            digest = hashlib.sha256(source_content).hexdigest()
-        if hashlib.sha256(payload).hexdigest() != digest:
-            raise ValueError(f"Exported resource digest mismatch: {resource.path}")
-        if bool(current.stat().st_mode & stat.S_IXUSR) != resource.executable:
-            raise ValueError(f"Exported resource executable bit differs: {resource.path}")
-
-
 def lower_to_harbor(
     specification: TaskSpec,
     convention: SubmissionConvention,
     environment_config: HarborEnvironmentConfig,
     destination: Path,
     *,
-    trusted_resolver: ResourceResolver | None = None,
     trusted_provider_sources: dict[str, Path] | None = None,
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
@@ -397,7 +342,6 @@ def lower_to_harbor(
         raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
     validate_submission_tools(specification, convention, environment_config)
     validate_verifier(specification.verifier)
-    validate_resources(specification.resources, trusted_resolver=trusted_resolver)
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     try:
@@ -412,7 +356,7 @@ def lower_to_harbor(
             staged_sources[name] = source
         if git_bindings:
             validate_environment_config(specification, convention, environment_config, provider_sources=staged_sources)
-        _write_harbor_task(specification, convention, environment_config, destination, instruction, trusted_resolver)
+        _write_harbor_task(specification, convention, environment_config, destination, instruction)
     except Exception:
         shutil.rmtree(destination)
         raise
@@ -425,7 +369,6 @@ def _write_harbor_task(
     environment_config: HarborEnvironmentConfig,
     destination: Path,
     instruction: str,
-    trusted_resolver: ResourceResolver | None,
 ) -> None:
     """Write files after all selected provider sources have been checked."""
     (destination / "instruction.md").write_text(instruction)
@@ -439,17 +382,3 @@ def _write_harbor_task(
     (destination / SPECIFICATION_FILE).write_text(specification.model_dump_json(indent=2) + "\n")
     (destination / ENVIRONMENT_CONFIG_FILE).write_text(environment_config.model_dump_json(indent=2) + "\n")
     (destination / SUBMISSION_CONVENTION_FILE).write_text(convention.model_dump_json(indent=2) + "\n")
-    if any(resource.visibility == ResourceVisibility.AGENT for resource in specification.resources):
-        materialize_resources(
-            specification.resources,
-            destination / "environment" / AGENT_RESOURCES_DIR,
-            visibility=ResourceVisibility.AGENT,
-            trusted_resolver=trusted_resolver,
-        )
-    if any(resource.visibility != ResourceVisibility.AGENT for resource in specification.resources):
-        materialize_resources(
-            specification.resources,
-            destination / PRIVATE_RESOURCES_DIR,
-            visibility=frozenset({ResourceVisibility.VERIFIER, ResourceVisibility.ORACLE}),
-            trusted_resolver=trusted_resolver,
-        )

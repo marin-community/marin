@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from taskcompendium.resources import validate_relative_file_paths, validate_resource_path
+from taskcompendium.path_validation import validate_relative_file_path, validate_relative_file_paths
 
 PROVIDER_SOURCES_DIR = "provider_sources"
 SOURCE_MANIFEST = ".taskcompendium-provider-manifest.json"
@@ -247,7 +247,7 @@ def validate_staged_git_provider(provider: str, source: Path) -> None:
     total_bytes = 0
     tree_files: list[tuple[str, str, bytes]] = []
     for item in manifest["files"]:
-        path = str(validate_resource_path(item["path"]))
+        path = str(validate_relative_file_path(item["path"]))
         if path in expected:
             raise ValueError(f"Duplicate Git provider source path: {path}")
         expected.add(path)

@@ -30,14 +30,11 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.resources import ResourceVisibility, TaskResource
 from taskcompendium.submission import ProviderState, SubmissionConvention
 
 DATASET = "nvidia/Nemotron-RL-agent-workplace_assistant"
 DATASET_REVISION = "c86a908379e0a361a573c395e175d3c1aa128e6c"
-DATASET_CARD_SHA256 = "afb783d398188a18a54222f9f124930bbf6de051587ce3c4949684bb9da8931a"
-DATASET_CARD_URL = f"https://huggingface.co/datasets/{DATASET}/blob/{DATASET_REVISION}/README.md"
-IMPORTER_REVISION = "taskcompendium-nemo-workplace-row0-v4"
+IMPORTER_REVISION = "taskcompendium-nemo-workplace-row0-v5"
 SOURCE_REVISION = "1e668906d2e69a9e8ee9aaafc60050a4025d9688"
 SOURCE_EXAMPLE_PATH = "resources_servers/workplace_assistant/data/example.jsonl"
 SOURCE_EXAMPLE_URL = f"https://raw.githubusercontent.com/NVIDIA-NeMo/Gym/{SOURCE_REVISION}/{SOURCE_EXAMPLE_PATH}"
@@ -45,15 +42,10 @@ SOURCE_EXAMPLE_SHA256 = "2df8a2537121aa40041b46a96683f0397cc945bf5de83062b76ca6e
 SOURCE_EXAMPLE_MAX_BYTES = 128 * 1024
 SOURCE_EXAMPLE_MAX_ROWS = 32
 ROW_SHA256 = "a92e1627d61734c323071765bba22a7f25bc3ec7e096b77b0c8d4f7e2848f447"
-SOURCE_ROW_PATH = "source-row.json"
-SOURCE_PROVENANCE_PATH = "source-provenance.json"
 PROVIDER_REPOSITORY = "https://github.com/marin-community/nemo_workplace"
-PROVIDER_GIT_REVISION = "f92a1efb9bcf416b953136463b2022c5525f4b23"
+PROVIDER_GIT_REVISION = "27b39001312617403021635f0492e120abc2cd34"
 PROVIDER = f"python+git+{PROVIDER_REPOSITORY}@{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider"
 PROVIDER_NAME = "workplace"
-EXAMPLE_LICENSE_URL = (
-    f"https://github.com/NVIDIA-NeMo/Gym/blob/{SOURCE_REVISION}/resources_servers/workplace_assistant/README.md"
-)
 
 
 class WorkplaceImport(NamedTuple):
@@ -155,26 +147,6 @@ def import_row(data: bytes) -> WorkplaceImport:
     if any(action["name"] not in {schema["name"] for schema in schemas} for action in actions):
         raise ValueError("Workplace ground truth calls an unavailable tool")
     expected = json.loads(expected_state_json(actions))
-    provenance = {
-        "dataset": DATASET,
-        "dataset_revision": DATASET_REVISION,
-        "dataset_owner": "NVIDIA Corporation",
-        "dataset_license": "CC-BY-4.0",
-        "dataset_card_url": DATASET_CARD_URL,
-        "dataset_card_sha256": DATASET_CARD_SHA256,
-        "source_repository": "NVIDIA-NeMo/Gym",
-        "source_revision": SOURCE_REVISION,
-        "source_path": SOURCE_EXAMPLE_PATH,
-        "source_file_sha256": SOURCE_EXAMPLE_SHA256,
-        "source_license": "Apache-2.0",
-        "source_license_url": EXAMPLE_LICENSE_URL,
-        "provider_repository": PROVIDER_REPOSITORY,
-        "provider_git_revision": PROVIDER_GIT_REVISION,
-        "row": 0,
-        "raw_sha256": ROW_SHA256,
-        "seed_sha256": SEED_SHA256,
-        "tools_sha256": TOOLS_SHA256,
-    }
     specification = TaskSpec(
         id="nemo-workplace-0",
         context=_conversation(request["input"]),
@@ -183,14 +155,6 @@ def import_row(data: bytes) -> WorkplaceImport:
         environment_requirements=EnvironmentRequirements(),
         tool_providers={PROVIDER_NAME: ProviderRequirement(action_interface=ACTION_INTERFACE, seed_sha256=SEED_SHA256)},
         answer_type=AnswerType.STATE,
-        resources=(
-            TaskResource(path=SOURCE_ROW_PATH, visibility=ResourceVisibility.VERIFIER, content=data.decode("utf-8")),
-            TaskResource(
-                path=SOURCE_PROVENANCE_PATH,
-                visibility=ResourceVisibility.VERIFIER,
-                content=json.dumps(provenance, sort_keys=True, separators=(",", ":")),
-            ),
-        ),
     )
     return WorkplaceImport(
         specification, ProviderState(id="state", provider=PROVIDER_NAME), workplace_environment_config()
