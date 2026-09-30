@@ -244,3 +244,15 @@ weight exactly 0 (sigmoid < 1e-38). D needs A's H-A4 flag: remat already binds o
 Decisions: D arm runs with the H-A4 flag and doubles as the multi-step smoke (loss at 180000 must equal
 1.261413); queued now as a second B job (exception to the one-job rule, queue ~5 h). B folds #9481's
 mirror parameters and pipelined chunks into `_routed_experts` for the stack; C reviews.
+
+## M30-011 Closed: loss/lm_head, optimizer elementwise, cheap norm-kernel variants (agent C, 2026-09-30)
+
+CE at the hero shape [65536, 6144] x 128256 on GB200x4 (`m30c-ce-01`): production tiles 331-335 ms
+fwd+bwd, best larger vocab tiles 320 ms: <= 0.012 s/step. The trace CE is 0.303 s of power-capped GEMMs +
+0.03 s elementwise at 6-7 TB/s. Optimizer: 0.19 of its ~0.29 s is QuACK's symmetric Newton-Schulz GEMM
+(power-bound); the ~0.1 s elementwise part already runs at 7 TB/s. Raw-Triton rewrite of the fused norm
+forward (`m30c-grntriton-01/02`) matches Pallas-Triton. The in-kernel [BT,128]x[128,BD] dot is the limit
+(elementwise body alone 0.51 ms at 6.2 TB/s; with the dot >= 0.76 ms); the cheapest re-split is worth
+~0.02 s/step. Remaining option: a K=128 CuTe/QuACK GEMM with norm and gate in its epilogue, ~0.1 s/step,
+1-2 days, held unless the stack falls short. Queue remainder: SwiGLU dswiglu epilogue (B), short-conv
+backward (~0.08, CUDA/CuTe), device idle 0.35 s (unanalyzed), CuTe norm epilogue (~0.1).
