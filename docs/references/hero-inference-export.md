@@ -1,69 +1,57 @@
 # Hero inference export
 
-Export one permanent native `moe_hero_ep` checkpoint to BF16 Hugging Face
-weights for the Marin vLLM fork.
-
-Create an export YAML with these fields:
+Choose a permanent checkpoint and fresh destination in the same region.
+Copy `model` from the training run's recorded `config.yaml` artifact or resolved
+launch configuration into `export.yaml`:
 
 ```yaml
 checkpoint: s3://marin-us-east-02a/marin/<run>/checkpoints/step-144000
-metadata_digest: <SHA-256 of canonical checkpoint metadata JSON>
-model: <complete GrugModelConfig mapping from the training run>
+metadata_digest: <digest from the command below>
+model: <complete GrugModelConfig mapping>
 destination: s3://marin-us-east-02a/marin/<new-export-root>
-source_revision: <40-character lowercase hexadecimal Marin producer commit>
+source_revision: <40-character lowercase hexadecimal Marin exporter commit>
 expert_axis_size: 32
 replica_axis_size: 1
 ```
 
-`metadata_digest` uses `weights.metadata_hash`: SHA-256 of `metadata.json`
-decoded and re-encoded with sorted keys and separators `(',', ':')`. Use the
-complete model configuration from the training run. Launch the exact checkout
-or bundle recorded in `source_revision`. Keep the source checkpoint immutable
-throughout all attempts.
+Compute `metadata_digest`; replace `<checkpoint>` with the YAML's checkpoint URL:
 
-Run in the existing Levanter GPU environment:
+```bash
+uv run --package marin-levanter --extra gpu python - <<'PYTHON'
+import json
+from experiments.grug.moe_hero_ep.weights import metadata_hash
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
+configure_coreweave_s3()
+print(metadata_hash(json.loads(StoragePath("<checkpoint>/metadata.json").read_text())))
+PYTHON
+```
+
+Launch the checkout or bundle pinned by `source_revision` on every JAX process
+with the same YAML. Use [Iris launch procedures](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md):
 
 ```bash
 uv run --package marin-levanter --extra gpu python -m \
   experiments.grug.moe_hero_ep.ops.export_vllm --config_path export.yaml
 ```
 
-Launch every process with the same YAML using the usual Iris/JAX distributed
-initialization. The global device count must be divisible by
-`expert_axis_size * replica_axis_size`; the data axis uses the remaining
-devices. Both configured axes default to one for local fixtures. Use
-region-local storage. See [Iris operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
-for launch procedures.
+Keep the checkpoint immutable. Run one exporting gang per destination. The
+global device count must be divisible by `expert_axis_size * replica_axis_size`;
+both axes default to one. Every device must fit the largest expert bank.
+Process zero needs host RAM for one layer plus serialization buffers.
 
-## Weight and file contract
+Load the BF16 output with [Marin vLLM's split-expert loader](https://github.com/marin-community/vllm/pull/77).
+Tokenizer files are not copied. Set vLLM's `--tokenizer` and
+`--tokenizer-revision` to the training run's tokenizer ID and pinned revision.
 
-Restore supports current manifests, older OCDBT and directory-backed layouts,
-including the legacy `train_state` wrapper. It selects `master_params` when
-present, otherwise `params`. Pending QB betas set the router bias to
-`-beta + mean(beta)` exactly once before BF16 conversion.
+## Resume and completion
 
-The export splits routed expert banks into
-`experts.<global_id>.<gate_proj|up_proj|down_proj>.weight`, each a two-dimensional
-`[output, input]` matrix. Loading requires the split loader from
-[Marin vLLM #77](https://github.com/marin-community/vllm/pull/77). Use the training
-run's pinned tokenizer separately; tokenizer files are not copied.
+After interruption, rerun the same YAML. Resume preserves shards only after
+checking their identity, names, size and freshly computed SHA-256. Uncommitted
+uploads may be rewritten. If corruption is reported, inspect the object;
+restore its original bytes or choose a fresh destination. Changed inputs also
+require a fresh destination.
 
-Gathering replicates the largest expert bank on every device. Process zero
-stages one layer in host RAM plus serialization buffers, then writes files;
-global tensors form a separate shard. There is no host-byte cap.
-
-## Interruption and completion
-
-Use a fresh destination and run only one exporting gang against it at a time.
-`export-request.json` records the inputs before any shard is written.
-Re-running the same YAML resumes partial output. Changed inputs require a
-fresh destination.
-
-Resume re-reads completed shards to verify their identity, tensor names, size
-and SHA-256. Verified shards are preserved. Corruption stops the export and
-preserves the object for inspection. An upload without its progress record may
-be rewritten.
-
-`config.json`, `model.safetensors.index.json` and `export-manifest.json` are
-published after all shard uploads succeed. The manifest is the completion
-marker; a completed destination is refused on subsequent runs.
+Use the output only when `export-manifest.json` exists. It is written after
+all shards, `config.json` and `model.safetensors.index.json`. Completed
+destinations are refused on subsequent runs.

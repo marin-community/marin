@@ -8,7 +8,6 @@ import hashlib
 import json
 import logging
 import re
-import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -39,7 +38,6 @@ MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"
 EXPORT_VERSION = 1
-COPY_BLOCK_BYTES = 32 * 1024 * 1024
 EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
 
 
@@ -80,11 +78,8 @@ class ShardRecord:
 
 
 def _sha256(path: StoragePath) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as source:
-        while block := source.read(COPY_BLOCK_BYTES):
-            digest.update(block)
-    return digest.hexdigest()
+        return hashlib.file_digest(source, "sha256").hexdigest()
 
 
 def _write_json(path: StoragePath, value: dict) -> None:
@@ -155,8 +150,7 @@ def _store_shard(spec: ShardSpec, tensors: dict[str, np.ndarray], local_root: Pa
     size, checksum = local.stat().st_size, _sha256(StoragePath(str(local)))
     # An upload without progress is uncommitted and may be rewritten after interruption.
     # Committed shards were already verified by _completed_shard.
-    with local.open("rb") as source, spec.path.open("wb") as destination:
-        shutil.copyfileobj(source, destination, length=COPY_BLOCK_BYTES)
+    spec.path.upload_from(str(local))
     record = ShardRecord(spec.export_id, spec.path.name, size, checksum, spec.tensor_names)
     _write_json(spec.progress_path, asdict(record))
     local.unlink()
@@ -186,13 +180,10 @@ def export(config: ExportConfig) -> None:
     _writer_step(prepare)
     mesh = compact_grug_mesh(expert_axis_size=config.expert_axis_size, replica_axis_size=config.replica_axis_size)
     with jax.set_mesh(mesh):
-        restored = restore_weights(config.checkpoint, config.metadata_digest, config.model, mesh)
-        weights_key = restored.weights_key
-        authoritative_dtypes = sorted({str(x.dtype) for x in jax.tree.leaves(restored.model) if eqx.is_inexact_array(x)})
+        model = restore_weights(config.checkpoint, config.metadata_digest, config.model, mesh)
         # restore_weights already applied the pending QB update to authoritative weights.
-        model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, restored.model)
+        model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, model)
         jax.block_until_ready(model)
-        del restored
         gc.collect()
         state_dict = grugmoe_inference_state_dict(model)
         groups: dict[str, list[str]] = {}
@@ -239,12 +230,6 @@ def export(config: ExportConfig) -> None:
                     "export_id": export_id,
                     "created_at": datetime.now(UTC).isoformat(),
                     "request": request,
-                    "authoritative_weight_tree": weights_key,
-                    "authoritative_weight_dtypes": authoritative_dtypes,
-                    "effective_weight_dtype": "bfloat16",
-                    "pending_qb_rule": "applied once by restore_weights before BF16 conversion",
-                    "tensor_count": len(weight_map),
-                    "total_safetensors_bytes": sum(record.bytes for record in records),
                     "shards": [asdict(record) for record in records],
                     "mesh": dict(mesh.shape),
                     "process_count": jax.process_count(),

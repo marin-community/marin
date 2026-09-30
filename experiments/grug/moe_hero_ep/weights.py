@@ -6,7 +6,6 @@
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
 from typing import cast
 
 import equinox as eqx
@@ -25,19 +24,13 @@ logger = logging.getLogger(__name__)
 PENDING_QB_BETAS_KEY = "pending_qb_betas"
 
 
-@dataclass(frozen=True)
-class RestoredWeights:
-    model: Transformer
-    weights_key: str
-
-
 def metadata_hash(metadata: dict) -> str:
     return hashlib.sha256(json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def restore_weights(
     checkpoint: str, metadata_digest: str, config: GrugModelConfig, mesh: jax.sharding.Mesh
-) -> RestoredWeights:
+) -> Transformer:
     """Restore authoritative weights and pending router bias, with no optimizer or fallback checkpoint."""
     logger.info("Validate checkpoint metadata and weight layout: %s", checkpoint)
     checkpoint_path = StoragePath(checkpoint)
@@ -78,4 +71,4 @@ def restore_weights(
     jax.block_until_ready(state)
     logger.info("Checkpoint arrays ready; apply pending router bias")
     pending = cast(jax.Array, state[PENDING_QB_BETAS_KEY])
-    return RestoredWeights(apply_qb_betas(cast(Transformer, state[weights_key]), pending), weights_key)
+    return apply_qb_betas(cast(Transformer, state[weights_key]), pending)

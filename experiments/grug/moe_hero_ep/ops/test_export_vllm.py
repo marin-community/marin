@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import hashlib
 import json
-from contextlib import contextmanager
 from pathlib import Path
 
 import equinox as eqx
@@ -23,15 +21,15 @@ from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.weights import metadata_hash
 
 
-def native_fixture(root: str, *, master: bool = False, hidden_dim: int = 16) -> tuple[ExportConfig, Transformer]:
+def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Transformer]:
     config = GrugModelConfig(
         vocab_size=32,
-        hidden_dim=hidden_dim,
-        intermediate_dim=hidden_dim * 3 // 2,
-        shared_expert_intermediate_dim=hidden_dim * 2,
+        hidden_dim=16,
+        intermediate_dim=24,
+        shared_expert_intermediate_dim=32,
         num_experts=4,
         num_experts_per_token=2,
-        latent_dim=hidden_dim // 2,
+        latent_dim=8,
         num_layers=2,
         num_heads=2,
         num_kv_heads=1,
@@ -43,19 +41,14 @@ def native_fixture(root: str, *, master: bool = False, hidden_dim: int = 16) -> 
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with jax.set_mesh(mesh):
         model = Transformer.init(config, key=jax.random.PRNGKey(7))
-        bank = model.stacked_blocks.stacked.mlp.expert_mlp
-        # Values distinguish layer, global expert, projection, row and column.
-        model = eqx.tree_at(
-            lambda m: (
-                m.stacked_blocks.stacked.mlp.expert_mlp.w_gate,
-                m.stacked_blocks.stacked.mlp.expert_mlp.w_up,
-                m.stacked_blocks.stacked.mlp.expert_mlp.w_down,
-            ),
-            model,
-            tuple(
-                jnp.reshape(jnp.arange(x.size, dtype=jnp.float32), x.shape) / 64 + offset
-                for x, offset in [(bank.w_gate, 1), (bank.w_up, -2), (bank.w_down, 3)]
-            ),
+        # Distinguish arrays and positions, including layer, expert and projection.
+        leaves, structure = jax.tree.flatten(model)
+        model = jax.tree.unflatten(
+            structure,
+            [
+                jnp.arange(x.size, dtype=jnp.float32).reshape(x.shape) / 64 + i if eqx.is_inexact_array(x) else x
+                for i, x in enumerate(leaves)
+            ],
         )
         model = eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.router_bias, model, jnp.full((2, 4), 9.0))
         pending = jnp.array([[1, -2, 4, -1], [-4, 1, 2, 7]], dtype=jnp.float32)
@@ -94,59 +87,60 @@ def test_native_export_preserves_expert_identity_and_effective_bias(tmp_path, la
         (tmp_path / "checkpoint" / "manifest.json").unlink()
     export(request)
     root = Path(request.destination)
-    index, tensors = reload_export(root)
+    _, tensors = reload_export(root)
     assert all(str(value.dtype) == "bfloat16" for value in tensors.values())
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         bank = model.stacked_blocks.stacked.mlp.expert_mlp
-        for layer in range(2):
-            for expert in range(4):
-                for projection, values in [
-                    ("gate_proj", bank.w_gate),
-                    ("up_proj", bank.w_up),
-                    ("down_proj", bank.w_down),
-                ]:
-                    expected = np.asarray(jax.sharding.reshard(values[layer, expert].T.astype(jnp.bfloat16), P()))
-                    actual = tensors[f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"]
-                    assert actual.shape == expected.shape
-                    assert actual.tobytes() == expected.tobytes()
+        for projection, values in [("gate_proj", bank.w_gate), ("up_proj", bank.w_up), ("down_proj", bank.w_down)]:
+            actual = np.stack(
+                [
+                    [tensors[f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"] for expert in range(4)]
+                    for layer in range(2)
+                ]
+            )
+            expected = np.asarray(jax.sharding.reshard(values.swapaxes(-1, -2).astype(jnp.bfloat16), P()))
+            assert actual.shape == expected.shape
+            assert actual.tobytes() == expected.tobytes()
     # Known centered negative betas. The saved router bias (9) must not survive or be added.
     for layer, expected in enumerate([[-0.5, 2.5, -3.5, 1.5], [5.5, 0.5, -0.5, -5.5]]):
         np.testing.assert_array_equal(tensors[f"model.layers.{layer}.mlp.router.bias"], expected)
     hf_config = json.loads((root / "config.json").read_text())
     decoded = GrugModelConfig.from_hf_config(GrugMoeHfConfig(**hf_config))
     assert (decoded.hidden_dim, decoded.intermediate_dim, decoded.latent_dim, decoded.sconv) == (16, 24, 8, True)
-    manifest = json.loads((root / "export-manifest.json").read_text())
-    assert manifest["authoritative_weight_tree"] == ("master_params" if layout == "wrapped-master" else "params")
-    assert manifest["tensor_count"] == len(tensors)
-    assert manifest["total_safetensors_bytes"] == sum(
-        (root / name).stat().st_size for name in set(index["weight_map"].values())
-    )
 
 
-def test_interrupted_export_resumes_and_completed_export_is_preserved(tmp_path, monkeypatch):
+def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path, monkeypatch):
     request, _ = native_fixture(str(tmp_path / "checkpoint"))
     root = Path(request.destination)
-    original_open = StoragePath.open
+    original_upload = StoragePath.upload_from
 
-    @contextmanager
-    def interrupt_upload(path, mode="rb", **kwargs):
-        if str(path) == str(root / "model-layer-000.safetensors") and mode == "wb":
-            with original_open(path, mode, **kwargs) as handle:
-                handle.write(b"interrupted")
+    def interrupt_upload(path, local_path, **kwargs):
+        if path.name == "model-layer-000.safetensors":
+            path.write_bytes(b"interrupted")
             raise OSError("upload interrupted")
-        with original_open(path, mode, **kwargs) as handle:
-            yield handle
+        original_upload(path, local_path, **kwargs)
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(StoragePath, "open", interrupt_upload)
+        scoped.setattr(StoragePath, "upload_from", interrupt_upload)
         with pytest.raises(OSError, match="upload interrupted"):
             export(request)
     assert not (root / "export-manifest.json").exists()
     global_shard = root / "model-global.safetensors"
-    committed_mtime = global_shard.stat().st_mtime_ns
     # A resume with a different config must not reuse existing shards.
     with pytest.raises(FileExistsError):
         export(dataclasses.replace(request, model=dataclasses.replace(request.model, qk_mult=1.5)))
+
+    # Corruption with unchanged size must stop resume and preserve the damaged object.
+    original = global_shard.read_bytes()
+    corrupted = original[:-1] + bytes([original[-1] ^ 1])
+    global_shard.write_bytes(corrupted)
+    with pytest.raises(ValueError, match="integrity"):
+        export(request)
+    assert global_shard.read_bytes() == corrupted
+    assert not (root / "export-manifest.json").exists()
+    global_shard.write_bytes(original)
+    committed_mtime = global_shard.stat().st_mtime_ns
+
     export(request)
     reload_export(root)
     assert global_shard.stat().st_mtime_ns == committed_mtime
@@ -154,19 +148,3 @@ def test_interrupted_export_resumes_and_completed_export_is_preserved(tmp_path, 
     with pytest.raises(FileExistsError):
         export(request)
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
-
-
-def test_resume_detects_same_size_shard_corruption(tmp_path):
-    request, _ = native_fixture(str(tmp_path / "checkpoint"))
-    export(request)
-    root = Path(request.destination)
-    (root / "export-manifest.json").unlink()  # Simulate interruption just before completion publication.
-    shard = root / "model-global.safetensors"
-    contents = bytearray(shard.read_bytes())
-    contents[-1] ^= 1
-    shard.write_bytes(contents)
-    corrupted_hash = hashlib.sha256(shard.read_bytes()).hexdigest()
-    with pytest.raises(ValueError, match="integrity"):
-        export(request)
-    assert hashlib.sha256(shard.read_bytes()).hexdigest() == corrupted_hash
-    assert not (root / "export-manifest.json").exists()

@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transformer:
     """Restore effective authoritative weights for the pinned sampling request."""
     config = draccus.decode(GrugModelConfig, request.model)
-    return restore_weights(request.checkpoint.uri, request.checkpoint.metadata_digest, config, mesh).model
+    return restore_weights(request.checkpoint.uri, request.checkpoint.metadata_digest, config, mesh)
 
 
 @eqx.filter_jit
