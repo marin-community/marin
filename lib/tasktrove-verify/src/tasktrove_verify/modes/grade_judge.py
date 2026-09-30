@@ -298,7 +298,7 @@ def _ask(
                 budget.consume()
         except JudgeInfrastructureError as error:
             raise JudgeInfrastructureError(str(error), {"attempts": attempts}) from error
-        entry = {"attempt": attempt}
+        entry: dict[str, int | str] = {"attempt": attempt}
         attempts.append(entry)
         try:
             reply = _complete(client, model, prompt, timeout)
