@@ -1,0 +1,31 @@
+from pathlib import Path
+import datetime, json, os, resource, selectors, signal, subprocess, sys, time
+root=Path.cwd();run_path=root/'docs/experiments/bio-task-generation/prompt-experiments'/sys.argv[1]; run=json.loads((run_path/'run.json').read_text()); trace_dir=root/'artifacts/bio-task-generation/cli-runs'/run_path.name;trace_dir.mkdir(parents=True,exist_ok=True);trace_dir=trace_dir/f'attempt-{1+len(list(trace_dir.glob("attempt-*")))}';trace_dir.mkdir()
+def resources():
+    available=int(next(x.split()[1] for x in Path('/proc/meminfo').read_text().splitlines() if x.startswith('MemAvailable:')))*1024
+    return available,os.getloadavg()[0]
+available,load=resources();estimate=400*1024**2
+if load>=1.5 or available<4*1024**3 or available-estimate<2*1024**3:raise SystemExit(f'Resource gate failed: available={available},load={load}')
+args=['codex','exec','--ignore-user-config','--disable','memories','--approve-for-me','--json','--model',run['model']['requested'],'--config',f'model_reasoning_effort="{run["model"]["reasoning_effort"]}"','--cd',str(run_path/'outputs'),'--output-last-message',str(run_path/'worker-final.txt'),'-']
+prompt=f'Read {run_path}/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, prior outputs, or conversation history. Write only the three assigned output files. There is no artificial time cutoff or unit quota. The parent holds the shared-node heavy-command lock for this runner; perform only lightweight source retrieval and file edits, with no heavy scientific executions or further agents.'
+start=time.monotonic();run['status']='running via fresh CLI context';run['execution'].update(runner='codex exec 0.159.2',launch_observed_at_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),command=args,prompt=prompt,history='fresh CLI exec, user config ignored and memories disabled',working_set_estimate_mib=400,trace_location=str(trace_dir.relative_to(root)),time_cutoff=None);run['trace_export']='CLI JSONL events captured locally; audit before publishing.';(run_path/'run.json').write_text(json.dumps(run,indent=2)+'\n')
+record={'start_utc':run['execution']['launch_observed_at_utc'],'working_set_estimate_mib':400,'command':args,'time_cutoff':None}; child=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True);child.stdin.write(prompt.encode());child.stdin.close();sel=selectors.DefaultSelector();sel.register(child.stdout,selectors.EVENT_READ,'stdout');sel.register(child.stderr,selectors.EVENT_READ,'stderr');files={key:(trace_dir/f'{key}.log').open('wb') for key in ['stdout','stderr']};peak=0;sample_count=0
+try:
+ while sel.get_map():
+  for key,_ in sel.select(timeout=15 if time.monotonic()-start<60 else 300):
+   data=os.read(key.fileobj.fileno(),65536)
+   if data:files[key.data].write(data);files[key.data].flush()
+   else:sel.unregister(key.fileobj)
+  available,load=resources();sample_count+=1
+  try:
+   rss=int(next(x.split()[1] for x in Path(f'/proc/{child.pid}/status').read_text().splitlines() if x.startswith('VmRSS:')));peak=max(peak,rss)
+  except (FileNotFoundError,StopIteration):pass
+  if available<2*1024**3 or load>2.5 or peak>500*1024:
+   record['resource_stop']={'available_bytes':available,'load':load,'rss_kib':peak};os.killpg(child.pid,signal.SIGTERM)
+ code=child.wait()
+finally:
+ for f in files.values():f.close()
+ if child.poll() is None:os.killpg(child.pid,signal.SIGTERM);child.wait()
+record.update(end_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),elapsed_seconds=time.monotonic()-start,exit_status=code,peak_child_rss_kib=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,sampled_codex_rss_kib=peak,resource_samples=sample_count)
+(trace_dir/'runner.json').write_text(json.dumps(record,indent=2)+'\n');run=json.loads((run_path/'run.json').read_text());run['execution'].update(record);run['status']='CLI finished; pending review' if code==0 else 'CLI runner failed';(run_path/'run.json').write_text(json.dumps(run,indent=2)+'\n');print(json.dumps(record),flush=True)
+raise SystemExit(code)

@@ -1,6 +1,6 @@
 # Computational biology task generation
 
-This is the canonical planning documentation for [issue #9257](https://github.com/marin-community/marin/issues/9257), as of 2026-09-25. It defines the future pipeline; compatibility with the earlier generator is not required. The design is under review, and authoring is paused while the process is specified.
+This is the canonical planning documentation for [issue #9257](https://github.com/marin-community/marin/issues/9257), as of 2026-09-30. It defines the future pipeline; compatibility with the earlier generator is not required. This authoring branch records prompt-development research. Trials of the authoring prompt and newly authored tasks remain pending.
 
 Generate realistic computational biology tasks with deterministic executable rewards, packaged for Harbor and usable by other people's pipelines. Optimize for using bioinformatics software to answer scientific questions. Analysis scripting, metadata reconciliation and workflow configuration belong in scope. Developing new bioinformatics algorithms or fixing package internals is not the initial target.
 
@@ -18,6 +18,45 @@ Task generation includes repository discovery, input curation, model-assisted au
 | [Storage and publication](storage.md) | Public artifacts, release layout, provenance and solver isolation |
 | [Transcriptomics examples](examples/transcriptomics.md) | Concrete candidates for reviewing the process |
 | [STAR–DESeq2 worked example](examples/star-deseq2.md) | Inspect a source workflow, define focused and integrated recipes, and plan instance variation |
+
+## Research handoff and repository migration
+
+The destination is [Open-Athena/biotasks issue #3](https://github.com/Open-Athena/biotasks/issues/3).
+It calls for preserving this research after the integration-baseline migration,
+then promoting supported improvements separately. Raw trials belong on a dedicated
+research branch; supported templates belong in `src/biotasks/prompts/`. The issue
+does not call for merging the research branch wholesale. No destination migration
+or promotion is performed by this documentation update.
+
+The source working agreement is:
+
+- `codex/bio-tasks` is the Marin integration branch, starting at planning commit
+  [`72008dd682`](https://github.com/marin-community/marin/tree/72008dd68247318a367a840a4f41e27fb15ff7e1).
+  Work in separate worktrees and feature branches. Do not push to integration or
+  `main`; eventual reviewed draft PRs target `codex/bio-tasks` and reference #9257.
+- This session owns `codex/bio-tasks-authoring`, its prompts, task-authoring
+  guidance and `prompt-experiments/`. Feature-branch commits and pushes are
+  authorized; no PR is requested at this analysis stage.
+- The discovery session owns `codex/bio-tasks-discovery` and `01-discovery/`.
+  Its source-ranking research has a separate migration scope.
+
+At pushed checkpoint
+[`c97c246912`](https://github.com/marin-community/marin/tree/c97c2469120f91931fdec648714a755d20604b47),
+all prompt trials discussed through the uncapped model/effort comparison and UCSC
+catalog probe were committed, and the checkout was clean. Its delta from the
+integration baseline contains 480 changed paths, all under this documentation
+directory and none under `01-discovery/`. The migration issue's drafting-time
+note about local round-two/round-three additions is superseded by that checkpoint.
+This handoff documentation follows it. Freeze the actual branch head when migration
+starts and check again for later commits and local additions.
+
+Read [prompt roles and worker handoffs](task-authoring.md#prompt-and-run-versioning),
+the [current discovery decisions](task-authoring.md#current-discovery-decisions),
+and the [experiment log](prompt-experiments/index.md) before continuing.
+The [evidence-preservation limits](prompt-experiments/index.md#evidence-preservation-and-migration)
+distinguish versioned outputs and traces from unavailable or local-only material.
+Repair destination links and executable paths separately from immutable historical
+snapshots; preserve original hashes and record every adaptation.
 
 ## Direction
 
@@ -81,7 +120,12 @@ The testbed starts with these cases; it is not yet an automated regression suite
 - Authoring model, worker concurrency, budgets and repair limits. GLM is a candidate; no model service is required by a released grader.
 - The public release repository name and account, storage quota and final packaging layout. The storage page proposes Hugging Face; no release repository has been created by this plan.
 
-Next, compare a focused transcriptomics task and a connected analysis from the same observed study. Review their prompts, input boundaries, references and grading contracts, then broaden the candidate portfolio before scaling authoring.
+Current prompt work concerns discovery coverage, source fidelity and reliable
+handoffs across repositories. The [experiment log](prompt-experiments/index.md)
+records remaining failures and the exploratory model comparisons. Authoring-prompt
+trials, a reflection prompt, worker orchestration and task execution remain open.
+A focused transcriptomics task and a connected analysis from the same observed
+study remain proposed authoring cases, not completed validation.
 
 ## Earlier work and supporting catalogs
 

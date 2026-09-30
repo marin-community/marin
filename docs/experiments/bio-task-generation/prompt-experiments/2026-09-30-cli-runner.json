@@ -1,0 +1,31 @@
+{
+  "source_path_at_capture": "artifacts/bio-task-generation/run_uncapped_cli.py",
+  "snapshot": "2026-09-30-cli-runner.py.txt",
+  "sha256": "6c5f342ca01a31bb1c6d080a63380cb862b098d2c5d3b5902de173b804149d6d",
+  "captured_at_utc": "2026-09-30T20:36:39.904517+00:00",
+  "scope": "Post-experiment snapshot of the local CLI wrapper, not a maintained pipeline runner. Individual run manifests and event logs establish what each execution did; this snapshot does not attest an identical wrapper hash for every historical run.",
+  "outer_launch": [
+    "flock",
+    "-n",
+    "/tmp/exe-codex-local-heavy.lock",
+    "env",
+    "POLARS_MAX_THREADS=1",
+    "RAYON_NUM_THREADS=1",
+    "OMP_NUM_THREADS=1",
+    "MKL_NUM_THREADS=1",
+    "OPENBLAS_NUM_THREADS=1",
+    "NUMEXPR_NUM_THREADS=1",
+    "nice",
+    "-n",
+    "10",
+    "ionice",
+    "-c",
+    "2",
+    "-n",
+    "7",
+    "python",
+    "artifacts/bio-task-generation/run_uncapped_cli.py",
+    "RUN_ID"
+  ],
+  "migration_note": "Absolute checkout paths in recorded commands and inputs are historical. Create a fresh run directory and record path adaptations before rerunning; do not overwrite preserved results."
+}

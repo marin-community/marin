@@ -153,6 +153,45 @@ Use a fresh solver context for each independent trial, isolated from the referen
 
 Automated Harbor execution, reference and grader checks are harness operations between these roles. The reviewer recommends a disposition; it cannot waive required evidence or edit the acceptance decision. LLM review during development does not introduce an LLM into the released reward.
 
+### Current discovery decisions
+
+Use one general repository-parameterized prompt across hundreds of repositories.
+Keep testbed-specific expectations in withheld review criteria, and iterate by
+running a fresh worker, inspecting its sources and outputs, and revising the
+shared prompt. Bedtools, UCSC, MMseqs2, DESeq2 and Scanpy are test cases; they do
+not introduce special branches in the instructions.
+
+The discovery worker finds operations, tutorials, functions, notebooks and
+associated source data, and classifies tool use versus creation from evidence.
+Each distinct public scientific command/API operation is a candidate unit,
+including simple conversion, extraction, indexing and validation. Enumerate
+catalog entries and inspect their semantics; record aliases, exclusions and
+pending work individually. Composed analyses may supply additional linked units.
+Task difficulty and final recipe selection belong to the author.
+
+Keep inventory consistency checks within this worker. A separate reconciliation
+prompt was tested and rejected as unnecessary workflow complexity. Retain those
+historical trials as evidence without restoring that stage. No artificial
+per-repository time cutoff or unit quota applies. Partial saved results are
+checkpoints while useful accessible work remains; elapsed time is an outcome.
+Actual access and shared-node resource limits still apply.
+
+Requested model and reasoning effort are experimental settings. The current
+comparison uses `gpt-6-luna` and `gpt-6.1-sol` at low/high effort; its single
+repository and incomplete service-blocked cell do not establish a default model
+or effort for the pipeline. The current prompt is tested research material and
+still has documented failures. The authoring prompt has not been trialed, and
+the independent-solve and reflection roles do not yet have separate prompt files.
+
+The original discussion referenced a [task-generation example](https://pastebin.com/CQqXR7b1)
+and a [Google document](https://docs.google.com/document/d/1ED4ThLOieKT_XIPNSUiL_7Sghnn6bhSwrTfeGNhYHqY/edit?tab=t.0).
+These external references are not archived in the branch. The earlier
+[proposal-only prompt](https://github.com/marin-community/marin/blob/2161051c5ee03ae435216844e4d5c2482c3f3a1b/docs/experiments/bio-task-generation/prompts/propose.md)
+is preserved in Git history; commit
+[`817ef20d64`](https://github.com/marin-community/marin/commit/817ef20d64c1d271d41266b12a1e6525588d8886)
+expanded authoring to proposal, construction and repair. Current prompt files
+contain the actual worker instructions without discussion-only labels.
+
 ### Versioned artifacts
 
 Keep a run record for each prompt experiment, with links to the original artifacts:

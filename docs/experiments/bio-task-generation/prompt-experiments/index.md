@@ -15,6 +15,41 @@ finds the public catalog and accounts for every top-level entry, but stops with
 283 entries pending. Source accuracy and completion remain unresolved; these
 inventories are provisional inputs for authoring, not validated tasks.
 
+## Evidence preservation and migration
+
+The branch preserves substantive design decisions, prompt revisions, experiment
+inputs, outputs, reviews and unresolved findings. It is not a verbatim transcript
+of the conversation. Use the [source handoff](../index.md#research-handoff-and-repository-migration)
+and [current decisions](../task-authoring.md#current-discovery-decisions) with the
+per-run records below when migrating to Open-Athena/biotasks.
+
+| Material | Preservation status |
+| --- | --- |
+| Exact templates, resolved prompts, worker launch/source-access instructions and source revisions | Versioned per run; hashes recorded where available |
+| Worker inventories, final responses, structural checks and independent reviews | Versioned, including negative/partial results; original bytes retained separately when formatting changed them |
+| Uncapped DESeq2 CLI comparison | All four configurations, runner metrics and compressed execution events are versioned; the blocked Sol/high run has a failure record instead of a final response |
+| Earlier collaboration-worker execution | Available final responses and parent observations are versioned; full event traces and usage were not exposed and cannot be reconstructed from these records |
+| CLI wrapper | [Source snapshot](2026-09-30-cli-runner.py.txt) and [launch envelope/hash](2026-09-30-cli-runner.json) captured after the batch; per-run wrapper hashes were not recorded, so this is not proof that its bytes were identical in every run |
+| Temporary validation/preparation helpers and source-review caches | Retained only in the source checkout's ignored `artifacts/bio-task-generation/`; they are not part of the branch. Saved check results, source URLs/pins and selected source hashes remain in the records |
+| Mutable external documentation and original discussion references | References and retrieval dates are recorded; complete source bodies are not archived. Re-fetching later may produce different contents |
+| Conversation and reasoning | No full chat export is included. CLI exports omit reasoning items; private reasoning is not a research artifact |
+
+The records are portable evidence, but historical commands contain absolute paths
+to the Marin checkout. Preserve those original snapshots. For a new run, create a
+new run ID and directory, adapt paths in copied launch instructions and the runner,
+and save the adapted inputs and hashes. Use the original template and repository
+pin when the intended comparison requires them. Follow the destination's resource
+and service-authorization rules, and record the scope and execution budget for
+each new experiment. Never rerun the archived wrapper against an existing evidence directory,
+because it writes the run manifest and worker outputs.
+
+The wrapper snapshot is an audit artifact, not a maintained portable pipeline.
+Source inspection, structural checks and saved event logs do not establish
+scientific correctness, task-authoring success or exact reproducibility of model
+outputs. Migration should record a disposition for the local-only material and
+check hashes and links after relocation, as required by
+[destination issue #3](https://github.com/Open-Athena/biotasks/issues/3).
+
 ## Cross-repository comparison on 2026-09-30
 
 The [comparison configuration](2026-09-30-comparison.json) records a two-hour
