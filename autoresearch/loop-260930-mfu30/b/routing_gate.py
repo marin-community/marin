@@ -23,10 +23,12 @@ import time
 import jax
 import jax.numpy as jnp
 import levanter.grug._moe.ep_ragged_all_to_all as candidate_module
+import levanter.grug._moe.sonic_cute as sonic_cute
 import levanter.grug.grug_moe as grug_moe
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from unfused_backward import unfused_backward
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -40,11 +42,14 @@ def _load_frozen(name: str):
 
 # control: main f38da1173d. sonic: inverse permutation + chained cotangents + unfilled transport
 # buffers + expert-side routing-weight gradient (ce112504f1). candidate: the branch's live module.
+# Every variant but the candidate runs the QuACK backward from before its SwiGLU-backward epilogue.
 VARIANTS = {
     "control": _load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
     "sonic": _load_frozen("sonic_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
     "candidate": candidate_module._moe_mlp_ep_ragged_a2a_local,
 }
+FUSED_BACKWARD = sonic_cute._expert_mlp_quack_wgrad_backward
+BACKWARDS = {"control": unfused_backward, "sonic": unfused_backward, "candidate": FUSED_BACKWARD}
 # Outputs whose values must match main exactly; the rest are compared to rounding. The SwiGLU
 # backward in the dh GEMM's fp32 epilogue changes dx and dW13 at rounding level.
 EXACT_OUTPUTS = ("out", "dropped", "d_w2")
@@ -103,6 +108,7 @@ def _build(variant, case, mesh, inp):
 
     def forward(x, weights, w13, w2):
         grug_moe._moe_mlp_ep_ragged_a2a_local = local_fn
+        sonic_cute._expert_mlp_quack_wgrad_backward = BACKWARDS[variant]
         out, counts = grug_moe.moe_mlp(
             x,
             inp["selected"],
@@ -128,7 +134,9 @@ def _build(variant, case, mesh, inp):
         return out, dropped, grads
 
     with jax.set_mesh(mesh):
-        return jax.jit(loss_and_grads).lower(inp["x"], inp["weights"], inp["w13"], inp["w2"], inp["ct"]).compile()
+        compiled = jax.jit(loss_and_grads).lower(inp["x"], inp["weights"], inp["w13"], inp["w2"], inp["ct"]).compile()
+    sonic_cute._expert_mlp_quack_wgrad_backward = FUSED_BACKWARD
+    return compiled
 
 
 def _bits(a):

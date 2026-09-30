@@ -38,6 +38,7 @@ import numpy as np
 from jax.ad_checkpoint import checkpoint_name
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from unfused_backward import unfused_backward
 
 HERE = pathlib.Path(__file__).resolve().parent
 LAYERS = 3
@@ -61,15 +62,25 @@ _BACKWARD = sonic_cute._expert_mlp_quack_wgrad_backward
 
 # name -> (module-local function, remat policy, QuACK backward)
 _SAVE_OUTPUT = jax.checkpoint_policies.save_only_these_names(MOE_OUTPUT)
+# Every variant but the candidate runs the QuACK backward from before the dh GEMM took the SwiGLU
+# backward into its epilogue.
 VARIANTS = {
-    "control": (_load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, _BACKWARD),
-    "unfilled": (_load_frozen("unfilled_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, _BACKWARD),
+    "control": (_load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, unfused_backward),
+    "unfilled": (_load_frozen("unfilled_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, unfused_backward),
     # unfilled + PR #9481's pipelined chunks and mirror transpose parameters (mfu30-stack 423e8c50e4).
-    "stack": (_load_frozen("stack_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, _BACKWARD),
+    "stack": (_load_frozen("stack_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, unfused_backward),
     # unfilled + expert-side routing-weight gradient (ce112504f1).
-    "sonic": (_load_frozen("sonic_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, _SAVE_OUTPUT, _BACKWARD),
-    # sonic + #9481's mirror transpose parameters only.
-    "mirror": (_load_frozen("mirror_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, _SAVE_OUTPUT, _BACKWARD),
+    "sonic": (
+        _load_frozen("sonic_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
+        _SAVE_OUTPUT,
+        unfused_backward,
+    ),
+    # sonic + #9481's mirror transpose parameters (6a6bb78853).
+    "mirror": (
+        _load_frozen("mirror_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
+        _SAVE_OUTPUT,
+        unfused_backward,
+    ),
     "candidate": (candidate_module._moe_mlp_ep_ragged_a2a_local, _SAVE_OUTPUT, _BACKWARD),
 }
 
