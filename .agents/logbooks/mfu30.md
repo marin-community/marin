@@ -187,3 +187,13 @@ Single-GPU hero-layer benchmark (real `Block.__call__`, stand-in routed experts,
 - Approved: fused RMSNorm+GatedNorm forward Pallas-Triton kernel (the rank-128 GEMMs sit between the norm
   and the gating multiply, so XLA can't fuse; ~1.5 ms per call vs ~0.4 at roofline; 4 calls per layer),
   ~0.2 s/step, no extra peak. The backward elementwise fusion (~0.1) is optional after that.
+
+## M30-007 Seed-0 control at the pinned checkpoint (2026-09-30)
+
+`mhep-ctx4k-s0-20260930` (main f38da1173d, step-180000 restore, 100 steps): median MFU **28.255** over
+180005-180059 (28.256 over 180005-180099), duration median 13.892 s, peak 103.09 GiB. Loss 180000
+1.261413, 180001 1.234596, 180002 1.200221, 180003 1.256785. Steps 180000-180010 are a post-restore warmup
+(20.6-27.8%); steady state from 180011 is 28.1-28.3 with isolated dips (180013, 180025, 180057). There is
+no in-run drift here, unlike the from-step-0 gcab runs (which also read higher, 28.3-28.5). **Gap to 30%
+at this checkpoint: 13.892 -> 13.084 s = -0.81 s/step.** Scoring window changed to 180011-180059 (median;
+the warmup only adds noise).
