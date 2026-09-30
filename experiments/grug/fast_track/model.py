@@ -90,6 +90,8 @@ _TABLE_REPLICA_AXES = tuple(axis for axis in _BATCH_AXES if axis not in _FSDP_AX
 # forward returns to the trainer, and the per-shard partial sums it is reduced from.
 NEWTON_GRAM_KEY = "_newton_gram"
 NEWTON_GRAM_LOCAL_KEY = "newton_gram_local"
+# Per-layer detached router distributions [B, S, E] for ``router_history``; popped by the layer loop, never summarized.
+ROUTER_PROBS_KEY = "router_probs"
 # Metrics-dict key that carries the auxiliary-loss residual stream from the forward to the loss.
 _AUX_HIDDEN = "aux_lm_hidden"
 # Folded into the per-step route key for the ERC proxy-token noise, so it is independent of the Gumbel noise.
@@ -136,6 +138,7 @@ _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
 _KDA_STAT_PREFIX = "attn_res_knob_kda_"
 # Folded off the root key for the KV side stream (kv_stream_dim), so it leaves every other init unchanged.
 _KV_STREAM_KEY_SALT = 0x4B5
+_ROUTER_HIST_KEY_SALT = 0x4E60
 
 
 class MtpMode(StrEnum):
@@ -551,6 +554,11 @@ class GrugModelConfig:
     attn_res_num_blocks: int = 8
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     latent_orthogonal_init: bool = False
+    router_history: bool = False
+    """HERO-MoE (arXiv 2609.32581): each router adds ``(rho * H) @ W_R`` to its logits, where ``H`` holds the earlier
+    layers' detached router softmax distributions and ``W_R`` (``Transformer.router_hist_w``) is learned. ``rho``
+    RMS-matches ``H`` to the (normed) router input and scales by ``sqrt(n_prev / (L - 1))``. Needs ``attn_res`` (the
+    unrolled layer loop carries the history)."""
     """Initialize the LatentMoE projections semi-orthogonal (``_latent_proj_init``); pairs with the optimizer's
     ``latent_proj_update`` of ``frozen`` or ``stiefel``."""
     attn_res_remat_attention: bool = False
@@ -3118,6 +3126,10 @@ class MoEMLP(eqx.Module):
         margin_min = functools.reduce(jnp.minimum, [lo for _, lo, _ in bank_stats])
         margin_max = functools.reduce(jnp.maximum, [hi for _, _, hi in bank_stats])
         router_stats["qb_beta"] = beta
+        if self.cfg.router_history:
+            router_stats[ROUTER_PROBS_KEY] = jax.lax.stop_gradient(
+                jax.nn.softmax(router_logits, axis=-1).reshape(b, s, -1)
+            ).astype(jnp.bfloat16)
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
         if self.cfg.qb_bias_damping is not None:
@@ -4710,8 +4722,32 @@ def _route_kwargs(
         "hash_token_ids": token_ids if physical_layer in cfg.moe_hash_layers else None,
         "noise_key": noise_key,
         "router_tok_rows": None if extras is None else extras.get("router_tok"),
-        "router_seed_bias": _router_seed_bias(cfg, physical_layer, token_ids) if cfg.router_bias_seed else None,
+        "router_seed_bias": _merged_router_bias(
+            _router_seed_bias(cfg, physical_layer, token_ids) if cfg.router_bias_seed else None,
+            None if extras is None else extras.get("router_hist"),
+        ),
     }
+
+
+def _merged_router_bias(seed: jax.Array | None, history: jax.Array | None) -> jax.Array | None:
+    if seed is None or history is None:
+        return seed if history is None else history
+    return seed + history
+
+
+def _router_history_bias(w: jax.Array, probs: list[jax.Array], num_layers: int) -> jax.Array | None:
+    """HERO-MoE's residual router logits for one layer: ``rho * H @ W_R`` over the earlier layers' distributions
+    ``probs`` (``GrugModelConfig.router_history``). ``w`` is this layer's ``[(L - 1) * E, E]`` slice."""
+    if not probs:
+        return None
+    e = probs[0].shape[-1]
+    bias = sum(
+        jnp.einsum("bse,ef->bsf", p.astype(jnp.float32), w[j * e : (j + 1) * e].astype(jnp.float32))
+        for j, p in enumerate(probs)
+    )
+    rms = jnp.sqrt(sum(jnp.mean(jnp.square(p.astype(jnp.float32))) for p in probs) / len(probs))
+    rho = jax.lax.stop_gradient(jnp.sqrt(len(probs) / max(num_layers - 1, 1)) / (rms + 1e-9))
+    return rho * bias
 
 
 def _stream_sum(sources: tuple[jax.Array, ...]) -> jax.Array:
@@ -5009,6 +5045,7 @@ class Transformer(eqx.Module):
     lm_head_bias: Float[Array, " V"] | None
     """Output logit bias (``lm_head_unigram_bias``), float32 even in the compute copy."""
     kv_stream: KvStream | None
+    router_hist_w: Float[Array, "L HE E"] | None  # HERO-MoE residual router weights (cfg.router_history)
     """The KV side stream (``kv_stream_dim``), the only source of the layers' keys and values."""
     config: GrugModelConfig = eqx.field(static=True)
 
@@ -5391,6 +5428,9 @@ class Transformer(eqx.Module):
                 reshard(jnp.zeros((cfg.vocab_size,), jnp.float32), P(None)) if cfg.lm_head_unigram_bias else None
             ),
             kv_stream=KvStream.init(cfg, key=random.fold_in(key, _KV_STREAM_KEY_SALT)) if cfg.kv_stream_dim else None,
+            router_hist_w=(
+                _router_hist_init(cfg, random.fold_in(key, _ROUTER_HIST_KEY_SALT)) if cfg.router_history else None
+            ),
             router_tie_alpha=None,
             config=cfg,
         )
@@ -5778,6 +5818,8 @@ class Transformer(eqx.Module):
         allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
         if set(cfg.attn_res_sum_inputs) - allowed:
             raise ValueError(f"attn_res_sum_inputs must be a subset of {sorted(allowed)}, got {cfg.attn_res_sum_inputs}")
+        if cfg.router_history and (not cfg.attn_res or cfg.loop_grow_step is not None or cfg.dense_mlp):
+            raise ValueError("router_history needs attn_res, a MoE and no looped growth")
         if cfg.attn_res_full and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
             raise ValueError("attn_res_full needs attn_res_layer_backward=SAVE")
         if cfg.mla_share_kv_latent and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
@@ -5810,6 +5852,7 @@ class Transformer(eqx.Module):
             per-layer router stats and the pass's gate z terms."""
             blocks, block_logits, partial = state
             stats_out, z_out = [], []
+            hist_probs: list[jax.Array] = []
             kv_share: dict[str, jax.Array] | None = {} if cfg.mla_share_kv_latent or cfg.value_residual_layers else None
             for i, layer in enumerate(layers):
                 eff = pass_index * num_layers + i
@@ -5836,6 +5879,10 @@ class Transformer(eqx.Module):
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 if kv_inputs is not None:
                     layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
+                if self.router_hist_w is not None:
+                    hist_bias = _router_history_bias(self.router_hist_w[i], hist_probs, num_layers)
+                    if hist_bias is not None:
+                        layer_extras = {**(layer_extras or {}), "router_hist": hist_bias}
                 if i in cfg.memory_layers:
                     assert self.memory is not None
                     layer_extras = {**(layer_extras or {}), "memory": self.memory[cfg.memory_layers.index(i)]}
@@ -5855,6 +5902,9 @@ class Transformer(eqx.Module):
                 else:
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
                 z_out.append(stats.pop(_ATTN_RES_Z))
+                layer_probs = stats.pop(ROUTER_PROBS_KEY, None)
+                if layer_probs is not None:
+                    hist_probs.append(layer_probs)
                 if cfg.nitp_weight > 0 and pass_index == 0 and i == cfg.nitp_layer:
                     # The plain residual stream after this layer: embedding plus every sublayer output so far.
                     nitp_logs[_NITP_TARGET] = _stream_sum((*blocks[len(extra_sources) :], partial))
@@ -6711,6 +6761,14 @@ def _token_window(
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * random.truncated_normal(key, -3, 3, shape)
+
+
+def _router_hist_init(cfg: "GrugModelConfig", key: PRNGKeyArray) -> jax.Array:
+    """HERO-MoE's ``W_R`` for every layer, uniform in +-1 / sqrt(D + (L - 1) E) (the paper's bound at full history)."""
+    n, e = cfg.num_layers, cfg.num_experts
+    bound = 1.0 / float(np.sqrt(cfg.hidden_dim + (n - 1) * e))
+    w = random.uniform(key, (n, (n - 1) * e, e), jnp.float32, -bound, bound)
+    return reshard(w, P(None, None, None))
 
 
 def _latent_proj_init(cfg: "GrugModelConfig", key: PRNGKeyArray, shape: tuple[int, int]) -> Float[Array, "..."]:
