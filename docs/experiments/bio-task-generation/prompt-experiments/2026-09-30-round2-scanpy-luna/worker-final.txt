@@ -1,0 +1,7 @@
+Completed the Scanpy source-inventory pass. The output contains 11 units and 8 dataset/reference records, covering clustering and annotation, trajectories, cell-cycle analysis, reference mapping, BBKNN integration, and Pearson-residual preprocessing.
+
+Both JSONL files parse; IDs are unique and all dataset and unit references resolve. The source map records remaining leads. The supplied deadline was 2026-09-30 14:37:52 UTC; the final clock check was 14:45:17 UTC, so discovery stopped after the deadline.
+
+- [units.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-scanpy-luna/outputs/units.jsonl)
+- [datasets.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-scanpy-luna/outputs/datasets.jsonl)
+- [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-scanpy-luna/outputs/inspection.md)

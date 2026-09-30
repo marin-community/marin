@@ -1,0 +1,61 @@
+{
+  "run_id": "2026-09-30-round2-deseq2-luna",
+  "status": "completed and reviewed; improvements and regressions observed",
+  "question": "Does the shared evidence, identity, source-map and checkpoint revision improve the first-round failure classes?",
+  "comparison_round": 2,
+  "repository": "https://github.com/thelovelab/DESeq2",
+  "source_revision": "c62c60c6ff83fd84ce115cacd1c49827533f85a7",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "f7622c7d89ea92bbc740ed10b47f5ae7c7261b653f241686377a45a02a763fa6",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "9d317f65e6d4c51a6c874d83b2d0b6f78099f077fb7f8ba1a150b4f64c112f36",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41",
+    "working_tree_revision": "round2 shared prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T14:18:56.491712+00:00",
+    "deadline_utc": "2026-09-30T14:28:56.491712+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "ff06795ab8eda387acd176e1d7a717ed885fddea9fdebb3d5cea013e5be7ff7b",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "c3ef467be0d2b063c3f689087292c0bb13bb84311bb8b846aabe772fb512228b",
+    "outputs": "outputs/",
+    "agent_task": "/root/round2_deseq2_luna",
+    "launch_observed_at_utc": "2026-09-30T14:20:02.394549+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-deseq2-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T14:27:50+00:00",
+    "completion_timestamp_precision": "Approximate parent observation; worker-stated stop time is separate."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 10,
+      "datasets": 3
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "7766a024680d254bc7fb26e732371724d69da455efa68aebc3e9a8693ce85a9c",
+      "outputs/inspection.md": "cd790e3e6246e4778c9ed476bc7da4fa5f8ed0ec96bd2336f1d1576b7672d2c0",
+      "outputs/units.jsonl": "0c5525ca1ce7566f69b6f566dccf98d847d82732b0ad182345edd6833cefa273"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T14:29:29.930274+00:00"
+}

@@ -1,0 +1,66 @@
+{
+  "run_id": "2026-09-30-round2-scanpy-luna",
+  "status": "completed and reviewed; improvements and regressions observed",
+  "question": "Does the shared evidence, identity, source-map and checkpoint revision improve the first-round failure classes?",
+  "comparison_round": 2,
+  "repository": "https://github.com/scverse/scanpy",
+  "source_revision": "8c1463d5d97272d5811ad3f4efb57483e23b4c7e",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "f7622c7d89ea92bbc740ed10b47f5ae7c7261b653f241686377a45a02a763fa6",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "b0b989d9f87407747340d24f609d9509304498b07bac2464f46cfdcd37e62f85",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41",
+    "working_tree_revision": "round2 shared prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T14:27:52.007121+00:00",
+    "deadline_utc": "2026-09-30T14:37:52.007121+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "512589107bad2c2233b62201b848d9dcc7dc848f2f9b3616671454fbe18d60e2",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "fe5db60183849183b4374eb0dcaa616724bca0da991c113a55022caa3fe208a9",
+    "outputs": "outputs/",
+    "agent_task": "/root/round2_scanpy_luna",
+    "launch_observed_at_utc": "2026-09-30T14:28:23.763993+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-scanpy-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T14:58:27+00:00",
+    "completion_timestamp_precision": "Parent observation; delayed until resumption for bedtools/Scanpy. Worker-stated final clock is separate.",
+    "deadline_enforcement": "Instruction only; no runner-enforced timeout."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 11,
+      "datasets": 8
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "normalization": {
+      "outputs/inspection.md": "Trailing spaces removed; exact original UTF-8 content and hash in original-inspection.json."
+    },
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "209675dc4a5159083f419bab85501193593a940924c046c6a3ab0ffd7b1961fc",
+      "outputs/inspection.md": "3bdc7dcc0068cb6d28203c2dbd5135f549f8f882492ab7174d42beb7b63b2363",
+      "outputs/units.jsonl": "5fea03277a1ade24ebb69677877aa073b7e94c55c9038fb4fbef2198fa4f9692",
+      "original-inspection.json": "37edfc5a1b8048e0f8ab7cc000638aaabe93f51ce68cc65f60de1c0f59637e54"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T15:01:53.869136+00:00"
+}

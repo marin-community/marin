@@ -1,0 +1,62 @@
+{
+  "run_id": "2026-09-30-round2-ucsc-luna",
+  "status": "completed and reviewed; improvements and regressions observed",
+  "question": "Does the shared evidence, identity, source-map and checkpoint revision improve the first-round failure classes?",
+  "comparison_round": 2,
+  "repository": "https://github.com/ucscGenomeBrowser/kent",
+  "source_revision": "ad6dd2177ad20bea9e32563ee76a1c598bccb6d5",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "f7622c7d89ea92bbc740ed10b47f5ae7c7261b653f241686377a45a02a763fa6",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "b67f55ab201e52d9e77b2064a62e60528b48badfdc04734c3cb63c53fc0ef04f",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41",
+    "working_tree_revision": "round2 shared prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T14:18:56.492139+00:00",
+    "deadline_utc": "2026-09-30T14:28:56.492139+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "85f9beec4410866137de62038dfbbd9b4c522b1f873e0fdb38ca1383a126824c",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "224b3242866f8a0879b8459ef6434c117cb743c33c9627b987f5067d04419527",
+    "outputs": "outputs/",
+    "agent_task": "/root/round2_ucsc_luna",
+    "launch_observed_at_utc": "2026-09-30T14:20:02.394670+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-ucsc-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T14:29:48+00:00",
+    "completion_timestamp_precision": "Parent observation; delayed until resumption for bedtools/Scanpy. Worker-stated final clock is separate.",
+    "deadline_enforcement": "Instruction only; no runner-enforced timeout."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 5,
+      "datasets": 4
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "a4793bae67bbc45eadb4f28e89d724999cace64588a153c0e1e26b1325b80063",
+      "outputs/inspection.md": "de57a435d7553bd58c55f18b1ad99eaa5f226fda0787f229d3e1ed72ba433331",
+      "outputs/units.jsonl": "223834b886312f9d85ee1364cdd8272df93b81cf1342012a54c63b5f9950c5de"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T15:01:53.867372+00:00"
+}

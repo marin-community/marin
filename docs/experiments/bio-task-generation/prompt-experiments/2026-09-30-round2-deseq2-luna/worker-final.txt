@@ -1,0 +1,7 @@
+Completed a partial source-inventory pass with **10 units and 3 dataset records**. Both JSONL files parse, identifiers are unique, and dataset/unit references resolve.
+
+- [units.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-deseq2-luna/outputs/units.jsonl)
+- [datasets.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-deseq2-luna/outputs/datasets.jsonl)
+- [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-deseq2-luna/outputs/inspection.md)
+
+The inventory covers pasilla differential-expression workflows, tximport, LFC shrinkage, VST, LRT, single-cell guidance, outlier replacement, HTSeq import, and airway object construction. At 14:27:26 UTC, I stopped before the 14:28:56 cutoff to reserve time for final consistency checks. The repository survey remains partial; `inspection.md` lists the next leads. No scientific analysis was run.

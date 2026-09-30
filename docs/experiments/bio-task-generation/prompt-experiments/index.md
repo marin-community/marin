@@ -63,6 +63,24 @@ no repository names, source hints, or review findings enter worker prompts.
 The next round tests the combined revision, so individual clause effects cannot
 be isolated. Its output counts will not be used as quality scores.
 
+## Round 2 results
+
+| Repository | Units / data records | Parent review |
+| --- | --- | --- |
+| [bedtools](2026-09-30-round2-bedtools-luna/index.md) | 13 / 3 | Coherent command map and separate references; tutorial data follow-up remains weak |
+| [Scanpy](2026-09-30-round2-scanpy-luna/index.md) | 11 / 8 | PBMC identity repaired; false raw-count-state claim and stale counts; deadline exceeded by 7m25s |
+| [MMseqs2](2026-09-30-round2-mmseqs2-luna/index.md) | 11 / 3 | Correct paper DOI and input stages; named references omitted under an unnecessary version gate; early stop |
+| [DESeq2](2026-09-30-round2-deseq2-luna/index.md) | 10 / 3 | Hidden tximeta chunk recognized; annotation grouping persists and artificial-label warning is lost |
+| [UCSC Kent](2026-09-30-round2-ucsc-luna/index.md) | 5 / 4 | Additional utilities and reference leads; stale final stopping evidence |
+
+The revision has specific gains and regressions; no overall improvement is
+established. Round 3 repeats the identical prompt in fresh contexts before
+another revision. All structural checks pass, while scientific and source-map
+errors remain. The runner supplies a deadline but does not enforce a timeout;
+Scanpy's wider coverage is confounded by its overrun. A parent execution gap
+from approximately 14:30 to 14:58 UTC is recorded in the comparison configuration.
+It is not counted as continuous parent research or review time.
+
 ## Earlier trials
 
 | Date | Experiment | Result | Status |

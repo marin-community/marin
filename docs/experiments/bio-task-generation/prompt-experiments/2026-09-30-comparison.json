@@ -92,7 +92,15 @@
       "Rewrite coherent final inspection state instead of appending conflicting corrections."
     ],
     "controls": "Same pinned repositories, fresh Luna contexts, generic source access, 10-minute maximum, no scientific execution; bundled prompt changes cannot establish individual clause effects.",
-    "ecosystem_special_cases": false
+    "ecosystem_special_cases": false,
+    "review_status": {
+      "bedtools": "completed; see per-run review",
+      "scanpy": "completed; see per-run review",
+      "mmseqs2": "completed; see per-run review",
+      "deseq2": "completed; see per-run review",
+      "ucsc": "completed; see per-run review"
+    },
+    "conclusion": "Mixed gains and regressions; no overall improvement established. Deadline adherence failed materially for Scanpy."
   },
   "checks": [
     {
@@ -102,6 +110,53 @@
       "environment": "Initial sandboxed uv cache write refused; elevated checks used existing cache under resource gate and shared lock.",
       "peak_rss_kib": 33772,
       "end_utc": "2026-09-30T14:22:59.155336+00:00"
+    },
+    {
+      "start_utc": "2026-09-30T15:03:22.486621+00:00",
+      "end_utc": "2026-09-30T15:03:22.872070+00:00",
+      "lint_exit_status": 0,
+      "source_links_exit_status": 0,
+      "peak_child_rss_kib": 33372,
+      "files": 63,
+      "working_set_estimate_mib": 150,
+      "formatter_changed_files": [],
+      "round": 2
     }
-  ]
+  ],
+  "publication_checkpoints": [
+    {
+      "commit": "ecc4d3c5ae0696ac444af7dc192a6869b22676ba",
+      "branch": "codex/bio-tasks-authoring",
+      "remote_verified_at_utc": "2026-09-30T14:24:00+00:00",
+      "scope": "Five reviewed round 1 runs and shared round 2 prompt revision",
+      "pull_request": null
+    }
+  ],
+  "execution_gap": {
+    "last_parent_clock_before_gap_utc": "2026-09-30T14:30:20+00:00",
+    "first_parent_clock_after_gap_utc": "2026-09-30T14:58:27+00:00",
+    "cause": "Unknown; no claim of continuous parent work during this interval. Children completed and their finals arrived on resumption.",
+    "effect": "Round 3 DESeq2 was prepared but not launched before the gap; its deadline was refreshed before launch. Scanpy round 2 exceeded its deadline by 7m25s; treat budget adherence as failed and coverage comparison as confounded."
+  },
+  "round3": {
+    "design": "Fresh repeats of the identical round 2 prompt; same repository pins and 10-minute maxima.",
+    "purpose": "Assess variability before selecting another revision.",
+    "repositories": [
+      "deseq2",
+      "mmseqs2",
+      "ucsc",
+      "scanpy",
+      "bedtools"
+    ]
+  },
+  "candidate_next_revision": {
+    "status": "not implemented or tested",
+    "hypotheses": [
+      "Tie each handoff-critical claim to a inspected source locator and preserve demonstration-only changes to scientific metadata.",
+      "Treat missing release, terms or downloadable assets as limitations rather than admission gates for identified data products.",
+      "Compact the instructions into an inspect-record-check loop, reducing repeated end-of-run prose.",
+      "Separate partial source states and remove unsupported negative claims about absent state or data."
+    ],
+    "decision_after": "Review identical-prompt repeats before changing the live prompt."
+  }
 }

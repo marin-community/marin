@@ -1,0 +1,62 @@
+{
+  "run_id": "2026-09-30-round2-bedtools-luna",
+  "status": "completed and reviewed; improvements and regressions observed",
+  "question": "Does the shared evidence, identity, source-map and checkpoint revision improve the first-round failure classes?",
+  "comparison_round": 2,
+  "repository": "https://github.com/arq5x/bedtools2",
+  "source_revision": "614e9a5c5935ab86e873dab9072fbbaf003c1b7e",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "snapshot": "template.md",
+    "sha256": "f7622c7d89ea92bbc740ed10b47f5ae7c7261b653f241686377a45a02a763fa6",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "565f1fcd576152a76ee6ae8a797abc2127bb4f5b80f6fe385a583e65051f98ce",
+    "base_commit": "37f8a601d26ba0e55ccb4836b100dfd3e0187f41",
+    "working_tree_revision": "round2 shared prompt snapshot"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": null,
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "history": "none",
+    "maximum_concurrent_children": 3,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-30T14:27:52.007690+00:00",
+    "deadline_utc": "2026-09-30T14:37:52.007690+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "a005d141b57df7dcb0cb01653a7f8173c6e13e277a03ce78cfbcaa83edafdc59",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "4da38d07943a1ab90d7955b9c33001296e4bd0dba861bd1cde6d5cf39f579f3f",
+    "outputs": "outputs/",
+    "agent_task": "/root/round2_bedtools_luna",
+    "launch_observed_at_utc": "2026-09-30T14:28:23.764177+00:00",
+    "spawn_message": "Read /home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-30-round2-bedtools-luna/launch-message.txt and carry out that assignment. Read only that launch file, its referenced resolved prompt and source-access instructions, and the external repository sources you discover. Do not read parent documentation, review criteria, sibling experiments, or previous outputs. Write only to the assigned outputs directory.",
+    "completion_observed_at_utc": "2026-09-30T14:58:27+00:00",
+    "completion_timestamp_precision": "Parent observation; delayed until resumption for bedtools/Scanpy. Worker-stated final clock is separate.",
+    "deadline_enforcement": "Instruction only; no runner-enforced timeout."
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full tool trace not exposed by the collaboration interface; worker final message will be saved.",
+  "outputs": {
+    "counts": {
+      "units": 13,
+      "datasets": 3
+    },
+    "structural_errors": [],
+    "scope": "JSONL parsing, required fields, unique IDs, role vocabulary and inventory references only; semantic review is separate.",
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "eaf5a2dab85996a4028523e0d30c46b3b42ee483a10d5a4fe671ed07052f47d7",
+      "outputs/inspection.md": "f224f3ced1ba07b827064fb72adecdea790e2844ccb22a584ceb4b59fa6841f0",
+      "outputs/units.jsonl": "27adaad4aa15bc6bc808bd5e27b816a88ce4a611754cdc63348ce2d4699d151a"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-30T15:01:53.868212+00:00"
+}
