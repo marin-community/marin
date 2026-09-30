@@ -14,7 +14,7 @@ from tasktrove_verify.spec import DEFAULT_WORKSPACE, ScriptSpec, parse_spec
 
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
-from taskcompendium.models import AnswerType, ConversationInput, TaskRequirements, TaskSpec, TextMessage
+from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
 from taskcompendium.verifiers.script import NetworkPolicy, PrivateResource, ScriptVerifier, script_verifier
 
 FAMILY = "prompt-injection"
@@ -104,6 +104,6 @@ def import_task(archive: TaskArchive, *, runtime_image: str) -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content=instructions),)),
         verifier=script_verifier(verifier),
         source=archive.source.model_copy(update={"importer_revision": IMPORTER_REVISION}),
-        requirements=TaskRequirements(),
+        environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
     )

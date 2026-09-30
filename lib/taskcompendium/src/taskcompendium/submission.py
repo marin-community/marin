@@ -100,12 +100,12 @@ def submission_compatible(specification: TaskSpec, convention: SubmissionConvent
     if not convention.supports(specification.answer_type):
         return False
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return bool(specification.tools.functions) and specification.tools.tool_choice != "none"
+        return bool(specification.final_tools.functions) and specification.final_tools.tool_choice != "none"
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        return specification.tools.tool_choice != "none" and all(
-            function.name != ANSWER_CALL_NAME for function in specification.tools.functions
+        return specification.final_tools.tool_choice != "none" and all(
+            function.name != ANSWER_CALL_NAME for function in specification.final_tools.functions
         )
-    return specification.tools.tool_choice != "required"
+    return specification.final_tools.tool_choice != "required"
 
 
 def submission_instruction(convention: SubmissionConvention) -> str:
@@ -177,18 +177,18 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     request: dict[str, Any] = {"messages": messages}
     tools: list[dict[str, object]] = [
         {"type": "function", "function": function.model_dump(exclude_none=True)}
-        for function in specification.tools.functions
+        for function in specification.final_tools.functions
     ]
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         tools.append(answer_call_tool())
-        if not specification.tools.functions:
+        if not specification.final_tools.functions:
             request.update(tool_choice="required", parallel_tool_calls=False)
     if tools:
         request["tools"] = tools
-    if specification.tools.tool_choice is not None:
-        request["tool_choice"] = specification.tools.tool_choice
-    if specification.tools.parallel_tool_calls is not None:
-        request["parallel_tool_calls"] = specification.tools.parallel_tool_calls
+    if specification.final_tools.tool_choice is not None:
+        request["tool_choice"] = specification.final_tools.tool_choice
+    if specification.final_tools.parallel_tool_calls is not None:
+        request["parallel_tool_calls"] = specification.final_tools.parallel_tool_calls
     return request
 
 
