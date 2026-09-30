@@ -84,6 +84,14 @@ nav:
           - Overview: experiments/bio-task-generation/index.md
           - Requirements: experiments/bio-task-generation/requirements.md
           - Repository Discovery: experiments/bio-task-generation/discovery.md
+          - Discovery Results:
+              - Source Inventory: experiments/bio-task-generation/01-discovery/index.md
+              - Adoption Analysis: experiments/bio-task-generation/01-discovery/adoption.md
+              - GitHub Topics: experiments/bio-task-generation/01-discovery/topics.md
+              - Ranking Comparison: experiments/bio-task-generation/01-discovery/ranking-comparison.md
+              - Ranked Source Lists: experiments/bio-task-generation/01-discovery/ranking-lists.md
+              - Expansion to 200: experiments/bio-task-generation/01-discovery/ranking-expansion.md
+              - Additional Ranked Sources: experiments/bio-task-generation/01-discovery/ranking-additions.md
           - Task Authoring: experiments/bio-task-generation/task-authoring.md
           - Validation: experiments/bio-task-generation/validation.md
           - Storage and Publication: experiments/bio-task-generation/storage.md

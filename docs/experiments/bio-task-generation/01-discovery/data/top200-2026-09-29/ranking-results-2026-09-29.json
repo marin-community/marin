@@ -1,0 +1,1576 @@
+{
+  "date": "2026-09-29",
+  "union_sources": 672,
+  "rankings": {
+    "bioconda": {
+      "n": 200,
+      "domains": {
+        "Computing infrastructure": 38,
+        "Gene expression": 10,
+        "Gene regulation": 5,
+        "General biology & multi-omics": 8,
+        "Genetic variation": 16,
+        "Genome assembly & annotation": 30,
+        "Immunology": 1,
+        "Microbiome & metagenomics": 13,
+        "Phylogenetics & evolution": 12,
+        "Protein structure & biophysics": 4,
+        "Proteomics": 3,
+        "RNA structure": 2,
+        "Sequence processing": 53,
+        "Single-cell & spatial omics": 4,
+        "Systems biology & ontologies": 1
+      },
+      "source_types": {
+        "Data resource": 2,
+        "Infrastructure": 39,
+        "Software": 154,
+        "Workflow": 5
+      },
+      "domain_bins": 15,
+      "manual_topic_bins": 45,
+      "effective_domain_bins": 8.93378834907709,
+      "largest_domain_share": 0.265,
+      "cutoff_score": 304978,
+      "last_raw_rank": 317,
+      "unique_to_ranking": 106,
+      "software_subset": {
+        "n": 198,
+        "domains": {
+          "Computing infrastructure": 38,
+          "Gene expression": 10,
+          "Gene regulation": 5,
+          "General biology & multi-omics": 8,
+          "Genetic variation": 16,
+          "Genome assembly & annotation": 29,
+          "Immunology": 1,
+          "Microbiome & metagenomics": 13,
+          "Phylogenetics & evolution": 11,
+          "Protein structure & biophysics": 4,
+          "Proteomics": 3,
+          "RNA structure": 2,
+          "Sequence processing": 53,
+          "Single-cell & spatial omics": 4,
+          "Systems biology & ontologies": 1
+        },
+        "source_types": {
+          "Infrastructure": 39,
+          "Software": 154,
+          "Workflow": 5
+        },
+        "domain_bins": 15,
+        "manual_topic_bins": 45,
+        "effective_domain_bins": 8.916634549132569,
+        "largest_domain_share": 0.2676767676767677
+      },
+      "specific_domain_subset": {
+        "n": 154,
+        "domains": {
+          "Gene expression": 10,
+          "Gene regulation": 5,
+          "Genetic variation": 16,
+          "Genome assembly & annotation": 30,
+          "Immunology": 1,
+          "Microbiome & metagenomics": 13,
+          "Phylogenetics & evolution": 12,
+          "Protein structure & biophysics": 4,
+          "Proteomics": 3,
+          "RNA structure": 2,
+          "Sequence processing": 53,
+          "Single-cell & spatial omics": 4,
+          "Systems biology & ontologies": 1
+        },
+        "source_types": {
+          "Data resource": 2,
+          "Infrastructure": 4,
+          "Software": 143,
+          "Workflow": 5
+        },
+        "domain_bins": 13,
+        "manual_topic_bins": 36,
+        "effective_domain_bins": 7.4303936098854,
+        "largest_domain_share": 0.34415584415584416
+      },
+      "tags": {
+        "github_mapped": 165,
+        "tagged_sources": 92,
+        "github_without_tags": 73,
+        "no_github_mapping": 35,
+        "distinct_raw_tags": 276,
+        "tag_assignments": 506,
+        "effective_raw_tags": 147.69677403840785,
+        "top_tags": [
+          [
+            "bioinformatics",
+            46
+          ],
+          [
+            "bioconductor-package",
+            27
+          ],
+          [
+            "core-package",
+            25
+          ],
+          [
+            "python",
+            16
+          ],
+          [
+            "genomics",
+            15
+          ],
+          [
+            "ngs",
+            9
+          ],
+          [
+            "sequence-alignment",
+            7
+          ],
+          [
+            "c-plus-plus",
+            6
+          ],
+          [
+            "metagenomics",
+            6
+          ],
+          [
+            "sequencing",
+            6
+          ],
+          [
+            "u24ca289073",
+            6
+          ],
+          [
+            "genome",
+            5
+          ]
+        ],
+        "mapped_domain_sources": 92,
+        "domain_presence": {
+          "Cheminformatics & drug discovery": 1,
+          "Computing infrastructure": 34,
+          "Gene expression": 5,
+          "Gene regulation": 3,
+          "General biology & multi-omics": 51,
+          "Genetic variation": 4,
+          "Genome assembly & annotation": 15,
+          "Microbiome & metagenomics": 9,
+          "Phylogenetics & evolution": 6,
+          "Protein structure & biophysics": 6,
+          "Proteomics": 2,
+          "Sequence processing": 34,
+          "Single-cell & spatial omics": 4
+        },
+        "fractional_domains": {
+          "Cheminformatics & drug discovery": 0.3333333333333333,
+          "Computing infrastructure": 30.75,
+          "Gene expression": 2.1666666666666665,
+          "Gene regulation": 1.0,
+          "General biology & multi-omics": 23.49999999999999,
+          "Genetic variation": 1.3333333333333333,
+          "Genome assembly & annotation": 7.5,
+          "Microbiome & metagenomics": 3.5000000000000004,
+          "Phylogenetics & evolution": 2.4166666666666665,
+          "Protein structure & biophysics": 2.5833333333333335,
+          "Proteomics": 1.0,
+          "Sequence processing": 13.666666666666671,
+          "Single-cell & spatial omics": 2.25
+        },
+        "effective_domain_bins": 6.565857986054625
+      },
+      "diversity_by_cutoff": {
+        "10": {
+          "n": 10,
+          "domains": {
+            "Gene regulation": 1,
+            "Genetic variation": 1,
+            "Genome assembly & annotation": 1,
+            "Sequence processing": 7
+          },
+          "source_types": {
+            "Infrastructure": 1,
+            "Software": 9
+          },
+          "domain_bins": 4,
+          "manual_topic_bins": 6,
+          "effective_domain_bins": 2.5611285178871386,
+          "largest_domain_share": 0.7
+        },
+        "25": {
+          "n": 25,
+          "domains": {
+            "Computing infrastructure": 6,
+            "Gene regulation": 1,
+            "General biology & multi-omics": 1,
+            "Genetic variation": 2,
+            "Genome assembly & annotation": 3,
+            "Sequence processing": 12
+          },
+          "source_types": {
+            "Infrastructure": 7,
+            "Software": 17,
+            "Workflow": 1
+          },
+          "domain_bins": 6,
+          "manual_topic_bins": 12,
+          "effective_domain_bins": 4.091096844619646,
+          "largest_domain_share": 0.48
+        },
+        "50": {
+          "n": 50,
+          "domains": {
+            "Computing infrastructure": 11,
+            "Gene regulation": 2,
+            "General biology & multi-omics": 1,
+            "Genetic variation": 4,
+            "Genome assembly & annotation": 5,
+            "Phylogenetics & evolution": 4,
+            "Proteomics": 1,
+            "RNA structure": 1,
+            "Sequence processing": 21
+          },
+          "source_types": {
+            "Data resource": 1,
+            "Infrastructure": 13,
+            "Software": 35,
+            "Workflow": 1
+          },
+          "domain_bins": 9,
+          "manual_topic_bins": 20,
+          "effective_domain_bins": 5.448333844472085,
+          "largest_domain_share": 0.42
+        },
+        "100": {
+          "n": 100,
+          "domains": {
+            "Computing infrastructure": 17,
+            "Gene expression": 6,
+            "Gene regulation": 3,
+            "General biology & multi-omics": 1,
+            "Genetic variation": 8,
+            "Genome assembly & annotation": 15,
+            "Microbiome & metagenomics": 3,
+            "Phylogenetics & evolution": 6,
+            "Protein structure & biophysics": 1,
+            "Proteomics": 2,
+            "RNA structure": 1,
+            "Sequence processing": 35,
+            "Single-cell & spatial omics": 1,
+            "Systems biology & ontologies": 1
+          },
+          "source_types": {
+            "Data resource": 1,
+            "Infrastructure": 21,
+            "Software": 76,
+            "Workflow": 2
+          },
+          "domain_bins": 14,
+          "manual_topic_bins": 31,
+          "effective_domain_bins": 7.47675164226894,
+          "largest_domain_share": 0.35
+        },
+        "200": {
+          "n": 200,
+          "domains": {
+            "Computing infrastructure": 38,
+            "Gene expression": 10,
+            "Gene regulation": 5,
+            "General biology & multi-omics": 8,
+            "Genetic variation": 16,
+            "Genome assembly & annotation": 30,
+            "Immunology": 1,
+            "Microbiome & metagenomics": 13,
+            "Phylogenetics & evolution": 12,
+            "Protein structure & biophysics": 4,
+            "Proteomics": 3,
+            "RNA structure": 2,
+            "Sequence processing": 53,
+            "Single-cell & spatial omics": 4,
+            "Systems biology & ontologies": 1
+          },
+          "source_types": {
+            "Data resource": 2,
+            "Infrastructure": 39,
+            "Software": 154,
+            "Workflow": 5
+          },
+          "domain_bins": 15,
+          "manual_topic_bins": 45,
+          "effective_domain_bins": 8.93378834907709,
+          "largest_domain_share": 0.265
+        }
+      }
+    },
+    "bioconductor": {
+      "n": 200,
+      "domains": {
+        "Bioimaging": 1,
+        "Computing infrastructure": 58,
+        "Gene expression": 28,
+        "Gene regulation": 11,
+        "General biology & multi-omics": 9,
+        "Genetic variation": 6,
+        "Genome assembly & annotation": 17,
+        "Metabolomics": 3,
+        "Microbiome & metagenomics": 9,
+        "Phylogenetics & evolution": 4,
+        "Proteomics": 10,
+        "Sequence processing": 10,
+        "Single-cell & spatial omics": 17,
+        "Systems biology & ontologies": 17
+      },
+      "source_types": {
+        "Infrastructure": 65,
+        "Software": 135
+      },
+      "domain_bins": 14,
+      "manual_topic_bins": 48,
+      "effective_domain_bins": 9.717807648225238,
+      "largest_domain_share": 0.29,
+      "cutoff_score": 2174,
+      "last_raw_rank": 200,
+      "unique_to_ranking": 143,
+      "software_subset": {
+        "n": 200,
+        "domains": {
+          "Bioimaging": 1,
+          "Computing infrastructure": 58,
+          "Gene expression": 28,
+          "Gene regulation": 11,
+          "General biology & multi-omics": 9,
+          "Genetic variation": 6,
+          "Genome assembly & annotation": 17,
+          "Metabolomics": 3,
+          "Microbiome & metagenomics": 9,
+          "Phylogenetics & evolution": 4,
+          "Proteomics": 10,
+          "Sequence processing": 10,
+          "Single-cell & spatial omics": 17,
+          "Systems biology & ontologies": 17
+        },
+        "source_types": {
+          "Infrastructure": 65,
+          "Software": 135
+        },
+        "domain_bins": 14,
+        "manual_topic_bins": 48,
+        "effective_domain_bins": 9.717807648225238,
+        "largest_domain_share": 0.29
+      },
+      "specific_domain_subset": {
+        "n": 133,
+        "domains": {
+          "Bioimaging": 1,
+          "Gene expression": 28,
+          "Gene regulation": 11,
+          "Genetic variation": 6,
+          "Genome assembly & annotation": 17,
+          "Metabolomics": 3,
+          "Microbiome & metagenomics": 9,
+          "Phylogenetics & evolution": 4,
+          "Proteomics": 10,
+          "Sequence processing": 10,
+          "Single-cell & spatial omics": 17,
+          "Systems biology & ontologies": 17
+        },
+        "source_types": {
+          "Infrastructure": 9,
+          "Software": 124
+        },
+        "domain_bins": 12,
+        "manual_topic_bins": 41,
+        "effective_domain_bins": 9.600807945611779,
+        "largest_domain_share": 0.21052631578947367
+      },
+      "tags": {
+        "github_mapped": 140,
+        "tagged_sources": 92,
+        "github_without_tags": 48,
+        "no_github_mapping": 60,
+        "distinct_raw_tags": 126,
+        "tag_assignments": 321,
+        "effective_raw_tags": 52.60651878124245,
+        "top_tags": [
+          [
+            "bioconductor-package",
+            40
+          ],
+          [
+            "core-package",
+            36
+          ],
+          [
+            "bioconductor",
+            22
+          ],
+          [
+            "r",
+            21
+          ],
+          [
+            "u24ca289073",
+            12
+          ],
+          [
+            "bioinformatics",
+            11
+          ],
+          [
+            "mass-spectrometry",
+            8
+          ],
+          [
+            "rstats",
+            8
+          ],
+          [
+            "genomics",
+            6
+          ],
+          [
+            "metabolomics",
+            6
+          ],
+          [
+            "proteomics",
+            6
+          ],
+          [
+            "microbiome",
+            5
+          ]
+        ],
+        "mapped_domain_sources": 81,
+        "domain_presence": {
+          "Bioimaging": 1,
+          "Computing infrastructure": 43,
+          "Gene expression": 3,
+          "Gene regulation": 1,
+          "General biology & multi-omics": 15,
+          "Genetic variation": 3,
+          "Genome assembly & annotation": 4,
+          "Metabolomics": 6,
+          "Microbiome & metagenomics": 5,
+          "Phylogenetics & evolution": 3,
+          "Proteomics": 8,
+          "Sequence processing": 1,
+          "Single-cell & spatial omics": 6,
+          "Systems biology & ontologies": 7
+        },
+        "fractional_domains": {
+          "Bioimaging": 0.5,
+          "Computing infrastructure": 40.333333333333336,
+          "Gene expression": 2.5,
+          "Gene regulation": 1.0,
+          "General biology & multi-omics": 8.666666666666666,
+          "Genetic variation": 1.3333333333333333,
+          "Genome assembly & annotation": 3.0,
+          "Metabolomics": 3.0,
+          "Microbiome & metagenomics": 2.833333333333333,
+          "Phylogenetics & evolution": 2.333333333333333,
+          "Proteomics": 4.5,
+          "Sequence processing": 0.5,
+          "Single-cell & spatial omics": 5.0,
+          "Systems biology & ontologies": 5.5
+        },
+        "effective_domain_bins": 6.404971408650748
+      },
+      "diversity_by_cutoff": {
+        "10": {
+          "n": 10,
+          "domains": {
+            "Computing infrastructure": 8,
+            "Genome assembly & annotation": 1,
+            "Sequence processing": 1
+          },
+          "source_types": {
+            "Infrastructure": 8,
+            "Software": 2
+          },
+          "domain_bins": 3,
+          "manual_topic_bins": 4,
+          "effective_domain_bins": 1.8946457081379977,
+          "largest_domain_share": 0.8
+        },
+        "25": {
+          "n": 25,
+          "domains": {
+            "Computing infrastructure": 13,
+            "Gene expression": 3,
+            "Genome assembly & annotation": 4,
+            "Phylogenetics & evolution": 2,
+            "Sequence processing": 2,
+            "Systems biology & ontologies": 1
+          },
+          "source_types": {
+            "Infrastructure": 13,
+            "Software": 12
+          },
+          "domain_bins": 6,
+          "manual_topic_bins": 9,
+          "effective_domain_bins": 4.139429753622678,
+          "largest_domain_share": 0.52
+        },
+        "50": {
+          "n": 50,
+          "domains": {
+            "Computing infrastructure": 25,
+            "Gene expression": 3,
+            "Genome assembly & annotation": 9,
+            "Phylogenetics & evolution": 2,
+            "Sequence processing": 4,
+            "Single-cell & spatial omics": 1,
+            "Systems biology & ontologies": 6
+          },
+          "source_types": {
+            "Infrastructure": 25,
+            "Software": 25
+          },
+          "domain_bins": 7,
+          "manual_topic_bins": 14,
+          "effective_domain_bins": 4.426137729106226,
+          "largest_domain_share": 0.5
+        },
+        "100": {
+          "n": 100,
+          "domains": {
+            "Computing infrastructure": 39,
+            "Gene expression": 15,
+            "General biology & multi-omics": 4,
+            "Genetic variation": 1,
+            "Genome assembly & annotation": 12,
+            "Microbiome & metagenomics": 2,
+            "Phylogenetics & evolution": 2,
+            "Proteomics": 1,
+            "Sequence processing": 7,
+            "Single-cell & spatial omics": 6,
+            "Systems biology & ontologies": 11
+          },
+          "source_types": {
+            "Infrastructure": 39,
+            "Software": 61
+          },
+          "domain_bins": 11,
+          "manual_topic_bins": 25,
+          "effective_domain_bins": 6.562157234334254,
+          "largest_domain_share": 0.39
+        },
+        "200": {
+          "n": 200,
+          "domains": {
+            "Bioimaging": 1,
+            "Computing infrastructure": 58,
+            "Gene expression": 28,
+            "Gene regulation": 11,
+            "General biology & multi-omics": 9,
+            "Genetic variation": 6,
+            "Genome assembly & annotation": 17,
+            "Metabolomics": 3,
+            "Microbiome & metagenomics": 9,
+            "Phylogenetics & evolution": 4,
+            "Proteomics": 10,
+            "Sequence processing": 10,
+            "Single-cell & spatial omics": 17,
+            "Systems biology & ontologies": 17
+          },
+          "source_types": {
+            "Infrastructure": 65,
+            "Software": 135
+          },
+          "domain_bins": 14,
+          "manual_topic_bins": 48,
+          "effective_domain_bins": 9.717807648225238,
+          "largest_domain_share": 0.29
+        }
+      }
+    },
+    "pypi": {
+      "n": 200,
+      "domains": {
+        "Bioimaging": 15,
+        "Biomedical text & clinical data": 8,
+        "Cheminformatics & drug discovery": 18,
+        "Computing infrastructure": 14,
+        "Gene expression": 2,
+        "Gene regulation": 9,
+        "General biology & multi-omics": 9,
+        "Genetic variation": 8,
+        "Genome assembly & annotation": 13,
+        "Immunology": 5,
+        "Microbiome & metagenomics": 1,
+        "Neuroscience & behavior": 16,
+        "Phylogenetics & evolution": 3,
+        "Protein structure & biophysics": 24,
+        "Proteomics": 5,
+        "RNA structure": 1,
+        "Sequence processing": 15,
+        "Single-cell & spatial omics": 13,
+        "Systems biology & ontologies": 21
+      },
+      "source_types": {
+        "Data resource": 1,
+        "Infrastructure": 23,
+        "Software": 175,
+        "Workflow": 1
+      },
+      "domain_bins": 19,
+      "manual_topic_bins": 63,
+      "effective_domain_bins": 15.225359841024444,
+      "largest_domain_share": 0.12,
+      "cutoff_score": 21313,
+      "last_raw_rank": 249,
+      "unique_to_ranking": 154,
+      "software_subset": {
+        "n": 199,
+        "domains": {
+          "Bioimaging": 15,
+          "Biomedical text & clinical data": 8,
+          "Cheminformatics & drug discovery": 18,
+          "Computing infrastructure": 14,
+          "Gene expression": 2,
+          "Gene regulation": 9,
+          "General biology & multi-omics": 9,
+          "Genetic variation": 8,
+          "Genome assembly & annotation": 13,
+          "Immunology": 4,
+          "Microbiome & metagenomics": 1,
+          "Neuroscience & behavior": 16,
+          "Phylogenetics & evolution": 3,
+          "Protein structure & biophysics": 24,
+          "Proteomics": 5,
+          "RNA structure": 1,
+          "Sequence processing": 15,
+          "Single-cell & spatial omics": 13,
+          "Systems biology & ontologies": 21
+        },
+        "source_types": {
+          "Infrastructure": 23,
+          "Software": 175,
+          "Workflow": 1
+        },
+        "domain_bins": 19,
+        "manual_topic_bins": 63,
+        "effective_domain_bins": 15.143650717925054,
+        "largest_domain_share": 0.12060301507537688
+      },
+      "specific_domain_subset": {
+        "n": 177,
+        "domains": {
+          "Bioimaging": 15,
+          "Biomedical text & clinical data": 8,
+          "Cheminformatics & drug discovery": 18,
+          "Gene expression": 2,
+          "Gene regulation": 9,
+          "Genetic variation": 8,
+          "Genome assembly & annotation": 13,
+          "Immunology": 5,
+          "Microbiome & metagenomics": 1,
+          "Neuroscience & behavior": 16,
+          "Phylogenetics & evolution": 3,
+          "Protein structure & biophysics": 24,
+          "Proteomics": 5,
+          "RNA structure": 1,
+          "Sequence processing": 15,
+          "Single-cell & spatial omics": 13,
+          "Systems biology & ontologies": 21
+        },
+        "source_types": {
+          "Data resource": 1,
+          "Infrastructure": 10,
+          "Software": 165,
+          "Workflow": 1
+        },
+        "domain_bins": 17,
+        "manual_topic_bins": 54,
+        "effective_domain_bins": 13.284613110792204,
+        "largest_domain_share": 0.13559322033898305
+      },
+      "tags": {
+        "github_mapped": 197,
+        "tagged_sources": 126,
+        "github_without_tags": 71,
+        "no_github_mapping": 3,
+        "distinct_raw_tags": 545,
+        "tag_assignments": 901,
+        "effective_raw_tags": 330.77173564036946,
+        "top_tags": [
+          [
+            "python",
+            63
+          ],
+          [
+            "bioinformatics",
+            43
+          ],
+          [
+            "genomics",
+            18
+          ],
+          [
+            "cheminformatics",
+            10
+          ],
+          [
+            "chemistry",
+            10
+          ],
+          [
+            "drug-discovery",
+            8
+          ],
+          [
+            "data-science",
+            6
+          ],
+          [
+            "machine-learning",
+            6
+          ],
+          [
+            "molecular-dynamics",
+            6
+          ],
+          [
+            "neuroscience",
+            6
+          ],
+          [
+            "rdkit",
+            6
+          ],
+          [
+            "scverse",
+            6
+          ]
+        ],
+        "mapped_domain_sources": 126,
+        "domain_presence": {
+          "Bioimaging": 10,
+          "Biomedical text & clinical data": 5,
+          "Cheminformatics & drug discovery": 21,
+          "Computing infrastructure": 10,
+          "Gene expression": 7,
+          "Gene regulation": 4,
+          "General biology & multi-omics": 54,
+          "Genetic variation": 6,
+          "Genome assembly & annotation": 9,
+          "Immunology": 1,
+          "Metabolomics": 2,
+          "Microbiome & metagenomics": 2,
+          "Neuroscience & behavior": 13,
+          "Phylogenetics & evolution": 5,
+          "Protein structure & biophysics": 26,
+          "Proteomics": 5,
+          "Sequence processing": 17,
+          "Single-cell & spatial omics": 12,
+          "Systems biology & ontologies": 16
+        },
+        "fractional_domains": {
+          "Bioimaging": 8.0,
+          "Biomedical text & clinical data": 3.5,
+          "Cheminformatics & drug discovery": 13.416666666666666,
+          "Computing infrastructure": 7.5,
+          "Gene expression": 2.125,
+          "Gene regulation": 2.75,
+          "General biology & multi-omics": 24.374999999999993,
+          "Genetic variation": 2.0833333333333335,
+          "Genome assembly & annotation": 4.625,
+          "Immunology": 0.5,
+          "Metabolomics": 1.0,
+          "Microbiome & metagenomics": 0.5833333333333333,
+          "Neuroscience & behavior": 11.0,
+          "Phylogenetics & evolution": 2.8333333333333335,
+          "Protein structure & biophysics": 15.041666666666668,
+          "Proteomics": 2.125,
+          "Sequence processing": 6.041666666666666,
+          "Single-cell & spatial omics": 6.291666666666666,
+          "Systems biology & ontologies": 12.208333333333334
+        },
+        "effective_domain_bins": 13.036317675989885
+      },
+      "diversity_by_cutoff": {
+        "10": {
+          "n": 10,
+          "domains": {
+            "Cheminformatics & drug discovery": 2,
+            "General biology & multi-omics": 2,
+            "Neuroscience & behavior": 1,
+            "Protein structure & biophysics": 1,
+            "Sequence processing": 1,
+            "Single-cell & spatial omics": 2,
+            "Systems biology & ontologies": 1
+          },
+          "source_types": {
+            "Infrastructure": 1,
+            "Software": 9
+          },
+          "domain_bins": 7,
+          "manual_topic_bins": 8,
+          "effective_domain_bins": 6.597539553864471,
+          "largest_domain_share": 0.2
+        },
+        "25": {
+          "n": 25,
+          "domains": {
+            "Biomedical text & clinical data": 1,
+            "Cheminformatics & drug discovery": 2,
+            "Computing infrastructure": 1,
+            "General biology & multi-omics": 3,
+            "Neuroscience & behavior": 2,
+            "Protein structure & biophysics": 4,
+            "Proteomics": 2,
+            "Sequence processing": 3,
+            "Single-cell & spatial omics": 2,
+            "Systems biology & ontologies": 5
+          },
+          "source_types": {
+            "Infrastructure": 2,
+            "Software": 23
+          },
+          "domain_bins": 10,
+          "manual_topic_bins": 16,
+          "effective_domain_bins": 8.932596352067492,
+          "largest_domain_share": 0.2
+        },
+        "50": {
+          "n": 50,
+          "domains": {
+            "Bioimaging": 5,
+            "Biomedical text & clinical data": 1,
+            "Cheminformatics & drug discovery": 3,
+            "Computing infrastructure": 2,
+            "Gene expression": 1,
+            "Gene regulation": 1,
+            "General biology & multi-omics": 4,
+            "Genetic variation": 1,
+            "Genome assembly & annotation": 1,
+            "Neuroscience & behavior": 5,
+            "Protein structure & biophysics": 6,
+            "Proteomics": 2,
+            "Sequence processing": 4,
+            "Single-cell & spatial omics": 3,
+            "Systems biology & ontologies": 11
+          },
+          "source_types": {
+            "Infrastructure": 6,
+            "Software": 44
+          },
+          "domain_bins": 15,
+          "manual_topic_bins": 25,
+          "effective_domain_bins": 11.455786571391148,
+          "largest_domain_share": 0.22
+        },
+        "100": {
+          "n": 100,
+          "domains": {
+            "Bioimaging": 8,
+            "Biomedical text & clinical data": 2,
+            "Cheminformatics & drug discovery": 10,
+            "Computing infrastructure": 4,
+            "Gene expression": 1,
+            "Gene regulation": 2,
+            "General biology & multi-omics": 6,
+            "Genetic variation": 3,
+            "Genome assembly & annotation": 4,
+            "Microbiome & metagenomics": 1,
+            "Neuroscience & behavior": 8,
+            "Phylogenetics & evolution": 3,
+            "Protein structure & biophysics": 12,
+            "Proteomics": 3,
+            "RNA structure": 1,
+            "Sequence processing": 9,
+            "Single-cell & spatial omics": 9,
+            "Systems biology & ontologies": 14
+          },
+          "source_types": {
+            "Infrastructure": 9,
+            "Software": 90,
+            "Workflow": 1
+          },
+          "domain_bins": 18,
+          "manual_topic_bins": 40,
+          "effective_domain_bins": 13.929845154161288,
+          "largest_domain_share": 0.14
+        },
+        "200": {
+          "n": 200,
+          "domains": {
+            "Bioimaging": 15,
+            "Biomedical text & clinical data": 8,
+            "Cheminformatics & drug discovery": 18,
+            "Computing infrastructure": 14,
+            "Gene expression": 2,
+            "Gene regulation": 9,
+            "General biology & multi-omics": 9,
+            "Genetic variation": 8,
+            "Genome assembly & annotation": 13,
+            "Immunology": 5,
+            "Microbiome & metagenomics": 1,
+            "Neuroscience & behavior": 16,
+            "Phylogenetics & evolution": 3,
+            "Protein structure & biophysics": 24,
+            "Proteomics": 5,
+            "RNA structure": 1,
+            "Sequence processing": 15,
+            "Single-cell & spatial omics": 13,
+            "Systems biology & ontologies": 21
+          },
+          "source_types": {
+            "Data resource": 1,
+            "Infrastructure": 23,
+            "Software": 175,
+            "Workflow": 1
+          },
+          "domain_bins": 19,
+          "manual_topic_bins": 63,
+          "effective_domain_bins": 15.225359841024444,
+          "largest_domain_share": 0.12
+        }
+      }
+    },
+    "github": {
+      "n": 200,
+      "domains": {
+        "Bioimaging": 57,
+        "Biomechanics & physiology": 1,
+        "Biomedical text & clinical data": 7,
+        "Cheminformatics & drug discovery": 16,
+        "Computing infrastructure": 9,
+        "Ecology & conservation": 1,
+        "Gene expression": 1,
+        "Gene regulation": 1,
+        "General biology & multi-omics": 23,
+        "Genetic variation": 7,
+        "Genome assembly & annotation": 8,
+        "Microbiome & metagenomics": 1,
+        "Neuroscience & behavior": 18,
+        "Phylogenetics & evolution": 1,
+        "Protein structure & biophysics": 26,
+        "Sequence processing": 14,
+        "Single-cell & spatial omics": 7,
+        "Systems biology & ontologies": 2
+      },
+      "source_types": {
+        "Agent instructions": 4,
+        "Data resource": 2,
+        "Hardware project": 2,
+        "Infrastructure": 12,
+        "Research implementation": 30,
+        "Resource index": 25,
+        "Review/article": 1,
+        "Software": 110,
+        "Tutorial/course": 9,
+        "Workflow": 5
+      },
+      "domain_bins": 18,
+      "manual_topic_bins": 71,
+      "effective_domain_bins": 9.993491151973375,
+      "largest_domain_share": 0.285,
+      "cutoff_score": 889,
+      "last_raw_rank": 241,
+      "unique_to_ranking": 146,
+      "software_subset": {
+        "n": 157,
+        "domains": {
+          "Bioimaging": 44,
+          "Biomechanics & physiology": 1,
+          "Biomedical text & clinical data": 5,
+          "Cheminformatics & drug discovery": 14,
+          "Computing infrastructure": 9,
+          "Gene expression": 1,
+          "Gene regulation": 1,
+          "General biology & multi-omics": 9,
+          "Genetic variation": 6,
+          "Genome assembly & annotation": 8,
+          "Microbiome & metagenomics": 1,
+          "Neuroscience & behavior": 14,
+          "Phylogenetics & evolution": 1,
+          "Protein structure & biophysics": 23,
+          "Sequence processing": 14,
+          "Single-cell & spatial omics": 4,
+          "Systems biology & ontologies": 2
+        },
+        "source_types": {
+          "Infrastructure": 12,
+          "Research implementation": 30,
+          "Software": 110,
+          "Workflow": 5
+        },
+        "domain_bins": 17,
+        "manual_topic_bins": 54,
+        "effective_domain_bins": 10.06061739377555,
+        "largest_domain_share": 0.2802547770700637
+      },
+      "specific_domain_subset": {
+        "n": 168,
+        "domains": {
+          "Bioimaging": 57,
+          "Biomechanics & physiology": 1,
+          "Biomedical text & clinical data": 7,
+          "Cheminformatics & drug discovery": 16,
+          "Ecology & conservation": 1,
+          "Gene expression": 1,
+          "Gene regulation": 1,
+          "Genetic variation": 7,
+          "Genome assembly & annotation": 8,
+          "Microbiome & metagenomics": 1,
+          "Neuroscience & behavior": 18,
+          "Phylogenetics & evolution": 1,
+          "Protein structure & biophysics": 26,
+          "Sequence processing": 14,
+          "Single-cell & spatial omics": 7,
+          "Systems biology & ontologies": 2
+        },
+        "source_types": {
+          "Agent instructions": 1,
+          "Data resource": 2,
+          "Hardware project": 2,
+          "Infrastructure": 4,
+          "Research implementation": 28,
+          "Resource index": 19,
+          "Software": 102,
+          "Tutorial/course": 5,
+          "Workflow": 5
+        },
+        "domain_bins": 16,
+        "manual_topic_bins": 62,
+        "effective_domain_bins": 8.19737079531973,
+        "largest_domain_share": 0.3392857142857143
+      },
+      "tags": {
+        "github_mapped": 200,
+        "tagged_sources": 151,
+        "github_without_tags": 49,
+        "no_github_mapping": 0,
+        "distinct_raw_tags": 804,
+        "tag_assignments": 1398,
+        "effective_raw_tags": 493.4828518511507,
+        "top_tags": [
+          [
+            "bioinformatics",
+            41
+          ],
+          [
+            "medical-imaging",
+            39
+          ],
+          [
+            "deep-learning",
+            35
+          ],
+          [
+            "python",
+            33
+          ],
+          [
+            "genomics",
+            20
+          ],
+          [
+            "machine-learning",
+            20
+          ],
+          [
+            "segmentation",
+            14
+          ],
+          [
+            "medical",
+            13
+          ],
+          [
+            "neuroscience",
+            13
+          ],
+          [
+            "pytorch",
+            12
+          ],
+          [
+            "drug-discovery",
+            11
+          ],
+          [
+            "neuroimaging",
+            10
+          ]
+        ],
+        "mapped_domain_sources": 148,
+        "domain_presence": {
+          "Bioimaging": 48,
+          "Biomechanics & physiology": 1,
+          "Biomedical text & clinical data": 12,
+          "Cheminformatics & drug discovery": 21,
+          "Computing infrastructure": 7,
+          "Ecology & conservation": 1,
+          "Gene expression": 9,
+          "Gene regulation": 2,
+          "General biology & multi-omics": 56,
+          "Genetic variation": 8,
+          "Genome assembly & annotation": 6,
+          "Immunology": 1,
+          "Metabolomics": 1,
+          "Microbiome & metagenomics": 4,
+          "Neuroscience & behavior": 26,
+          "Phylogenetics & evolution": 5,
+          "Protein structure & biophysics": 24,
+          "Proteomics": 2,
+          "RNA structure": 1,
+          "Sequence processing": 25,
+          "Single-cell & spatial omics": 10,
+          "Systems biology & ontologies": 7
+        },
+        "fractional_domains": {
+          "Bioimaging": 40.5,
+          "Biomechanics & physiology": 0.3333333333333333,
+          "Biomedical text & clinical data": 5.316666666666667,
+          "Cheminformatics & drug discovery": 11.899999999999999,
+          "Computing infrastructure": 4.083333333333334,
+          "Ecology & conservation": 1.0,
+          "Gene expression": 2.708333333333333,
+          "Gene regulation": 0.41666666666666663,
+          "General biology & multi-omics": 24.024999999999995,
+          "Genetic variation": 2.916666666666667,
+          "Genome assembly & annotation": 1.9583333333333333,
+          "Immunology": 0.3333333333333333,
+          "Metabolomics": 0.2,
+          "Microbiome & metagenomics": 1.25,
+          "Neuroscience & behavior": 19.0,
+          "Phylogenetics & evolution": 2.0,
+          "Protein structure & biophysics": 12.325000000000001,
+          "Proteomics": 0.325,
+          "RNA structure": 0.16666666666666666,
+          "Sequence processing": 9.458333333333334,
+          "Single-cell & spatial omics": 5.041666666666666,
+          "Systems biology & ontologies": 2.7416666666666667
+        },
+        "effective_domain_bins": 10.179499683806714
+      },
+      "diversity_by_cutoff": {
+        "10": {
+          "n": 10,
+          "domains": {
+            "Bioimaging": 3,
+            "Cheminformatics & drug discovery": 1,
+            "General biology & multi-omics": 3,
+            "Neuroscience & behavior": 1,
+            "Protein structure & biophysics": 2
+          },
+          "source_types": {
+            "Agent instructions": 1,
+            "Research implementation": 3,
+            "Resource index": 1,
+            "Software": 5
+          },
+          "domain_bins": 5,
+          "manual_topic_bins": 9,
+          "effective_domain_bins": 4.503200128402044,
+          "largest_domain_share": 0.3
+        },
+        "25": {
+          "n": 25,
+          "domains": {
+            "Bioimaging": 6,
+            "Cheminformatics & drug discovery": 2,
+            "Computing infrastructure": 1,
+            "General biology & multi-omics": 5,
+            "Genetic variation": 1,
+            "Neuroscience & behavior": 4,
+            "Protein structure & biophysics": 5,
+            "Single-cell & spatial omics": 1
+          },
+          "source_types": {
+            "Agent instructions": 1,
+            "Infrastructure": 1,
+            "Research implementation": 6,
+            "Resource index": 4,
+            "Software": 11,
+            "Tutorial/course": 1,
+            "Workflow": 1
+          },
+          "domain_bins": 8,
+          "manual_topic_bins": 20,
+          "effective_domain_bins": 6.474164179820087,
+          "largest_domain_share": 0.24
+        },
+        "50": {
+          "n": 50,
+          "domains": {
+            "Bioimaging": 16,
+            "Biomedical text & clinical data": 2,
+            "Cheminformatics & drug discovery": 4,
+            "Computing infrastructure": 2,
+            "Gene regulation": 1,
+            "General biology & multi-omics": 6,
+            "Genetic variation": 1,
+            "Neuroscience & behavior": 5,
+            "Protein structure & biophysics": 6,
+            "Sequence processing": 4,
+            "Single-cell & spatial omics": 3
+          },
+          "source_types": {
+            "Agent instructions": 1,
+            "Infrastructure": 2,
+            "Research implementation": 10,
+            "Resource index": 8,
+            "Software": 26,
+            "Tutorial/course": 1,
+            "Workflow": 2
+          },
+          "domain_bins": 11,
+          "manual_topic_bins": 27,
+          "effective_domain_bins": 8.090195859966816,
+          "largest_domain_share": 0.32
+        },
+        "100": {
+          "n": 100,
+          "domains": {
+            "Bioimaging": 30,
+            "Biomedical text & clinical data": 4,
+            "Cheminformatics & drug discovery": 7,
+            "Computing infrastructure": 5,
+            "Gene regulation": 1,
+            "General biology & multi-omics": 12,
+            "Genetic variation": 2,
+            "Neuroscience & behavior": 10,
+            "Protein structure & biophysics": 14,
+            "Sequence processing": 9,
+            "Single-cell & spatial omics": 6
+          },
+          "source_types": {
+            "Agent instructions": 2,
+            "Data resource": 1,
+            "Infrastructure": 4,
+            "Research implementation": 16,
+            "Resource index": 15,
+            "Software": 56,
+            "Tutorial/course": 4,
+            "Workflow": 2
+          },
+          "domain_bins": 11,
+          "manual_topic_bins": 40,
+          "effective_domain_bins": 8.130639126730454,
+          "largest_domain_share": 0.3
+        },
+        "200": {
+          "n": 200,
+          "domains": {
+            "Bioimaging": 57,
+            "Biomechanics & physiology": 1,
+            "Biomedical text & clinical data": 7,
+            "Cheminformatics & drug discovery": 16,
+            "Computing infrastructure": 9,
+            "Ecology & conservation": 1,
+            "Gene expression": 1,
+            "Gene regulation": 1,
+            "General biology & multi-omics": 23,
+            "Genetic variation": 7,
+            "Genome assembly & annotation": 8,
+            "Microbiome & metagenomics": 1,
+            "Neuroscience & behavior": 18,
+            "Phylogenetics & evolution": 1,
+            "Protein structure & biophysics": 26,
+            "Sequence processing": 14,
+            "Single-cell & spatial omics": 7,
+            "Systems biology & ontologies": 2
+          },
+          "source_types": {
+            "Agent instructions": 4,
+            "Data resource": 2,
+            "Hardware project": 2,
+            "Infrastructure": 12,
+            "Research implementation": 30,
+            "Resource index": 25,
+            "Review/article": 1,
+            "Software": 110,
+            "Tutorial/course": 9,
+            "Workflow": 5
+          },
+          "domain_bins": 18,
+          "manual_topic_bins": 71,
+          "effective_domain_bins": 9.993491151973375,
+          "largest_domain_share": 0.285
+        }
+      }
+    }
+  },
+  "pairs": [
+    {
+      "first": "bioconda",
+      "second": "bioconductor",
+      "intersection": 54,
+      "jaccard": 0.15606936416184972,
+      "shared_sources": [
+        "bioconductor:annotate",
+        "bioconductor:apeglm",
+        "bioconductor:biocneighbors",
+        "bioconductor:bluster",
+        "bioconductor:edger",
+        "bioconductor:genefilter",
+        "bioconductor:geneplotter",
+        "bioconductor:limma",
+        "bioconductor:multtest",
+        "bioconductor:rtracklayer",
+        "bioconductor:scater",
+        "bioconductor:scuttle",
+        "bioconductor:singlecellexperiment",
+        "bioconductor:zlibbioc",
+        "github:benjjneb/dada2",
+        "github:bioconductor/annotationdbi",
+        "github:bioconductor/biobase",
+        "github:bioconductor/biocfilecache",
+        "github:bioconductor/biocgenerics",
+        "github:bioconductor/biocio",
+        "github:bioconductor/biocparallel",
+        "github:bioconductor/biostrings",
+        "github:bioconductor/bsgenome",
+        "github:bioconductor/delayedarray",
+        "github:bioconductor/genomeinfodb",
+        "github:bioconductor/genomicalignments",
+        "github:bioconductor/genomicfeatures",
+        "github:bioconductor/genomicranges",
+        "github:bioconductor/hdf5array",
+        "github:bioconductor/iranges",
+        "github:bioconductor/keggrest",
+        "github:bioconductor/matrixgenerics",
+        "github:bioconductor/rhtslib",
+        "github:bioconductor/rsamtools",
+        "github:bioconductor/s4arrays",
+        "github:bioconductor/s4vectors",
+        "github:bioconductor/shortread",
+        "github:bioconductor/sparsearray",
+        "github:bioconductor/summarizedexperiment",
+        "github:bioconductor/xvector",
+        "github:const-ae/sparsematrixstats",
+        "github:huber-group-embl/biomart",
+        "github:huber-group-embl/rhdf5",
+        "github:huber-group-embl/rhdf5filters",
+        "github:huber-group-embl/rhdf5lib",
+        "github:joey711/phyloseq",
+        "github:ltla/biocsingular",
+        "github:ltla/scaledmatrix",
+        "github:marionilab/scran",
+        "github:petehaitch/delayedmatrixstats",
+        "github:storeylab/qvalue",
+        "github:tatami-inc/beachmat",
+        "github:thelovelab/deseq2",
+        "github:yulab-smu/treeio"
+      ],
+      "spearman_within_intersection": 0.7262435677530017,
+      "intersection_by_cutoff": {
+        "10": 0,
+        "25": 8,
+        "50": 15,
+        "100": 28,
+        "200": 54
+      },
+      "raw_tag_jaccard": 0.11977715877437325
+    },
+    {
+      "first": "bioconda",
+      "second": "pypi",
+      "intersection": 20,
+      "jaccard": 0.05263157894736842,
+      "shared_sources": [
+        "github:althonos/pyhmmer",
+        "github:althonos/pyrodigal",
+        "github:biopython/biopython",
+        "github:brentp/cyvcf2",
+        "github:bxlab/bx-python",
+        "github:daler/pybedtools",
+        "github:deeptools/pybigwig",
+        "github:jeetsukumaran/dendropy",
+        "github:jeffdaily/parasail-python",
+        "github:lh3/minimap2",
+        "github:marcelm/cutadapt",
+        "github:marcelm/dnaio",
+        "github:martinsos/edlib",
+        "github:mdshw5/pyfaidx",
+        "github:multiqc/multiqc",
+        "github:pyranges/ncls",
+        "github:pyranges/pyranges0",
+        "github:pysam-developers/pysam",
+        "github:snakemake/snakemake",
+        "github:viennarna/viennarna"
+      ],
+      "spearman_within_intersection": 0.15789473684210525,
+      "intersection_by_cutoff": {
+        "10": 1,
+        "25": 2,
+        "50": 4,
+        "100": 10,
+        "200": 20
+      },
+      "raw_tag_jaccard": 0.13397790055248618
+    },
+    {
+      "first": "bioconda",
+      "second": "github",
+      "intersection": 25,
+      "jaccard": 0.06666666666666667,
+      "shared_sources": [
+        "github:ablab/spades",
+        "github:alexdobin/star",
+        "github:arq5x/bedtools2",
+        "github:bbuchfink/diamond",
+        "github:bcbio/bcbio-nextgen",
+        "github:bioconda/bioconda-recipes",
+        "github:biopython/biopython",
+        "github:broadinstitute/gatk",
+        "github:broadinstitute/picard",
+        "github:combine-lab/salmon",
+        "github:lh3/bwa",
+        "github:lh3/minimap2",
+        "github:lh3/seqtk",
+        "github:multiqc/multiqc",
+        "github:ncbi/sra-tools",
+        "github:nextflow-io/nextflow",
+        "github:opengene/fastp",
+        "github:pysam-developers/pysam",
+        "github:samtools/bcftools",
+        "github:samtools/htslib",
+        "github:samtools/samtools",
+        "github:shenwei356/seqkit",
+        "github:snakemake/snakemake",
+        "github:soedinglab/mmseqs2",
+        "github:steineggerlab/foldseek"
+      ],
+      "spearman_within_intersection": -0.35,
+      "intersection_by_cutoff": {
+        "10": 0,
+        "25": 0,
+        "50": 3,
+        "100": 13,
+        "200": 25
+      },
+      "raw_tag_jaccard": 0.14044350580781415
+    },
+    {
+      "first": "bioconductor",
+      "second": "pypi",
+      "intersection": 0,
+      "jaccard": 0.0,
+      "shared_sources": [],
+      "spearman_within_intersection": null,
+      "intersection_by_cutoff": {
+        "10": 0,
+        "25": 0,
+        "50": 0,
+        "100": 0,
+        "200": 0
+      },
+      "raw_tag_jaccard": 0.0484375
+    },
+    {
+      "first": "bioconductor",
+      "second": "github",
+      "intersection": 3,
+      "jaccard": 0.007556675062972292,
+      "shared_sources": [
+        "github:jokergoo/complexheatmap",
+        "github:yulab-smu/clusterprofiler",
+        "github:yulab-smu/ggtree"
+      ],
+      "spearman_within_intersection": -1.0,
+      "intersection_by_cutoff": {
+        "10": 0,
+        "25": 0,
+        "50": 0,
+        "100": 1,
+        "200": 3
+      },
+      "raw_tag_jaccard": 0.0472972972972973
+    },
+    {
+      "first": "pypi",
+      "second": "github",
+      "intersection": 31,
+      "jaccard": 0.08401084010840108,
+      "shared_sources": [
+        "github:3dmol/3dmol.js",
+        "github:aim-harvard/pyradiomics",
+        "github:allenai/scispacy",
+        "github:biopython/biopython",
+        "github:biotite-dev/biotite",
+        "github:braindecode/braindecode",
+        "github:brian-team/brian2",
+        "github:ccsb-scripps/autodock-vina",
+        "github:chemprop/chemprop",
+        "github:google-deepmind/alphagenome",
+        "github:jax-md/jax-md",
+        "github:lammps/lammps",
+        "github:lh3/minimap2",
+        "github:mdanalysis/mdanalysis",
+        "github:mic-dkfz/nnunet",
+        "github:mne-tools/mne-python",
+        "github:mouseland/cellpose",
+        "github:multiqc/multiqc",
+        "github:napari/napari",
+        "github:neuropsychology/neurokit",
+        "github:nglviewer/nglview",
+        "github:nilearn/nilearn",
+        "github:openbabel/openbabel",
+        "github:pysam-developers/pysam",
+        "github:rdkit/rdkit",
+        "github:scikit-bio/scikit-bio",
+        "github:scverse/gget",
+        "github:scverse/scanpy",
+        "github:scverse/scvi-tools",
+        "github:snakemake/snakemake",
+        "github:tanghaibao/goatools"
+      ],
+      "spearman_within_intersection": 0.31088709677419357,
+      "intersection_by_cutoff": {
+        "10": 1,
+        "25": 3,
+        "50": 7,
+        "100": 15,
+        "200": 31
+      },
+      "raw_tag_jaccard": 0.20986547085201793
+    }
+  ],
+  "github_search_only_sensitivity": {
+    "shared_with_supplemented_top200": 172,
+    "supplement_only_sources": [
+      "github:ablab/spades",
+      "github:alexdobin/star",
+      "github:arq5x/bedtools2",
+      "github:bbuchfink/diamond",
+      "github:bcbio/bcbio-nextgen",
+      "github:broadinstitute/picard",
+      "github:ccsb-scripps/autodock-vina",
+      "github:cellprofiler/cellprofiler",
+      "github:databiosphere/toil",
+      "github:deeplabcut/deeplabcut",
+      "github:deeptools/pygenometracks",
+      "github:derrickwood/kraken2",
+      "github:google-deepmind/alphafold",
+      "github:google-deepmind/alphafold3",
+      "github:google-deepmind/alphagenome",
+      "github:jokergoo/complexheatmap",
+      "github:lammps/lammps",
+      "github:lucidrains/alphafold3-pytorch",
+      "github:mic-dkfz/nnunet",
+      "github:mouseland/cellpose",
+      "github:napari/napari",
+      "github:ncbi/sra-tools",
+      "github:neuropsychology/neurokit",
+      "github:samtools/bcftools",
+      "github:samtools/samtools",
+      "github:snakemake/snakemake",
+      "github:tseemann/prokka",
+      "github:yulab-smu/clusterprofiler"
+    ],
+    "cutoff_stars": 812,
+    "intersection_with_other_rankings": {
+      "bioconda": 15,
+      "bioconductor": 1,
+      "pypi": 25
+    }
+  }
+}

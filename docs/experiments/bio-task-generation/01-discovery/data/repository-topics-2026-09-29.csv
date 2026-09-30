@@ -1,0 +1,84 @@
+name,github_url,topic_count,topics,observed_on
+BLAST+,https://github.com/ncbi/ncbi-cxx-toolkit-public,0,,2026-09-29
+SAMtools,https://github.com/samtools/samtools,0,,2026-09-29
+BWA,https://github.com/lh3/bwa,4,bioinformatics;fm-index;genomics;sequence-alignment,2026-09-29
+Bowtie 2,https://github.com/BenLangmead/bowtie2,4,bioinformatics;c-plus-plus;genomics;read-aligners,2026-09-29
+DESeq2,https://github.com/thelovelab/DESeq2,0,,2026-09-29
+STAR,https://github.com/alexdobin/STAR,0,,2026-09-29
+BEDTools,https://github.com/arq5x/bedtools2,0,,2026-09-29
+GATK,https://github.com/broadinstitute/gatk,9,bioinformatics;dna;gatk;genome;genomics;ngs;science;sequencing;spark,2026-09-29
+pysam,https://github.com/pysam-developers/pysam,4,bioinformatics;htslib;ngs;python,2026-09-29
+HMMER,https://github.com/EddyRivasLab/hmmer,0,,2026-09-29
+Seurat,https://github.com/satijalab/seurat,4,cran;human-cell-atlas;single-cell-genomics;single-cell-rna-seq,2026-09-29
+minimap2,https://github.com/lh3/minimap2,4,bioinformatics;genomics;sequence-alignment;spliced-alignment,2026-09-29
+BCFtools,https://github.com/samtools/bcftools,0,,2026-09-29
+Picard,https://github.com/broadinstitute/picard,0,,2026-09-29
+Snakemake,https://github.com/snakemake/snakemake,3,reproducibility;snakemake;workflow-management,2026-09-29
+HTSlib,https://github.com/samtools/htslib,8,bam;bcf;bioinformatics;cram;htslib;ngs;sam;vcf,2026-09-29
+FastQC,https://github.com/s-andrews/FastQC,0,,2026-09-29
+Biopython,https://github.com/biopython/biopython,9,bioinformatics;biopython;dna;genomics;phylogenetics;protein;protein-structure;python;sequence-alignment,2026-09-29
+Nextflow,https://github.com/nextflow-io/nextflow,18,aws;bioinformatics;cloud;dataflow;docker;groovy;hello;hpc;nextflow;pipeline;pipeline-framework;reproducible-research;reproducible-science;sge;singularity;singularity-containers;slurm;workflow-engine,2026-09-29
+DIAMOND,https://github.com/bbuchfink/diamond,1,sequence-alignment,2026-09-29
+PLINK / PLINK 2,https://github.com/chrchang/plink-ng,0,,2026-09-29
+Scanpy,https://github.com/scverse/scanpy,9,anndata;bioinformatics;data-science;machine-learning;python;scanpy;scverse;transcriptomics;visualize-data,2026-09-29
+MultiQC,https://github.com/MultiQC/MultiQC,11,analysis;bioconda;bioinformatics;data-visualization;multiqc;pypi;python;quality-control;reporting;seqera;vizualisation,2026-09-29
+SPAdes,https://github.com/ablab/spades,7,genome-assembly;illumina;metagenome-assembly;next-generation-sequencing;sequence-assembler;sequencing;transcriptome-assembly,2026-09-29
+IQ-TREE,https://github.com/iqtree/iqtree3,0,,2026-09-29
+FastTree,https://github.com/morgannprice/fasttree,0,,2026-09-29
+RAxML,https://github.com/stamatak/standard-RAxML,0,,2026-09-29
+cutadapt,https://github.com/marcelm/cutadapt,2,bioinformatics;python,2026-09-29
+Salmon,https://github.com/COMBINE-lab/salmon,15,bioinformatics;c-plus-plus;gene-expression;quantification;quasi-mapping;rna-seq;rna-seq-quantification;rnaseq;sailfish;salmon;scrna-seq;selective-alignment;single-cell;single-cell-rna-seq;transcriptome,2026-09-29
+kallisto,https://github.com/pachterlab/kallisto,3,kallisto;pseudoalignment;rna-seq,2026-09-29
+StringTie,https://github.com/gpertea/stringtie,0,,2026-09-29
+fastp,https://github.com/OpenGene/fastp,19,adapter;bioinformatics;duplication;fastq;filter;filtering;illumina;merging;ngs;overlap;polyg;preprocessing;qc;quality;quality-control;sequencing;splitting;trimming;umi,2026-09-29
+SRA Toolkit,https://github.com/ncbi/sra-tools,0,,2026-09-29
+deepTools,https://github.com/deeptools/deepTools,6,bioinformatics;chip-seq;genomics;ngs;python;rna-seq,2026-09-29
+VCFtools,https://github.com/vcftools/vcftools,0,,2026-09-29
+SnpEff,https://github.com/pcingola/SnpEff,0,,2026-09-29
+Ensembl VEP,https://github.com/Ensembl/ensembl-vep,0,,2026-09-29
+MACS2 / MACS3,https://github.com/macs3-project/MACS,7,atac-seq;chip-seq;dnase-seq;macs;peak-caller;poisson-equation;python,2026-09-29
+MMseqs2,https://github.com/soedinglab/MMseqs2,10,alignment;bioinformatics;blast;linclust;metagenomics;mmseqs;profile-search;sequence-clustering;sequence-search;taxonomy,2026-09-29
+MUSCLE,https://github.com/rcedgar/muscle,9,algorithms;bioinformatics;biology;nucleotide-alignment;protein-alignment;protein-structure;protein-structure-alignment;sequence-clustering;sequence-search,2026-09-29
+Kraken 2,https://github.com/DerrickWood/kraken2,0,,2026-09-29
+UCSC Kent utilities,https://github.com/ucscGenomeBrowser/kent,4,bioinformatics;computational-biology;data-visualisation;genomics-visualization,2026-09-29
+GenomicRanges,https://github.com/Bioconductor/GenomicRanges,3,bioconductor-package;core-package;genomicranges,2026-09-29
+Biostrings,https://github.com/Bioconductor/Biostrings,2,bioconductor-package;core-package,2026-09-29
+pybedtools,https://github.com/daler/pybedtools,0,,2026-09-29
+nf-core/tools,https://github.com/nf-core/tools,8,bioinformatics;linter;linting;nextflow;nf-core;pipeline;python;workflow,2026-09-29
+BBTools,https://github.com/bbushnell/BBTools,20,adapter-trimming;alignment;assembly;bbcms;bbduk;bbmap;bbmerge;bbnorm;bioinformatics;callvariants;clumpify;error-correction;fastq;genomics;java;ngs;quality-control;sam;sequencing;tadpole,2026-09-29
+ViennaRNA,https://github.com/ViennaRNA/ViennaRNA,0,,2026-09-29
+HyPhy,https://github.com/veg/hyphy,7,bioinformatics;c-plus-plus;comparative-genomics;evolution;phylogenetics;science;statistical-methods,2026-09-29
+SEPP,https://github.com/smirarab/sepp,0,,2026-09-29
+HTSeq,https://github.com/htseq/htseq,0,,2026-09-29
+VSEARCH,https://github.com/torognes/vsearch,11,amplicon;bioinformatics;chimera;clustering;fasta;fastq;metabarcoding;metagenomics;microbiome;search;sequence-alignment,2026-09-29
+FreeBayes,https://github.com/freebayes/freebayes,0,,2026-09-29
+SeqKit,https://github.com/shenwei356/seqkit,9,bioinformatics;cross-platform;fasta;fastq;golang;manipulation;sequence;tool;toolkit,2026-09-29
+seqtk,https://github.com/lh3/seqtk,2,bioinformatics;sequence-analysis,2026-09-29
+SearchGUI,https://github.com/CompOmics/searchgui,4,bioinformatics;java;protein-identification;proteomics,2026-09-29
+PeptideShaker,https://github.com/CompOmics/peptide-shaker,4,bioinformatics;java;protein-identification;proteomics,2026-09-29
+Prokka,https://github.com/tseemann/prokka,4,bacterial-genomes;functional-assignment;gene-finding;genome-annotation,2026-09-29
+QUAST,https://github.com/ablab/quast,4,bioinformatics;contigs;genome-assembly-evaluation;visualization,2026-09-29
+CheckM,https://github.com/Ecogenomics/CheckM,0,,2026-09-29
+Mash,https://github.com/marbl/Mash,0,,2026-09-29
+sourmash,https://github.com/sourmash-bio/sourmash,12,bioinformatics;fracminhash;hacktoberfest;kmer;minhash;python;rust;scaled-minhash;sketching;sourmash;taxonomic-classification;taxonomic-profiling,2026-09-29
+BEDOPS,https://github.com/bedops/bedops,13,bed;bedops;bioinformatics;c;c-plus-plus;compression;conversion;genomics;parallel;pipeline;set;set-theory;toolkit,2026-09-29
+BamTools,https://github.com/pezmaster31/bamtools,0,,2026-09-29
+pyBigWig,https://github.com/deeptools/pyBigWig,3,bigbed;bigwig;bioinfomatics,2026-09-29
+pyfaidx,https://github.com/mdshw5/pyfaidx,9,bgzf;bioinformatics;dna;fasta;genomics;indexing;protein;python;samtools,2026-09-29
+cyvcf2,https://github.com/brentp/cyvcf2,5,bioinformatics;cython;genomics;htslib;vcf,2026-09-29
+DendroPy,https://github.com/jeetsukumaran/DendroPy,0,,2026-09-29
+fgsea,https://github.com/alserglab/fgsea,0,,2026-09-29
+clusterProfiler,https://github.com/YuLab-SMU/clusterProfiler,6,enrichment-analysis;go;gsea;kegg;rstats;visualization,2026-09-29
+GSVA,https://github.com/rcastelo/GSVA,3,gene-set-enrichment;genomics;pathway-enrichment-analysis,2026-09-29
+ggtree,https://github.com/YuLab-SMU/ggtree,5,annotations;ggplot2;phylogenetic-trees;r;visualization,2026-09-29
+treeio,https://github.com/YuLab-SMU/treeio,3,exporter;parser;phylogenetic-trees,2026-09-29
+ComplexHeatmap,https://github.com/jokergoo/ComplexHeatmap,3,clustering;complex-heatmaps;heatmap,2026-09-29
+scran,https://github.com/MarioniLab/scran,3,bioconductor-package;human-cell-atlas;single-cell-rna-seq,2026-09-29
+phyloseq,https://github.com/joey711/phyloseq,0,,2026-09-29
+dada2,https://github.com/benjjneb/dada2,7,amplicon;bioconductor;bioinformatics;metabarcoding;metagenomics;microbiome;taxonomy,2026-09-29
+SingleR,https://github.com/SingleR-inc/SingleR,2,bioconductor;singler,2026-09-29
+tximport,https://github.com/thelovelab/tximport,3,bioconductor;deseq2;rnaseq,2026-09-29
+GEOquery,https://github.com/seandavi/GEOquery,8,bioconductor;bioinformatics;data-science;genomics;ncbi-geo;r;rstats;u24ca289073,2026-09-29
+biomaRt,https://github.com/Huber-group-EMBL/biomaRt,4,bioconductor;biomart;ensembl;r,2026-09-29
+GenomicFeatures,https://github.com/Bioconductor/GenomicFeatures,2,bioconductor-package;core-package,2026-09-29
+ShortRead,https://github.com/Bioconductor/ShortRead,2,bioconductor-package;core-package,2026-09-29
