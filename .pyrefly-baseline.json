@@ -1,6 +1,1315 @@
 {
   "errors": [
     {
+      "column": 28,
+      "path": "experiments/grug/base/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/base/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, float] | list[tuple[int, dict[str, float]]] | None` is not assignable to parameter `weights` with type `dict[str, float] | list[tuple[int, dict[str, float]]]` in function `levanter.data.mixture.MixtureDataset.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/base/train.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 71,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.update.apply_updates`",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `tuple[LiteralString, ...] | tuple[Target, ...]` is not assignable to parameter `watch_targets` with type `Sequence[Target]` in function `levanter.callbacks.watch.compute_watch_stats`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` is not assignable to parameter `params` with type `Transformer` in function `GrugTrainState.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GrugTrainState` is not assignable to parameter `state` with type `GrugStateWithSharding` in function `experiments.grug.sharding_dump.dump_grug_state_sharding_run_artifact`",
+      "severity": "error"
+    },
+    {
+      "column": 79,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 63,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 59,
+      "path": "experiments/grug/base/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "experiments/grug/checkpointing.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "experiments/grug/fast_track/adamh.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter `count` with type `Array | numpy.bool | ndarray | number` in function `ScaleByAdamHState.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 50,
+      "path": "experiments/grug/fast_track/adamh.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `(updates: Unknown, state: Unknown, params: Unknown) -> tuple[Any, ScaleByAdamHState]` is not assignable to parameter `update` with type `TransformUpdateFn` in function `optax._src.base.GradientTransformation.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 86,
+      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_zeropower_via_newtonschulz_replicated`",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_newtonschulz_padded_stack_sharded`",
+      "severity": "error"
+    },
+    {
+      "column": 82,
+      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_newtonschulz_4d_distributed`",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "experiments/grug/fast_track/launch.py",
+      "name": "unsupported-operation",
+      "concise_description": "`*` is not supported between `int` and `None`",
+      "severity": "error"
+    },
+    {
+      "column": 51,
+      "path": "experiments/grug/fast_track/launch.py",
+      "name": "unsupported-operation",
+      "concise_description": "`*` is not supported between `int` and `None`",
+      "severity": "error"
+    },
+    {
+      "column": 5,
+      "path": "experiments/grug/fast_track/model.py",
+      "name": "missing-import",
+      "concise_description": "Cannot find module `jax.shard_map`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/fast_track/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/fast_track/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "experiments/grug/fast_track/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/fast_track/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/fast_track/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/fast_track/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "experiments/grug/fast_track/optimizer.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, GradientTransformationExtraArgs]` is not assignable to parameter `transforms` with type `Mapping[Hashable, GradientTransformation]` in function `optax.transforms._combining.partition`",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "experiments/grug/fast_track/paloma_detok.py",
+      "name": "bad-index",
+      "concise_description": "Cannot index into `list[Any]`",
+      "severity": "error"
+    },
+    {
+      "column": 5,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "missing-import",
+      "concise_description": "Cannot find module `jax.shard_map`",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 48,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "experiments/grug/fast_track/router_metrics.py",
+      "name": "bad-assignment",
+      "concise_description": "`Array | None` is not assignable to dict value type `Array | SummaryStats`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, float] | list[tuple[int, dict[str, float]]] | None` is not assignable to parameter `weights` with type `dict[str, float] | list[tuple[int, dict[str, float]]]` in function `levanter.data.mixture.MixtureDataset.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Literal['grads', 'opt_state', 'params', 'updates'] | list[Target]` is not assignable to parameter `watch_targets` with type `Sequence[Target]` in function `levanter.callbacks.watch.compute_watch_stats`",
+      "severity": "error"
+    },
+    {
+      "column": 67,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `list[LiteralString]` is not assignable to parameter `watch_targets` with type `Literal['grads', 'opt_state', 'params', 'updates'] | list[Target]` in function `levanter.callbacks.watch.WatchConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 72,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.update.apply_updates`",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer | None` is not assignable to parameter `model` with type `Transformer` in function `_apply_qb_betas`",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `tuple[LiteralString, ...] | tuple[Target, ...]` is not assignable to parameter `watch_targets` with type `Sequence[Target]` in function `levanter.callbacks.watch.compute_watch_stats`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | Transformer | numpy.bool | ndarray | number` is not assignable to parameter `params` with type `Transformer` in function `GrugTrainState.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 56,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 104,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 67,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 63,
+      "path": "experiments/grug/fast_track/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "experiments/grug/moe/adamh.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter `count` with type `Array | numpy.bool | ndarray | number` in function `ScaleByAdamHState.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 50,
+      "path": "experiments/grug/moe/adamh.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `(updates: Unknown, state: Unknown, params: Unknown) -> tuple[Any, ScaleByAdamHState]` is not assignable to parameter `update` with type `TransformUpdateFn` in function `optax._src.base.GradientTransformation.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `cache_catalog` with type `str | None` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `cache_options` with type `CacheOptions` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `enforce_eos` with type `bool` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `chat_template` with type `str | None` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `shuffle` with type `BlockShuffleConfig | bool` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `permutation_type` with type `Literal['feistel', 'linear']` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `block_cross_document_attention` with type `bool` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `stop_strategy` with type `str` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `max_train_batches` with type `dict[str, int] | None` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `num_validation_sequences` with type `dict[str, int] | None` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int | None` is not assignable to parameter `shuffle_before_trainval_split` with type `bool` in function `levanter.data.text.datasets.LmDataConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe/launch_datakit_moe_mix.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, DatasetComponent]` is not assignable to parameter `val_components` with type `dict[str, ConcatDatasetComponent | DatasetComponent]` in function `_datakit_data_config`",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-specialization",
+      "concise_description": "`GrugModelConfig` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-specialization",
+      "concise_description": "`Self@GrugModelConfig` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `transformers_version` with type `str | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `architectures` with type `list[str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `output_hidden_states` with type `bool | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `return_dict` with type `bool | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `dtype` with type `dtype | str | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `chunk_size_feed_forward` with type `int` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `is_encoder_decoder` with type `bool` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `id2label` with type `dict[int, str] | dict[str, str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `label2id` with type `dict[str, int] | dict[str, str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `problem_type` with type `Literal['multi_label_classification', 'regression', 'single_label_classification'] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/moe/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "experiments/grug/moe/model.py",
+      "name": "bad-assignment",
+      "concise_description": "`Array | None` is not assignable to dict value type `Array | SummaryStats`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 71,
+      "path": "experiments/grug/moe/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "experiments/grug/moe/optimizer.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, GradientTransformationExtraArgs]` is not assignable to parameter `transforms` with type `Mapping[Hashable, GradientTransformation]` in function `optax.transforms._combining.partition`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, float] | list[tuple[int, dict[str, float]]] | None` is not assignable to parameter `weights` with type `dict[str, float] | list[tuple[int, dict[str, float]]]` in function `levanter.data.mixture.MixtureDataset.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/moe/train.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer | None` is not assignable to parameter `model` with type `Transformer` in function `_apply_qb_betas`",
+      "severity": "error"
+    },
+    {
+      "column": 71,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.update.apply_updates`",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `tuple[LiteralString, ...] | tuple[Target, ...]` is not assignable to parameter `watch_targets` with type `Sequence[Target]` in function `levanter.callbacks.watch.compute_watch_stats`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` is not assignable to parameter `params` with type `Transformer` in function `GrugTrainState.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GrugTrainState` is not assignable to parameter `state` with type `GrugStateWithSharding` in function `experiments.grug.sharding_dump.dump_grug_state_sharding_run_artifact`",
+      "severity": "error"
+    },
+    {
+      "column": 79,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 58,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 63,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 59,
+      "path": "experiments/grug/moe/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "experiments/grug/moe_hero_ep/adamh.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter `count` with type `Array | numpy.bool | ndarray | number` in function `ScaleByAdamHState.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 50,
+      "path": "experiments/grug/moe_hero_ep/adamh.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `(updates: Unknown, state: Unknown, params: Unknown) -> tuple[Any, ScaleByAdamHState]` is not assignable to parameter `update` with type `TransformUpdateFn` in function `optax._src.base.GradientTransformation.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 86,
+      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_zeropower_via_newtonschulz_replicated`",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_newtonschulz_padded_stack_sharded`",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_newtonschulz_4d_distributed`",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/moe_hero_ep/harrier_mix_2026_08_17_1.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, DatasetComponent]` is not assignable to parameter `components` with type `dict[str, ConcatDatasetComponent | DatasetComponent]` in function `experiments.grug.moe.launch_datakit_moe_mix._two_phase_data_config`",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/moe_hero_ep/harrier_mix_2026_08_17_1.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `tuple[dict[str, float], ...]` is not assignable to parameter `phase_weights` with type `tuple[dict[str, float], dict[str, float]]` in function `experiments.grug.moe.launch_datakit_moe_mix._two_phase_data_config`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe_hero_ep/harrier_mix_2026_08_17_1.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, DatasetComponent]` is not assignable to parameter `val_components` with type `dict[str, ConcatDatasetComponent | DatasetComponent]` in function `experiments.grug.moe.launch_datakit_moe_mix._two_phase_data_config`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `vocab_size` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `hidden_dim` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `intermediate_dim` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `shared_expert_intermediate_dim` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `num_shared_experts` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `num_experts` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `num_experts_per_token` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `latent_dim` with type `int | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `qb_estimator` with type `QbEstimator` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `qb_hist_bins` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `num_layers` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `num_heads` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `num_kv_heads` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `local_kv_heads` with type `int | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `global_kv_heads` with type `int | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `head_dim` with type `int | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `max_seq_len` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `sliding_window` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `global_every` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `capacity_factor` with type `float` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `layer_norm_eps` with type `float` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `initializer_std` with type `float` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `qk_mult` with type `float` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `sconv` with type `bool` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `sconv_kernel` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `sconv_sites` with type `tuple[str, ...]` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `attention_implementation` with type `Literal['gpu_fa4_cute', 'gpu_fa4_cute_sm100', 'reference', 'tpu_splash'] | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `moe_implementation` with type `Literal['deepep', 'fixed_all_to_all', 'fixed_pooled_wave_all_to_all', 'ragged_all_to_all', 'ring', 'scatter', 'sonic', 'sonic_cute'] | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `expert_chunks` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `pooled_transport_capacity_factor` with type `float | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `num_expert_waves` with type `int` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `report_capacity_overflow` with type `bool` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `remat_mode` with type `Literal['offload_carry', 'recompute_all', 'save_moe']` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `rope` with type `RotaryConfig` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/launch_diagnostics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `float | int | str` is not assignable to parameter `rope_fused` with type `bool` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/moe_hero_ep/memory_soak.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ndarray[tuple[int], dtype[signedinteger[_32Bit]]]` is not assignable to parameter `tokens` with type `Array` in function `levanter.data.text.examples.GrugLmExample.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 56,
+      "path": "experiments/grug/moe_hero_ep/memory_soak.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ndarray[tuple[int], dtype[floating[_32Bit]]]` is not assignable to parameter `loss_weight` with type `Array` in function `levanter.data.text.examples.GrugLmExample.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe_hero_ep/memory_soak.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Literal['deepep', 'fixed_all_to_all', 'fixed_pooled_wave_all_to_all', 'ragged_all_to_all', 'ring', 'scatter', 'sonic', 'sonic_cute'] | None` is not assignable to parameter `moe_implementation` with type `str` in function `experiments.grug.moe_hero_ep.small_scale_abl_launch._small_model`",
+      "severity": "error"
+    },
+    {
+      "column": 5,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "missing-import",
+      "concise_description": "Cannot find module `jax.shard_map`",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-specialization",
+      "concise_description": "`GrugModelConfig` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-specialization",
+      "concise_description": "`Self@GrugModelConfig` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `transformers_version` with type `str | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `architectures` with type `list[str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `output_hidden_states` with type `bool | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `return_dict` with type `bool | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `dtype` with type `dtype | str | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `chunk_size_feed_forward` with type `int` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `is_encoder_decoder` with type `bool` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `id2label` with type `dict[int, str] | dict[str, str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `label2id` with type `dict[str, int] | dict[str, str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `problem_type` with type `Literal['multi_label_classification', 'regression', 'single_label_classification'] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "bad-assignment",
+      "concise_description": "`Array | None` is not assignable to dict value type `Array | SummaryStats`",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 75,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe_hero_ep/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 34,
       "path": "experiments/grug/moe_hero_ep/ops/vibe_check/config.py",
       "name": "bad-argument-type",
@@ -96,6 +1405,916 @@
       "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `object | Unknown` is not assignable to parameter `eos_token_id` with type `Decimal | bool | bytes | float | int | str` in function `experiments.grug.moe_hero_ep.ops.vibe_check.completions.SampleResult.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "experiments/grug/moe_hero_ep/optimizer.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, GradientTransformationExtraArgs]` is not assignable to parameter `transforms` with type `Mapping[Hashable, GradientTransformation]` in function `optax.transforms._combining.partition`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_ep/restore_benchmark.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Literal['deepep', 'fixed_all_to_all', 'fixed_pooled_wave_all_to_all', 'ragged_all_to_all', 'ring', 'scatter', 'sonic', 'sonic_cute'] | None` is not assignable to parameter `moe_implementation` with type `str` in function `experiments.grug.moe_hero_ep.small_scale_abl_launch._small_model`",
+      "severity": "error"
+    },
+    {
+      "column": 34,
+      "path": "experiments/grug/moe_hero_ep/small_scale_abl_launch.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str` is not assignable to parameter `attention_implementation` with type `Literal['gpu_fa4_cute', 'gpu_fa4_cute_sm100', 'reference', 'tpu_splash'] | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe_hero_ep/small_scale_abl_launch.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str` is not assignable to parameter `moe_implementation` with type `Literal['deepep', 'fixed_all_to_all', 'fixed_pooled_wave_all_to_all', 'ragged_all_to_all', 'ring', 'scatter', 'sonic', 'sonic_cute'] | None` in function `experiments.grug.moe_hero_ep.model.GrugModelConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "experiments/grug/moe_hero_ep/small_scale_abl_launch.py",
+      "name": "unsupported-operation",
+      "concise_description": "`*` is not supported between `int` and `None`",
+      "severity": "error"
+    },
+    {
+      "column": 51,
+      "path": "experiments/grug/moe_hero_ep/small_scale_abl_launch.py",
+      "name": "unsupported-operation",
+      "concise_description": "`*` is not supported between `int` and `None`",
+      "severity": "error"
+    },
+    {
+      "column": 46,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `None` is not assignable to parameter `params` with type `Transformer` in function `GrugTrainState.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, float] | list[tuple[int, dict[str, float]]] | None` is not assignable to parameter `weights` with type `dict[str, float] | list[tuple[int, dict[str, float]]]` in function `levanter.data.mixture.MixtureDataset.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 33,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array` in function `levanter.data.text.examples.GrugLmExample.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 53,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `loss_weight` with type `Array` in function `levanter.data.text.examples.GrugLmExample.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Literal['grads', 'opt_state', 'params', 'updates'] | list[Target]` is not assignable to parameter `watch_targets` with type `Sequence[Target]` in function `levanter.callbacks.watch.compute_watch_stats`",
+      "severity": "error"
+    },
+    {
+      "column": 67,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `list[LiteralString]` is not assignable to parameter `watch_targets` with type `Literal['grads', 'opt_state', 'params', 'updates'] | list[Target]` in function `levanter.callbacks.watch.WatchConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer | None` is not assignable to parameter `model` with type `Transformer` in function `_apply_qb_betas`",
+      "severity": "error"
+    },
+    {
+      "column": 79,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
+      "severity": "error"
+    },
+    {
+      "column": 49,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.update.apply_updates`",
+      "severity": "error"
+    },
+    {
+      "column": 72,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.update.apply_updates`",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `tuple[LiteralString, ...] | tuple[Target, ...]` is not assignable to parameter `watch_targets` with type `Sequence[Target]` in function `levanter.callbacks.watch.compute_watch_stats`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | Unknown` is not assignable to parameter `params` with type `Transformer` in function `GrugTrainState.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GrugTrainState | Any` is not assignable to parameter `state` with type `GrugStateWithSharding` in function `experiments.grug.sharding_dump.dump_grug_state_sharding_run_artifact`",
+      "severity": "error"
+    },
+    {
+      "column": 66,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 60,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 63,
+      "path": "experiments/grug/moe_hero_ep/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "experiments/grug/moe_hero_fsdp/adamh.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter `count` with type `Array | numpy.bool | ndarray | number` in function `ScaleByAdamHState.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 50,
+      "path": "experiments/grug/moe_hero_fsdp/adamh.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `(updates: Unknown, state: Unknown, params: Unknown) -> tuple[Any, ScaleByAdamHState]` is not assignable to parameter `update` with type `TransformUpdateFn` in function `optax._src.base.GradientTransformation.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 86,
+      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_zeropower_via_newtonschulz_replicated`",
+      "severity": "error"
+    },
+    {
+      "column": 82,
+      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_newtonschulz_padded_stack_sharded`",
+      "severity": "error"
+    },
+    {
+      "column": 82,
+      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_newtonschulz_4d_distributed`",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 5,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "missing-import",
+      "concise_description": "Cannot find module `jax.shard_map`",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-specialization",
+      "concise_description": "`GrugModelConfig` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-specialization",
+      "concise_description": "`Self@GrugModelConfig` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `transformers_version` with type `str | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `architectures` with type `list[str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `output_hidden_states` with type `bool | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `return_dict` with type `bool | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `dtype` with type `dtype | str | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `chunk_size_feed_forward` with type `int` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `is_encoder_decoder` with type `bool` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `id2label` with type `dict[int, str] | dict[str, str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `label2id` with type `dict[str, int] | dict[str, str] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str | None` is not assignable to parameter `problem_type` with type `Literal['multi_label_classification', 'regression', 'single_label_classification'] | None` in function `GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "bad-assignment",
+      "concise_description": "`Array | None` is not assignable to dict value type `Array | SummaryStats`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 75,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe_hero_fsdp/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "experiments/grug/moe_hero_fsdp/optimizer.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, GradientTransformationExtraArgs]` is not assignable to parameter `transforms` with type `Mapping[Hashable, GradientTransformation]` in function `optax.transforms._combining.partition`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `dict[str, float] | list[tuple[int, dict[str, float]]] | None` is not assignable to parameter `weights` with type `dict[str, float] | list[tuple[int, dict[str, float]]]` in function `levanter.data.mixture.MixtureDataset.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer | None` is not assignable to parameter `model` with type `Transformer` in function `_apply_qb_betas`",
+      "severity": "error"
+    },
+    {
+      "column": 68,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.update.apply_updates`",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `tuple[LiteralString, ...] | tuple[Target, ...]` is not assignable to parameter `watch_targets` with type `Sequence[Target]` in function `levanter.callbacks.watch.compute_watch_stats`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` is not assignable to parameter `params` with type `Transformer` in function `GrugTrainState.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GrugTrainState` is not assignable to parameter `state` with type `GrugStateWithSharding` in function `experiments.grug.sharding_dump.dump_grug_state_sharding_run_artifact`",
+      "severity": "error"
+    },
+    {
+      "column": 79,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 57,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 104,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 67,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 63,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 65,
+      "path": "experiments/grug/moe_hero_fsdp/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | None` is not assignable to parameter `label` with type `str` in function `levanter.recovery.supervisor.GPUHangSupervisor.run`",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | None` is not assignable to parameter `token_embed` with type `Array` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `RMSNorm | None` is not assignable to parameter `embed_norm` with type `RMSNorm` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GatedNorm | None` is not assignable to parameter `embed_gated_norm` with type `GatedNorm` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | None` is not assignable to parameter `output_proj` with type `Array` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `RMSNorm | None` is not assignable to parameter `final_norm` with type `RMSNorm` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GatedNorm | None` is not assignable to parameter `final_gated_norm` with type `GatedNorm` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `tuple[ArrayImpl, ...]` is not assignable to declared return type `tuple[Array, ...]`",
+      "severity": "error"
+    },
+    {
+      "column": 41,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "unsupported-operation",
+      "concise_description": "`None` is not subscriptable",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `ArrayImpl` is not assignable to declared return type `Array`",
+      "severity": "error"
+    },
+    {
+      "column": 89,
+      "path": "experiments/grug/moe_pipeline/checkpoint.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Sharding` is not assignable to parameter `sharding` with type `NamedSharding` in function `_stack_pending`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/moe_pipeline/checkpoint_smoke.py",
+      "name": "bad-index",
+      "concise_description": "Cannot index into `Iterable[ArrayTree]`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/moe_pipeline/checkpoint_smoke.py",
+      "name": "bad-index",
+      "concise_description": "Cannot index into `numpy.bool`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/moe_pipeline/checkpoint_smoke.py",
+      "name": "bad-index",
+      "concise_description": "Cannot index into `number`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "experiments/grug/moe_pipeline/checkpoint_smoke.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Unknown` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 56,
+      "path": "experiments/grug/moe_pipeline/checkpoint_smoke.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Unknown` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "experiments/grug/moe_pipeline/checkpoint_smoke.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GrugMoeAutomaticPipelineState | GrugMoeCheckpointState` is not assignable to parameter `sample_state` with type `GrugMoeAutomaticPipelineState` in function `experiments.grug.moe_pipeline.pipeline.make_automatic_pipeline_step`",
+      "severity": "error"
+    },
+    {
+      "column": 54,
+      "path": "experiments/grug/moe_pipeline/checkpoint_smoke.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GrugMoeAutomaticPipelineState | GrugMoeCheckpointState` is not assignable to parameter `state` with type `GrugMoeAutomaticPipelineState` in function `experiments.grug.moe_pipeline.pipeline.prepare_automatic_mpmd_step`",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-specialization",
+      "concise_description": "`GrugModelConfig` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-specialization",
+      "concise_description": "`Self@GrugModelConfig` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `transformers_version` with type `str | None` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `architectures` with type `list[str] | None` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `output_hidden_states` with type `bool | None` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `return_dict` with type `bool | None` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `dtype` with type `dtype | str | None` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `chunk_size_feed_forward` with type `int` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `is_encoder_decoder` with type `bool` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `id2label` with type `dict[int, str] | dict[str, str] | None` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `label2id` with type `dict[str, int] | dict[str, str] | None` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `problem_type` with type `Literal['multi_label_classification', 'regression', 'single_label_classification'] | None` in function `experiments.grug.moe.model.GrugMoeHfConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `experiments.grug.moe_pipeline.model.GrugModelConfig` is not assignable to parameter `cfg` with type `experiments.grug.moe.model.GrugModelConfig` in function `experiments.grug.moe.model.Block.init`",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Self@experiments.grug.moe_pipeline.model.Transformer` is not assignable to parameter `model` with type `experiments.grug.moe.model.Transformer` in function `experiments.grug.moe.model.grugmoe_inference_state_dict`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 71,
+      "path": "experiments/grug/moe_pipeline/model.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "experiments/grug/moe_pipeline/pipeline.py",
+      "name": "missing-import",
+      "concise_description": "Cannot find module `jaxpp.api`",
+      "severity": "error"
+    },
+    {
+      "column": 5,
+      "path": "experiments/grug/moe_pipeline/pipeline.py",
+      "name": "missing-import",
+      "concise_description": "Cannot find module `jaxpp.experimental`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "experiments/grug/moe_pipeline/pipeline.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "experiments/grug/moe_pipeline/pipeline.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `ArrayImpl` is not assignable to declared return type `Array`",
+      "severity": "error"
+    },
+    {
+      "column": 75,
+      "path": "experiments/grug/moe_pipeline/pipeline.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GrugMoePipelineStage` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.base.TransformInitFn.__call__`",
+      "severity": "error"
+    },
+    {
+      "column": 81,
+      "path": "experiments/grug/moe_pipeline/pipeline.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `GrugMoePipelineStage` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
+      "severity": "error"
+    },
+    {
+      "column": 34,
+      "path": "experiments/grug/moe_pipeline/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str` is not assignable to parameter `attention_implementation` with type `Literal['gpu_fa4_cute', 'gpu_fa4_cute_sm100', 'reference', 'tpu_splash'] | None` in function `experiments.grug.moe_pipeline.model.GrugModelConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/moe_pipeline/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str` is not assignable to parameter `moe_implementation` with type `Literal['deepep', 'fixed_all_to_all', 'fixed_pooled_wave_all_to_all', 'ragged_all_to_all', 'ring', 'scatter', 'sonic', 'sonic_cute'] | None` in function `experiments.grug.moe_pipeline.model.GrugModelConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/moe_pipeline/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str` is not assignable to parameter `remat_mode` with type `Literal['recompute_all', 'save_moe']` in function `experiments.grug.moe_pipeline.model.GrugModelConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/moe_pipeline/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `str | None` is not assignable to parameter `run_id` with type `str` in function `levanter.callbacks.profiler.ProfilerConfig.build`",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "experiments/grug/moe_pipeline/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `SimpleNamespace` is not assignable to parameter with type `StepInfo[Unknown]`",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "experiments/grug/moe_pipeline/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `SimpleNamespace` is not assignable to parameter with type `StepInfo[Unknown]`",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "experiments/grug/moe_pipeline/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 76,
+      "path": "experiments/grug/recovery/config.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked keyword argument `int` is not assignable to parameter `rope` with type `RotaryConfig` in function `experiments.grug.base.model.GrugModelConfig.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/recovery/minimal_wedge_repro.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "experiments/grug/recovery/minimal_wedge_repro.py",
+      "name": "missing-argument",
+      "concise_description": "Missing argument `fun` in function `jax.jit`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "experiments/grug/recovery/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Unknown` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "experiments/grug/recovery/train.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
