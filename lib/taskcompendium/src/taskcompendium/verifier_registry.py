@@ -50,6 +50,17 @@ def validate_verifier(specification: VerifierSpec) -> None:
     resolve_verifier(specification)
 
 
+def validate_launch_parallel_tool_calls(specification: VerifierSpec, parallel_tool_calls: bool | None) -> None:
+    """Reject a launch that cannot emit the task's expected final action."""
+    verifier = resolve_verifier(specification)
+    if (
+        parallel_tool_calls is False
+        and isinstance(verifier, PredictedActionVerifier)
+        and len(verifier.expected_calls) > 1
+    ):
+        raise ValueError("Launch disables parallel calls required by the task")
+
+
 async def grade_answer(
     specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt
 ) -> GradeResult:
