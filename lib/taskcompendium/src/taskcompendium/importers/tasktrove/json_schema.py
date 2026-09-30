@@ -5,6 +5,7 @@
 
 import json
 import re
+from types import MappingProxyType
 
 from tasktrove_verify.spec import JsonSchemaSpec, SchemaFormat, parse_spec
 
@@ -13,10 +14,12 @@ from taskcompendium.importers.tasktrove.convert import import_metadata, task_id
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
 
-CONVERTERS = {
-    "nemotron_structured_outputs": "laion__nemotron-gym-structured-outputs-v4",
-    "nemotron_if_structured": "laion__nemotron-gym-instruction-following-structured-v3",
-}
+CONVERTERS = MappingProxyType(
+    {
+        "nemotron_structured_outputs": "laion__nemotron-gym-structured-outputs-v4",
+        "nemotron_if_structured": "laion__nemotron-gym-instruction-following-structured-v3",
+    }
+)
 
 
 def _clean_instruction(instruction: str) -> str:
