@@ -19,13 +19,18 @@ from taskcompendium.public_projection import PublicTask
 from taskcompendium.release_common import REPO_ID, sha256_file
 
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
+GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 REGIONAL_PIN_PATTERN = re.compile(
     r"[^#]+#manifest-sha256=[0-9a-f]{64}#parquet-size=\d+#parquet-etag=([^#]*)#parquet-version-id=([^#]*)\Z"
 )
+WORKPLACE_CONFIG = "workplace"
+TASKTROVE_CONFIG = "tasktrove_clean"
+MANIFEST_FILENAME = "manifest.json"
+CARD_FILENAME = "README.md"
 ConfigName = Literal["workplace", "tasktrove_clean"]
 SplitName = Literal["train", "validation"]
 RecordFormat = Literal["public_task", "accepted_public_record"]
-CONFIG_ORDER = {"workplace": 0, "tasktrove_clean": 1}
+CONFIG_ORDER = (WORKPLACE_CONFIG, TASKTROVE_CONFIG)
 
 
 def _valid_source_pin(pin: str) -> bool:
@@ -90,7 +95,7 @@ class SourceRights(BaseModel):
             raise ValueError("Each cohort needs license, attribution, pinned card, and change notice")
         if not self.source_card_url.startswith("https://"):
             raise ValueError("Source card URL must use HTTPS")
-        if not re.fullmatch(r"[0-9a-f]{40}", self.source_card_revision):
+        if not GIT_SHA_PATTERN.fullmatch(self.source_card_revision):
             raise ValueError("Source card revision must be a full Git commit")
         return self
 
@@ -111,7 +116,7 @@ class HarborSample(BaseModel):
         if not self.evidence_url.startswith("https://") or not self.coverage:
             raise ValueError("Harbor samples need evidence URL and coverage")
         for revision in (self.taskcompendium_revision, self.harbor_revision):
-            if not re.fullmatch(r"[0-9a-f]{40}", revision):
+            if not GIT_SHA_PATTERN.fullmatch(revision):
                 raise ValueError("Harbor sample revisions must be full Git commits")
         return self
 
@@ -194,21 +199,21 @@ class CohortInput(BaseModel):
             raise ValueError("Accepted input needs a SHA256 digest")
         if not all((self.source_dataset, self.task_spec_schema)):
             raise ValueError("Cohort source and schema pins are required")
-        if not self.importer_revision or not re.fullmatch(r"[0-9a-f]{40}", self.projection_builder_revision):
+        if not self.importer_revision or not GIT_SHA_PATTERN.fullmatch(self.projection_builder_revision):
             raise ValueError("Importer and projection builder pins are required")
-        if self.config == "workplace" and self.record_format != "public_task":
+        if self.config == WORKPLACE_CONFIG and self.record_format != "public_task":
             raise ValueError("Workplace input must use the public task format")
-        if self.config == "workplace" and (self.source_revision is None or len(self.source_assets) != 1):
+        if self.config == WORKPLACE_CONFIG and (self.source_revision is None or len(self.source_assets) != 1):
             raise ValueError("Workplace needs its pinned source revision and one split file")
-        if self.config == "tasktrove_clean" and self.record_format != "accepted_public_record":
+        if self.config == TASKTROVE_CONFIG and self.record_format != "accepted_public_record":
             raise ValueError("TaskTrove input must carry accepted-row source proof")
-        if self.config == "tasktrove_clean" and (not self.source_subset or not self.source_category):
+        if self.config == TASKTROVE_CONFIG and (not self.source_subset or not self.source_category):
             raise ValueError("TaskTrove cohorts need an exact source subset and category")
-        if self.config == "tasktrove_clean" and (
+        if self.config == TASKTROVE_CONFIG and (
             self.projection_manifest_sha256 is None or not SHA256_PATTERN.fullmatch(self.projection_manifest_sha256)
         ):
             raise ValueError("TaskTrove cohorts need the accepted projection manifest SHA256")
-        if self.config == "workplace" and self.projection_manifest_sha256 is not None:
+        if self.config == WORKPLACE_CONFIG and self.projection_manifest_sha256 is not None:
             raise ValueError("Workplace cohorts do not use the regional TaskTrove projection manifest")
         if len({pin.name for pin in self.provider_pins}) != len(self.provider_pins):
             raise ValueError("Provider pin names must be unique")
@@ -258,7 +263,7 @@ def _validated_record(
         pin = provider_pins[name]
         if requirement.action_interface != pin.action_interface or requirement.seed_sha256 != pin.seed_sha256:
             raise ValueError("Public provider interface or seed differs from cohort runtime pin")
-    if cohort.config == "tasktrove_clean":
+    if cohort.config == TASKTROVE_CONFIG:
         if not task.tags:
             raise ValueError("TaskTrove rows must retain original ordered source tags")
         if task.source_category != cohort.source_category or not task.source.row.startswith(f"{cohort.source_subset}:"):
@@ -307,7 +312,7 @@ def _card(cohorts: tuple[CohortInput, ...], data_files: list[dict[str, object]])
     licenses = {cohort.rights.license for cohort in cohorts}
     license_label = next(iter(licenses)) if len(licenses) == 1 else "other"
     lines = ["---", "pretty_name: TaskCompendium Alpha 1 Candidate", f"license: {license_label}", "configs:"]
-    for config in ("workplace", "tasktrove_clean"):
+    for config in (WORKPLACE_CONFIG, TASKTROVE_CONFIG):
         entries = [entry for entry in data_files if entry["config"] == config]
         if not entries:
             continue
@@ -379,12 +384,17 @@ def finalize_mixed_candidate(candidate: Path, destination: Path, review: Release
         raise ValueError("Ready artifact must be outside the candidate directory")
     if candidate.is_symlink() or not candidate.is_dir():
         raise ValueError("Candidate must be a regular directory")
-    manifest_path = candidate / "manifest.json"
+    manifest_path = candidate / MANIFEST_FILENAME
     if sha256_file(manifest_path) != review.candidate_manifest_sha256:
         raise ValueError("Release review does not match the candidate manifest")
     manifest = json.loads(manifest_path.read_text())
-    if manifest["publication_ready"]:
-        raise ValueError("Candidate is already publication-ready")
+    data_paths = _candidate_data_paths(candidate, manifest)
+    _validate_publication_evidence(candidate, manifest, review)
+    return _write_ready_artifact(candidate, destination, manifest, review, data_paths)
+
+
+def _candidate_data_paths(candidate: Path, manifest: dict[str, object]) -> set[str]:
+    """Validate the candidate's exact file inventory and return its listed data paths."""
     data_paths: set[str] = set()
     for entry in manifest["data_files"]:
         path = entry["path"]
@@ -403,7 +413,7 @@ def finalize_mixed_candidate(candidate: Path, destination: Path, review: Release
         if path in data_paths:
             raise ValueError(f"Candidate data path is duplicated: {path}")
         data_paths.add(path)
-    allowed_files = {"README.md", "manifest.json", *data_paths}
+    allowed_files = {CARD_FILENAME, MANIFEST_FILENAME, *data_paths}
     allowed_directories: set[str] = set()
     for path in data_paths:
         parent = PurePosixPath(path).parent
@@ -424,6 +434,13 @@ def finalize_mixed_candidate(candidate: Path, destination: Path, review: Release
             seen_files.add(relative_path)
     if seen_files != allowed_files:
         raise ValueError(f"Candidate file inventory differs from its manifest: {sorted(allowed_files - seen_files)}")
+    return data_paths
+
+
+def _validate_publication_evidence(candidate: Path, manifest: dict[str, object], review: ReleaseReview) -> None:
+    """Check reviewed Harbor evidence, export counts, and the candidate data digests."""
+    if manifest["publication_ready"]:
+        raise ValueError("Candidate is already publication-ready")
     expected_harbor_urls = {
         sample["evidence_url"] for entry in manifest["data_files"] for sample in entry["harbor_samples"]
     }
@@ -438,10 +455,19 @@ def finalize_mixed_candidate(candidate: Path, destination: Path, review: Release
         if not data_path.is_file() or sha256_file(data_path) != entry["sha256"]:
             raise ValueError(f"Candidate data file does not match its manifest: {entry['path']}")
 
+
+def _write_ready_artifact(
+    candidate: Path,
+    destination: Path,
+    manifest: dict[str, object],
+    review: ReleaseReview,
+    data_paths: set[str],
+) -> Path:
+    """Copy only reviewed files and write a ready manifest and card."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
     try:
-        shutil.copyfile(manifest_path, temporary / "manifest.json")
+        shutil.copyfile(candidate / MANIFEST_FILENAME, temporary / MANIFEST_FILENAME)
         for path in sorted(data_paths):
             source_path = candidate / path
             output_path = temporary / path
@@ -456,8 +482,8 @@ def finalize_mixed_candidate(candidate: Path, destination: Path, review: Release
             "rights_review_url": review.rights_review_url,
             "harbor_evidence_urls": sorted(review.harbor_evidence_urls),
         }
-        (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        (temporary / "README.md").write_text(_publication_card(manifest, review))
+        (temporary / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        (temporary / CARD_FILENAME).write_text(_publication_card(manifest, review))
         os.replace(temporary, destination)
     finally:
         if temporary.exists():
@@ -471,7 +497,7 @@ def _publication_card(manifest: dict[str, object], review: ReleaseReview) -> str
     licenses = {entry["rights"]["license"] for entry in data_files}
     license_label = next(iter(licenses)) if len(licenses) == 1 else "other"
     lines = ["---", "pretty_name: TaskCompendium Alpha 1", f"license: {license_label}", "configs:"]
-    for config in ("workplace", "tasktrove_clean"):
+    for config in (WORKPLACE_CONFIG, TASKTROVE_CONFIG):
         entries = [entry for entry in data_files if entry["config"] == config]
         if not entries:
             continue
@@ -503,11 +529,11 @@ def _publication_card(manifest: dict[str, object], review: ReleaseReview) -> str
 
 def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path, *, builder_revision: str) -> Path:
     """Validate and atomically write accepted cohorts into separate Hub configs."""
-    if not re.fullmatch(r"[0-9a-f]{40}", builder_revision):
+    if not GIT_SHA_PATTERN.fullmatch(builder_revision):
         raise ValueError("Builder revision must be a full Git commit")
     if not cohorts or destination.exists():
         raise ValueError("Nonempty cohorts and a new destination are required")
-    ordered = tuple(sorted(cohorts, key=lambda cohort: (CONFIG_ORDER[cohort.config], cohort.split, cohort.cohort)))
+    ordered = tuple(sorted(cohorts, key=lambda cohort: (CONFIG_ORDER.index(cohort.config), cohort.split, cohort.cohort)))
     if len({(cohort.config, cohort.split, cohort.cohort) for cohort in ordered}) != len(ordered):
         raise ValueError("Cohort output paths must be unique")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -557,8 +583,8 @@ def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path
             "publication_ready": False,
             "data_files": data_files,
         }
-        (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        (temporary / "README.md").write_text(_card(ordered, data_files))
+        (temporary / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        (temporary / CARD_FILENAME).write_text(_card(ordered, data_files))
         os.replace(temporary, destination)
     finally:
         if temporary.exists():

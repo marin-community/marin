@@ -3,6 +3,7 @@
 
 """Reviewed agent-visible projection of a private TaskSpec."""
 
+from types import MappingProxyType
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -38,18 +39,20 @@ _PUBLIC_SPEC_FIELDS = frozenset(
         "schema_version",
     }
 )
-_PUBLIC_NESTED_FIELDS = {
-    ConversationInput: {"events"},
-    TextMessage: {"type", "role", "content"},
-    AssistantToolCalls: {"type", "calls", "content"},
-    ConversationToolCall: {"call_id", "name", "arguments"},
-    ToolResult: {"type", "call_id", "content"},
-    EnvironmentRequirements: {"capabilities"},
-    ProviderRequirement: {"action_interface", "seed_sha256"},
-    FinalTools: {"functions", "tool_choice", "parallel_tool_calls"},
-    FunctionDefinition: {"name", "parameters", "description", "strict"},
-    Source: {"dataset", "revision", "row", "importer_revision"},
-}
+_PUBLIC_NESTED_FIELDS = MappingProxyType(
+    {
+        ConversationInput: frozenset({"events"}),
+        TextMessage: frozenset({"type", "role", "content"}),
+        AssistantToolCalls: frozenset({"type", "calls", "content"}),
+        ConversationToolCall: frozenset({"call_id", "name", "arguments"}),
+        ToolResult: frozenset({"type", "call_id", "content"}),
+        EnvironmentRequirements: frozenset({"capabilities"}),
+        ProviderRequirement: frozenset({"action_interface", "seed_sha256"}),
+        FinalTools: frozenset({"functions", "tool_choice", "parallel_tool_calls"}),
+        FunctionDefinition: frozenset({"name", "parameters", "description", "strict"}),
+        Source: frozenset({"dataset", "revision", "row", "importer_revision"}),
+    }
+)
 
 
 class PublicTask(BaseModel):

@@ -244,52 +244,6 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
     assert "config_name: workplace" in (destination / "README.md").read_text()
     assert "config_name: tasktrove_clean" in (destination / "README.md").read_text()
 
-    candidate_manifest_sha256 = sha256((destination / "manifest.json").read_bytes()).hexdigest()
-    (destination / "private.json").write_text('{"private": true}')
-    with pytest.raises(ValueError, match="unlisted or unsupported file"):
-        finalize_mixed_candidate(
-            destination,
-            tmp_path / "ready-with-private-file",
-            ReleaseReview(
-                candidate_manifest_sha256=candidate_manifest_sha256,
-                rights_review_url="https://example.org/rights-review",
-                harbor_evidence_urls=("https://example.org/trials",),
-            ),
-        )
-    assert not (tmp_path / "ready-with-private-file").exists()
-    (destination / "private.json").unlink()
-    ready = finalize_mixed_candidate(
-        destination,
-        tmp_path / "ready",
-        ReleaseReview(
-            candidate_manifest_sha256=candidate_manifest_sha256,
-            rights_review_url="https://example.org/rights-review",
-            harbor_evidence_urls=("https://example.org/trials",),
-        ),
-    )
-    ready_manifest = json.loads((ready / "manifest.json").read_text())
-    assert ready_manifest["publication_ready"] is True
-    assert ready_manifest["publication_review"]["candidate_manifest_sha256"] == candidate_manifest_sha256
-    assert (
-        sha256((ready / "data/tasktrove_clean/knowledge_mcqa.jsonl").read_bytes()).hexdigest()
-        == sha256((destination / "data/tasktrove_clean/knowledge_mcqa.jsonl").read_bytes()).hexdigest()
-    )
-    assert json.loads((destination / "manifest.json").read_text())["publication_ready"] is False
-    assert "TaskCompendium Alpha 1 Candidate" not in (ready / "README.md").read_text()
-    tasktrove_output_path = destination / "data/tasktrove_clean/knowledge_mcqa.jsonl"
-    tasktrove_output_path.write_text(tasktrove_output + " ")
-    with pytest.raises(ValueError, match="does not match its manifest"):
-        finalize_mixed_candidate(
-            destination,
-            tmp_path / "tampered-ready",
-            ReleaseReview(
-                candidate_manifest_sha256=candidate_manifest_sha256,
-                rights_review_url="https://example.org/rights-review",
-                harbor_evidence_urls=("https://example.org/trials",),
-            ),
-        )
-    assert not (tmp_path / "tampered-ready").exists()
-
 
 def test_mixed_candidate_rejects_private_or_unproved_tasktrove_record(tmp_path):
     regional_pin = (
@@ -389,6 +343,105 @@ def test_release_finalizer_rejects_review_for_another_candidate(tmp_path):
                 harbor_evidence_urls=("https://example.org/trials",),
             ),
         )
+    assert not (tmp_path / "ready").exists()
+
+
+def _workplace_candidate(tmp_path):
+    row_digest = "a" * 64
+    record = public_task(
+        TaskSpec(
+            id="workplace-finalize-test",
+            context=ConversationInput(events=(TextMessage(role="user", content="Update the calendar."),)),
+            environment_requirements=EnvironmentRequirements(),
+            answer_type=AnswerType.TEXT,
+            verifier=exact_answer("private answer"),
+            source=Source(
+                dataset="nvidia/workplace",
+                revision="source-pin",
+                row=f"train:0:{row_digest}",
+                importer_revision="workplace-v1",
+            ),
+        ),
+        PlainText(id="plain"),
+        HarborEnvironmentConfig(),
+    )
+    input_path = tmp_path / "workplace.jsonl"
+    input_path.write_text(record.model_dump_json() + "\n")
+    evidence_url = "https://example.org/workplace-trials"
+    cohort = CohortInput(
+        config="workplace",
+        cohort="workplace_train",
+        split="train",
+        record_format="public_task",
+        input_path=input_path,
+        input_sha256=sha256(input_path.read_bytes()).hexdigest(),
+        accepted_rows=1,
+        source_records=1,
+        source_dataset="nvidia/workplace",
+        source_revision="source-pin",
+        source_assets=(SourceAsset(path="train.jsonl", pin="sha256:" + "b" * 64),),
+        task_spec_schema="0.13",
+        importer_revision="workplace-v1",
+        projection_builder_revision="c" * 40,
+        rights=SourceRights(
+            license="cc-by-4.0",
+            attribution="NVIDIA Corporation",
+            source_card_url="https://example.org/card",
+            source_card_revision="d" * 40,
+            change_notice="Converted source row.",
+        ),
+        harbor_samples=(
+            HarborSample(
+                evidence_url=evidence_url,
+                taskcompendium_revision="e" * 40,
+                harbor_revision="f" * 40,
+                trials=1,
+                coverage="one public task",
+            ),
+        ),
+    )
+    candidate = assemble_mixed_candidate((cohort,), tmp_path / "candidate", builder_revision="1" * 40)
+    manifest_sha256 = sha256((candidate / "manifest.json").read_bytes()).hexdigest()
+    review = ReleaseReview(
+        candidate_manifest_sha256=manifest_sha256,
+        rights_review_url="https://example.org/rights-review",
+        harbor_evidence_urls=(evidence_url,),
+    )
+    return candidate, review
+
+
+def test_release_finalizer_rejects_unlisted_private_file(tmp_path):
+    candidate, review = _workplace_candidate(tmp_path)
+    (candidate / "private.json").write_text('{"private": true}')
+
+    with pytest.raises(ValueError, match="unlisted or unsupported file"):
+        finalize_mixed_candidate(candidate, tmp_path / "ready", review)
+
+    assert not (tmp_path / "ready").exists()
+
+
+def test_release_finalizer_writes_separate_ready_artifact(tmp_path):
+    candidate, review = _workplace_candidate(tmp_path)
+    ready = finalize_mixed_candidate(candidate, tmp_path / "ready", review)
+    candidate_data = candidate / "data/workplace/workplace_train.jsonl"
+    ready_data = ready / "data/workplace/workplace_train.jsonl"
+
+    ready_manifest = json.loads((ready / "manifest.json").read_text())
+    assert ready_manifest["publication_ready"] is True
+    assert ready_manifest["publication_review"]["candidate_manifest_sha256"] == review.candidate_manifest_sha256
+    assert sha256(ready_data.read_bytes()).hexdigest() == sha256(candidate_data.read_bytes()).hexdigest()
+    assert json.loads((candidate / "manifest.json").read_text())["publication_ready"] is False
+    assert "TaskCompendium Alpha 1 Candidate" not in (ready / "README.md").read_text()
+
+
+def test_release_finalizer_rejects_data_changed_after_review(tmp_path):
+    candidate, review = _workplace_candidate(tmp_path)
+    data_path = candidate / "data/workplace/workplace_train.jsonl"
+    data_path.write_text(data_path.read_text() + " ")
+
+    with pytest.raises(ValueError, match="does not match its manifest"):
+        finalize_mixed_candidate(candidate, tmp_path / "ready", review)
+
     assert not (tmp_path / "ready").exists()
 
 
