@@ -234,9 +234,11 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
         ("old_output_budget", "invalid"),
         ("unbounded_context", "invalid"),
         ("unbounded_input", "invalid"),
-        ("large_thinking_disabled", "invalid"),
+        ("large_thinking_enabled", "invalid"),
+        ("large_old_sampling", "invalid"),
         ("hosted_max_effort", "invalid"),
         ("inherited_sampling_defaults", "invalid"),
+        ("old_protocol", "historical"),
     ],
 )
 def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budgets(change, expected_status) -> None:
@@ -254,7 +256,7 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
         "estimated_at": "2026-09-29",
         "sampling": {"task_count": 32, "method": "uniform"},
         "protocol": {
-            "id": "atlas-difficulty-v2-65k16k",
+            "id": "atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking",
             "context_window": 65536,
             "max_input_tokens": 49152,
             "max_output_tokens": 16384,
@@ -274,7 +276,9 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
                 "verified": 32,
                 "generation_parameters": {
                     **parameters,
-                    "chat_template_kwargs": {"enable_thinking": True},
+                    "top_p": 0.8,
+                    "presence_penalty": 1.5,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             },
             {
@@ -299,12 +303,16 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
         report["protocol"]["context_window"] = 131072
     elif change == "unbounded_input":
         report["protocol"]["max_input_tokens"] = 65536
-    elif change == "large_thinking_disabled":
-        report["models"][1]["generation_parameters"]["chat_template_kwargs"]["enable_thinking"] = False
+    elif change == "large_thinking_enabled":
+        report["models"][1]["generation_parameters"]["chat_template_kwargs"]["enable_thinking"] = True
+    elif change == "large_old_sampling":
+        report["models"][1]["generation_parameters"]["top_p"] = 0.95
     elif change == "hosted_max_effort":
         report["models"][2]["generation_parameters"]["reasoning_effort"] = "max"
     elif change == "inherited_sampling_defaults":
         report["models"][0]["generation_parameters"].pop("repetition_penalty")
+    elif change == "old_protocol":
+        report["protocol"]["id"] = "atlas-difficulty-v2-65k16k"
     row = source_with_review(
         {
             "payload": {"id": "MarinSkyRL:math", "dataset_revision": "data1", "verifier_revision": "code1"},

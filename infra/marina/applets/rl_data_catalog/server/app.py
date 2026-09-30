@@ -32,7 +32,7 @@ from .hf_auth import HFCredentialError, HuggingFaceAuth, runtime_hf_token
 from .verifier_policy import migrate_verifier_policy
 
 logger = logging.getLogger(__name__)
-DIFFICULTY_PROTOCOL = "atlas-difficulty-v2-65k16k"
+DIFFICULTY_PROTOCOL = "atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking"
 DIFFICULTY_MODELS = {
     "small": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "large": "Qwen/Qwen3.5-122B-A10B",
@@ -65,13 +65,16 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
         if model.get("model") != DIFFICULTY_MODELS[model["size"]]:
             return "invalid", "A model identity does not match its designated comparison role."
         parameters = model.get("generation_parameters") or {}
-        if any(parameters.get(key) != value for key, value in DIFFICULTY_GENERATION.items()):
+        expected_generation = DIFFICULTY_GENERATION
+        if model["size"] == "large":
+            expected_generation = {**DIFFICULTY_GENERATION, "top_p": 0.8, "presence_penalty": 1.5}
+        if any(parameters.get(key) != value for key, value in expected_generation.items()):
             return "invalid", "A model's generation parameters do not match the current protocol."
         if (
             model["size"] == "large"
-            and (parameters.get("chat_template_kwargs") or {}).get("enable_thinking") is not True
+            and (parameters.get("chat_template_kwargs") or {}).get("enable_thinking") is not False
         ):
-            return "invalid", "The Large model's recorded configuration does not enable thinking."
+            return "invalid", "The Large model's recorded configuration does not disable thinking."
         if model["size"] == "hosted" and parameters.get("reasoning_effort") != "low":
             return "invalid", "The Hosted model's recorded configuration does not use Low reasoning effort."
     return "current", "Matched Small, Large and Hosted models at 65,536 context and 16,384 output tokens."
