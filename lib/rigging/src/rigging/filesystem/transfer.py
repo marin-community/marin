@@ -13,8 +13,8 @@ from typing import Any, cast
 from fsspec import AbstractFileSystem
 
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.hashing import file_md5_for_path
+from rigging.filesystem.storage_path import StoragePath
 
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
 DIRECTORY_TYPE = "directory"

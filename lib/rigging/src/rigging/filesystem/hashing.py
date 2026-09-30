@@ -25,4 +25,3 @@ def file_md5_for_path(filesystem: AbstractFileSystem, path: str) -> bytes:
         while chunk := file.read(HASH_CHUNK_BYTES):
             md5.update(chunk)
     return md5.digest()
-
