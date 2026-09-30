@@ -144,9 +144,9 @@ def test_export_holds_rows_until_packaging_clearance_and_excludes_sft(tmp_path):
     result = export_accepted_records(*inputs, output, ingestion_manifest=manifest, builder_revision="d" * 40)
 
     assert result["outputs"] == {}
-    assert result["accepted_rows_by_source"] == {SOURCE: 0}
+    assert result["accepted_rows_by_source"] == {}
     assert result["rights_rejected_rows_by_source_reason"] == [
-        {"source": SOURCE, "reason": "awaiting-packaging-cohort-clearance", "rows": 1}
+        {"source": SOURCE, "reason": "awaiting-exact-cohort-clearance", "rows": 1}
     ]
     terms = result["rights_terms_by_source_mode_family_converter"]
     assert {term["term_field"]: term["value"] for term in terms} == {
@@ -161,8 +161,39 @@ def test_export_holds_rows_until_packaging_clearance_and_excludes_sft(tmp_path):
         "source_url": "<absent>",
     }
     assert result["rights_term_examples_by_source_mode_family_converter"]
+
+
+def test_export_writes_proof_wrapped_record_for_exact_cleared_cohort(tmp_path):
+    inputs, manifest = _input_artifacts(tmp_path)
+    output = StoragePath(str(tmp_path / "cleared"))
+    clearance_key = (SOURCE, "mcq", "qa-short-answer", "nemotron_mcqa", "c814af4f124d", "tasks")
+
+    result = export_accepted_records(
+        *inputs,
+        output,
+        ingestion_manifest=manifest,
+        builder_revision="d" * 40,
+        clearance_audit_manifest_sha256="ab71556290d1ce54e596588b549de95ddd68366cd8fd3bb18b77ed9e99f0eed1",
+        clearances={clearance_key: {"source_card_revision": "synthetic-card", "expected_rows": 1}},
+    )
+
+    output_record_path = output / "tasktrove_clean" / "train" / SOURCE / "qa-short-answer.jsonl"
+    record = json.loads(output_record_path.read_bytes())
+    assert set(record) == {"task", "source_proof"}
+    assert record["task"]["id"] == "synthetic-task-id"
+    assert record["task"]["tags"] == ["qa", "mcq"]
+    assert record["source_proof"] == {
+        "source_row": f"{SOURCE}:{ARCHIVE_PATH}",
+        "input_file": "tasks/part-00000.parquet",
+        "input_object_pin": OBJECT_PIN,
+        "archive_path": ARCHIVE_PATH,
+        "archive_sha256": "b" * 64,
+    }
+    assert result["accepted_rows_by_source_family_split"] == {f"{SOURCE}/qa-short-answer/tasks": 1}
+    assert result["source_assets_by_source_family_split"] == {
+        f"{SOURCE}/qa-short-answer/tasks": [{"path": "tasks/part-00000.parquet", "pin": OBJECT_PIN}]
+    }
     assert result["original_split_to_public_split"] == {"tasks": "train", "sft": None}
-    assert result["source_assets_by_source"][SOURCE] == [{"path": "tasks/part-00000.parquet", "pin": OBJECT_PIN}]
     assert (output / "manifest.json").exists()
 
 

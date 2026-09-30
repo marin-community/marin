@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Write packaging-ready TaskTrove rows with source proof, without archives."""
+"""Write rights-cleared TaskTrove rows with source proof, without archives."""
 
 import hashlib
 import json
@@ -60,6 +60,36 @@ RIGHTS_TERM_KEYS = (
     "authors",
     "source_url",
 )
+RIGHTS_AUDIT_MANIFEST_SHA256 = "ab71556290d1ce54e596588b549de95ddd68366cd8fd3bb18b77ed9e99f0eed1"
+RIGHTS_INVENTORY_SHA256 = "165124b2f8fa95b3c2d013136eb5be0638cf0a170142cc0b4bfebd5297de0389"
+RIGHTS_CLEARANCES = {
+    (
+        "laion__nemotron-gym-knowledge-mcqa-v2",
+        "mcq",
+        "qa-short-answer",
+        "nemotron_mcqa",
+        "c814af4f124d",
+        "tasks",
+    ): {
+        "source_card_revision": "5d35ead3ba07abda719b3d24f6f395fee8108efd",
+        "license": "CC-BY-4.0",
+        "attribution": "NVIDIA",
+        "expected_rows": 23_711,
+    },
+    (
+        "laion__nemo-prism-math-v3",
+        "math",
+        "math-answer",
+        "nemotron_math",
+        "5ee94cf985a9",
+        "tasks",
+    ): {
+        "source_card_revision": "8a35a0602167ad1f1ec9d6db5e72281e486738a7",
+        "license": "CC-BY-4.0",
+        "attribution": "NVIDIA",
+        "expected_rows": 2_219,
+    },
+}
 
 
 def _valid_object_pin(value: Any) -> bool:
@@ -129,6 +159,14 @@ def _rights_terms(source_metadata_json: str) -> list[tuple[str, str]]:
     return terms
 
 
+def _rights_inventory_sha256(rights_audit: dict[str, Any]) -> str:
+    inventory = rights_audit.get("rights_terms_by_source_mode_family_converter")
+    if not isinstance(inventory, list):
+        raise ValueError("Rights audit is missing its normalized rights-term inventory")
+    canonical = json.dumps(inventory, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _stream_rows(path: StoragePath) -> Iterator[pa.RecordBatch]:
     with path.open("rb") as opened:
         with opened as stream:
@@ -157,8 +195,10 @@ def export_accepted_records(
     *,
     ingestion_manifest: dict[str, Any],
     builder_revision: str,
+    clearance_audit_manifest_sha256: str | None = None,
+    clearances: dict[tuple[str, str, str, str, str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Join accepted rows and write one proof-wrapped JSONL per eligible source."""
+    """Join, rights-gate, and project candidate rows with exact source proof."""
     if ingestion_manifest.get("status") != "complete":
         raise ValueError("Cannot export accepted records from an incomplete ingestion run")
     declared_holdouts = _declared_holdouts(ingestion_manifest.get("upstream_tasktrove"))
@@ -166,6 +206,10 @@ def export_accepted_records(
         raise ValueError(f"Pinned TaskTrove metadata declares holdouts requiring split review: {declared_holdouts}")
     if not re.fullmatch(r"[0-9a-f]{40}", builder_revision):
         raise ValueError("Projection builder revision must be a full Git commit")
+    if clearance_audit_manifest_sha256 not in (None, RIGHTS_AUDIT_MANIFEST_SHA256):
+        raise ValueError("Rights clearance is bound to a different audited manifest")
+    clearance_manifest_verified = clearance_audit_manifest_sha256 == RIGHTS_AUDIT_MANIFEST_SHA256
+    clearance_rules = RIGHTS_CLEARANCES if clearances is None else clearances
     audit = audit_artifacts(ledger_path, candidate_path, proof_path)
     if audit["status"] != "passed":
         raise ValueError(f"TaskTrove candidate proof audit failed: {audit['validation_errors']}")
@@ -176,13 +220,13 @@ def export_accepted_records(
     rejection_reasons: Counter[tuple[str, str, str, str, str, str, str]] = Counter()
     math_sample_pointers: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
     cohort_dispositions: Counter[tuple[str, str, str]] = Counter()
-    cohort_rows: Counter[tuple[str, str]] = Counter()
     cohort_eligible_rows: Counter[str] = Counter()
     cohort_converted_rows: Counter[str] = Counter()
     cohort_archive_rows: Counter[str] = Counter()
     rights_term_counts: Counter[tuple[str, str, str, str, str, str]] = Counter()
     rights_examples: dict[tuple[str, str, str, str, str], tuple[str, str]] = {}
-    source_assets: dict[str, set[tuple[str, str]]] = {}
+    source_assets: dict[tuple[str, str, str], set[tuple[str, str]]] = {}
+    group_counts: Counter[tuple[str, str, str, str, str, str]] = Counter()
     candidate_digest = hashlib.sha256()
     proof_digest = hashlib.sha256()
     expected_artifacts = ingestion_manifest["artifacts"]
@@ -223,6 +267,9 @@ def export_accepted_records(
                     path TEXT,
                     archive_sha256 TEXT,
                     disposition TEXT
+                );
+                CREATE TABLE public_records (
+                    id TEXT PRIMARY KEY, source TEXT, family TEXT, split TEXT, record_json TEXT
                 );
                 CREATE TABLE catalog_terms (
                     id TEXT PRIMARY KEY, source TEXT, path TEXT, tags_json TEXT, source_metadata_json TEXT
@@ -266,7 +313,6 @@ def export_accepted_records(
                         ] += 1
                     expected_mode = PUBLIC_CANDIDATE_COHORTS.get(source)
                     if split == "tasks" and expected_mode is not None:
-                        cohort_rows[(source, disposition)] += 1
                         if row.get("mode") == expected_mode:
                             cohort_eligible_rows[source] += 1
                             cohort_dispositions[(source, disposition, split)] += 1
@@ -310,7 +356,39 @@ def export_accepted_records(
                             archive_sha256,
                         ),
                     )
-                    source_assets.setdefault(source, set()).add((row["input_file"], row["input_object_pin"]))
+                    group = (source, str(row.get("family") or "<missing>"), split)
+                    source_assets.setdefault(group, set()).add((row["input_file"], row["input_object_pin"]))
+                    group_counts[
+                        (
+                            source,
+                            str(row.get("family") or "<missing>"),
+                            str(row.get("mode") or "<missing>"),
+                            str(row.get("converter") or "<missing>"),
+                            str(row.get("template_id") or "<missing>"),
+                            split,
+                        )
+                    ] += 1
+
+            if clearance_manifest_verified:
+                observed_clearance_groups = {
+                    (source, mode, family, converter, template_id, split)
+                    for source, family, mode, converter, template_id, split in group_counts
+                }
+                expected_clearance_groups = set(clearance_rules)
+                if observed_clearance_groups != expected_clearance_groups:
+                    raise ValueError(
+                        "Candidate source/family/mode/converter/template/split groups differ from reviewed clearance: "
+                        f"observed={sorted(observed_clearance_groups)}, expected={sorted(expected_clearance_groups)}"
+                    )
+                for source, mode, family, converter, template_id, split in sorted(expected_clearance_groups):
+                    expected_rows = clearance_rules[(source, mode, family, converter, template_id, split)][
+                        "expected_rows"
+                    ]
+                    observed_rows = group_counts[(source, family, mode, converter, template_id, split)]
+                    if observed_rows != expected_rows:
+                        raise ValueError(
+                            f"Clearance cohort {source}/{template_id} has {observed_rows} rows, expected {expected_rows}"
+                        )
 
             for batch in _stream_catalog_metadata(catalog_path):
                 for row in batch.to_pylist():
@@ -423,17 +501,32 @@ def export_accepted_records(
                         (source, str(mode), str(family), str(converter), term_field),
                         (archive_path, archive_sha256),
                     )
-                # Public release remains held until packaging binds an explicit
-                # clearance to this exact source/converter/template cohort.
-                cursor.execute(
-                    "INSERT INTO rights_rejected VALUES (?, ?, ?)",
-                    (task_id, source, "awaiting-packaging-cohort-clearance"),
-                )
-                continue
+                clearance_key = (source, str(mode), str(family), str(converter), str(template_id), str(split))
+                clearance = clearance_rules.get(clearance_key)
+                if not clearance_manifest_verified or clearance is None:
+                    reason = "awaiting-exact-cohort-clearance"
+                elif any(value != "<absent>" for _field, value in terms):
+                    reason = "source-rights-metadata-requires-review"
+                else:
+                    source_proof = {
+                        "source_row": expected_row,
+                        "input_file": input_file,
+                        "input_object_pin": object_pin,
+                        "archive_path": archive_path,
+                        "archive_sha256": archive_sha256,
+                    }
+                    record = {"task": candidate, "source_proof": source_proof}
+                    cursor.execute(
+                        "INSERT INTO public_records VALUES (?, ?, ?, ?, ?)",
+                        (task_id, source, family, split, json.dumps(record, separators=(",", ":"), sort_keys=True)),
+                    )
+                    continue
+                cursor.execute("INSERT INTO rights_rejected VALUES (?, ?, ?)", (task_id, source, reason))
             connection.commit()
 
             expected_count = cursor.execute("SELECT COUNT(*) FROM expected").fetchone()[0]
             proof_count = cursor.execute("SELECT COUNT(*) FROM proofs").fetchone()[0]
+            accepted_count = cursor.execute("SELECT COUNT(*) FROM public_records").fetchone()[0]
             rights_rejected_count = cursor.execute("SELECT COUNT(*) FROM rights_rejected").fetchone()[0]
             rights_rejected_counts: Counter[tuple[str, str]] = Counter()
             for source, reason, count in cursor.execute(
@@ -442,9 +535,9 @@ def export_accepted_records(
                 rights_rejected_counts[(str(source), str(reason))] = count
             if expected_count == 0:
                 raise ValueError("No accepted TaskTrove candidates are available for export")
-            if expected_count != rights_rejected_count or expected_count != proof_count:
+            if expected_count != accepted_count + rights_rejected_count or expected_count != proof_count:
                 raise ValueError(
-                    f"Candidate joins are incomplete: ledger={expected_count}, "
+                    f"Candidate joins are incomplete: ledger={expected_count}, accepted={accepted_count}, "
                     f"rights_rejected={rights_rejected_count}, proof={proof_count}"
                 )
             unexpected_proofs = cursor.execute(
@@ -457,26 +550,81 @@ def export_accepted_records(
             if proof_digest.hexdigest() != expected_artifacts["candidate_proof"]["sha256"]:
                 raise ValueError("Candidate proof digest differs from the ingestion manifest")
 
-            sources = [row[0] for row in cursor.execute("SELECT DISTINCT source FROM expected ORDER BY source")]
-            rights_held_sources = set(sources)
-    output_files: dict[str, Any] = {}
-    output_counts = Counter({source: 0 for source in rights_held_sources})
+            output_counts: Counter[tuple[str, str, str]] = Counter()
+            output_hashes: dict[tuple[str, str, str], Any] = {}
+            output_sizes: Counter[tuple[str, str, str]] = Counter()
+            output_paths: dict[tuple[str, str, str], str] = {}
+            output_groups = list(
+                cursor.execute("SELECT DISTINCT source, family, split FROM public_records ORDER BY 1, 2, 3")
+            )
+            destination.mkdirs(exist_ok=True)
+            for source, family, split in output_groups:
+                group = (source, family, split)
+                public_split = {"tasks": "train"}.get(split)
+                if public_split is None:
+                    raise ValueError(f"No public split mapping exists for TaskTrove split {split!r}")
+                output_path = destination / "tasktrove_clean" / public_split / source / f"{family}.jsonl"
+                output_path.parent.mkdirs(exist_ok=True)
+                output_paths[group] = str(output_path)
+                output_hashes[group] = hashlib.sha256()
+                with output_path.open("wb") as opened:
+                    with opened as stream:
+                        rows = cursor.execute(
+                            "SELECT record_json FROM public_records WHERE source=? AND family=? AND split=? ORDER BY id",
+                            group,
+                        )
+                        for (record_json,) in rows:
+                            encoded = (record_json + "\n").encode()
+                            stream.write(encoded)
+                            output_hashes[group].update(encoded)
+                            output_sizes[group] += len(encoded)
+                            output_counts[group] += 1
+    output_files = {
+        f"{source}/{family}/{split}": {
+            "uri": output_paths[(source, family, split)],
+            "rows": output_counts[(source, family, split)],
+            "size_bytes": output_sizes[(source, family, split)],
+            "sha256": output_hashes[(source, family, split)].hexdigest(),
+        }
+        for source, family, split in sorted(output_paths)
+    }
     cohort_counts: dict[str, Any] = {}
-    for source in sorted(rights_held_sources):
-        cohort_counts[source] = {
-            "source_subset_rows_in_tasks_split": sum(
-                count for (candidate_source, _disposition), count in cohort_rows.items() if candidate_source == source
+    for source, family, split in sorted({(key[0], key[1], key[5]) for key in group_counts}):
+        cohort_name = f"{source}/{family}/{split}"
+        cohort_rows = sum(
+            count
+            for (
+                candidate_source,
+                candidate_family,
+                _mode,
+                _converter,
+                _template,
+                candidate_split,
+            ), count in group_counts.items()
+            if (candidate_source, candidate_family, candidate_split) == (source, family, split)
+        )
+        cohort_counts[cohort_name] = {
+            "candidate_ledger_rows": cohort_rows,
+            "eligible_mode_rows_in_tasks_split": cohort_eligible_rows[source] if split == "tasks" else 0,
+            "archive_rows_hashed_before_conversion": cohort_archive_rows[source] if split == "tasks" else 0,
+            "converter_completed_rows": cohort_converted_rows[source] if split == "tasks" else 0,
+            "accepted_public_records": sum(
+                count
+                for (out_source, out_family, out_split), count in output_counts.items()
+                if (out_source, out_family, out_split) == (source, family, split)
             ),
-            "eligible_mode_rows_in_tasks_split": cohort_eligible_rows[source],
-            "archive_rows_hashed_before_conversion": cohort_archive_rows[source],
-            "converter_completed_rows": cohort_converted_rows[source],
-            "accepted_public_records": 0,
             "ledger_dispositions": {
                 disposition: count
                 for (candidate_source, disposition, _split), count in sorted(cohort_dispositions.items())
-                if candidate_source == source
+                if candidate_source == source and _split == split
             },
+            "source_assets": [
+                {"path": path, "input_object_pin": pin} for path, pin in sorted(source_assets[(source, family, split)])
+            ],
         }
+    accepted_by_source: Counter[str] = Counter()
+    for (source, _family, _split), count in output_counts.items():
+        accepted_by_source[source] += count
     report = {
         "status": "complete",
         "format": "AcceptedPublicRecord-v1",
@@ -503,9 +651,9 @@ def export_accepted_records(
         "private_catalog_metadata_columns_read": ["id", "source", "path", "tags", "source_metadata_json"],
         "private_task_specifications_loaded": False,
         "original_split_to_public_split": {"tasks": "train", "sft": None},
-        "source_assets_by_source": {
-            source: [{"path": path, "pin": pin} for path, pin in sorted(assets)]
-            for source, assets in sorted(source_assets.items())
+        "source_assets_by_source_family_split": {
+            f"{source}/{family}/{split}": [{"path": path, "pin": pin} for path, pin in sorted(assets)]
+            for (source, family, split), assets in sorted(source_assets.items())
         },
         "input_rows_by_source_split_mode_family_converter_disposition": [
             {
@@ -598,7 +746,16 @@ def export_accepted_records(
             {"source": source, "reason": reason, "rows": count}
             for (source, reason), count in sorted(rights_rejected_counts.items())
         ],
-        "accepted_rows_by_source": dict(sorted(output_counts.items())),
+        "accepted_rows_by_source": dict(sorted(accepted_by_source.items())),
+        "accepted_rows_by_source_family_split": {
+            f"{source}/{family}/{split}": count for (source, family, split), count in sorted(output_counts.items())
+        },
+        "clearance_audit_manifest_sha256": clearance_audit_manifest_sha256,
+        "clearance_rights_inventory_sha256": RIGHTS_INVENTORY_SHA256 if clearance_manifest_verified else None,
+        "rights_clearance_source_cards": {
+            f"{source}/{family}/{split}": clearance
+            for (source, _mode, family, _converter, _template_id, split), clearance in clearance_rules.items()
+        },
         "outputs": output_files,
         "source_split_policy": (
             "Original TaskTrove tasks rows map to public tasktrove_clean/train; SFT rows are excluded."
@@ -618,10 +775,29 @@ def main() -> None:
     configure_coreweave_s3()
     output_uri = os.environ["TASKTROVE_OUTPUT_URI"]
     accepted_uri = os.environ["TASKTROVE_ACCEPTED_OUTPUT_URI"]
+    rights_audit_uri = os.environ["TASKTROVE_RIGHTS_AUDIT_MANIFEST_URI"]
     builder_revision = os.environ["TASKTROVE_PROJECTION_REVISION"]
     ingest_prefix = StoragePath(output_uri)
     manifest_path = ingest_prefix / "ingestion-manifest.json"
     ingestion_manifest = json.loads(manifest_path.read_bytes())
+    rights_audit_bytes = StoragePath(rights_audit_uri).read_bytes()
+    rights_audit_sha256 = hashlib.sha256(rights_audit_bytes).hexdigest()
+    rights_audit = json.loads(rights_audit_bytes)
+    if rights_audit.get("status") != "complete":
+        raise ValueError("Rights clearance requires a complete regional metadata audit")
+    if _rights_inventory_sha256(rights_audit) != RIGHTS_INVENTORY_SHA256:
+        raise ValueError("Rights-term inventory differs from the reviewed rights clearance")
+    if rights_audit.get("source_manifest_sha256") != ingestion_manifest.get("source_manifest_sha256"):
+        raise ValueError("Rights audit and ingestion run use different TaskTrove source manifests")
+    for artifact in ("ledger", "private_catalog", "public_candidates", "candidate_proof"):
+        audit_key = {
+            "ledger": "input_ledger_sha256",
+            "private_catalog": "private_catalog_sha256",
+            "public_candidates": "input_candidate_sha256",
+            "candidate_proof": "input_proof_sha256",
+        }[artifact]
+        if rights_audit.get(audit_key) != ingestion_manifest["artifacts"][artifact]["sha256"]:
+            raise ValueError(f"Rights audit does not verify current ingestion artifact {artifact}")
     report = export_accepted_records(
         ingest_prefix / "ingestion-ledger.parquet",
         ingest_prefix / "private-catalog.parquet",
@@ -630,6 +806,7 @@ def main() -> None:
         StoragePath(accepted_uri),
         ingestion_manifest=ingestion_manifest,
         builder_revision=builder_revision,
+        clearance_audit_manifest_sha256=rights_audit_sha256,
     )
     summary = {
         "status": report["status"],
@@ -651,6 +828,12 @@ def main() -> None:
         "archive_payload_bytes_read": report["archive_payload_bytes_read"],
         "private_task_specifications_loaded": report["private_task_specifications_loaded"],
         "accepted_rows_by_source": report["accepted_rows_by_source"],
+        "accepted_rows_by_source_family_split": report["accepted_rows_by_source_family_split"],
+        "cohort_counts": report["cohort_counts"],
+        "outputs": report["outputs"],
+        "rights_clearance_audit_manifest_sha256": report["clearance_audit_manifest_sha256"],
+        "rights_clearance_inventory_sha256": report["clearance_rights_inventory_sha256"],
+        "rights_clearance_source_cards": report["rights_clearance_source_cards"],
         "rights_rejected_rows_by_source_reason": report["rights_rejected_rows_by_source_reason"],
         "rights_terms_by_source_mode_family_converter": report["rights_terms_by_source_mode_family_converter"],
         "input_rows_by_source_split_mode_family_converter_disposition": report[
