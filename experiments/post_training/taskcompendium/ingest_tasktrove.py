@@ -9,6 +9,7 @@ import os
 import signal
 import tomllib
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,15 @@ PUBLIC_CANDIDATE_COHORTS = {
     "laion__nemotron-gym-math-openmathreasoning-v2": "math",
     "laion__nemo-prism-math-v3": "math",
 }
+
+
+@dataclass(frozen=True)
+class ConvertedTask:
+    specification: TaskSpec
+    archive_sha256: str
+    source_metadata_json: str
+
+
 SOURCE_METADATA_KEYS = (
     "source",
     "source_dataset",
@@ -96,7 +106,7 @@ def _info_value(info: dict[str, Any], name: str) -> Any:
     return next((value for key, value in info.items() if key.lower() == name.lower()), None)
 
 
-def _convert(row: dict[str, Any], release_uri: str, release_revision: str) -> tuple[TaskSpec, str, str]:
+def _convert(row: dict[str, Any], release_uri: str, release_revision: str) -> ConvertedTask:
     mode = row.get("mode")
     archive_bytes = row.get("task_binary")
     if not isinstance(archive_bytes, bytes):
@@ -121,10 +131,10 @@ def _convert(row: dict[str, Any], release_uri: str, release_revision: str) -> tu
     else:
         specification = import_numeric(archive)
     source_metadata = {key: metadata[key] for key in SOURCE_METADATA_KEYS if key in metadata}
-    return specification, archive.archive_sha256, json.dumps(source_metadata, sort_keys=True)
+    return ConvertedTask(specification, archive.archive_sha256, json.dumps(source_metadata, sort_keys=True))
 
 
-def ingest(release_uri: str, output_dir: Path, *, limit: int | None = None) -> dict[str, Any]:
+def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | None = None) -> dict[str, Any]:
     """Stream both release splits, preserving one ledger row per input row."""
     if limit is not None and limit < 1:
         raise ValueError("limit must be positive")
@@ -135,7 +145,6 @@ def ingest(release_uri: str, output_dir: Path, *, limit: int | None = None) -> d
     source_terms = _source_terms(source_manifest)
     revision = release.segments[-1]
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_uri = os.environ["TASKTROVE_OUTPUT_URI"].rstrip("/")
     output_prefix = StoragePath(output_uri)
     output_prefix.mkdirs(exist_ok=True)
     catalog_path = output_prefix / "private-catalog.parquet"
@@ -165,6 +174,11 @@ def ingest(release_uri: str, output_dir: Path, *, limit: int | None = None) -> d
             "source": pa.string(),
             "path": pa.string(),
             "route": pa.string(),
+            "mode": pa.string(),
+            "family": pa.string(),
+            "converter": pa.string(),
+            "template_id": pa.string(),
+            "tags": pa.list_(pa.string()),
             "input_object_pin": pa.string(),
             "archive_sha256": pa.string(),
             "disposition": pa.string(),
@@ -266,9 +280,10 @@ def ingest(release_uri: str, output_dir: Path, *, limit: int | None = None) -> d
                                         archive_sha256_for_ledger = hashlib.sha256(archive_bytes).hexdigest()
                                         candidate_archive_bytes_parsed += len(archive_bytes)
                                         row["task_binary"] = archive_bytes
-                                        specification, archive_sha256, source_metadata_json = _convert(
-                                            row, release_uri, pinned_revision
-                                        )
+                                        converted = _convert(row, release_uri, pinned_revision)
+                                        specification = converted.specification
+                                        archive_sha256 = converted.archive_sha256
+                                        source_metadata_json = converted.source_metadata_json
                                         source_identity = (str(source), str(source_path))
                                         previous_digest = seen_ids.get(source_identity)
                                         if previous_digest == archive_sha256:
@@ -322,6 +337,11 @@ def ingest(release_uri: str, output_dir: Path, *, limit: int | None = None) -> d
                                         source=source,
                                         path=source_path,
                                         route=str(route),
+                                        mode=row.get("mode"),
+                                        family=row.get("family"),
+                                        converter=row.get("converter"),
+                                        template_id=row.get("template_id"),
+                                        tags=row.get("tags") or [],
                                         input_object_pin=input_object_pin,
                                         archive_sha256=archive_sha256_for_ledger,
                                         disposition=disposition,
@@ -398,6 +418,7 @@ def ingest(release_uri: str, output_dir: Path, *, limit: int | None = None) -> d
         "public_candidate_routes": ["tasks"],
         "public_candidate_cohorts": PUBLIC_CANDIDATE_COHORTS,
         "public_allowlist_fields": [
+            "record_version",
             "id",
             "context",
             "environment_requirements",
@@ -426,6 +447,7 @@ def ingest(release_uri: str, output_dir: Path, *, limit: int | None = None) -> d
         )
         opened.close()
     manifest_path = output_prefix / "ingestion-manifest.json"
+    report["manifest_uri"] = str(manifest_path)
     with manifest_path.open("w") as stream:
         stream.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
     with (output_dir / "ingestion-summary.json").open("w") as summary_stream:
@@ -467,16 +489,14 @@ def main() -> None:
     signal.signal(signal.SIGALRM, stop_at_runtime_limit)
     signal.setitimer(signal.ITIMER_REAL, runtime_limit)
     try:
-        report = ingest(release_uri, output_dir, limit=limit)
+        report = ingest(release_uri, os.environ["TASKTROVE_OUTPUT_URI"], output_dir, limit=limit)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
     print(
         json.dumps(
             {
                 "counts": report["counts"],
-                "manifest_uri": (
-                    report["artifacts"]["private_catalog"]["uri"].rsplit("/", 1)[0] + "/ingestion-manifest.json"
-                ),
+                "manifest_uri": report["manifest_uri"],
             },
             sort_keys=True,
         )

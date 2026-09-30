@@ -13,6 +13,7 @@ import hashlib
 import io
 import tarfile
 import tomllib
+import zlib
 
 from taskcompendium.importers.tasktrove.models import TaskArchive
 
@@ -38,22 +39,25 @@ def read_archive(
     files: dict[str, bytes] = {}
     size = 0
     members = 0
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
-        for member in archive:
-            members += 1
-            if members > MAX_ARCHIVE_MEMBERS:
-                raise ValueError("Task archive exceeds member limit")
-            name = member.name.removeprefix("./")
-            if member.isdir():
-                continue
-            if not member.isfile() or not name or name.startswith("/") or ".." in name.split("/") or name in files:
-                raise ValueError(f"Unsupported archive member: {member.name}")
-            size += member.size
-            if size > MAX_ARCHIVE_BYTES:
-                raise ValueError("Task archive exceeds expanded size limit")
-            stream = archive.extractfile(member)
-            assert stream is not None
-            files[name] = stream.read()
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+            for member in archive:
+                members += 1
+                if members > MAX_ARCHIVE_MEMBERS:
+                    raise ValueError("Task archive exceeds member limit")
+                name = member.name.removeprefix("./")
+                if member.isdir():
+                    continue
+                if not member.isfile() or not name or name.startswith("/") or ".." in name.split("/") or name in files:
+                    raise ValueError(f"Unsupported archive member: {member.name}")
+                size += member.size
+                if size > MAX_ARCHIVE_BYTES:
+                    raise ValueError("Task archive exceeds expanded size limit")
+                stream = archive.extractfile(member)
+                assert stream is not None
+                files[name] = stream.read()
+    except (tarfile.TarError, EOFError, OSError, zlib.error) as error:
+        raise ValueError(f"Invalid TaskTrove archive container: {error}") from error
     try:
         metadata = tomllib.loads(files[TASK_MANIFEST].decode())[METADATA_TABLE]
         if not isinstance(metadata, dict):

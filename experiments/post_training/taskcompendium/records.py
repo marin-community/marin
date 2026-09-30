@@ -55,6 +55,7 @@ def public_task_record(
 ) -> dict:
     """Return the typed PublicTask-v1 field allowlist, without verifier material."""
     return {
+        "record_version": 1,
         "id": specification.id,
         "context": specification.context.model_dump(mode="json"),
         "environment_requirements": specification.environment_requirements.model_dump(mode="json"),
@@ -76,6 +77,11 @@ def ledger_record(
     source: str | None,
     path: str | None,
     route: str,
+    mode: str | None,
+    family: str | None,
+    converter: str | None,
+    template_id: str | None,
+    tags: list[str],
     input_object_pin: str,
     archive_sha256: str | None,
     disposition: Disposition,
@@ -90,6 +96,11 @@ def ledger_record(
         "source": source,
         "path": path,
         "route": route,
+        "mode": mode,
+        "family": family,
+        "converter": converter,
+        "template_id": template_id,
+        "tags": list(tags),
         "input_object_pin": input_object_pin,
         "archive_sha256": archive_sha256,
         "disposition": disposition.value,
