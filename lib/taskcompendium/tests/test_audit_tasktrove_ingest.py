@@ -16,7 +16,7 @@ def _public_record(task_id: str) -> dict:
         "context": {},
         "environment_requirements": {},
         "tool_providers": {},
-        "final_tools": {},
+        "final_tools": [],
         "answer_type": "text",
         "source": {},
         "submission_instruction": "Answer the synthetic question.",

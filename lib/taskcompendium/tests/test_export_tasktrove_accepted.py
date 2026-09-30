@@ -53,7 +53,7 @@ def _candidate(task_id: str) -> dict:
         "context": {},
         "environment_requirements": {},
         "tool_providers": {},
-        "final_tools": {},
+        "final_tools": [],
         "answer_type": "text",
         "source": {
             "dataset": RELEASE_URI,
