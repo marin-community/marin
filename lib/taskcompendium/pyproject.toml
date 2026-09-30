@@ -9,6 +9,9 @@ description = "Semantic answer tasks and Harbor direct-chat lowerings"
 requires-python = ">=3.12"
 dependencies = ["pydantic>=2.0", "tasktrove-verify"]
 
+[project.scripts]
+taskcompendium-finalize-release = "taskcompendium.mixed_release:finalize_main"
+
 [project.optional-dependencies]
 harbor = ["harbor"]
 workplace = ["nemo-workplace @ git+https://github.com/marin-community/nemo_workplace@27b39001312617403021635f0492e120abc2cd34"]

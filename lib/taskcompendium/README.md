@@ -85,6 +85,21 @@ Tool providers expose callable actions. `environment_requirements` separately de
 
 The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes require their own runtime contract.
 
+## Build a mixed public candidate
+
+`taskcompendium.mixed_release` assembles Workplace public rows and reviewed TaskTrove `AcceptedPublicRecord` JSONL cohorts into separate Hugging Face configurations. Each TaskTrove cohort input pins its accepted input file by SHA256 and the accepted regional projection manifest by SHA256. The output manifest retains that regional pin, source archive proof, rights record, Harbor evidence, and source, parsed, accepted, and exported counts. The candidate card and manifest remain marked pending.
+
+The cohort JSON passed to `python -m taskcompendium.mixed_release` is an array of `CohortInput` objects. TaskTrove entries use `record_format: "accepted_public_record"`, `source_assets` for the pinned source Parquet object, and `projection_manifest_sha256` for the regional accepted projection manifest. Each JSONL line contains the public task plus its `source_proof`; private verifier fields are rejected by the public task schema. `--output` must name a new directory. Build it with:
+
+```bash
+uv run --directory lib/taskcompendium python -m taskcompendium.mixed_release \
+  --cohorts /path/to/cohorts.json \
+  --output /path/to/candidate \
+  --builder-revision <full-git-commit>
+```
+
+After rights review and Harbor trials are complete, hash the candidate `manifest.json` and write a `ReleaseReview` JSON containing that digest, the HTTPS rights review reference, and the exact set of Harbor evidence URLs recorded in the candidate manifest. Run `uv run --directory lib/taskcompendium taskcompendium-finalize-release --candidate <candidate> --review <review.json> --output <ready>` to create a separate artifact with `publication_ready: true`. The finalizer verifies that the review binds to the candidate manifest, covers its Harbor evidence URLs, and that every accepted row was exported. It does not upload the artifact.
+
 ### NeMo predicted function calls
 
 `taskcompendium.importers.nemo_predicted_action.import_row` accepts a NeMo predicted-function-call row and a caller-pinned digest of that row. `canonical_sha256(row)` hashes its UTF-8 JSON with sorted keys and compact separators; record the digest with the source revision before importing. The importer returns `(specification, convention)`, with `answer_type=native_action` and `FinalAction(id="native-final-action")`. A hand-authored task can select the same convention with `FinalAction(id="final-call")`. The context carries the source conversation; `final_tools` carries advertised terminal functions, tool choice, and the parallel-call setting. The convention describes how Harbor captures the final action and can be reused across tasks. The expected function calls remain in the private `predicted_action` verifier. There is one stored conversation, with no second flattened prompt to keep in sync.

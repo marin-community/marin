@@ -14,10 +14,12 @@ from taskcompendium.mixed_release import (
     AcceptedPublicRecord,
     CohortInput,
     HarborSample,
+    ReleaseReview,
     SourceAsset,
     SourceProof,
     SourceRights,
     assemble_mixed_candidate,
+    finalize_mixed_candidate,
 )
 from taskcompendium.models import (
     AnswerType,
@@ -207,6 +209,7 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
             source_dataset="open-athena/task-trove",
             source_subset="knowledge",
             source_category="knowledge",
+            projection_manifest_sha256="c" * 64,
             source_assets=(SourceAsset(path="source.parquet", pin=regional_pin),),
             task_spec_schema="0.13",
             importer_revision="mcq-v1",
@@ -216,6 +219,14 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
         ),
     )
     destination = assemble_mixed_candidate(cohorts, tmp_path / "candidate", builder_revision="3" * 40)
+    reversed_candidate = assemble_mixed_candidate(
+        tuple(reversed(cohorts)), tmp_path / "candidate-reversed", builder_revision="3" * 40
+    )
+    candidate_files = sorted(path.relative_to(destination) for path in destination.rglob("*") if path.is_file())
+    assert candidate_files == sorted(
+        path.relative_to(reversed_candidate) for path in reversed_candidate.rglob("*") if path.is_file()
+    )
+    assert all((destination / path).read_bytes() == (reversed_candidate / path).read_bytes() for path in candidate_files)
     manifest = json.loads((destination / "manifest.json").read_text())
     assert [entry["config"] for entry in manifest["data_files"]] == ["workplace", "tasktrove_clean"]
     assert [entry["source_records"] for entry in manifest["data_files"]] == [2, 23860]
@@ -223,6 +234,7 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
     assert [entry["accepted_rows"] for entry in manifest["data_files"]] == [1, 1]
     assert [entry["exported_rows"] for entry in manifest["data_files"]] == [1, 1]
     assert manifest["publication_ready"] is False
+    assert manifest["data_files"][1]["source"]["projection_manifest_sha256"] == "c" * 64
     tasktrove_output = (destination / "data/tasktrove_clean/knowledge_mcqa.jsonl").read_text()
     assert json.loads(tasktrove_output)["task"]["record_version"] == 1
     assert json.loads(tasktrove_output)["task"]["tags"] == ["knowledge", "mcqa"]
@@ -231,6 +243,52 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
     assert "private-tasktrove-answer" not in tasktrove_output
     assert "config_name: workplace" in (destination / "README.md").read_text()
     assert "config_name: tasktrove_clean" in (destination / "README.md").read_text()
+
+    candidate_manifest_sha256 = sha256((destination / "manifest.json").read_bytes()).hexdigest()
+    (destination / "private.json").write_text('{"private": true}')
+    with pytest.raises(ValueError, match="unlisted or unsupported file"):
+        finalize_mixed_candidate(
+            destination,
+            tmp_path / "ready-with-private-file",
+            ReleaseReview(
+                candidate_manifest_sha256=candidate_manifest_sha256,
+                rights_review_url="https://example.org/rights-review",
+                harbor_evidence_urls=("https://example.org/trials",),
+            ),
+        )
+    assert not (tmp_path / "ready-with-private-file").exists()
+    (destination / "private.json").unlink()
+    ready = finalize_mixed_candidate(
+        destination,
+        tmp_path / "ready",
+        ReleaseReview(
+            candidate_manifest_sha256=candidate_manifest_sha256,
+            rights_review_url="https://example.org/rights-review",
+            harbor_evidence_urls=("https://example.org/trials",),
+        ),
+    )
+    ready_manifest = json.loads((ready / "manifest.json").read_text())
+    assert ready_manifest["publication_ready"] is True
+    assert ready_manifest["publication_review"]["candidate_manifest_sha256"] == candidate_manifest_sha256
+    assert (
+        sha256((ready / "data/tasktrove_clean/knowledge_mcqa.jsonl").read_bytes()).hexdigest()
+        == sha256((destination / "data/tasktrove_clean/knowledge_mcqa.jsonl").read_bytes()).hexdigest()
+    )
+    assert json.loads((destination / "manifest.json").read_text())["publication_ready"] is False
+    assert "TaskCompendium Alpha 1 Candidate" not in (ready / "README.md").read_text()
+    tasktrove_output_path = destination / "data/tasktrove_clean/knowledge_mcqa.jsonl"
+    tasktrove_output_path.write_text(tasktrove_output + " ")
+    with pytest.raises(ValueError, match="does not match its manifest"):
+        finalize_mixed_candidate(
+            destination,
+            tmp_path / "tampered-ready",
+            ReleaseReview(
+                candidate_manifest_sha256=candidate_manifest_sha256,
+                rights_review_url="https://example.org/rights-review",
+                harbor_evidence_urls=("https://example.org/trials",),
+            ),
+        )
+    assert not (tmp_path / "tampered-ready").exists()
 
 
 def test_mixed_candidate_rejects_private_or_unproved_tasktrove_record(tmp_path):
@@ -283,6 +341,7 @@ def test_mixed_candidate_rejects_private_or_unproved_tasktrove_record(tmp_path):
         source_dataset="open-athena/task-trove",
         source_subset="knowledge",
         source_category="knowledge",
+        projection_manifest_sha256="f" * 64,
         source_assets=(SourceAsset(path="source.parquet", pin=regional_pin),),
         task_spec_schema="0.13",
         importer_revision="mcq-v1",
@@ -314,6 +373,23 @@ def test_mixed_candidate_rejects_private_or_unproved_tasktrove_record(tmp_path):
     with pytest.raises(ValueError):
         assemble_mixed_candidate((cohort,), tmp_path / "candidate", builder_revision="e" * 40)
     assert not (tmp_path / "candidate").exists()
+
+
+def test_release_finalizer_rejects_review_for_another_candidate(tmp_path):
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / "manifest.json").write_text('{"publication_ready": false}\n')
+    with pytest.raises(ValueError, match="does not match"):
+        finalize_mixed_candidate(
+            candidate,
+            tmp_path / "ready",
+            ReleaseReview(
+                candidate_manifest_sha256="a" * 64,
+                rights_review_url="https://example.org/rights-review",
+                harbor_evidence_urls=("https://example.org/trials",),
+            ),
+        )
+    assert not (tmp_path / "ready").exists()
 
 
 def test_regional_proof_requires_object_identity():

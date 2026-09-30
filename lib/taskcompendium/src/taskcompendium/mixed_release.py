@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -173,6 +173,7 @@ class CohortInput(BaseModel):
     source_revision: str | None = None
     source_subset: str | None = None
     source_category: str | None = None
+    projection_manifest_sha256: str | None = None
     source_assets: tuple[SourceAsset, ...] = Field(min_length=1)
     task_spec_schema: str
     importer_revision: str
@@ -203,6 +204,12 @@ class CohortInput(BaseModel):
             raise ValueError("TaskTrove input must carry accepted-row source proof")
         if self.config == "tasktrove_clean" and (not self.source_subset or not self.source_category):
             raise ValueError("TaskTrove cohorts need an exact source subset and category")
+        if self.config == "tasktrove_clean" and (
+            self.projection_manifest_sha256 is None or not SHA256_PATTERN.fullmatch(self.projection_manifest_sha256)
+        ):
+            raise ValueError("TaskTrove cohorts need the accepted projection manifest SHA256")
+        if self.config == "workplace" and self.projection_manifest_sha256 is not None:
+            raise ValueError("Workplace cohorts do not use the regional TaskTrove projection manifest")
         if len({pin.name for pin in self.provider_pins}) != len(self.provider_pins):
             raise ValueError("Provider pin names must be unique")
         if len({(asset.path, asset.pin) for asset in self.source_assets}) != len(self.source_assets):
@@ -305,8 +312,15 @@ def _card(cohorts: tuple[CohortInput, ...], data_files: list[dict[str, object]])
         if not entries:
             continue
         lines.extend((f"  - config_name: {config}", "    data_files:"))
-        for entry in entries:
-            lines.extend((f"      - split: {entry['split']}", f"        path: {entry['path']}"))
+        splits = sorted({str(entry["split"]) for entry in entries})
+        for split in splits:
+            paths = [str(entry["path"]) for entry in entries if entry["split"] == split]
+            lines.append(f"      - split: {split}")
+            if len(paths) == 1:
+                lines.append(f"        path: {paths[0]}")
+            else:
+                lines.append("        path:")
+                lines.extend(f"          - {path}" for path in paths)
     lines.extend(("---", "", "# TaskCompendium Alpha 1 Candidate", ""))
     lines.append(
         "This local candidate contains accepted, agent-visible tasks. The manifest records exported counts, "
@@ -335,6 +349,156 @@ def _card(cohorts: tuple[CohortInput, ...], data_files: list[dict[str, object]])
         )
     )
     return "\n".join(lines)
+
+
+class ReleaseReview(BaseModel):
+    """Evidence that a specific candidate passed publication review."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    candidate_manifest_sha256: str
+    rights_review_url: str
+    harbor_evidence_urls: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_review(self) -> "ReleaseReview":
+        if not SHA256_PATTERN.fullmatch(self.candidate_manifest_sha256):
+            raise ValueError("Release review must pin the candidate manifest SHA256")
+        if not self.rights_review_url.startswith("https://"):
+            raise ValueError("Release review needs an HTTPS rights review reference")
+        if not self.harbor_evidence_urls or any(not url.startswith("https://") for url in self.harbor_evidence_urls):
+            raise ValueError("Release review needs HTTPS Harbor evidence for every source")
+        return self
+
+
+def finalize_mixed_candidate(candidate: Path, destination: Path, review: ReleaseReview) -> Path:
+    """Create a distinct publication-ready artifact after review of the exact candidate."""
+    if destination.exists():
+        raise FileExistsError(destination)
+    if destination.resolve().is_relative_to(candidate.resolve()):
+        raise ValueError("Ready artifact must be outside the candidate directory")
+    if candidate.is_symlink() or not candidate.is_dir():
+        raise ValueError("Candidate must be a regular directory")
+    manifest_path = candidate / "manifest.json"
+    if sha256_file(manifest_path) != review.candidate_manifest_sha256:
+        raise ValueError("Release review does not match the candidate manifest")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest["publication_ready"]:
+        raise ValueError("Candidate is already publication-ready")
+    data_paths: set[str] = set()
+    for entry in manifest["data_files"]:
+        path = entry["path"]
+        if not isinstance(path, str):
+            raise ValueError("Candidate data paths must be strings")
+        relative_path = PurePosixPath(path)
+        if (
+            not path
+            or path != relative_path.as_posix()
+            or relative_path.is_absolute()
+            or not relative_path.parts
+            or relative_path.parts[0] != "data"
+            or any(part in ("", ".", "..") for part in relative_path.parts)
+        ):
+            raise ValueError(f"Candidate data path is not a normalized relative path: {path}")
+        if path in data_paths:
+            raise ValueError(f"Candidate data path is duplicated: {path}")
+        data_paths.add(path)
+    allowed_files = {"README.md", "manifest.json", *data_paths}
+    allowed_directories: set[str] = set()
+    for path in data_paths:
+        parent = PurePosixPath(path).parent
+        while parent != PurePosixPath("."):
+            allowed_directories.add(parent.as_posix())
+            parent = parent.parent
+    seen_files: set[str] = set()
+    for item in candidate.rglob("*"):
+        relative_path = item.relative_to(candidate).as_posix()
+        if item.is_symlink():
+            raise ValueError(f"Candidate contains a symlink: {relative_path}")
+        if item.is_dir():
+            if relative_path not in allowed_directories:
+                raise ValueError(f"Candidate contains an unlisted directory: {relative_path}")
+        elif not item.is_file() or relative_path not in allowed_files:
+            raise ValueError(f"Candidate contains an unlisted or unsupported file: {relative_path}")
+        else:
+            seen_files.add(relative_path)
+    if seen_files != allowed_files:
+        raise ValueError(f"Candidate file inventory differs from its manifest: {sorted(allowed_files - seen_files)}")
+    expected_harbor_urls = {
+        sample["evidence_url"] for entry in manifest["data_files"] for sample in entry["harbor_samples"]
+    }
+    if set(review.harbor_evidence_urls) != expected_harbor_urls:
+        raise ValueError("Release review Harbor evidence must match every candidate cohort")
+    if not manifest["data_files"] or any(
+        entry["accepted_rows"] != entry["exported_rows"] for entry in manifest["data_files"]
+    ):
+        raise ValueError("Publication requires every accepted row to be exported")
+    for entry in manifest["data_files"]:
+        data_path = candidate / entry["path"]
+        if not data_path.is_file() or sha256_file(data_path) != entry["sha256"]:
+            raise ValueError(f"Candidate data file does not match its manifest: {entry['path']}")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
+    try:
+        shutil.copyfile(manifest_path, temporary / "manifest.json")
+        for path in sorted(data_paths):
+            source_path = candidate / path
+            output_path = temporary / path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, output_path)
+        for entry in manifest["data_files"]:
+            if sha256_file(temporary / entry["path"]) != entry["sha256"]:
+                raise ValueError(f"Candidate data file changed during finalization: {entry['path']}")
+        manifest["publication_ready"] = True
+        manifest["publication_review"] = {
+            "candidate_manifest_sha256": review.candidate_manifest_sha256,
+            "rights_review_url": review.rights_review_url,
+            "harbor_evidence_urls": sorted(review.harbor_evidence_urls),
+        }
+        (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        (temporary / "README.md").write_text(_publication_card(manifest, review))
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return destination
+
+
+def _publication_card(manifest: dict[str, object], review: ReleaseReview) -> str:
+    """Render the ready card from manifest data so candidate prose is not trusted."""
+    data_files = manifest["data_files"]
+    licenses = {entry["rights"]["license"] for entry in data_files}
+    license_label = next(iter(licenses)) if len(licenses) == 1 else "other"
+    lines = ["---", "pretty_name: TaskCompendium Alpha 1", f"license: {license_label}", "configs:"]
+    for config in ("workplace", "tasktrove_clean"):
+        entries = [entry for entry in data_files if entry["config"] == config]
+        if not entries:
+            continue
+        lines.extend((f"  - config_name: {config}", "    data_files:"))
+        for split in sorted({entry["split"] for entry in entries}):
+            paths = [entry["path"] for entry in entries if entry["split"] == split]
+            lines.append(f"      - split: {split}")
+            if len(paths) == 1:
+                lines.append(f"        path: {paths[0]}")
+            else:
+                lines.append("        path:")
+                lines.extend(f"          - {path}" for path in paths)
+    lines.extend(("---", "", "# TaskCompendium Alpha 1", ""))
+    lines.append(
+        "This release contains accepted, agent-visible tasks. Verifier settings, reference answers, gold actions, "
+        "and private resources are excluded."
+    )
+    lines.append("")
+    for entry in data_files:
+        rights = entry["rights"]
+        lines.append(
+            f"- `{entry['config']}/{entry['cohort']}` ({entry['split']}): {entry['exported_rows']} rows; "
+            f"{rights['attribution']}, {rights['license']}; [source card]({rights['source_card_url']}) "
+            f"at `{rights['source_card_revision']}`. {rights['change_notice']}"
+        )
+    lines.extend(("", f"Rights review: {review.rights_review_url}. Harbor evidence is recorded in `manifest.json`."))
+    return "\n".join(lines) + "\n"
 
 
 def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path, *, builder_revision: str) -> Path:
@@ -377,6 +541,7 @@ def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path
                         "task_spec_schema": cohort.task_spec_schema,
                         "importer_revision": cohort.importer_revision,
                         "projection_builder_revision": cohort.projection_builder_revision,
+                        "projection_manifest_sha256": cohort.projection_manifest_sha256,
                     },
                     "rights": cohort.rights.model_dump(mode="json"),
                     "harbor_samples": [sample.model_dump(mode="json") for sample in cohort.harbor_samples],
@@ -409,6 +574,16 @@ def main() -> None:
     arguments = parser.parse_args()
     cohorts = tuple(CohortInput.model_validate(item) for item in json.loads(arguments.cohorts.read_text()))
     assemble_mixed_candidate(cohorts, arguments.output, builder_revision=arguments.builder_revision)
+
+
+def finalize_main() -> None:
+    parser = argparse.ArgumentParser(description="Finalize a reviewed TaskCompendium candidate for publication")
+    parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--review", type=Path, required=True, help="JSON ReleaseReview bound to candidate manifest")
+    parser.add_argument("--output", type=Path, required=True)
+    arguments = parser.parse_args()
+    review = ReleaseReview.model_validate_json(arguments.review.read_text())
+    finalize_mixed_candidate(arguments.candidate, arguments.output, review)
 
 
 if __name__ == "__main__":
