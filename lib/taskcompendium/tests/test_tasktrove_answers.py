@@ -55,7 +55,7 @@ def test_import_removes_source_submission_instructions():
     assert "theranostics clinical trials" in prompt
     public = render_instruction(specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN))
     assert "verifier" not in public.lower()
-    assert specification.requirements.capabilities == ()
+    assert specification.environment_requirements.capabilities == ()
     assert specification.answer_type is AnswerType.TEXT
 
 
