@@ -226,3 +226,21 @@ switches for A's flag, C's triton_gemm flag and PGLE go through `stack/arm.sh --
 <trace-run>` builds the profile from the rank-0 xplane. Open: B's SonicMoE backward replaces the chunk loop,
 so the #9481 transport ports must be re-folded into it (B to decide). #9481's attention re-gather may be
 redundant with A's H-A4 flag.
+
+## M30-010 Agent B: SonicMoE-style backward "D" built and gated (2026-09-30)
+
+`research/mcwitt/mfu30-routing` @ ce112504f1 (entries M30B-010..012). One custom_vjp from dispatch to combine;
+the backward returns s = <h, dh> per expert row (fused into the SwiGLU-backward pass), one [C,1] f32
+all-to-all per chunk returns it, dS = s/w in f32, dropped/padding slots get 0 via `where`. The offload_carry
+policy saves the routed MoE output (`grug_moe_routed_output`, before W_up, 18 GiB). The chunk barrier ties
+to the previous chunk's MLP residuals. GB200x4 gate (`m30b-gate-sonic-02`): out/drops/dx/dW13/dW2
+value-equal to main in all six cases; dS max 0.6% of the largest gradient, median ~1 ulp. 3-layer
+rematted scan at hero per-shard shapes: recompute drops both down-projection QuACK GEMMs, both return
+all-to-alls and the combine gather-sum; step 338.8 (main) / 326.0 (A+B+C) / 290.7 ms (A+B+C+D); D alone
+-11.8 ms/layer (~-0.57 s/step extrapolated); compiler temp 35.30 / 32.08 / 31.92 GB.
+Hazards: D is exact and repeatable only at collective overlap limit 1 (its backward all-to-alls no longer
+depend on the recompute's; B forces limit 1 for every ragged run). dS = 0 for an accepted assignment with
+weight exactly 0 (sigmoid < 1e-38). D needs A's H-A4 flag: remat already binds on the host-carry mis-count.
+Decisions: D arm runs with the H-A4 flag and doubles as the multi-step smoke (loss at 180000 must equal
+1.261413); queued now as a second B job (exception to the one-job rule, queue ~5 h). B folds #9481's
+mirror parameters and pipelined chunks into `_routed_experts` for the stack; C reviews.
