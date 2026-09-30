@@ -60,6 +60,8 @@ from levanter.grug.grug_moe import (
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
+from levanter.kernels.pallas.gated_rms_norm import Implementation as GatedRmsNormImplementation
+from levanter.kernels.pallas.gated_rms_norm import gated_rms_norm
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -257,6 +259,10 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    gated_norm_implementation: GatedRmsNormImplementation | None = None
+    """How each block computes RMSNorm followed by its GatedNorm. None runs the two modules as
+    written and lets XLA fuse them; "pallas_gpu" runs the fused kernels of
+    `levanter.kernels.pallas.gated_rms_norm`. Parameters are the same either way."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -717,6 +723,21 @@ class GatedNorm(eqx.Module):
         return x * gate.astype(x.dtype)
 
 
+@named_call(name="GatedNorm")
+def _fused_gated_rms_norm(
+    norm: RMSNorm, gated: GatedNorm, x: Float[Array, "B S D"], implementation: GatedRmsNormImplementation
+) -> Float[Array, "B S D"]:
+    """`gated(norm(x))` through the fused kernels; same parameters, bf16-rounding-level numerics."""
+    return gated_rms_norm(
+        x,
+        unshard(norm.weight),
+        gated.w_down.astype(x.dtype),
+        gated.w_up.astype(x.dtype),
+        eps=norm.eps,
+        implementation=implementation,
+    )
+
+
 class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
@@ -1133,6 +1154,7 @@ class Block(eqx.Module):
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"  # SConv on the attention branch output (cfg.sconv)
     sconv_mlp: "ShortConv | None"  # SConv on the MoE branch output (cfg.sconv)
+    gated_norm_implementation: GatedRmsNormImplementation | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -1162,7 +1184,13 @@ class Block(eqx.Module):
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
             ),
+            gated_norm_implementation=cfg.gated_norm_implementation,
         )
+
+    def _gated_rms_norm(self, norm: "RMSNorm", gated: "GatedNorm", x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        if self.gated_norm_implementation is None:
+            return gated(norm(x))
+        return _fused_gated_rms_norm(norm, gated, x, self.gated_norm_implementation)
 
     @named_call
     def __call__(
@@ -1179,12 +1207,12 @@ class Block(eqx.Module):
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_in = self._gated_rms_norm(self.rms_attn, self.attn_gated_norm, x)
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_in = self._gated_rms_norm(self.rms_mlp, self.mlp_gated_norm, x)
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
         mlp_out, router_stats = self.mlp(mlp_in, token_valid)
         if self.shared is not None:

@@ -93,6 +93,7 @@ def build_block(mod, cfg, key):
         shared=shared,
         sconv_attn=mod.ShortConv.init(d, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None,
         sconv_mlp=mod.ShortConv.init(d, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None,
+        **({"gated_norm_implementation": cfg.gated_norm_implementation} if hasattr(mod.Block, "_gated_rms_norm") else {}),
     )
 
 
@@ -168,6 +169,8 @@ def main():
     ap.add_argument("--check", action="store_true", help="compare loss and gradients between variants")
     ap.add_argument("--small", action="store_true", help="tiny shapes and reference attention (CPU smoke test)")
     ap.add_argument("--variant", action="append", default=[], help="extra model source as name=path")
+    ap.add_argument("--gated-norm", default=None, help="gated_norm_implementation for model sources that support it")
+    ap.add_argument("--interpret", action="store_true", help="run Pallas kernels in interpret mode (CPU smoke test)")
     args = ap.parse_args()
     global B, S
 
@@ -183,6 +186,12 @@ def main():
             num_experts=16, num_heads=4, num_kv_heads=2, local_kv_heads=2, global_kv_heads=1, head_dim=64,
             max_seq_len=64, sliding_window=32, attention_implementation="reference",
         )
+    cfg = dataclasses.replace(cfg, gated_norm_implementation=args.gated_norm)
+    if args.interpret:
+        from levanter.kernels.pallas.gated_rms_norm.pallas_gpu import interpret_mode
+
+        interpret = interpret_mode()  # keep a reference: collecting the generator would exit it
+        interpret.__enter__()
     results = {}
     grads = {}
     with jax.set_mesh(mesh):
