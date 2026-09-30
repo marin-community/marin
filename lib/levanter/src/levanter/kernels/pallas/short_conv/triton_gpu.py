@@ -23,6 +23,9 @@ for ``dx``, with packed bf16 PTX instructions so the compiler cannot fuse them. 
 The kernels handle ``kernel_size == 4`` only, the hero's width.
 """
 
+import dataclasses
+import math
+
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
@@ -39,22 +42,42 @@ except ModuleNotFoundError:
     tl = None
 
 KERNEL_SIZE = 4
-#: Rows each program walks. The halo re-read is ``(KERNEL_SIZE - 1) / CHUNK`` of a pass.
-CHUNK = 64
-_MAX_CHANNEL_BLOCK = 1024
+
+
+@dataclasses.dataclass(frozen=True)
+class TritonShortConvTiles:
+    """Launch shape of one direction's kernel.
+
+    Attributes:
+      chunk: rows each program walks; the sequence length must divide by it. The halo re-read
+        is ``(KERNEL_SIZE - 1) / chunk`` of a pass.
+      max_channel_block: channels per program, halved until it divides the channel count.
+      num_warps: warps per program.
+      num_stages: Triton software-pipelining depth of the row loop.
+    """
+
+    chunk: int
+    max_channel_block: int
+    num_warps: int
+    num_stages: int
+
+    def channel_block(self, channels: int) -> int | None:
+        block = self.max_channel_block
+        while block >= 64:
+            if channels % block == 0:
+                return block
+            block //= 2
+        return None
+
+
+FORWARD_TILES = TritonShortConvTiles(chunk=64, max_channel_block=1024, num_warps=4, num_stages=1)
+BACKWARD_TILES = TritonShortConvTiles(chunk=64, max_channel_block=1024, num_warps=4, num_stages=1)
+#: The local sequence length must be a multiple of this.
+SEQUENCE_MULTIPLE = math.lcm(FORWARD_TILES.chunk, BACKWARD_TILES.chunk)
 
 
 def triton_short_conv_available() -> bool:
     return jt is not None and triton is not None and jax.default_backend() == "gpu"
-
-
-def _channel_block(channels: int) -> int | None:
-    block = _MAX_CHANNEL_BLOCK
-    while block >= 64:
-        if channels % block == 0:
-            return block
-        block //= 2
-    return None
 
 
 def triton_short_conv_shapes_supported(
@@ -71,9 +94,9 @@ def triton_short_conv_shapes_supported(
         return f"kernel_size must be {KERNEL_SIZE}, got {width}"
     if weight_channels != channels:
         return f"weight channel dim {weight_channels} != x channel dim {channels}"
-    if seq_len % CHUNK:
-        return f"seq_len {seq_len} not divisible by {CHUNK}"
-    if _channel_block(channels) is None:
+    if seq_len % SEQUENCE_MULTIPLE:
+        return f"seq_len {seq_len} not divisible by {SEQUENCE_MULTIPLE}"
+    if FORWARD_TILES.channel_block(channels) is None or BACKWARD_TILES.channel_block(channels) is None:
         return f"channels {channels} not divisible by 64"
     return None
 
@@ -305,15 +328,20 @@ else:
     _short_conv_bwd_kernel = None
 
 
-def _launch_config(x: jax.Array) -> tuple[int, tuple[int, int, int]]:
+def _launch_kwargs(x: jax.Array, tiles: TritonShortConvTiles, exact: bool) -> dict:
     batch, seq_len, channels = x.shape
-    block_c = _channel_block(channels)
-    assert block_c is not None
-    return block_c, (channels // block_c, seq_len // CHUNK, batch)
-
-
-def _num_warps(block_c: int) -> int:
-    return 4 if block_c >= 512 else 2
+    block_c = tiles.channel_block(channels)
+    assert block_c is not None and seq_len % tiles.chunk == 0, (x.shape, tiles)
+    return dict(
+        grid=(channels // block_c, seq_len // tiles.chunk, batch),
+        num_warps=tiles.num_warps,
+        num_stages=tiles.num_stages,
+        seq_len=seq_len,
+        channels=channels,
+        chunk=tiles.chunk,
+        block_c=block_c,
+        exact=exact,
+    )
 
 
 def short_conv_triton_fwd_local(
@@ -322,24 +350,16 @@ def short_conv_triton_fwd_local(
     segment_ids: Int[Array, "B S"],
     *,
     exact_reference_rounding: bool,
+    tiles: TritonShortConvTiles = FORWARD_TILES,
 ) -> Float[Array, "B S C"]:
     """Shard-local forward. Callers must have already entered a ``shard_map``."""
-    batch, seq_len, channels = x.shape
-    block_c, grid = _launch_config(x)
     return jt.triton_call(
         x,
         segment_ids.astype(jnp.int32),
         weight,
         kernel=_short_conv_fwd_kernel,
         out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
-        grid=grid,
-        num_warps=_num_warps(block_c),
-        num_stages=1,
-        seq_len=seq_len,
-        channels=channels,
-        chunk=CHUNK,
-        block_c=block_c,
-        exact=exact_reference_rounding,
+        **_launch_kwargs(x, tiles, exact_reference_rounding),
     )
 
 
@@ -350,10 +370,10 @@ def short_conv_triton_bwd_local(
     dy: Float[Array, "B S C"],
     *,
     exact_reference_rounding: bool,
+    tiles: TritonShortConvTiles = BACKWARD_TILES,
 ) -> tuple[Float[Array, "B S C"], Float[Array, "P W C"]]:
-    """Shard-local backward. Returns ``(dx, dw_partials)`` with ``dw_partials`` ``[B * S / CHUNK, W, C]``."""
+    """Shard-local backward. Returns ``(dx, dw_partials)`` with ``dw_partials`` ``[B * S / chunk, W, C]``."""
     batch, seq_len, channels = x.shape
-    block_c, grid = _launch_config(x)
     dx, dw_partials = jt.triton_call(
         x,
         segment_ids.astype(jnp.int32),
@@ -362,22 +382,19 @@ def short_conv_triton_bwd_local(
         kernel=_short_conv_bwd_kernel,
         out_shape=(
             jax.ShapeDtypeStruct(x.shape, dy.dtype),
-            jax.ShapeDtypeStruct((batch * (seq_len // CHUNK), KERNEL_SIZE, channels), jnp.float32),
+            jax.ShapeDtypeStruct((batch * (seq_len // tiles.chunk), KERNEL_SIZE, channels), jnp.float32),
         ),
-        grid=grid,
-        num_warps=_num_warps(block_c),
-        num_stages=1,
-        seq_len=seq_len,
-        channels=channels,
-        chunk=CHUNK,
-        block_c=block_c,
-        exact=exact_reference_rounding,
+        **_launch_kwargs(x, tiles, exact_reference_rounding),
     )
     return dx, dw_partials
 
 
 __all__ = [
+    "BACKWARD_TILES",
+    "FORWARD_TILES",
     "OOB_SEGMENT",
+    "SEQUENCE_MULTIPLE",
+    "TritonShortConvTiles",
     "short_conv_triton_bwd_local",
     "short_conv_triton_fwd_local",
     "triton_short_conv_available",

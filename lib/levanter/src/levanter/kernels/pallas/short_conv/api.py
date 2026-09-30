@@ -27,7 +27,7 @@ from .pallas_gpu import (
 )
 from .reference import short_conv_reference
 from .triton_gpu import (
-    CHUNK as TRITON_CHUNK,
+    SEQUENCE_MULTIPLE as TRITON_SEQUENCE_MULTIPLE,
     short_conv_triton_bwd_local,
     short_conv_triton_fwd_local,
     triton_short_conv_available,
@@ -372,7 +372,7 @@ def short_conv(
                 return short_conv_reference(weight, x, segment_ids)
             return sharded(local_call=short_conv_reference, padded_local_seq=local_seq + halo)
         if name == "triton_gpu":
-            triton_local_seq = _round_up(local_seq + halo, TRITON_CHUNK) if seq_axis else local_seq
+            triton_local_seq = _round_up(local_seq + halo, TRITON_SEQUENCE_MULTIPLE) if seq_axis else local_seq
             if not triton_short_conv_available():
                 reason = "Triton backend unavailable or not running on a GPU"
             else:
