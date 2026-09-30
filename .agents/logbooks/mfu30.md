@@ -288,3 +288,27 @@ all-reduce 0.019): structural. XLA remat clones 0.246 (A's flag). FSDP gathers +
 ~0.27, mostly waits (PGLE). Offset all-to-alls 0.010 (mirror params). Pipelined D variant
 `research/mcwitt/mfu30-routing-pipelined` @ 64909b24d0 (values identical). C to queue two stacked trace
 arms, pipelined first, then sequential; the winner gets the PGLE build.
+
+## M30-014 Stacked trace arms queued; fidelity criterion refined (2026-09-30)
+
+C's stack = B's 12643e682c (D + mirror + E; `_moe/` identical) + campaign merge + fused norm + #9481's
+attention re-gather, MLP-weight prefetch, QB-after-MLP and `pgle_profile.py`. Arms (hero program with
+`--xla_gpu_enable_host_memory_offloading=true --xla_gpu_enable_triton_gemm=false`,
+`--gated-norm-implementation pallas_gpu`, remat VLOG, profiled 180021-180023):
+`m30c-stackpipe-trace-01` (`research/mcwitt/mfu30-stack-pipelined` @ 7393a9ae26) and
+`m30c-stackseq-trace-01` (`research/mcwitt/mfu30-stack` @ 4ee7986fb4). Gates `m30c-stackgate-03` /
+`-pipe-01`: B's module gate bitwise (d_weights max 0.4%); scan main 339 / D 292.5 / sequential 289.9 /
+pipelined 296.0 ms (no shared experts in the scan). C's review of `_routed_experts`: no bugs. Correctness
+depends on overlap limit 1 (add an assertion for landing); the backward has no inter-chunk barrier, so
+both chunks' [C,H] cotangent buffers (~1.9 GB each) may be live together; watch the EP64 peak.
+
+**Fidelity criterion, refined.** Rounding-level forward changes (fused norm, triton_gemm off) flip
+near-tied top-k routing decisions: in a 4-layer EP4 bf16 CPU smoke the routed-MoE gradient leaves move ~6%
+relative (every leaf within 1e-4 in f32; loss 7.657223 vs 7.657212). A same-code comparison is
+expected to be bitwise (B's exact arms test this), so the C-C band is ~0 and cannot judge rounding changes.
+The reference for "numerically ~equal" is therefore a **rounding-only perturbation band**: the loss
+divergence of `m30c-grnflag-01` (fused norm + triton_gemm off, no algorithmic change) vs the seed-0
+control. A candidate passes if its pointwise loss divergence from the control over 180000-180059 is within
+that band (max |d| and mean d, no larger one-signed drift), and drops / balancing loss stay in family.
+Exact-equality smoke checks (loss at 180000 == 1.261413) apply only to bitwise-forward arms (A's flag,
+B's A+B+C and D).
