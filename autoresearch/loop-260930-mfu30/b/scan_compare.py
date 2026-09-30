@@ -13,6 +13,8 @@ the routing weights to rounding.
 Variants:
   control:   main's module, full remat.
   unfilled:  inverse permutation + chained cotangents + unfilled buffers, full remat.
+  stack:     unfilled + PR #9481's pipelined chunks and mirror parameters, full remat.
+  sonic:     unfilled + expert-side routing-weight gradient, remat saving the MoE output.
   candidate: the branch module, remat saving the MoE output (the hero's new policy).
 
 Usage (GB200x4): python autoresearch/loop-260930-mfu30/b/scan_compare.py
@@ -57,14 +59,15 @@ _BACKWARD = sonic_cute._expert_mlp_quack_wgrad_backward
 
 
 # name -> (module-local function, remat policy, QuACK backward)
+_SAVE_OUTPUT = jax.checkpoint_policies.save_only_these_names(MOE_OUTPUT)
 VARIANTS = {
     "control": (_load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, _BACKWARD),
     "unfilled": (_load_frozen("unfilled_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, _BACKWARD),
-    "candidate": (
-        candidate_module._moe_mlp_ep_ragged_a2a_local,
-        jax.checkpoint_policies.save_only_these_names(MOE_OUTPUT),
-        _BACKWARD,
-    ),
+    # unfilled + PR #9481's pipelined chunks and mirror transpose parameters (mfu30-stack 423e8c50e4).
+    "stack": (_load_frozen("stack_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, _BACKWARD),
+    # unfilled + expert-side routing-weight gradient (ce112504f1).
+    "sonic": (_load_frozen("sonic_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, _SAVE_OUTPUT, _BACKWARD),
+    "candidate": (candidate_module._moe_mlp_ep_ragged_a2a_local, _SAVE_OUTPUT, _BACKWARD),
 }
 
 

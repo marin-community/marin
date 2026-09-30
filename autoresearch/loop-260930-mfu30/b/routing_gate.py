@@ -38,11 +38,11 @@ def _load_frozen(name: str):
     return module
 
 
-# control: main f38da1173d. unfilled: inverse permutation + chained cotangents + unfilled transport
-# buffers (e612b34244). candidate: the branch's live module.
+# control: main f38da1173d. sonic: inverse permutation + chained cotangents + unfilled transport
+# buffers + expert-side routing-weight gradient (ce112504f1). candidate: the branch's live module.
 VARIANTS = {
     "control": _load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
-    "unfilled": _load_frozen("unfilled_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
+    "sonic": _load_frozen("sonic_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
     "candidate": candidate_module._moe_mlp_ep_ragged_a2a_local,
 }
 # Outputs whose values must match main exactly. The routing-weight gradient is compared to rounding.

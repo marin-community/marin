@@ -298,6 +298,24 @@ def _transport_buffer(
     return jax.lax.broadcast(marker.astype(dtype), (rows, hidden_dim))
 
 
+def _reverse_ragged_a2a(
+    cotangent: Float[Array, "O H"], init: Float[Array, "R H"], params: ExpertA2aParams
+) -> Float[Array, "R H"]:
+    """Send each received row's cotangent back to the operand row it came from, into ``init``."""
+    # Exchanged offsets reverse the collective, matching JAX's transpose rule.
+    exchanged_output_offsets = jax.lax.all_to_all(params.output_offsets, "expert", 0, 0, tiled=True)
+    exchanged_input_offsets = jax.lax.all_to_all(params.input_offsets, "expert", 0, 0, tiled=True)
+    return jax.lax.ragged_all_to_all(
+        cotangent,
+        init,
+        exchanged_output_offsets,
+        params.recv_sizes,
+        exchanged_input_offsets,
+        params.send_sizes,
+        axis_name="expert",
+    )
+
+
 def _accepted_assignments(
     flat_selected: Int[Array, "TK"],
     sorted_indices: Int[Array, "TK"],
@@ -351,64 +369,10 @@ class _ExpertLayout:
         return self.local_experts // self.chunk_experts
 
 
-class _ChunkPlan(NamedTuple):
-    """One chunk's transfers and group sizes.
-
-    ``_expert_granular_a2a_params`` builds the dispatch and return parameters as mirror
-    transfers: each is the other's transpose (JAX's ragged_all_to_all transpose rule derives the
-    same offsets with two offset all-to-alls), so the backward sends cotangents back along the
-    mirror transfer's parameters.
-    """
-
+class _ChunkResiduals(NamedTuple):
     dispatch_params: ExpertA2aParams
     return_params: ExpertA2aParams
-    physical_group_sizes: Int[Array, "Echunk"]
-    active_group_sizes: Int[Array, "Echunk"]
-
-
-class _ChunkResiduals(NamedTuple):
-    plan: _ChunkPlan
     expert_mlp: tuple[jax.Array, ...]
-
-
-def _chunk_plans(routing: _ExpertRouting, layout: _ExpertLayout) -> tuple[_ChunkPlan, ...]:
-    plans = []
-    for chunk_index, clipped_group_sizes in enumerate(routing.chunk_clipped_group_sizes):
-        with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            # Sender starts come from the full (unmasked) sizes, so each chunk reads its
-            # groups' accepted prefixes in place in the shared sorted buffer.
-            dispatch_params, return_params = _expert_granular_a2a_params(
-                routing.all_group_sizes,
-                clipped_group_sizes,
-                routing.shard_id,
-                local_expert_size=layout.local_experts,
-            )
-            active_all = jnp.sum(  # [Elocal]
-                clipped_group_sizes.reshape(layout.ep_size, layout.ep_size, layout.local_experts)[
-                    :, routing.shard_id, :
-                ],
-                axis=0,
-            )
-            experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
-            active_group_sizes = active_all[experts]  # [Echunk]
-            total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
-            physical_group_sizes = active_group_sizes.at[-1].add(layout.chunk_capacity - total_valid)  # [Echunk]
-            plans.append(_ChunkPlan(dispatch_params, return_params, physical_group_sizes, active_group_sizes))
-    return tuple(plans)
-
-
-def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _ExpertLayout) -> Float[Array, "C H"]:
-    # Accepted rows are the prefix of each unclipped expert group and receiver offsets pack
-    # arrivals expert-major, so the received buffer feeds the grouped MLP directly: no sender
-    # compaction and no receiver-side permute.
-    dispatch_init = _transport_buffer(  # [C, H]
-        layout.chunk_capacity,
-        sorted_x.shape[1],
-        sorted_x.dtype,
-        plan.dispatch_params.send_sizes,
-        site=_TransportBufferSite.DISPATCH_OUTPUT,
-    )
-    return jax.lax.ragged_all_to_all(sorted_x, dispatch_init, *plan.dispatch_params, axis_name="expert")
 
 
 def _routed_experts_forward(
@@ -420,43 +384,63 @@ def _routed_experts_forward(
     layout: _ExpertLayout,
 ) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...]]:
     assignments, hidden_dim = sorted_x.shape
-    plans = _chunk_plans(routing, layout)
     # Rows no chunk writes are the dropped assignments, which the combine skips.
     returned = _transport_buffer(
         assignments, hidden_dim, sorted_x.dtype, routing.group_sizes, site=_TransportBufferSite.RETURN_OUTPUT
     )  # [TK, H]
-    # The chunks run as a two-stage pipeline: chunk c+1's dispatch is in flight during chunk c's
-    # expert MLP, and chunk c's return during chunk c+1's MLP. Two barriers bound it. The next
-    # dispatch starts only once this chunk's dispatch has landed, so at most two receiver buffers
-    # are live. This chunk's return starts only once the next dispatch has landed, so one
-    # transport is in flight at a time. The second barrier holds only the return's input: the
-    # next chunk's received rows flow on unbarriered, so a recompute for the backward, which needs
-    # no return, can drop the return and the down projection feeding it.
-    with jax.named_scope("moe_chunk_0"):
-        x_dispatch = _dispatch_chunk(sorted_x, plans[0], layout)  # [C, H]
+    chunk_source = sorted_x
     chunk_residuals = []
-    for chunk_index, plan in enumerate(plans):
+    for chunk_index, clipped_group_sizes in enumerate(routing.chunk_clipped_group_sizes):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            next_x_dispatch = None
-            if chunk_index + 1 < len(plans):
-                next_source, _ = jax.lax.optimization_barrier((sorted_x, x_dispatch))
-                next_x_dispatch = _dispatch_chunk(next_source, plans[chunk_index + 1], layout)  # [C, H]
+            # Sender starts come from the full (unmasked) sizes, so each chunk reads its
+            # groups' accepted prefixes in place in the shared sorted buffer.
+            dispatch_params, return_params = _expert_granular_a2a_params(
+                routing.all_group_sizes,
+                clipped_group_sizes,
+                routing.shard_id,
+                local_expert_size=layout.local_experts,
+            )
+            if chunk_residuals:
+                # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
+                # of every chunk at the same time, and the chunk buffers are all live at once,
+                # which is the memory the chunks exist to save. The barrier waits for the previous
+                # chunk's backward inputs rather than its return transport: the backward does not
+                # need the return, so a recompute for the backward drops it and must not be held
+                # to it.
+                chunk_source, _ = jax.lax.optimization_barrier((chunk_source, chunk_residuals[-1].expert_mlp))
+            # Accepted rows are the prefix of each unclipped expert group and receiver offsets
+            # pack arrivals expert-major, so the received buffer feeds the grouped MLP
+            # directly: no sender compaction and no receiver-side permute.
+            dispatch_init = _transport_buffer(  # [C, H]
+                layout.chunk_capacity,
+                hidden_dim,
+                sorted_x.dtype,
+                dispatch_params.send_sizes,
+                site=_TransportBufferSite.DISPATCH_OUTPUT,
+            )
+            x_dispatch = jax.lax.ragged_all_to_all(chunk_source, dispatch_init, *dispatch_params, axis_name="expert")
+            active_all = jnp.sum(  # [Elocal]
+                clipped_group_sizes.reshape(layout.ep_size, layout.ep_size, layout.local_experts)[
+                    :, routing.shard_id, :
+                ],
+                axis=0,
+            )
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
+            active_group_sizes = active_all[experts]  # [Echunk]
+            total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
+            physical_group_sizes = active_group_sizes.at[-1].add(layout.chunk_capacity - total_valid)  # [Echunk]
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
                 x_dispatch,
                 moe_w13_local[experts],
                 moe_w2_local[experts],
-                plan.physical_group_sizes,
-                plan.active_group_sizes,
+                physical_group_sizes,
+                active_group_sizes,
             )
-            if next_x_dispatch is not None:
-                out_dispatch, _ = jax.lax.optimization_barrier((out_dispatch, next_x_dispatch))
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
             # no expansion step.
-            returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
-            chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
-            x_dispatch = next_x_dispatch
+            returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *return_params, axis_name="expert")
+            chunk_residuals.append(_ChunkResiduals(dispatch_params, return_params, expert_mlp_residuals))
 
     with jax.named_scope("combine"):
         out = _unpermute_from_global_expert(
@@ -527,30 +511,25 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
     moe_w13_cotangents = []
     moe_w2_cotangents = []
     for chunk_index in reversed(range(layout.chunks)):
-        plan, expert_mlp_residuals = chunk_residuals[chunk_index]
+        dispatch_params, return_params, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             out_dispatch_init = _transport_buffer(
                 layout.chunk_capacity,
                 hidden_dim,
                 out_cotangent.dtype,
-                plan.return_params.recv_sizes,
+                return_params.recv_sizes,
                 site=_TransportBufferSite.RETURN_COTANGENT,
             )
-            # Each transport's cotangent travels back along its mirror transfer.
-            out_dispatch_cotangent = jax.lax.ragged_all_to_all(
-                returned_cotangent, out_dispatch_init, *plan.dispatch_params, axis_name="expert"
-            )
+            out_dispatch_cotangent = _reverse_ragged_a2a(returned_cotangent, out_dispatch_init, return_params)
             x_dispatch_cotangent, w13_cotangent, w2_cotangent, row_output_dot = layout.expert_mlp.backward(
                 expert_mlp_residuals, out_dispatch_cotangent
             )
             # Chunks read disjoint rows of the sorted buffer, so each writes its rows of one
             # shared cotangent buffer, and the rows no chunk writes are the dropped assignments.
-            dispatch_cotangent = jax.lax.ragged_all_to_all(
-                x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
-            )
+            dispatch_cotangent = _reverse_ragged_a2a(x_dispatch_cotangent, dispatch_cotangent, dispatch_params)
             # Each row's <y, dy> travels back to its assignment's sorted position like y did.
             output_dot = jax.lax.ragged_all_to_all(
-                row_output_dot[:, None], output_dot, *plan.return_params, axis_name="expert"
+                row_output_dot[:, None], output_dot, *return_params, axis_name="expert"
             )
             moe_w13_cotangents.append(w13_cotangent)
             moe_w2_cotangents.append(w2_cotangent)
