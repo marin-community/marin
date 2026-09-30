@@ -660,6 +660,7 @@ members = [
     "marin-marina",
     "marin-rigging",
     "marin-root",
+    "marin-silo",
     "marin-zephyr",
     "tasktrove-verify",
 ]
@@ -7190,6 +7191,45 @@ requires-dist = [
     { name = "watchdog" },
 ]
 provides-extras = ["pipeline"]
+
+[[package]]
+name = "marin-silo"
+version = "0.1.0"
+source = { editable = "experiments/silo" }
+dependencies = [
+    { name = "starlette" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "starlette", specifier = ">=0.37" },
+    { name = "uvicorn", specifier = ">=0.30" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
 
 [[package]]
 name = "marin-zephyr"

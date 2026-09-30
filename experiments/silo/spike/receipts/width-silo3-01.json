@@ -1,0 +1,51 @@
+{
+  "schema": "silo-width-v1",
+  "image": "docker.io/library/python@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9",
+  "profile": {
+    "cpu": 4,
+    "memory_gb": 8,
+    "disk_gb": 10,
+    "provider_units": {
+      "cpu": "cores",
+      "memory": "GB",
+      "disk": "GB"
+    },
+    "source": "compatible_default_no_pinned_profile",
+    "effective_limits": "unverified"
+  },
+  "requested_concurrency": 250,
+  "trials": 500,
+  "wall_seconds": 205.6,
+  "outcomes": {
+    "ok": 500
+  },
+  "peak_in_flight_client": 250,
+  "peak_sandboxes_live_broker": 252,
+  "any_create_waited_at_capacity": true,
+  "telemetry_finite": 500,
+  "create_seconds": {
+    "p50": 2.55,
+    "p90": 10.89,
+    "p99": 15.68,
+    "max": 17.57,
+    "mean": 4.41,
+    "n": 500
+  },
+  "trial_seconds": {
+    "p50": 94.35,
+    "p90": 103.11,
+    "p99": 109.01,
+    "max": 110.43,
+    "mean": 95.59,
+    "n": 500
+  },
+  "capacity_before": {
+    "hosts_live": 6,
+    "slots_free": {
+      "candidate_4cpu_8gb": 288,
+      "verifier_2cpu_1gb": 360
+    },
+    "sandboxes_live": 0
+  },
+  "errors_sample": []
+}

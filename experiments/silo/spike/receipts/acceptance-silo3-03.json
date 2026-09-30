@@ -1,0 +1,456 @@
+{
+  "schema": "silo-acceptance-v1",
+  "started_at": "2026-09-22T18:10:10Z",
+  "capacity_before": {
+    "hosts_live": 1,
+    "hosts_known": 7,
+    "sandboxes_live": 0,
+    "creates_waiting_for_capacity": 0,
+    "slots_free": {
+      "candidate_4cpu_8gb": 8,
+      "verifier_2cpu_1gb": 16
+    },
+    "snapshots": 3,
+    "snapshot_quota": null,
+    "hosts": [
+      {
+        "host_id": "silo3-host-6",
+        "url": "http://10.184.200.213:21409",
+        "age_s": 2.0,
+        "sandboxes_live": 0,
+        "cpu": {
+          "budget": 32,
+          "oversubscribe": 1.0,
+          "allocated": 0
+        },
+        "memory_bytes": {
+          "budget": 103079215104,
+          "allocated": 0
+        },
+        "disk_bytes": {
+          "budget": 214748364800,
+          "allocated": 0,
+          "enforcement": "accounted_not_enforced"
+        },
+        "default_runtime": "runsc"
+      }
+    ]
+  },
+  "detail": {
+    "broker_reachable_and_hosts_live": {
+      "hosts_live": 1,
+      "slots_free": {
+        "candidate_4cpu_8gb": 8,
+        "verifier_2cpu_1gb": 16
+      }
+    },
+    "positive_control_network_reachable_outside": {
+      "outside": {
+        "dns": "reached",
+        "tcp_ip": "reached",
+        "https_name": "reached",
+        "interfaces": [
+          "cilium_host",
+          "cilium_net",
+          "enp193s0np0",
+          "enp193s0v0",
+          "enp193s0v1",
+          "enp193s0v2",
+          "enp193s0v3",
+          "enp193s0v4",
+          "enp193s0v5",
+          "enp193s0v6",
+          "enp193s0v7",
+          "lo",
+          "lxc08975116f515",
+          "lxc4e1e425d357f",
+          "lxc5d4111adea31",
+          "lxc6bb68b45fdc9",
+          "lxc6d4f5be6938c",
+          "lxc_health",
+          "lxcffc7a837d97e"
+        ]
+      }
+    },
+    "snapshot_active_and_identity_verified[cap-harbor]": {
+      "snapshot": "cap-harbor-38f7f8f07f62f783fb7c",
+      "seconds": 0.0,
+      "identity": {
+        "snapshot_name": "cap-harbor-38f7f8f07f62f783fb7c",
+        "dockerfile_sha256": "50e1070d84ea042b2ec92e142ee2ecf0dc3bbc1ed8f264392feda61631f2b408",
+        "evidence": "provider-build-info-exact-match"
+      }
+    },
+    "snapshot_active_and_identity_verified[cap-verifier]": {
+      "snapshot": "cap-verifier-d164a2a8c30c47cce914",
+      "seconds": 0.0,
+      "identity": {
+        "snapshot_name": "cap-verifier-d164a2a8c30c47cce914",
+        "dockerfile_sha256": "50e1070d84ea042b2ec92e142ee2ecf0dc3bbc1ed8f264392feda61631f2b408",
+        "evidence": "provider-build-info-exact-match"
+      }
+    },
+    "create[runsc/4cpu]": {
+      "sandbox_id": "slbc4f0c94c424443dc94d6af35b59c4ab1",
+      "host": "silo3-host-6",
+      "seconds": 0.93
+    },
+    "exec[runsc/4cpu]": {
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    "exit_code_exact_one_shot[runsc/4cpu]": {
+      "exit": 7,
+      "stdout": ""
+    },
+    "exit_code_and_stderr_exact_session[runsc/4cpu]": {
+      "exit_code": 124,
+      "stdout": "out\n",
+      "stderr": "err\n"
+    },
+    "cgroup_limits_finite[runsc/4cpu]": {
+      "cgroup_version": "v1",
+      "observed": {
+        "cpu_max": "400000 100000",
+        "memory_max": "8589934592",
+        "memory_current": "4513792",
+        "memory_peak": null
+      },
+      "limit_evidence": {
+        "cpu": "finite_cgroup_limit",
+        "memory": "finite_cgroup_limit",
+        "requested_profile_verified": false
+      }
+    },
+    "nproc_matches_profile[runsc/4cpu]": {
+      "nproc": {
+        "exit": 0,
+        "stdout": "4\n"
+      }
+    },
+    "session_polled_without_consuming_output[runsc/4cpu]": {
+      "exit_code": 0,
+      "polls": 4
+    },
+    "egress_blocked_inside_sandbox[runsc/4cpu]": {
+      "inside": {
+        "dns": "blocked:gaierror",
+        "tcp_ip": "blocked:OSError",
+        "https_name": "blocked:URLError",
+        "interfaces": []
+      }
+    },
+    "deletion_observed_async[runsc/4cpu]": {
+      "observations": [
+        {
+          "elapsed_seconds": 0.0,
+          "state": "present"
+        },
+        {
+          "elapsed_seconds": 5.0,
+          "state": "not_found"
+        }
+      ]
+    },
+    "create[runsc/2cpu]": {
+      "sandbox_id": "slb6f6ddabb251e454a8619ea2b9d050cc7",
+      "host": "silo3-host-6",
+      "seconds": 0.83
+    },
+    "exec[runsc/2cpu]": {
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    "exit_code_exact_one_shot[runsc/2cpu]": {
+      "exit": 7,
+      "stdout": ""
+    },
+    "exit_code_and_stderr_exact_session[runsc/2cpu]": {
+      "exit_code": 124,
+      "stdout": "out\n",
+      "stderr": "err\n"
+    },
+    "cgroup_limits_finite[runsc/2cpu]": {
+      "cgroup_version": "v1",
+      "observed": {
+        "cpu_max": "200000 100000",
+        "memory_max": "1073741824",
+        "memory_current": "4513792",
+        "memory_peak": null
+      },
+      "limit_evidence": {
+        "cpu": "finite_cgroup_limit",
+        "memory": "finite_cgroup_limit",
+        "requested_profile_verified": false
+      }
+    },
+    "nproc_matches_profile[runsc/2cpu]": {
+      "nproc": {
+        "exit": 0,
+        "stdout": "2\n"
+      }
+    },
+    "session_polled_without_consuming_output[runsc/2cpu]": {
+      "exit_code": 0,
+      "polls": 4
+    },
+    "egress_blocked_inside_sandbox[runsc/2cpu]": {
+      "inside": {
+        "dns": "blocked:gaierror",
+        "tcp_ip": "blocked:OSError",
+        "https_name": "blocked:URLError",
+        "interfaces": []
+      }
+    },
+    "deletion_observed_async[runsc/2cpu]": {
+      "observations": [
+        {
+          "elapsed_seconds": 0.0,
+          "state": "present"
+        },
+        {
+          "elapsed_seconds": 5.0,
+          "state": "not_found"
+        }
+      ]
+    },
+    "create[runc/4cpu]": {
+      "sandbox_id": "slb1232105f99f04e0b8e8d01855f8c171a",
+      "host": "silo3-host-6",
+      "seconds": 0.67
+    },
+    "exec[runc/4cpu]": {
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    "exit_code_exact_one_shot[runc/4cpu]": {
+      "exit": 7,
+      "stdout": ""
+    },
+    "exit_code_and_stderr_exact_session[runc/4cpu]": {
+      "exit_code": 124,
+      "stdout": "out\n",
+      "stderr": "err\n"
+    },
+    "cgroup_limits_finite[runc/4cpu]": {
+      "cgroup_version": "v2",
+      "observed": {
+        "cpu_max": "400000 100000",
+        "memory_max": "8589934592",
+        "memory_current": "1785856",
+        "memory_peak": "4980736"
+      },
+      "limit_evidence": {
+        "cpu": "finite_cgroup_limit",
+        "memory": "finite_cgroup_limit",
+        "requested_profile_verified": false
+      }
+    },
+    "nproc_matches_profile[runc/4cpu]": {
+      "nproc": {
+        "exit": 0,
+        "stdout": "4\n"
+      }
+    },
+    "session_polled_without_consuming_output[runc/4cpu]": {
+      "exit_code": 0,
+      "polls": 4
+    },
+    "egress_blocked_inside_sandbox[runc/4cpu]": {
+      "inside": {
+        "dns": "blocked:gaierror",
+        "tcp_ip": "blocked:OSError",
+        "https_name": "blocked:URLError",
+        "interfaces": [
+          "lo"
+        ]
+      }
+    },
+    "deletion_observed_async[runc/4cpu]": {
+      "observations": [
+        {
+          "elapsed_seconds": 0.0,
+          "state": "present"
+        },
+        {
+          "elapsed_seconds": 5.0,
+          "state": "not_found"
+        }
+      ]
+    },
+    "create[runc/2cpu]": {
+      "sandbox_id": "slb354480e0e15c40b6ae2cd10a22f439be",
+      "host": "silo3-host-6",
+      "seconds": 0.66
+    },
+    "exec[runc/2cpu]": {
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    "exit_code_exact_one_shot[runc/2cpu]": {
+      "exit": 7,
+      "stdout": ""
+    },
+    "exit_code_and_stderr_exact_session[runc/2cpu]": {
+      "exit_code": 124,
+      "stdout": "out\n",
+      "stderr": "err\n"
+    },
+    "cgroup_limits_finite[runc/2cpu]": {
+      "cgroup_version": "v2",
+      "observed": {
+        "cpu_max": "200000 100000",
+        "memory_max": "1073741824",
+        "memory_current": "1560576",
+        "memory_peak": "5324800"
+      },
+      "limit_evidence": {
+        "cpu": "finite_cgroup_limit",
+        "memory": "finite_cgroup_limit",
+        "requested_profile_verified": false
+      }
+    },
+    "nproc_matches_profile[runc/2cpu]": {
+      "nproc": {
+        "exit": 0,
+        "stdout": "2\n"
+      }
+    },
+    "session_polled_without_consuming_output[runc/2cpu]": {
+      "exit_code": 0,
+      "polls": 4
+    },
+    "egress_blocked_inside_sandbox[runc/2cpu]": {
+      "inside": {
+        "dns": "blocked:gaierror",
+        "tcp_ip": "blocked:OSError",
+        "https_name": "blocked:URLError",
+        "interfaces": [
+          "lo"
+        ]
+      }
+    },
+    "deletion_observed_async[runc/2cpu]": {
+      "observations": [
+        {
+          "elapsed_seconds": 0.0,
+          "state": "present"
+        },
+        {
+          "elapsed_seconds": 5.0,
+          "state": "not_found"
+        }
+      ]
+    },
+    "run_recipe_built": {
+      "snapshot": "cap-verifier-b1ff9c87021e2742d96d",
+      "ref": "silo.local/snapshots/cap-verifier-b1ff9c87021e2742d96d:built",
+      "seconds": 5.9
+    },
+    "run_recipe_package_usable_offline": {
+      "exit": 0,
+      "stdout": "1.16.0\n"
+    },
+    "concurrent_ids_unique": {
+      "ids": [
+        "slb6505d80148d1426780f0d1df2be06e16",
+        "slb41fb93b794e946c6a5d7c46321e0d1bf",
+        "slbe111bd9f30064ec3a20d67742412c7cd",
+        "slb09087ea12d664622a7d6b1bf0b61f8ae",
+        "slbdcae925a0bf148ee9084a349ee20b05e",
+        "slb19aa4f43563645cd8b9bd9ee65fc197a"
+      ],
+      "seconds": 2.3
+    }
+  },
+  "capacity_after": {
+    "hosts_live": 1,
+    "hosts_known": 7,
+    "sandboxes_live": 0,
+    "creates_waiting_for_capacity": 0,
+    "slots_free": {
+      "candidate_4cpu_8gb": 8,
+      "verifier_2cpu_1gb": 16
+    },
+    "snapshots": 3,
+    "snapshot_quota": null,
+    "hosts": [
+      {
+        "host_id": "silo3-host-6",
+        "url": "http://10.184.200.213:21409",
+        "age_s": 9.5,
+        "sandboxes_live": 0,
+        "cpu": {
+          "budget": 32,
+          "oversubscribe": 1.0,
+          "allocated": 0
+        },
+        "memory_bytes": {
+          "budget": 103079215104,
+          "allocated": 0
+        },
+        "disk_bytes": {
+          "budget": 214748364800,
+          "allocated": 0,
+          "enforcement": "accounted_not_enforced"
+        },
+        "default_runtime": "runsc"
+      }
+    ]
+  },
+  "finished_at": "2026-09-22T18:11:08Z",
+  "checks": {
+    "broker_reachable_and_hosts_live": true,
+    "positive_control_network_reachable_outside": true,
+    "snapshot_active_and_identity_verified[cap-harbor]": true,
+    "snapshot_active_and_identity_verified[cap-verifier]": true,
+    "create[runsc/4cpu]": true,
+    "network_block_all_attested[runsc/4cpu]": true,
+    "exec[runsc/4cpu]": true,
+    "exit_code_exact_one_shot[runsc/4cpu]": true,
+    "exit_code_and_stderr_exact_session[runsc/4cpu]": true,
+    "cgroup_limits_finite[runsc/4cpu]": true,
+    "nproc_matches_profile[runsc/4cpu]": true,
+    "session_polled_without_consuming_output[runsc/4cpu]": true,
+    "fs_roundtrip_4mib[runsc/4cpu]": true,
+    "egress_blocked_inside_sandbox[runsc/4cpu]": true,
+    "deletion_observed_async[runsc/4cpu]": true,
+    "create[runsc/2cpu]": true,
+    "network_block_all_attested[runsc/2cpu]": true,
+    "exec[runsc/2cpu]": true,
+    "exit_code_exact_one_shot[runsc/2cpu]": true,
+    "exit_code_and_stderr_exact_session[runsc/2cpu]": true,
+    "cgroup_limits_finite[runsc/2cpu]": true,
+    "nproc_matches_profile[runsc/2cpu]": true,
+    "session_polled_without_consuming_output[runsc/2cpu]": true,
+    "fs_roundtrip_4mib[runsc/2cpu]": true,
+    "egress_blocked_inside_sandbox[runsc/2cpu]": true,
+    "deletion_observed_async[runsc/2cpu]": true,
+    "create[runc/4cpu]": true,
+    "network_block_all_attested[runc/4cpu]": true,
+    "exec[runc/4cpu]": true,
+    "exit_code_exact_one_shot[runc/4cpu]": true,
+    "exit_code_and_stderr_exact_session[runc/4cpu]": true,
+    "cgroup_limits_finite[runc/4cpu]": true,
+    "nproc_matches_profile[runc/4cpu]": true,
+    "session_polled_without_consuming_output[runc/4cpu]": true,
+    "fs_roundtrip_4mib[runc/4cpu]": true,
+    "egress_blocked_inside_sandbox[runc/4cpu]": true,
+    "deletion_observed_async[runc/4cpu]": true,
+    "create[runc/2cpu]": true,
+    "network_block_all_attested[runc/2cpu]": true,
+    "exec[runc/2cpu]": true,
+    "exit_code_exact_one_shot[runc/2cpu]": true,
+    "exit_code_and_stderr_exact_session[runc/2cpu]": true,
+    "cgroup_limits_finite[runc/2cpu]": true,
+    "nproc_matches_profile[runc/2cpu]": true,
+    "session_polled_without_consuming_output[runc/2cpu]": true,
+    "fs_roundtrip_4mib[runc/2cpu]": true,
+    "egress_blocked_inside_sandbox[runc/2cpu]": true,
+    "deletion_observed_async[runc/2cpu]": true,
+    "run_recipe_built": true,
+    "run_recipe_package_usable_offline": true,
+    "concurrent_ids_unique": true
+  },
+  "passed": true
+}

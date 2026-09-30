@@ -1,0 +1,4 @@
+source: build_envs/envgen/dt.py (the maintained helper staged as tools/daytona/dt.py)
+sha256: 83c6f4d43b4eaae82f5dbcdee3938f354b86167d775609def38c280de06aedb6
+Vendored verbatim so the dt_shim tests run against the real CLI. .orig so neither
+pytest nor ruff treats it as project code.

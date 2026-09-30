@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-silo"
+version = "0.1.0"
+description = "Sandbox provider: pinned-OCI-digest sandboxes as nested containers inside Iris jobs."
+requires-python = ">=3.12"
+# The broker and host agent need a server. The worker-side client needs nothing
+# beyond the stdlib (it is loaded by exec() from a single file), so these are
+# never imported on that path. Deliberately not an optional extra: extras in this
+# workspace join the cpu/gpu/tpu conflict forks and multiply the lock's torch
+# resolutions.
+dependencies = [
+    "starlette>=0.37",
+    "uvicorn>=0.30",
+]
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.2",
+    "pytest-timeout",
+    # unified-unit runs pytest with `-n auto --dist=worksteal`, so the test env needs xdist.
+    "pytest-xdist",
+]
+dev = [{ include-group = "test" }]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/silo"]
+
+[tool.pytest.ini_options]
+timeout = 60
+timeout_method = "thread"
+addopts = "--durations=10 -v"
+log_level = "INFO"

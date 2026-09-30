@@ -1,0 +1,474 @@
+{
+  "schema": "silo-acceptance-v1",
+  "started_at": "2026-09-22T19:03:24Z",
+  "capacity_before": {
+    "hosts_live": 1,
+    "hosts_known": 1,
+    "sandboxes_live": 0,
+    "creates_waiting_for_capacity": 0,
+    "slots_free": {
+      "candidate_4cpu_8gb": 8,
+      "verifier_2cpu_1gb": 16
+    },
+    "snapshots": 0,
+    "snapshot_quota": null,
+    "hosts": [
+      {
+        "host_id": "silo-rno2a-host-0",
+        "url": "http://10.168.192.71:13911",
+        "age_s": 5.7,
+        "sandboxes_live": 0,
+        "cpu": {
+          "budget": 32,
+          "oversubscribe": 1.0,
+          "allocated": 0
+        },
+        "memory_bytes": {
+          "budget": 103079215104,
+          "allocated": 0
+        },
+        "disk_bytes": {
+          "budget": 214748364800,
+          "allocated": 0,
+          "enforcement": "accounted_not_enforced"
+        },
+        "default_runtime": "runsc"
+      }
+    ]
+  },
+  "detail": {
+    "broker_reachable_and_hosts_live": {
+      "hosts_live": 1,
+      "slots_free": {
+        "candidate_4cpu_8gb": 8,
+        "verifier_2cpu_1gb": 16
+      }
+    },
+    "positive_control_network_reachable_outside": {
+      "outside": {
+        "dns": "reached",
+        "tcp_ip": "reached",
+        "https_name": "reached",
+        "interfaces": [
+          "cilium_host",
+          "cilium_net",
+          "enp220s0f0",
+          "enp220s0f1",
+          "enp90s0np0",
+          "enp90s0v0",
+          "enp90s0v1",
+          "enp90s0v2",
+          "enp90s0v3",
+          "enp90s0v4",
+          "enp90s0v5",
+          "enp90s0v6",
+          "enp90s0v7",
+          "ibs0",
+          "ibs1",
+          "ibs2",
+          "ibs3",
+          "ibs4",
+          "ibs5",
+          "ibs6",
+          "ibs7",
+          "lo",
+          "lxc21abf743fbc5",
+          "lxc22449052a40d",
+          "lxc2bef6f607292",
+          "lxc3694a7cc4e48",
+          "lxc3b201d7b7bbc",
+          "lxc53e989c11734",
+          "lxc5c3f9c0a62b7",
+          "lxc6541419f94c9",
+          "lxc879e582513fe",
+          "lxc972c1253bbda",
+          "lxc_health",
+          "lxca5586ccc51a1",
+          "lxcab6ee9a08976",
+          "lxcde458913a407",
+          "lxce47e63a060d6"
+        ]
+      }
+    },
+    "snapshot_active_and_identity_verified[cap-harbor]": {
+      "snapshot": "cap-harbor-38f7f8f07f62f783fb7c",
+      "seconds": 3.86,
+      "identity": {
+        "snapshot_name": "cap-harbor-38f7f8f07f62f783fb7c",
+        "dockerfile_sha256": "50e1070d84ea042b2ec92e142ee2ecf0dc3bbc1ed8f264392feda61631f2b408",
+        "evidence": "provider-build-info-exact-match"
+      }
+    },
+    "snapshot_active_and_identity_verified[cap-verifier]": {
+      "snapshot": "cap-verifier-d164a2a8c30c47cce914",
+      "seconds": 0.86,
+      "identity": {
+        "snapshot_name": "cap-verifier-d164a2a8c30c47cce914",
+        "dockerfile_sha256": "50e1070d84ea042b2ec92e142ee2ecf0dc3bbc1ed8f264392feda61631f2b408",
+        "evidence": "provider-build-info-exact-match"
+      }
+    },
+    "create[runsc/4cpu]": {
+      "sandbox_id": "slb6ef53c0e051a4fccb209030fe49070aa",
+      "host": "silo-rno2a-host-0",
+      "seconds": 1.47
+    },
+    "exec[runsc/4cpu]": {
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    "exit_code_exact_one_shot[runsc/4cpu]": {
+      "exit": 7,
+      "stdout": ""
+    },
+    "exit_code_and_stderr_exact_session[runsc/4cpu]": {
+      "exit_code": 124,
+      "stdout": "out\n",
+      "stderr": "err\n"
+    },
+    "cgroup_limits_finite[runsc/4cpu]": {
+      "cgroup_version": "v1",
+      "observed": {
+        "cpu_max": "400000 100000",
+        "memory_max": "8589934592",
+        "memory_current": "4513792",
+        "memory_peak": null
+      },
+      "limit_evidence": {
+        "cpu": "finite_cgroup_limit",
+        "memory": "finite_cgroup_limit",
+        "requested_profile_verified": false
+      }
+    },
+    "nproc_matches_profile[runsc/4cpu]": {
+      "nproc": {
+        "exit": 0,
+        "stdout": "4\n"
+      }
+    },
+    "session_polled_without_consuming_output[runsc/4cpu]": {
+      "exit_code": 0,
+      "polls": 4
+    },
+    "egress_blocked_inside_sandbox[runsc/4cpu]": {
+      "inside": {
+        "dns": "blocked:gaierror",
+        "tcp_ip": "blocked:OSError",
+        "https_name": "blocked:URLError",
+        "interfaces": []
+      }
+    },
+    "deletion_observed_async[runsc/4cpu]": {
+      "observations": [
+        {
+          "elapsed_seconds": 0.0,
+          "state": "present"
+        },
+        {
+          "elapsed_seconds": 5.0,
+          "state": "not_found"
+        }
+      ]
+    },
+    "create[runsc/2cpu]": {
+      "sandbox_id": "slb63ecf63d5aaf4b0ca8c2d0ee9a05a610",
+      "host": "silo-rno2a-host-0",
+      "seconds": 0.75
+    },
+    "exec[runsc/2cpu]": {
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    "exit_code_exact_one_shot[runsc/2cpu]": {
+      "exit": 7,
+      "stdout": ""
+    },
+    "exit_code_and_stderr_exact_session[runsc/2cpu]": {
+      "exit_code": 124,
+      "stdout": "out\n",
+      "stderr": "err\n"
+    },
+    "cgroup_limits_finite[runsc/2cpu]": {
+      "cgroup_version": "v1",
+      "observed": {
+        "cpu_max": "200000 100000",
+        "memory_max": "1073741824",
+        "memory_current": "4513792",
+        "memory_peak": null
+      },
+      "limit_evidence": {
+        "cpu": "finite_cgroup_limit",
+        "memory": "finite_cgroup_limit",
+        "requested_profile_verified": false
+      }
+    },
+    "nproc_matches_profile[runsc/2cpu]": {
+      "nproc": {
+        "exit": 0,
+        "stdout": "2\n"
+      }
+    },
+    "session_polled_without_consuming_output[runsc/2cpu]": {
+      "exit_code": 0,
+      "polls": 4
+    },
+    "egress_blocked_inside_sandbox[runsc/2cpu]": {
+      "inside": {
+        "dns": "blocked:gaierror",
+        "tcp_ip": "blocked:OSError",
+        "https_name": "blocked:URLError",
+        "interfaces": []
+      }
+    },
+    "deletion_observed_async[runsc/2cpu]": {
+      "observations": [
+        {
+          "elapsed_seconds": 0.0,
+          "state": "present"
+        },
+        {
+          "elapsed_seconds": 5.0,
+          "state": "not_found"
+        }
+      ]
+    },
+    "create[runc/4cpu]": {
+      "sandbox_id": "slb9bc62dc81f01437c84bb027c22655e5c",
+      "host": "silo-rno2a-host-0",
+      "seconds": 0.66
+    },
+    "exec[runc/4cpu]": {
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    "exit_code_exact_one_shot[runc/4cpu]": {
+      "exit": 7,
+      "stdout": ""
+    },
+    "exit_code_and_stderr_exact_session[runc/4cpu]": {
+      "exit_code": 124,
+      "stdout": "out\n",
+      "stderr": "err\n"
+    },
+    "cgroup_limits_finite[runc/4cpu]": {
+      "cgroup_version": "v2",
+      "observed": {
+        "cpu_max": "400000 100000",
+        "memory_max": "8589934592",
+        "memory_current": "1789952",
+        "memory_peak": "5177344"
+      },
+      "limit_evidence": {
+        "cpu": "finite_cgroup_limit",
+        "memory": "finite_cgroup_limit",
+        "requested_profile_verified": false
+      }
+    },
+    "nproc_matches_profile[runc/4cpu]": {
+      "nproc": {
+        "exit": 0,
+        "stdout": "4\n"
+      }
+    },
+    "session_polled_without_consuming_output[runc/4cpu]": {
+      "exit_code": 0,
+      "polls": 4
+    },
+    "egress_blocked_inside_sandbox[runc/4cpu]": {
+      "inside": {
+        "dns": "blocked:gaierror",
+        "tcp_ip": "blocked:OSError",
+        "https_name": "blocked:URLError",
+        "interfaces": [
+          "lo"
+        ]
+      }
+    },
+    "deletion_observed_async[runc/4cpu]": {
+      "observations": [
+        {
+          "elapsed_seconds": 0.0,
+          "state": "present"
+        },
+        {
+          "elapsed_seconds": 5.0,
+          "state": "not_found"
+        }
+      ]
+    },
+    "create[runc/2cpu]": {
+      "sandbox_id": "slbcbc96169676e4df3867752fe8ada0d49",
+      "host": "silo-rno2a-host-0",
+      "seconds": 0.65
+    },
+    "exec[runc/2cpu]": {
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    "exit_code_exact_one_shot[runc/2cpu]": {
+      "exit": 7,
+      "stdout": ""
+    },
+    "exit_code_and_stderr_exact_session[runc/2cpu]": {
+      "exit_code": 124,
+      "stdout": "out\n",
+      "stderr": "err\n"
+    },
+    "cgroup_limits_finite[runc/2cpu]": {
+      "cgroup_version": "v2",
+      "observed": {
+        "cpu_max": "200000 100000",
+        "memory_max": "1073741824",
+        "memory_current": "1564672",
+        "memory_peak": "5505024"
+      },
+      "limit_evidence": {
+        "cpu": "finite_cgroup_limit",
+        "memory": "finite_cgroup_limit",
+        "requested_profile_verified": false
+      }
+    },
+    "nproc_matches_profile[runc/2cpu]": {
+      "nproc": {
+        "exit": 0,
+        "stdout": "2\n"
+      }
+    },
+    "session_polled_without_consuming_output[runc/2cpu]": {
+      "exit_code": 0,
+      "polls": 4
+    },
+    "egress_blocked_inside_sandbox[runc/2cpu]": {
+      "inside": {
+        "dns": "blocked:gaierror",
+        "tcp_ip": "blocked:OSError",
+        "https_name": "blocked:URLError",
+        "interfaces": [
+          "lo"
+        ]
+      }
+    },
+    "deletion_observed_async[runc/2cpu]": {
+      "observations": [
+        {
+          "elapsed_seconds": 0.0,
+          "state": "present"
+        },
+        {
+          "elapsed_seconds": 5.0,
+          "state": "not_found"
+        }
+      ]
+    },
+    "run_recipe_built": {
+      "snapshot": "cap-verifier-b1ff9c87021e2742d96d",
+      "ref": "silo.local/snapshots/cap-verifier-b1ff9c87021e2742d96d:built",
+      "seconds": 3.9
+    },
+    "run_recipe_package_usable_offline": {
+      "exit": 0,
+      "stdout": "1.16.0\n"
+    },
+    "concurrent_ids_unique": {
+      "ids": [
+        "slb978e51cd470d46438b29dece2d63c567",
+        "slb6c85b68399c5493db5b44177fc61825f",
+        "slbb597d97507cc40148f6925870d5cfaec",
+        "slb804e6717fc0f4a439b7b7d1ac57b2218",
+        "slb0f71a75130844383a67c200451543c03",
+        "slb45d749f9d95e461b8f8fba8b26cdbd19"
+      ],
+      "seconds": 3.17
+    }
+  },
+  "capacity_after": {
+    "hosts_live": 1,
+    "hosts_known": 1,
+    "sandboxes_live": 0,
+    "creates_waiting_for_capacity": 0,
+    "slots_free": {
+      "candidate_4cpu_8gb": 8,
+      "verifier_2cpu_1gb": 16
+    },
+    "snapshots": 3,
+    "snapshot_quota": null,
+    "hosts": [
+      {
+        "host_id": "silo-rno2a-host-0",
+        "url": "http://10.168.192.71:13911",
+        "age_s": 4.3,
+        "sandboxes_live": 0,
+        "cpu": {
+          "budget": 32,
+          "oversubscribe": 1.0,
+          "allocated": 0
+        },
+        "memory_bytes": {
+          "budget": 103079215104,
+          "allocated": 0
+        },
+        "disk_bytes": {
+          "budget": 214748364800,
+          "allocated": 0,
+          "enforcement": "accounted_not_enforced"
+        },
+        "default_runtime": "runsc"
+      }
+    ]
+  },
+  "finished_at": "2026-09-22T19:04:22Z",
+  "checks": {
+    "broker_reachable_and_hosts_live": true,
+    "positive_control_network_reachable_outside": true,
+    "snapshot_active_and_identity_verified[cap-harbor]": true,
+    "snapshot_active_and_identity_verified[cap-verifier]": true,
+    "create[runsc/4cpu]": true,
+    "network_block_all_attested[runsc/4cpu]": true,
+    "exec[runsc/4cpu]": true,
+    "exit_code_exact_one_shot[runsc/4cpu]": true,
+    "exit_code_and_stderr_exact_session[runsc/4cpu]": true,
+    "cgroup_limits_finite[runsc/4cpu]": true,
+    "nproc_matches_profile[runsc/4cpu]": true,
+    "session_polled_without_consuming_output[runsc/4cpu]": true,
+    "fs_roundtrip_4mib[runsc/4cpu]": true,
+    "egress_blocked_inside_sandbox[runsc/4cpu]": true,
+    "deletion_observed_async[runsc/4cpu]": true,
+    "create[runsc/2cpu]": true,
+    "network_block_all_attested[runsc/2cpu]": true,
+    "exec[runsc/2cpu]": true,
+    "exit_code_exact_one_shot[runsc/2cpu]": true,
+    "exit_code_and_stderr_exact_session[runsc/2cpu]": true,
+    "cgroup_limits_finite[runsc/2cpu]": true,
+    "nproc_matches_profile[runsc/2cpu]": true,
+    "session_polled_without_consuming_output[runsc/2cpu]": true,
+    "fs_roundtrip_4mib[runsc/2cpu]": true,
+    "egress_blocked_inside_sandbox[runsc/2cpu]": true,
+    "deletion_observed_async[runsc/2cpu]": true,
+    "create[runc/4cpu]": true,
+    "network_block_all_attested[runc/4cpu]": true,
+    "exec[runc/4cpu]": true,
+    "exit_code_exact_one_shot[runc/4cpu]": true,
+    "exit_code_and_stderr_exact_session[runc/4cpu]": true,
+    "cgroup_limits_finite[runc/4cpu]": true,
+    "nproc_matches_profile[runc/4cpu]": true,
+    "session_polled_without_consuming_output[runc/4cpu]": true,
+    "fs_roundtrip_4mib[runc/4cpu]": true,
+    "egress_blocked_inside_sandbox[runc/4cpu]": true,
+    "deletion_observed_async[runc/4cpu]": true,
+    "create[runc/2cpu]": true,
+    "network_block_all_attested[runc/2cpu]": true,
+    "exec[runc/2cpu]": true,
+    "exit_code_exact_one_shot[runc/2cpu]": true,
+    "exit_code_and_stderr_exact_session[runc/2cpu]": true,
+    "cgroup_limits_finite[runc/2cpu]": true,
+    "nproc_matches_profile[runc/2cpu]": true,
+    "session_polled_without_consuming_output[runc/2cpu]": true,
+    "fs_roundtrip_4mib[runc/2cpu]": true,
+    "egress_blocked_inside_sandbox[runc/2cpu]": true,
+    "deletion_observed_async[runc/2cpu]": true,
+    "run_recipe_built": true,
+    "run_recipe_package_usable_offline": true,
+    "concurrent_ids_unique": true
+  },
+  "passed": true
+}

@@ -1,0 +1,593 @@
+#!/usr/bin/env python3
+"""dt -- the agent's Daytona CLI.  JSON out, timings logged, no SDK to learn.
+
+    dt snapshot build --dockerfile Dockerfile --name NAME [--cpu 4 --mem 8 --disk 10]
+    dt snapshot get NAME | delete NAME | list [--prefix P]
+    dt sandbox create --snapshot NAME [--no-network] [--ttl-min N]
+    dt sandbox delete ID | list | delete-mine
+    dt exec ID [--cwd DIR] [--timeout SEC] [--env K=V ...] [--json] -- CMD ...
+    dt upload ID LOCAL REMOTE          (file or directory; a directory travels as a tar)
+    dt download ID REMOTE LOCAL        (file only)
+    dt validate --snapshot NAME --bundle DIR --workdir DIR --oracle PATCH --ref-sha SHA...
+                [--ref-runs 1] [--out validation.json] [--adapter-context DIR]
+
+Every call appends one JSON line to $DT_LOG (default ./dt_calls.jsonl): command, args,
+seconds, ok, and the ids involved.  That log is the record the build report is checked
+against; a claim with no call behind it did not happen.
+
+Facts about the org this was written against (measured 2026-09-17, RL key):
+  * declarative builds are disabled -- a sandbox cannot be created from a bare image
+    name; it must come from a snapshot, and a snapshot is built server-side from a
+    Dockerfile (30-45 s for an apt install on ubuntu:22.04, 16 s for golang:1.22).
+  * hard caps per sandbox: 4 CPU, 8 GB RAM, 10 GB disk.  Requests above are refused.
+  * sandbox-from-snapshot takes 1-3 s; 8 in parallel took 2.9 s wall.
+  * exec inherits the image's ENV (PATH included); a LOGIN shell resets PATH from
+    /etc/profile and loses it, so commands run under `bash -c`, never `bash -lc`.
+  * a 130 s exec survives the proxy; longer commands run through an async session
+    that is polled, so a 40-minute build is fine.
+  * `network_block_all=True` at create time is real: DNS resolution fails inside.
+
+Credentials: DAYTONA_API_KEY in the environment.  Never printed, never written.
+"""
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import io
+import json
+import os
+import pathlib
+import shlex
+import sys
+import tarfile
+import time
+import uuid
+
+HERE = pathlib.Path(__file__).resolve().parent
+DT_LOG = os.environ.get("DT_LOG", "dt_calls.jsonl")
+LONG_EXEC_S = 240          # past this, run through an async session and poll
+MAX_CPU, MAX_MEM, MAX_DISK = 4, 8, 10
+
+
+def log_call(rec: dict) -> None:
+    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **rec}
+    try:
+        with open(DT_LOG, "a") as fh:
+            fh.write(json.dumps(rec, default=str) + "\n")
+    except OSError:
+        pass
+
+
+def out(obj: dict, code: int = 0) -> int:
+    print(json.dumps(obj, indent=1, default=str))
+    return code
+
+
+def client():
+    from daytona import Daytona, DaytonaConfig
+    key = os.environ.get("DAYTONA_API_KEY", "")
+    if not key:
+        raise SystemExit("dt: DAYTONA_API_KEY is not set")
+    return Daytona(DaytonaConfig(api_key=key))
+
+
+def labels() -> dict:
+    lab = {"envgen": "1"}
+    for k in ("DT_KEY", "DT_RUN", "DT_REPO"):
+        v = os.environ.get(k)
+        if v:
+            lab[k.lower()] = v[:63]
+    return lab
+
+
+def _err(e: BaseException) -> str:
+    return f"{type(e).__name__}: {str(e)[:600]}"
+
+
+# ---------------------------------------------------------------------------- snapshots
+def snapshot_build(a) -> int:
+    from daytona import CreateSnapshotParams, Image, Resources
+    import hashlib
+    df = pathlib.Path(a.dockerfile)
+    if not df.is_file():
+        return out({"ok": False, "error": f"no such Dockerfile: {df}"}, 1)
+    content = df.read_text(errors="replace")
+    sha = hashlib.sha256(content.encode()).hexdigest()
+    for kw in ("COPY ", "ADD "):
+        if any(line.strip().upper().startswith(kw) for line in content.splitlines()):
+            return out({"ok": False, "error": f"Dockerfile uses {kw.strip()}: there is no build context on Daytona; fetch with RUN (git clone / curl) instead"}, 1)
+    cpu, mem, disk = min(a.cpu, MAX_CPU), min(a.mem, MAX_MEM), min(a.disk, MAX_DISK)
+    d = client()
+    logs: list[str] = []
+    t0 = time.time()
+    rec = {"cmd": "snapshot.build", "name": a.name, "dockerfile_sha256": sha, "cpu": cpu, "mem": mem, "disk": disk}
+    # The org's snapshot quota is 40 and SHARED with every other Daytona user (12 harbor__*,
+    # 8 daytona-*, 4 windows-* were foreign at pilot time).  "Snapshot quota exceeded" is a
+    # transient of other sessions' cleanup, not a fact about this Dockerfile: wait for a slot
+    # (up to DT_QUOTA_WAIT_S, default 30 min) instead of handing the agent a failure to reason
+    # about.  Every wait is logged so the report can count quota stalls.
+    quota_wait = int(os.environ.get("DT_QUOTA_WAIT_S", "3600"))
+    quota_stalls = 0
+    # Run-level budget, checked BEFORE asking the server: this run may hold at most
+    # DT_SNAPSHOT_BUDGET snapshots (names starting with DT_SNAPSHOT_PREFIX, default the
+    # run's `eg-<run>` prefix) and the org at most DT_ORG_SNAPSHOT_QUOTA - 1 in total.  Over
+    # budget means wait, so N concurrent sessions queue on slots instead of all failing
+    # against the org quota at once.  Racy by nature (list-then-create), which the server-side
+    # quota wait above still covers.
+    budget = int(os.environ.get("DT_SNAPSHOT_BUDGET", "12"))
+    org_quota = int(os.environ.get("DT_ORG_SNAPSHOT_QUOTA", "40"))
+    prefix = os.environ.get("DT_SNAPSHOT_PREFIX") or ("eg-" + os.environ.get("DT_RUN", "")[:8] if os.environ.get("DT_RUN") else "")
+    def _counts():
+        """(run's live snapshots, org usage, org quota).
+
+        Usage and quota come from GET /organizations/{id}/usage (currentSnapshotUsage /
+        totalSnapshotQuota), which the key can read once the org id -- taken from any
+        snapshot's organization_id -- is in the path.  The snapshot LIST overcounts: 13 of
+        its entries are Daytona's shared base snapshots (general: true) that do not count,
+        and `removing` entries linger.  Falls back to the list count if the call fails.
+        """
+        mine = 0
+        org_id = None
+        listed = 0
+        page = 1
+        while True:
+            r = d.snapshot.list(page=page, limit=100)
+            for sn in r.items:
+                if not getattr(sn, "general", False):
+                    listed += 1
+                org_id = org_id or getattr(sn, "organization_id", None)
+                if prefix and sn.name.startswith(prefix):
+                    mine += 1
+            if len(r.items) < 100:
+                break
+            page += 1
+        usage, quota = listed, org_quota
+        if org_id:
+            try:
+                import daytona_api_client as C
+                ov = C.OrganizationsApi(d._api_client).get_organization_usage_overview(org_id)
+                usage = int(getattr(ov, "current_snapshot_usage", usage) or 0)
+                quota = int(getattr(ov, "total_snapshot_quota", quota) or org_quota)
+            except Exception:  # noqa: BLE001
+                pass
+        return mine, usage, quota
+    while time.time() - t0 < quota_wait:
+        try:
+            mine, usage, quota = _counts()
+        except Exception:  # noqa: BLE001
+            break
+        if (not prefix or mine < budget) and usage < quota - 1:
+            break
+        quota_stalls += 1
+        log_call({"cmd": "snapshot.budget_wait", "name": a.name, "stall": quota_stalls, "run_snapshots": mine,
+                  "org_snapshot_usage": usage, "budget": budget, "org_quota": quota})
+        time.sleep(45)
+    def _create():
+        return d.snapshot.create(
+            CreateSnapshotParams(name=a.name, image=Image.from_dockerfile(str(df)),
+                                 resources=Resources(cpu=cpu, memory=mem, disk=disk)),
+            on_logs=lambda line: logs.append(line), timeout=a.timeout)
+    try:
+        while True:
+            try:
+                snap = _create()
+                break
+            except Exception as e:  # noqa: BLE001
+                if "quota exceeded" not in str(e).lower() or time.time() - t0 > quota_wait:
+                    raise
+                quota_stalls += 1
+                log_call({"cmd": "snapshot.quota_wait", "name": a.name, "stall": quota_stalls, "error": _err(e)[:160]})
+                time.sleep(60)
+        rec["quota_stalls"] = quota_stalls
+        dt = round(time.time() - t0, 1)
+        res = {"ok": True, "name": snap.name, "id": snap.id, "state": str(snap.state), "ref": snap.ref,
+               "size_gb": snap.size, "build_s": dt, "dockerfile_sha256": sha, "cpu": cpu, "mem": mem, "disk": disk,
+               "quota_stalls": quota_stalls, "log_tail": "".join(logs)[-1500:]}
+        if a.log_file:
+            pathlib.Path(a.log_file).write_text("".join(logs))
+        log_call({**rec, "ok": True, "seconds": dt, "id": snap.id, "ref": snap.ref, "size_gb": snap.size})
+        return out(res)
+    except Exception as e:  # noqa: BLE001
+        dt = round(time.time() - t0, 1)
+        tail = "".join(logs)[-4000:]
+        if a.log_file:
+            pathlib.Path(a.log_file).write_text("".join(logs))
+        # The SDK call can fail while the SERVER-SIDE build is fine: a 502 from the API
+        # gateway mid-poll was observed after a 420 s build that had in fact completed.
+        # So do not trust the exception: poll the snapshot itself for up to 10 minutes and
+        # report what it says.  Only a snapshot in ERROR (or none) is a failed build.
+        state = ""
+        snap = None
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            try:
+                snap = d.snapshot.get(a.name)
+                state = str(snap.state).split(".")[-1].upper()
+            except Exception:  # noqa: BLE001
+                snap, state = None, "MISSING"
+            if state in ("ACTIVE", "ERROR", "MISSING", "BUILD_FAILED"):
+                break
+            time.sleep(15)
+        if snap is not None and state == "ACTIVE":
+            dt = round(time.time() - t0, 1)
+            res = {"ok": True, "name": snap.name, "id": snap.id, "state": str(snap.state), "ref": snap.ref,
+                   "size_gb": snap.size, "build_s": dt, "dockerfile_sha256": sha, "cpu": cpu, "mem": mem, "disk": disk,
+                   "log_tail": tail[-1500:], "note": f"SDK call raised ({_err(e)[:120]}) but the snapshot is ACTIVE"}
+            log_call({**rec, "ok": True, "seconds": dt, "id": snap.id, "ref": snap.ref, "size_gb": snap.size,
+                      "sdk_error_ignored": _err(e)[:200]})
+            return out(res)
+        log_call({**rec, "ok": False, "seconds": dt, "error": _err(e), "snapshot_state": state})
+        # A failed build leaves a snapshot in ERROR state under the same name, which blocks
+        # a rebuild; clear it so the next attempt is not "name already exists".
+        if snap is not None:
+            try:
+                d.snapshot.delete(snap)
+            except Exception:  # noqa: BLE001
+                pass
+        return out({"ok": False, "error": _err(e), "build_s": dt, "dockerfile_sha256": sha, "snapshot_state": state,
+                    "log_tail": tail}, 1)
+
+
+def snap_dict(s) -> dict:
+    bi = getattr(s, "build_info", None)
+    return {"name": s.name, "id": s.id, "state": str(s.state), "ref": getattr(s, "ref", None), "size_gb": s.size,
+            "cpu": s.cpu, "mem": s.mem, "disk": s.disk, "created_at": str(s.created_at),
+            "dockerfile_in_build_info": bool(bi and getattr(bi, "dockerfile_content", None))}
+
+
+def snapshot_get(a) -> int:
+    d = client()
+    t0 = time.time()
+    try:
+        s = d.snapshot.get(a.name)
+        log_call({"cmd": "snapshot.get", "name": a.name, "ok": True, "seconds": round(time.time() - t0, 2)})
+        return out({"ok": True, **snap_dict(s)})
+    except Exception as e:  # noqa: BLE001
+        log_call({"cmd": "snapshot.get", "name": a.name, "ok": False, "error": _err(e)})
+        return out({"ok": False, "error": _err(e)}, 1)
+
+
+def snapshot_delete(a) -> int:
+    d = client()
+    t0 = time.time()
+    try:
+        d.snapshot.delete(d.snapshot.get(a.name))
+        log_call({"cmd": "snapshot.delete", "name": a.name, "ok": True, "seconds": round(time.time() - t0, 2)})
+        return out({"ok": True, "deleted": a.name})
+    except Exception as e:  # noqa: BLE001
+        log_call({"cmd": "snapshot.delete", "name": a.name, "ok": False, "error": _err(e)})
+        return out({"ok": False, "error": _err(e)}, 1)
+
+
+def snapshot_list(a) -> int:
+    d = client()
+    items = []
+    page = 1
+    while True:
+        r = d.snapshot.list(page=page, limit=100)
+        for s in r.items:
+            if not a.prefix or s.name.startswith(a.prefix):
+                items.append(snap_dict(s))
+        if len(r.items) < 100:
+            break
+        page += 1
+    log_call({"cmd": "snapshot.list", "prefix": a.prefix, "n": len(items), "ok": True})
+    return out({"ok": True, "n": len(items), "snapshots": items})
+
+
+# ---------------------------------------------------------------------------- sandboxes
+def sandbox_create(a) -> int:
+    from daytona import CreateSandboxFromSnapshotParams
+    d = client()
+    t0 = time.time()
+    lab = labels()
+    lab.update({"envgen_purpose": a.purpose or "work"})
+    try:
+        sb = d.create(CreateSandboxFromSnapshotParams(
+            snapshot=a.snapshot, labels=lab, ephemeral=True, auto_stop_interval=0,
+            ttl_minutes=a.ttl_min, network_block_all=bool(a.no_network)), timeout=600)
+        dt = round(time.time() - t0, 2)
+        log_call({"cmd": "sandbox.create", "snapshot": a.snapshot, "id": sb.id, "ok": True, "seconds": dt,
+                  "no_network": bool(a.no_network)})
+        return out({"ok": True, "id": sb.id, "snapshot": a.snapshot, "state": str(sb.state), "create_s": dt,
+                    "cpu": sb.cpu, "mem": sb.memory, "disk": sb.disk, "network_blocked": bool(a.no_network),
+                    "ttl_min": a.ttl_min})
+    except Exception as e:  # noqa: BLE001
+        log_call({"cmd": "sandbox.create", "snapshot": a.snapshot, "ok": False, "error": _err(e),
+                  "seconds": round(time.time() - t0, 2)})
+        return out({"ok": False, "error": _err(e)}, 1)
+
+
+def sandbox_delete(a) -> int:
+    d = client()
+    t0 = time.time()
+    try:
+        d.get(a.id).delete()
+        log_call({"cmd": "sandbox.delete", "id": a.id, "ok": True, "seconds": round(time.time() - t0, 2)})
+        return out({"ok": True, "deleted": a.id})
+    except Exception as e:  # noqa: BLE001
+        log_call({"cmd": "sandbox.delete", "id": a.id, "ok": False, "error": _err(e)})
+        return out({"ok": False, "error": _err(e)}, 1)
+
+
+def _mine(d, only_key: str | None):
+    key = only_key if only_key is not None else os.environ.get("DT_KEY")
+    for s in d.list():
+        lab = s.labels or {}
+        if lab.get("envgen") != "1":
+            continue
+        if key and lab.get("dt_key") != key:
+            continue
+        yield s
+
+
+def sandbox_list(a) -> int:
+    d = client()
+    rows = []
+    for s in _mine(d, a.key if a.all_keys is False else ""):
+        rows.append({"id": s.id, "state": str(s.state), "snapshot": s.snapshot, "labels": s.labels,
+                     "created_at": str(s.created_at)})
+    log_call({"cmd": "sandbox.list", "n": len(rows), "ok": True})
+    return out({"ok": True, "n": len(rows), "sandboxes": rows})
+
+
+def sandbox_delete_mine(a) -> int:
+    d = client()
+    deleted, errors = [], []
+    for s in _mine(d, a.key):
+        try:
+            s.delete()
+            deleted.append(s.id)
+        except Exception as e:  # noqa: BLE001
+            errors.append({"id": s.id, "error": _err(e)})
+    log_call({"cmd": "sandbox.delete_mine", "deleted": deleted, "errors": errors, "ok": not errors})
+    return out({"ok": not errors, "deleted": deleted, "errors": errors})
+
+
+# ---------------------------------------------------------------------------- exec
+def run_in_sandbox(sb, cmd: str, cwd: str | None, env: dict | None, timeout: int) -> dict:
+    """Run `cmd` through `bash -c`, returning {exit, stdout, stderr|None, seconds, timed_out}.
+
+    Short commands go through process.exec (one HTTP call, stdout+stderr interleaved in
+    `result`).  Long ones go through an async session command and are polled, because the
+    proxy is not something to hold an HTTP request open against for 40 minutes.
+    """
+    from daytona import SessionExecuteRequest
+    t0 = time.time()
+    full = f"bash -c {shlex.quote(cmd)}"
+    if timeout <= LONG_EXEC_S:
+        try:
+            r = sb.process.exec(full, cwd=cwd, env=env or None, timeout=timeout + 15)
+            return {"exit": r.exit_code, "stdout": r.result or "", "stderr": None,
+                    "seconds": round(time.time() - t0, 2), "timed_out": False}
+        except Exception as e:  # noqa: BLE001
+            msg = _err(e)
+            return {"exit": None, "stdout": "", "stderr": msg, "seconds": round(time.time() - t0, 2),
+                    "timed_out": "timeout" in msg.lower() or "timed out" in msg.lower()}
+    sid = "dt-" + uuid.uuid4().hex[:8]
+    sb.process.create_session(sid)
+    try:
+        prefix = ""
+        if cwd:
+            prefix += f"cd {shlex.quote(cwd)} && "
+        for k, v in (env or {}).items():
+            prefix += f"export {k}={shlex.quote(str(v))} && "
+        # Plain `timeout N`: busybox's timeout (alpine images) has no -k, and GNU's default
+        # SIGTERM is enough; the poll deadline below is the hard stop either way.
+        wrapped = f"{prefix}timeout {int(timeout)} {full}"
+        resp = sb.process.execute_session_command(sid, SessionExecuteRequest(command=wrapped, run_async=True), timeout=60)
+        cid = resp.cmd_id
+        deadline = t0 + timeout + 120
+        exit_code = None
+        while time.time() < deadline:
+            c = sb.process.get_session_command(sid, cid)
+            if c.exit_code is not None:
+                exit_code = c.exit_code
+                break
+            time.sleep(3 if time.time() - t0 < 120 else 8)
+        logs = sb.process.get_session_command_logs(sid, cid)
+        timed_out = exit_code is None or exit_code == 124
+        return {"exit": exit_code, "stdout": logs.stdout or "", "stderr": logs.stderr or "",
+                "seconds": round(time.time() - t0, 2), "timed_out": timed_out}
+    finally:
+        try:
+            sb.process.delete_session(sid)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def exec_cmd(a) -> int:
+    d = client()
+    cmd = " ".join(a.cmd)
+    env = {}
+    for kv in a.env or []:
+        k, _, v = kv.partition("=")
+        env[k] = v
+    t0 = time.time()
+    try:
+        sb = d.get(a.id)
+    except Exception as e:  # noqa: BLE001
+        log_call({"cmd": "exec", "id": a.id, "ok": False, "error": _err(e)})
+        return out({"ok": False, "error": _err(e)}, 1)
+    r = run_in_sandbox(sb, cmd, a.cwd, env, a.timeout)
+    log_call({"cmd": "exec", "id": a.id, "cwd": a.cwd, "command": cmd[:300], "exit": r["exit"],
+              "seconds": r["seconds"], "timed_out": r["timed_out"], "ok": r["exit"] == 0})
+    if a.json:
+        return out({"ok": r["exit"] == 0, **r})
+    text = r["stdout"]
+    if r["stderr"]:
+        text += ("\n" if text and not text.endswith("\n") else "") + r["stderr"]
+    if a.tail and len(text) > a.tail:
+        text = f"[... {len(text) - a.tail} chars trimmed ...]\n" + text[-a.tail:]
+    sys.stdout.write(text)
+    if text and not text.endswith("\n"):
+        sys.stdout.write("\n")
+    sys.stdout.write(f"[dt exec: exit={r['exit']} wall={r['seconds']}s{' TIMED OUT' if r['timed_out'] else ''}]\n")
+    return 0 if r["exit"] == 0 else 1
+
+
+# ---------------------------------------------------------------------------- files
+def upload_path(sb, local: pathlib.Path, remote: str) -> dict:
+    """Upload a file, or a directory as a tarball unpacked at `remote`."""
+    t0 = time.time()
+    if local.is_dir():
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            tf.add(str(local), arcname=".")
+        data = buf.getvalue()
+        tmp = f"/tmp/dt-upload-{uuid.uuid4().hex[:8]}.tgz"
+        sb.fs.upload_file(data, tmp)
+        r = sb.process.exec(f"mkdir -p {shlex.quote(remote)} && tar xzf {shlex.quote(tmp)} -C {shlex.quote(remote)} && rm -f {shlex.quote(tmp)}", timeout=300)
+        return {"kind": "dir", "bytes": len(data), "seconds": round(time.time() - t0, 2), "exit": r.exit_code, "out": (r.result or "")[-300:]}
+    data = local.read_bytes()
+    parent = str(pathlib.PurePosixPath(remote).parent)
+    if parent and parent != "/":
+        sb.process.exec(f"mkdir -p {shlex.quote(parent)}", timeout=60)
+    sb.fs.upload_file(data, remote)
+    return {"kind": "file", "bytes": len(data), "seconds": round(time.time() - t0, 2), "exit": 0}
+
+
+def upload(a) -> int:
+    d = client()
+    local = pathlib.Path(a.local)
+    if not local.exists():
+        return out({"ok": False, "error": f"no such local path: {local}"}, 1)
+    try:
+        sb = d.get(a.id)
+        r = upload_path(sb, local, a.remote)
+        log_call({"cmd": "upload", "id": a.id, "local": str(local), "remote": a.remote, "ok": r["exit"] == 0, **r})
+        return out({"ok": r["exit"] == 0, **r}, 0 if r["exit"] == 0 else 1)
+    except Exception as e:  # noqa: BLE001
+        log_call({"cmd": "upload", "id": a.id, "ok": False, "error": _err(e)})
+        return out({"ok": False, "error": _err(e)}, 1)
+
+
+def download(a) -> int:
+    d = client()
+    t0 = time.time()
+    try:
+        sb = d.get(a.id)
+        data = sb.fs.download_file(a.remote)
+        p = pathlib.Path(a.local)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data or b"")
+        log_call({"cmd": "download", "id": a.id, "remote": a.remote, "local": str(p), "bytes": len(data or b""),
+                  "ok": True, "seconds": round(time.time() - t0, 2)})
+        return out({"ok": True, "bytes": len(data or b""), "local": str(p)})
+    except Exception as e:  # noqa: BLE001
+        log_call({"cmd": "download", "id": a.id, "remote": a.remote, "ok": False, "error": _err(e)})
+        return out({"ok": False, "error": _err(e)}, 1)
+
+
+# ---------------------------------------------------------------------------- validate
+def validate(a) -> int:
+    sys.path.insert(0, str(HERE))
+    from validate_env import validate_environment
+    t0 = time.time()
+    res = validate_environment(
+        client(), snapshot=a.snapshot, bundle=pathlib.Path(a.bundle), workdir=a.workdir,
+        oracle=pathlib.Path(a.oracle) if a.oracle else None, ref_shas=a.ref_sha or [],
+        ref_runs=a.ref_runs, run_timeout=a.timeout, adapter_context=a.adapter_context,
+        labels=labels(), no_network=not a.allow_network, keep_failed=a.keep_failed)
+    res["validate_s"] = round(time.time() - t0, 1)
+    pathlib.Path(a.out).write_text(json.dumps(res, indent=1, default=str))
+    log_call({"cmd": "validate", "snapshot": a.snapshot, "valid": res.get("valid"), "seconds": res["validate_s"],
+              "ok": bool(res.get("valid")), "summary": res.get("summary")})
+    # A compact view for the agent; the full record is in --out.
+    view = {k: res.get(k) for k in ("valid", "summary", "reasons", "verifier_kind", "timings", "leak_check")}
+    view["base"] = {k: v for k, v in (res.get("base") or {}).items() if k in ("reward", "p2p_exit", "f2p_exit", "f2p_class", "f2p_class_evidence", "verify_s", "p2p_tail", "f2p_tail")}
+    view["ref"] = [{k: v for k, v in r.items() if k in ("reward", "p2p_exit", "f2p_exit", "verify_s", "patch_applied", "f2p_tail", "p2p_tail")} for r in (res.get("ref") or [])]
+    view["out"] = a.out
+    return out(view, 0 if res.get("valid") else 1)
+
+
+# ---------------------------------------------------------------------------- main
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="dt", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sn = sub.add_parser("snapshot").add_subparsers(dest="sub", required=True)
+    b = sn.add_parser("build"); b.add_argument("--dockerfile", required=True); b.add_argument("--name", required=True)
+    b.add_argument("--cpu", type=int, default=MAX_CPU); b.add_argument("--mem", type=int, default=MAX_MEM)
+    b.add_argument("--disk", type=int, default=MAX_DISK); b.add_argument("--timeout", type=int, default=3600)
+    b.add_argument("--log-file", default=""); b.set_defaults(fn=snapshot_build)
+    g = sn.add_parser("get"); g.add_argument("name"); g.set_defaults(fn=snapshot_get)
+    x = sn.add_parser("delete"); x.add_argument("name"); x.set_defaults(fn=snapshot_delete)
+    ls = sn.add_parser("list"); ls.add_argument("--prefix", default=""); ls.set_defaults(fn=snapshot_list)
+
+    sb = sub.add_parser("sandbox").add_subparsers(dest="sub", required=True)
+    c = sb.add_parser("create"); c.add_argument("--snapshot", required=True); c.add_argument("--no-network", action="store_true")
+    c.add_argument("--ttl-min", type=int, default=int(os.environ.get("DT_TTL_MIN", "240"))); c.add_argument("--purpose", default="work")
+    c.set_defaults(fn=sandbox_create)
+    dl = sb.add_parser("delete"); dl.add_argument("id"); dl.set_defaults(fn=sandbox_delete)
+    sl = sb.add_parser("list"); sl.add_argument("--key", default=None); sl.add_argument("--all-keys", action="store_true", default=False); sl.set_defaults(fn=sandbox_list)
+    dm = sb.add_parser("delete-mine"); dm.add_argument("--key", default=None); dm.set_defaults(fn=sandbox_delete_mine)
+
+    e = sub.add_parser("exec", add_help=False); e.set_defaults(fn=exec_cmd)
+
+    u = sub.add_parser("upload"); u.add_argument("id"); u.add_argument("local"); u.add_argument("remote"); u.set_defaults(fn=upload)
+    dn = sub.add_parser("download"); dn.add_argument("id"); dn.add_argument("remote"); dn.add_argument("local"); dn.set_defaults(fn=download)
+
+    v = sub.add_parser("validate"); v.add_argument("--snapshot", required=True); v.add_argument("--bundle", required=True)
+    v.add_argument("--workdir", required=True); v.add_argument("--oracle", default="")
+    v.add_argument("--ref-sha", action="append", default=[]); v.add_argument("--ref-runs", type=int, default=1)
+    v.add_argument("--timeout", type=int, default=1800); v.add_argument("--out", default="validation.json")
+    v.add_argument("--adapter-context", default=""); v.add_argument("--allow-network", action="store_true")
+    v.add_argument("--keep-failed", action="store_true"); v.set_defaults(fn=validate)
+
+    argv = sys.argv[1:]
+    if argv and argv[0] == "exec":
+        # Hand-parsed: `dt exec ID [--cwd D] [--timeout S] [--env K=V]... [--json] [--tail N] -- CMD...`.
+        # argparse's REMAINDER would swallow the options that follow the positional id.
+        a = argparse.Namespace(cmd="exec", id=None, cwd=None, timeout=600, env=[], json=False, tail=20000, fn=exec_cmd)
+        rest = argv[1:]
+        i = 0
+        while i < len(rest):
+            t = rest[i]
+            if t == "--":
+                i += 1
+                break
+            if t in ("--cwd", "--timeout", "--env", "--tail") and i + 1 < len(rest):
+                v = rest[i + 1]
+                if t == "--cwd":
+                    a.cwd = v
+                elif t == "--timeout":
+                    a.timeout = int(v)
+                elif t == "--tail":
+                    a.tail = int(v)
+                else:
+                    a.env.append(v)
+                i += 2
+                continue
+            if t.startswith("--cwd=") or t.startswith("--timeout=") or t.startswith("--env=") or t.startswith("--tail="):
+                k, v = t[2:].split("=", 1)
+                if k == "cwd":
+                    a.cwd = v
+                elif k == "timeout":
+                    a.timeout = int(v)
+                elif k == "tail":
+                    a.tail = int(v)
+                else:
+                    a.env.append(v)
+                i += 1
+                continue
+            if t == "--json":
+                a.json = True
+                i += 1
+                continue
+            if a.id is None and not t.startswith("-"):
+                a.id = t
+                i += 1
+                continue
+            break  # first command token
+        a.cmd = rest[i:]
+        if not a.id or not a.cmd:
+            print("usage: dt exec ID [--cwd D] [--timeout S] [--env K=V] [--json] -- CMD...", file=sys.stderr)
+            return 2
+        return exec_cmd(a)
+    a = ap.parse_args(argv)
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

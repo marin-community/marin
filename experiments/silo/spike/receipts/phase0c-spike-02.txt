@@ -1,0 +1,25 @@
+[0c] runc container id: 965dcb1a26fd648fa3c4dd9fb3e0b038a24aed9ea9b985fefb4890d008b663d4
+[0c] runc nerdctl exit=0 -> rc=0 stdout=out| stderr=err|
+[0c] runc ctr     exit=0 -> rc=0 stdout=out| stderr=err|
+[0c] runc nerdctl exit=3 -> rc=1 stdout=out| stderr=err|time="2026-09-22T17:57:29Z" level=fatal msg="exec failed with exit code 3"|
+[0c] runc ctr     exit=3 -> rc=3 stdout=out| stderr=err|
+[0c] runc nerdctl exit=124 -> rc=1 stdout=out| stderr=err|time="2026-09-22T17:57:29Z" level=fatal msg="exec failed with exit code 124"|
+[0c] runc ctr     exit=124 -> rc=124 stdout=out| stderr=err|
+[0c] runc nerdctl exit=137 -> rc=1 stdout=out| stderr=err|time="2026-09-22T17:57:29Z" level=fatal msg="exec failed with exit code 137"|
+[0c] runc ctr     exit=137 -> rc=137 stdout=out| stderr=err|
+[0c] runc ctr --cwd /tmp -> /tmp| rc=0
+[0c] runc ctr env A=1 -> A=1|
+[0c] runc ctr stdin 1MiB rc=0 sha_match=yes
+[0c] runsc container id: bb4ef94e8c73b70d9f42df87339bb59d297ccc8b1bf69ec6d5dd386d19f52db5
+[0c] runsc nerdctl exit=0 -> rc=0 stdout=out| stderr=err|
+[0c] runsc ctr     exit=0 -> rc=0 stdout=out| stderr=err|
+[0c] runsc nerdctl exit=3 -> rc=1 stdout=out| stderr=err|time="2026-09-22T17:57:30Z" level=fatal msg="exec failed with exit code 3"|
+[0c] runsc ctr     exit=3 -> rc=3 stdout=out| stderr=err|
+[0c] runsc nerdctl exit=124 -> rc=1 stdout=out| stderr=err|time="2026-09-22T17:57:30Z" level=fatal msg="exec failed with exit code 124"|
+[0c] runsc ctr     exit=124 -> rc=124 stdout=out| stderr=err|
+[0c] runsc nerdctl exit=137 -> rc=1 stdout=out| stderr=err|time="2026-09-22T17:57:30Z" level=fatal msg="exec failed with exit code 137"|
+[0c] runsc ctr     exit=137 -> rc=137 stdout=out| stderr=err|
+[0c] runsc ctr --cwd /tmp -> /tmp| rc=0
+[0c] runsc ctr env A=1 -> A=1|
+[0c] runsc ctr stdin 1MiB rc=0 sha_match=yes
+[0c] done
