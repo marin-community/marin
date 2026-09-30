@@ -25,6 +25,18 @@ SOURCES = {
     "laion__nemotron-gym-agent-calendar-v2": ("tool-use", "agent_calendar"),
     "laion__nemotron-gym-instruction-following-calendar-v3": ("instruction-following", "nemotron_if_structured"),
 }
+_OUTPUT_INSTRUCTION = (
+    "You are scheduling events on a calendar. Read the conversation below and "
+    "write your final calendar as a JSON list to `/app/answer.txt`. Each event "
+    "must include `event_id` (int), `event_name` (str), `start_time` "
+    '("HH:MM"), and `duration` (minutes). Events must not overlap. The verifier '
+    "checks the exact event set, duration, time window, declared constraints, "
+    "and pairwise overlap.\n\n---\n\n"
+)
+_FINAL_ANSWER_INSTRUCTION = _OUTPUT_INSTRUCTION.replace(
+    "write your final calendar as a JSON list to `/app/answer.txt`.",
+    "write your final calendar as a JSON list in your final response.",
+)
 _ADAPTER = Path(__file__).with_name("calendar_adapter.py")
 
 
@@ -86,6 +98,11 @@ def import_task(archive: TaskArchive, *, runtime_image: str) -> TaskSpec:
         ):
             raise ValueError("Unsupported TaskTrove calendar script contract")
         instructions = archive.files["instruction.md"].decode().strip()
+        if not instructions.startswith(_OUTPUT_INSTRUCTION):
+            raise ValueError("Unsupported TaskTrove calendar instruction shape")
+        # Both registered source converters share this fixed header. Only its
+        # file-output sentence is incompatible with TaskCompendium's text answer.
+        instructions = _FINAL_ANSWER_INSTRUCTION + instructions[len(_OUTPUT_INSTRUCTION) :]
         checker = archive.files[f"tests/{CHECKER}"]
         expected_events = archive.files[f"tests/{DATA}"]
         if not instructions or not checker or not _valid_expected_events(json.loads(expected_events)):
