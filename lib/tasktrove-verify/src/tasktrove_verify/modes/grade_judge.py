@@ -86,9 +86,9 @@ logger = logging.getLogger(__name__)
 
 
 class JudgeInfrastructureError(RuntimeError):
-    """A judge endpoint failed or returned a response without a valid score."""
+    """A request, scorer, or deterministic check failed without a valid grade."""
 
-    def __init__(self, message: str, evidence: dict | None = None):
+    def __init__(self, message: str, evidence: dict[str, object] | None = None):
         super().__init__(message)
         self.evidence = evidence or {}
 
@@ -112,10 +112,45 @@ class _JudgeClient:
 
 
 @dataclass(frozen=True)
+class _JudgeAttempt:
+    number: int
+    response: str | None = None
+    error: str | None = None
+
+    def evidence(self) -> dict[str, int | str]:
+        result: dict[str, int | str] = {"attempt": self.number}
+        if self.response is not None:
+            result["response"] = self.response
+        if self.error is not None:
+            result["error"] = self.error
+        return result
+
+
+@dataclass(frozen=True)
 class _JudgeAnswer:
     score: float
     response: str
-    attempts: list[dict]
+    attempts: tuple[_JudgeAttempt, ...]
+
+
+@dataclass(frozen=True)
+class _ChecklistResult:
+    criterion: str
+    passed: bool
+    reasoning: str
+    prompt: str
+    response: str
+    attempts: tuple[_JudgeAttempt, ...]
+
+    def evidence(self) -> dict[str, object]:
+        return {
+            "criterion": self.criterion,
+            "passed": self.passed,
+            "reasoning": self.reasoning,
+            "prompt": self.prompt,
+            "response": self.response,
+            "attempts": [attempt.evidence() for attempt in self.attempts],
+        }
 
 
 def grade(spec: Spec, tests_dir: Path, workspace: Path, runtime: JudgeRuntimeConfig | None = None) -> Reward:
@@ -246,7 +281,7 @@ def _judge_reference(
         prompt=prompt,
         reasoning=_reasoning(answer.response),
         response=answer.response,
-        attempts=answer.attempts,
+        attempts=[attempt.evidence() for attempt in answer.attempts],
     )
 
 
@@ -259,7 +294,7 @@ def _judge_checklist(
 ) -> Reward:
     judge = _client(spec, runtime)
     context_block = f"\nReference context (not the candidate):\n{context.strip()}\n" if context.strip() else ""
-    results = []
+    results: list[_ChecklistResult] = []
     budget = _CallBudget(runtime.max_requests) if runtime is not None else None
     for criterion in criteria:
         prompt = CHECKLIST_PROMPT.format(
@@ -271,46 +306,61 @@ def _judge_checklist(
             evidence = error.evidence if isinstance(error, JudgeInfrastructureError) else {}
             raise JudgeInfrastructureError(
                 f"judge request failed for criterion {criterion!r}: {error}",
-                {"model": judge.model, "criteria": results, "prompt": prompt, **evidence},
+                {
+                    "model": judge.model,
+                    "criteria": [result.evidence() for result in results],
+                    "prompt": prompt,
+                    **evidence,
+                },
             ) from error
         results.append(
-            {
-                "criterion": criterion,
-                "passed": answer.score >= 1.0,
-                "reasoning": _reasoning(answer.response),
-                "prompt": prompt,
-                "response": answer.response,
-                "attempts": answer.attempts,
-            }
+            _ChecklistResult(
+                criterion=criterion,
+                passed=answer.score >= 1.0,
+                reasoning=_reasoning(answer.response),
+                prompt=prompt,
+                response=answer.response,
+                attempts=answer.attempts,
+            )
         )
-    passed = sum(1 for result in results if result["passed"])
-    return scored(passed / len(results), model=judge.model, passed=passed, total=len(results), criteria=results)
+    passed = sum(result.passed for result in results)
+    return scored(
+        passed / len(results),
+        model=judge.model,
+        passed=passed,
+        total=len(results),
+        criteria=[r.evidence() for r in results],
+    )
 
 
 def _ask(
     client: openai.OpenAI, model: str, prompt: str, timeout: float, budget: _CallBudget | None, rubric: str
 ) -> _JudgeAnswer:
     """The parsed score and raw reply, retrying once when the model leaves out the SCORE line."""
-    attempts: list[dict] = []
+    attempts: list[_JudgeAttempt] = []
     for attempt in range(1, ATTEMPTS + 1):
         try:
             if budget is not None:
                 budget.consume()
         except JudgeInfrastructureError as error:
-            raise JudgeInfrastructureError(str(error), {"attempts": attempts}) from error
-        entry: dict[str, int | str] = {"attempt": attempt}
+            raise JudgeInfrastructureError(str(error), {"attempts": [item.evidence() for item in attempts]}) from error
+        entry = _JudgeAttempt(number=attempt)
         attempts.append(entry)
         try:
             reply = _complete(client, model, prompt, timeout)
         except Exception as error:
-            entry["error"] = f"{type(error).__name__}: {error}"
-            raise JudgeInfrastructureError(f"judge endpoint request failed: {error}", {"attempts": attempts}) from error
-        entry["response"] = reply
+            attempts[-1] = _JudgeAttempt(number=attempt, error=f"{type(error).__name__}: {error}")
+            raise JudgeInfrastructureError(
+                f"judge endpoint request failed: {error}", {"attempts": [item.evidence() for item in attempts]}
+            ) from error
+        attempts[-1] = _JudgeAttempt(number=attempt, response=reply)
         score = _score(reply, rubric)
         if score is not None:
-            return _JudgeAnswer(score=score, response=reply, attempts=attempts)
+            return _JudgeAnswer(score=score, response=reply, attempts=tuple(attempts))
         logger.warning("judge %s returned no SCORE line on attempt %d", model, attempt)
-    raise JudgeInfrastructureError("judge returned no parseable score after retries", {"attempts": attempts})
+    raise JudgeInfrastructureError(
+        "judge returned no parseable score after retries", {"attempts": [item.evidence() for item in attempts]}
+    )
 
 
 def _complete(client: openai.OpenAI, model: str, prompt: str, timeout: float) -> str:
