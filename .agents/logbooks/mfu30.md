@@ -24,7 +24,8 @@ Toolkit: `autoresearch/loop-260930-mfu30/`. Prefix for entries and runs: `M30-`.
 - Arm: `python -m experiments.grug.moe_hero_ep.launch_diagnostics --run-id <id> --seed 0 --num-steps 180060
   --schedule-steps 390251 --batch-size 1024 --gc-interval 100 --restore-from <ckpt> --version dev --run`
   submitted with `iris --cluster=marin job run --target-cluster cw-us-east-08a --priority interactive
-  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 3540`, env `WANDB_API_KEY`,
+  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB` (no `--timeout`: it counts Kueue queue time;
+  `m30a-hmo-01` died gated at 59m57s), env `WANDB_API_KEY`,
   `WANDB_PROJECT=marin_moe`, a unique `IRIS_PORT_JAX`. `--num-steps` is an absolute stop step.
 - Score steps 180005-180059 (median). Profiled arms add `--profile-start-step 180021 --profile-steps 3`
   and score outside the profiled steps.
