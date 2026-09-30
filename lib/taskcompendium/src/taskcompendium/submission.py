@@ -55,12 +55,6 @@ class AnswerFormat(StrEnum):
     FINAL_ACTION = "final_action"
 
 
-class SubmissionFailurePolicy(StrEnum):
-    """Reward assigned when an agent ends with an invalid submission."""
-
-    ZERO_REWARD = "zero_reward"
-
-
 @dataclass(frozen=True)
 class GradingAttempt:
     """Trial evidence available to submission conventions and verifiers."""
@@ -104,7 +98,6 @@ class Convention(BaseModel, ABC):
 
     id: str
     answer_format: AnswerFormat
-    submission_failure_policy: SubmissionFailurePolicy = SubmissionFailurePolicy.ZERO_REWARD
 
     @model_validator(mode="after")
     def validate_convention(self) -> Self:
