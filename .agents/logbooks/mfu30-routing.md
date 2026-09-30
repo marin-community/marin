@@ -136,3 +136,45 @@ fcec70f93d) with `--profile-start-step 180021 --profile-steps 3`. All three chan
 the gate, so one stacked arm measures the deployable set; the profile attributes the removed kernels.
 Expected: +1.5-2% throughput (0.2-0.25 s/step if the component wins carry over), loss equal to
 `mhep-ctx4k-s0-20260930` at every step if the hero step is deterministic, peak HBM unchanged or lower.
+
+## M30B-009 Pricing: expert-side router gradient + saved MoE output (2026-09-30)
+
+Fidelity ruling (orchestrator): rounding/reassociation changes are allowed inside the same-code loss
+band; anything that changes drops, capacity or chunking is not.
+
+Idea: the backward needs the down-projection output y only through `returned`, for (a) the combine's
+router-weight gradient dS[t,k] = <dout[t], y[t,k]> and (b) the combine output, which feeds the W_up
+weight gradient and the SConv input. Save the combine output (the latent MoE output) and compute dS on
+the expert side from values the MLP backward already has: dy = w * dout rows, dh = dy @ W2^T, so
+<dout, y> = rowsum(dh * h) / w. The remat then no longer needs y, `returned` or the combine.
+
+Design (keeps the forward and dx, dW13, dW2 bitwise, changes only dS at rounding level):
+- One `custom_vjp` over `_moe_mlp_ep_ragged_a2a_local`. Its backward is the current one written out:
+  the weighted gather of dout into sorted order, then per chunk in reverse: reverse-return a2a, the QuACK
+  backward, the reverse dispatch chained into one buffer. It adds s = rowsum(dh * h) per expert row
+  (fused into the SwiGLU backward or a separate [C, I] reduce), one small [C, 1] f32 a2a per chunk that
+  returns s to the token side, and dS = s / w on accepted assignments with w != 0 (0 otherwise; the
+  router weights are renormalized sigmoids in bf16, so an exactly-zero accepted weight is not expected).
+- Remat policy saves the MoE latent output (checkpoint name, on device). JAX's remat DCE then drops the
+  recomputed down GEMM, both return a2as, and the combine gather-sum.
+- The chunk barrier currently ties chunk c+1's dispatch to chunk c's `returned`. That would keep the
+  return alive in the remat. It must tie to chunk c's SwiGLU output h instead, which lets dispatch c+1
+  start after the gated GEMM c in the forward pass (one extra [C, H] buffer live, schedule change).
+
+Price from the Sep 24 trace, s/step:
+| item | change |
+|---|---|
+| remat down GEMM, 2 chunks (`ffi_call.341/.342`) | -0.279 |
+| remat return a2a, exposed (`ragged-all-to-all.1.1` 0.181, `.3.1` 0.001) | -0.18 |
+| remat combine gather-sum (`triton_kernel_call.17`) | -0.027 |
+| combine backward: Sonic bwd (reads `returned`) -> gather-multiply | -0.015 to -0.03 |
+| SM contention: `.3.1` (0.207 busy) no longer shares SMs with GEMMs (~22% per C) | ~-0.04, low confidence |
+| s = rowsum(dh * h): fused, or a separate [C, I] reduce | 0 to +0.05 |
+| 96 small a2as in the backward | <= +0.005 |
+| stacking the saved output per layer | +0.005 |
+| **net** | **-0.40 to -0.50** |
+
+HBM: saved latent output [65536, 3072] bf16 = 402.7 MB/layer, 48 layers = 19.3 GB = 18.0 GiB on device.
+The recompute no longer materializes `returned` (3.2 GB) or the two y chunks (1.85 GB each); whether that
+lowers the backward peak depends on where the peak sits. Fallback: offload the saved output to pinned host
+like the carry (0.4 GB per layer each way).
