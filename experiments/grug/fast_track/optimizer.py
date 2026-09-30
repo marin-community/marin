@@ -196,6 +196,15 @@ _KDA_BETA_MLP_LEAVES = frozenset({"w_beta_down", "w_beta_up"})
 
 
 # Matrix families that ``okls_targets`` can move from MuonH to the OKLS direction.
+# Matrix types for ``muon_truncate_family`` (the attention families split by layer kind).
+_TRUNCATE_FAMILIES: dict[str, re.Pattern] = {
+    "kda": re.compile(r"kda_blocks\.stacked\.attn\.w_\w+$"),
+    "mla": re.compile(r"(?<!kda_blocks\.)stacked_blocks\.stacked\.attn\.w_\w+$"),
+    "latent": re.compile(r"\.mlp\.w_latent_(down|up)$"),
+    "shared": re.compile(r"\.shared\.\d+\.w_(gate|up|down)$"),
+    "routed": re.compile(r"\.mlp\.expert_mlp\.w_(gate|up|down)$"),
+}
+
 _OKLS_FAMILIES: dict[str, re.Pattern] = {
     "attn": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(q|k|v|o|g|dkv|uk|uv|q2|uk2)$"),
     "routed": re.compile(r"\.mlp\.expert_mlp\.w_(gate|up|down)$"),
@@ -686,6 +695,7 @@ def scale_with_grug_muonh(
     pre_norm: str = "none",
     top_shrink: float = 0.0,
     precond_beta2: float | None = None,
+    truncate_frac: float = 0.0,
     momentum_schedule=None,
     bimaxwell_switch_step: int | None = None,
     bimaxwell_rails: BiMaxwellRails = DEFAULT_RAILS,
@@ -725,6 +735,7 @@ def scale_with_grug_muonh(
         pre_norm=pre_norm,
         top_shrink=top_shrink,
         precond_beta2=precond_beta2,
+        truncate_frac=truncate_frac,
     )
     momentum_stage = (
         scale_by_muon_momentum(
@@ -1248,6 +1259,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muonh_qk_momentum: float | None = None
     """MuonH momentum for the query/key projections (None: ``momentum``)."""
     muonh_routed_momentum: float | None = None
+    muon_truncate_family: str | None = None
+    """Matrix type (``_TRUNCATE_FAMILIES``) whose MuonH updates drop their weakest ``muon_truncate_frac`` of
+    singular directions (``_truncate_bottom_directions``). None: no truncation."""
+    muon_truncate_frac: float = 0.0
     muonh_routed_slow_rate: float | None = None
     """The routed experts' Bi-Maxwell slow-rail EMA rate (None: ``BiMaxwellRails``'s default, 0.02)."""
     muonh_routed_slow_weight: float | None = None
@@ -1444,6 +1459,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 momentum: float | None = None,
                 rails: BiMaxwellRails = DEFAULT_RAILS,
                 switch_step: int | None = None,
+                truncate_frac: float = 0.0,
             ):
                 momentum = self.momentum if momentum is None else momentum
                 switch_step = default_switch if switch_step is None else switch_step
@@ -1468,6 +1484,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         pre_norm=self.muon_pre_norm,
                         top_shrink=self.muon_top_shrink,
                         precond_beta2=self.muon_precond_beta2,
+                        truncate_frac=truncate_frac,
                         retraction=self.muonh_retraction,
                         spectral_radius_c=self.spectral_radius_c,
                         momentum_schedule=momentum_schedule,
@@ -1586,6 +1603,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     _match_named_update_sharding(),
                 ),
                 "muonh_attn": muonh_transform_at(learning_rate * self.muonh_attn_lr_mult, 2),
+                "muonh_trunc": muonh_transform_at(learning_rate, 5, truncate_frac=self.muon_truncate_frac),
                 "muonh_qk": muonh_transform_at(
                     learning_rate * self.muonh_qk_lr_mult, 4, momentum=self.muonh_qk_momentum
                 ),
@@ -1710,6 +1728,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         return inner
 
     def __post_init__(self):
+        if self.muon_truncate_family is not None and self.muon_truncate_family not in _TRUNCATE_FAMILIES:
+            raise ValueError(f"muon_truncate_family must be one of {sorted(_TRUNCATE_FAMILIES)}")
+        if (self.muon_truncate_family is None) != (
+            self.muon_truncate_frac == 0.0
+        ) or not 0.0 <= self.muon_truncate_frac < 1:
+            raise ValueError("muon_truncate_family and a muon_truncate_frac in (0, 1) go together")
         if self.routed_expert_optimizer not in ("muonh", "adam"):
             raise ValueError(f"routed_expert_optimizer must be muonh or adam, got {self.routed_expert_optimizer!r}")
         if self.embed2_update not in ("adam", "sinkhorn"):
@@ -1741,6 +1765,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             group = _base_group(param, path)
             if group == "muonh":
                 path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+                if self.muon_truncate_family is not None and _TRUNCATE_FAMILIES[self.muon_truncate_family].search(
+                    path_lower
+                ):
+                    return "muonh_trunc"
                 if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.okls_targets):
                     return "okls"
                 if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.muon_free_families):

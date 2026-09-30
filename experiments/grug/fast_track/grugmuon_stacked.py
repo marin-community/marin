@@ -139,6 +139,37 @@ def _shrink_top_direction(direction, m, amount: float):
     return shrunk.astype(direction.dtype)
 
 
+def _truncate_bottom_directions(direction, m, frac: float):
+    """Zero the bottom ``frac`` of ``direction``'s singular directions, ranked by the Newton-Schulz input ``m``.
+
+    Newton-Schulz is an odd polynomial in ``m``, so its output shares ``m``'s singular vectors; projecting it onto the
+    span of ``m``'s top ``(1 - frac) min(rows, cols)`` singular vectors (from ``eigh`` of the Gram on the smaller side)
+    removes exactly the weakest directions and leaves the others' Newton-Schulz values unchanged."""
+    if not _is_matrix_stack(direction):
+        return direction
+    rows, cols = m.shape[-2:]
+    rank = min(rows, cols)
+    keep = rank - round(frac * rank)
+    if keep <= 0:
+        raise ValueError(f"truncate_frac {frac} keeps no direction of a rank-{rank} matrix")
+    target = _target_named_sharding(direction)
+    m32, d32 = m.astype(jnp.float32), direction.astype(jnp.float32)
+    if target is not None:
+        spec = tuple(target.spec) + (None,) * (direction.ndim - len(target.spec))
+        # eigh and the projections need each matrix whole; stacked (layer, expert) axes stay sharded.
+        whole = PartitionSpec(*spec[:-2], None, None)
+        m32, d32 = reshard(m32, whole), reshard(d32, whole)
+    if cols <= rows:
+        basis = jnp.linalg.eigh(jnp.swapaxes(m32, -1, -2) @ m32)[1][..., -keep:]
+        out = (d32 @ basis) @ jnp.swapaxes(basis, -1, -2)
+    else:
+        basis = jnp.linalg.eigh(m32 @ jnp.swapaxes(m32, -1, -2))[1][..., -keep:]
+        out = basis @ (jnp.swapaxes(basis, -1, -2) @ d32)
+    if target is not None:
+        out = reshard(out, target.spec)
+    return out.astype(direction.dtype)
+
+
 def _grug_scale_with_muon(
     momentum=0.95,
     nesterov=True,
@@ -149,6 +180,7 @@ def _grug_scale_with_muon(
     pre_norm: str = "none",
     top_shrink: float = 0.0,
     precond_beta2: float | None = None,
+    truncate_frac: float = 0.0,
 ):
     """Muon gradient transformation for the stacked model (2D/3D/4D leaves).
 
@@ -159,7 +191,8 @@ def _grug_scale_with_muon(
     SAMuon's ``gamma * NS(M) - (gamma - 1) u1 v1^T`` once the hyperball step fixes the overall scale.
     ``precond_beta2`` (Muon2, arXiv 2604.09967) divides the momentum elementwise by the root of a
     bias-corrected EMA of the squared gradient before Newton-Schulz; the state is then
-    ``(ScaleByMuonState, count, second_moment)``.
+    ``(ScaleByMuonState, count, second_moment)``. ``truncate_frac`` zeroes the weakest fraction of each
+    matrix's singular directions after Newton-Schulz (``_truncate_bottom_directions``).
 
     With ``head_dim``, the stacked attention projections (``_head_axis``) are orthogonalized per head:
     each ``[D, head_dim]`` (or ``[head_dim, D]``) block of every layer is its own Newton-Schulz matrix.
@@ -282,6 +315,13 @@ def _grug_scale_with_muon(
         if top_shrink:
             updates = jax.tree.map(
                 lambda o, m: _shrink_top_direction(o, m, top_shrink), updates, momentum_dirs, is_leaf=lambda x: x is None
+            )
+        if truncate_frac:
+            updates = jax.tree.map(
+                lambda o, m: _truncate_bottom_directions(o, m, truncate_frac),
+                updates,
+                momentum_dirs,
+                is_leaf=lambda x: x is None,
             )
         if head_axes is not None:
             updates = jax.tree.map(
