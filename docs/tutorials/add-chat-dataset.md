@@ -31,7 +31,10 @@ Adapt these parts:
 A `StepSpec` describes a processing step and its dependencies. The copied factory
 connects the pinned download to `transform_chat`, then to chat normalization.
 `transform_chat` uses Zephyr to read rows, apply your converter with `flat_map`,
-and write the returned documents as Parquet using `CHAT_SCHEMA`.
+and write the returned documents as Parquet using `CHAT_SCHEMA`. It returns a
+`ConvertedChatData` artifact containing the output path and conversion counters.
+The normalization step reads that artifact and preserves its counters alongside
+the normalization counters in a `ChatSourceData` artifact.
 
 ## 2. Adapt the row converter
 
@@ -87,7 +90,7 @@ The full output contract is enforced in
 [chat_normalize.py](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/datakit/chat_normalize.py).
 To retain extra fields such as reward or teacher, pass them to the document helper,
 extend `CHAT_SCHEMA` with their Arrow fields, and use that schema for both the
-Parquet writer and `normalize_chat_step(output_schema=...)`.
+Parquet writer and `normalize_chat_source(output_schema=...)`.
 
 ## 3. Register the source
 
@@ -131,28 +134,32 @@ from pprint import pprint
 
 import pyarrow.parquet as pq
 
-from marin.datakit.chat_normalize import normalize_chat_to_parquet
+from marin.datakit.chat_normalize import normalize_chat_source
 from marin.datakit.download.example import transform_chat
 
-transform_chat("scratch/chat-fixture", "scratch/chat-processed")
-artifact = normalize_chat_to_parquet(
-    input_path="scratch/chat-processed",
+converted = transform_chat("scratch/chat-fixture", "scratch/chat-processed")
+artifact = normalize_chat_source(
+    source=converted,
     output_path="scratch/chat-normalized",
 )
 print(artifact.main_output_dir)
-print(artifact.counters)
-parquet_file = next(Path(artifact.main_output_dir).rglob("*.parquet"))
-batch = next(pq.ParquetFile(parquet_file).iter_batches(batch_size=1))
-pprint(batch.to_pylist()[0]["messages"])
+pprint(artifact.counters["conversion"])
+pprint(artifact.counters["normalization"])
+for parquet_file in Path(artifact.main_output_dir).rglob("*.parquet"):
+    for batch in pq.ParquetFile(parquet_file).iter_batches(batch_size=1):
+        pprint(batch.to_pylist()[0]["messages"])
 ```
 
 Run `uv run python scratch/check_chat_source.py`. Use fresh output directories
-when rerunning after a converter change: the copied writer skips existing files.
+when changing the fixture's input files so old shards cannot enter the check.
 If you extended `CHAT_SCHEMA`, pass it as `output_schema` to the normalizer here too.
 
 Inspect the output Parquet and compare messages with the input records. Check that
 requests, reasoning, tool definitions, and replies survived. Review filter,
-quarantine, and duplicate counts. Quarantine counters count dropped rows; no
+quarantine, and duplicate counts. `counters["conversion"]` contains source filters
+and conversion quarantines; `counters["normalization"]` contains validation,
+normalization filters, and deduplication counts. These groups describe separate
+executions: do not sum their input or output counts. Quarantine counters count dropped rows; no
 separate quarantine file is saved. Reproduce unexpected drops with individual
 fixture records. Normalization fails if more than 5% of its input records have
 empty messages or fail validation; investigate those failures before proceeding.
@@ -169,6 +176,7 @@ uv run --no-project infra/ci/run_tests.py
 To process the full registered source, use this in a separate script:
 
 ```python
+from marin.datakit.chat_normalize import ChatSourceData
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sft_sources import all_sft_sources
 from marin.execution.artifact import read_artifact
@@ -176,7 +184,7 @@ from marin.execution.step_runner import StepRunner
 
 source = all_sft_sources()["example"]
 StepRunner().run([source.normalized], max_concurrent=1)
-chat = read_artifact(source.chat_normalized.output_path, NormalizedData)
+chat = read_artifact(source.chat_normalized.output_path, ChatSourceData)
 text = read_artifact(source.normalized.output_path, NormalizedData)
 print(chat.main_output_dir, chat.counters)
 print(text.main_output_dir, text.counters)

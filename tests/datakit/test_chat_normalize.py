@@ -11,13 +11,18 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.chat_normalize import (
     ChatChannel,
+    ChatSourceData,
+    ConvertedChatData,
     _normalize_chat_record,
+    normalize_chat_source,
     normalize_chat_to_parquet,
     validate_chat_messages,
 )
 from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.coderforge import SOURCE_CHAT_SCHEMA
 from marin.datakit.download.coderforge import transform_chat as transform_coderforge_chat
+from marin.datakit.download.superior_reasoning import STAGES, transform_chat
+from marin.execution.artifact import read_artifact, write_artifact
 from openai_harmony import Author, Message, Role
 
 
@@ -25,6 +30,38 @@ from openai_harmony import Author, Message, Role
 def flow_backend_ctx():
     with set_current_client(LocalClient()):
         yield
+
+
+def test_chat_source_retains_conversion_drops_and_normalization_counts(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    records = [
+        {"input": "Question", "output": "Answer"},
+        {"input": "Question", "output": "Answer"},
+        {"input": "Missing answer", "output": ""},
+        {"input": "Invalid markup", "output": "<tool_call>bad</tool_call>"},
+    ]
+    for stage in STAGES:
+        (input_dir / stage).write_text("".join(json.dumps(record) + "\n" for record in records))
+    processed_dir = str(tmp_path / "processed")
+    converted = transform_chat(str(input_dir), processed_dir)
+    write_artifact(converted, processed_dir)
+
+    normalized_dir = str(tmp_path / "normalized")
+    result = normalize_chat_source(source=read_artifact(processed_dir, ConvertedChatData), output_path=normalized_dir)
+    write_artifact(result, normalized_dir)
+    loaded = read_artifact(normalized_dir, ChatSourceData)
+
+    conversion = loaded.counters["conversion"]
+    assert conversion["superior_reasoning/chat/missing_text_filtered"] == 2
+    assert conversion["superior_reasoning/chat/quarantined"] == 2
+    normalization = loaded.counters["normalization"]
+    assert normalization["normalize_chat/records_validated"] == 4
+    assert normalization["normalize/unique_records_out"] == 1
+    assert normalization["normalize/duplicate_records_out"] == 3
+    rows = [row for path in Path(loaded.main_output_dir).glob("*.parquet") for row in pq.read_table(path).to_pylist()]
+    assert len(rows) == 1
+    assert rows[0]["messages"][-1]["content"] == [{"type": "text", "text": "Answer"}]
 
 
 def test_normalization_preserves_native_harmony_channels_without_interpreting_text():
