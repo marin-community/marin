@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import dataclasses
 import functools
 import gc
@@ -59,6 +61,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
+from shape_extensions import IntVar
 
 from experiments.grug.checkpointing import (
     LEGACY_STATE_KEY,
@@ -167,9 +170,7 @@ def checkpoint_stores_master(candidate: str) -> bool:
     return any(path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers)
 
 
-def template_for_candidate_layout(
-    state: "GrugTrainState", candidate: str, run_mode: MasterParamMode
-) -> "GrugTrainState":
+def template_for_candidate_layout(state: GrugTrainState, candidate: str, run_mode: MasterParamMode) -> GrugTrainState:
     """Pick the template restore reads checkpoint ``candidate`` with.
 
     Restore reads only the leaves the template names and takes each dtype from storage, checking
@@ -192,7 +193,7 @@ def template_for_candidate_layout(
     return dataclasses.replace(state, params=None, master_params=state.params)
 
 
-def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
+def take_master_as_params(state: GrugTrainState) -> GrugTrainState:
     """Move a master restored through ``template_for_candidate_layout`` into ``params``."""
     if state.master_params is None:
         return state
@@ -555,7 +556,9 @@ def build_tagged_evaluator(
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
-    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def eval_loss_fn(
+        model: Transformer, batch: LmExample | GrugLmExample
+    ) -> tuple[jax.Array[[int, int]], jax.Array[[int, int]], jax.Array[[int, int]]]:  # each [B, S]
         # Evaluate at the compute dtype, as the train step does at `mp.cast_to_compute(params)`.
         # Parameters are stored float32, and `gpu_fa4_cute` accepts only bf16/fp16, so without this
         # every eval raises `TypeError: ... supports only bf16/fp16, got float32` on Blackwell. The
@@ -678,15 +681,15 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 @register_dataclass
 @dataclass(frozen=True)
 class GrugTrainState:
-    step: jax.Array
+    step: jax.Array[[]]
     params: Transformer
     master_params: Transformer | None
     opt_state: optax.OptState
     ema_params: Transformer | None
-    pending_qb_betas: jax.Array
+    pending_qb_betas: jax.Array[[int, int]]  # [num_layers, num_experts]
 
 
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
+def _apply_qb_betas[L: IntVar, E: IntVar](model: Transformer, qb_betas: jax.Array[[L, E]]) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
     new_bias = -qb_betas
     new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
@@ -747,12 +750,12 @@ def initial_state(
     )
 
 
-def _drop_metrics(
-    dropped_assignments: jax.Array,
-    sender_dropped_assignments: jax.Array,
-    receiver_dropped_assignments: jax.Array,
-    skipped_padding_assignments: jax.Array,
-    valid_assignments: jax.Array,
+def _drop_metrics[L: IntVar](
+    dropped_assignments: jax.Array[[L]],
+    sender_dropped_assignments: jax.Array[[L]],
+    receiver_dropped_assignments: jax.Array[[L]],
+    skipped_padding_assignments: jax.Array[[L]],
+    valid_assignments: jax.Array[[L]],
     *,
     batch_size: int,
     sequence_length: int,
@@ -761,7 +764,7 @@ def _drop_metrics(
 ) -> dict[str, int | float]:
     # Per-layer int32 counts summed over layers in int64 on the host: the global totals exceed int32 at
     # large batch (jax_enable_x64 is off, so an in-device sum would overflow), and float32 would round them.
-    def _sum_int64(per_layer: jax.Array) -> int:
+    def _sum_int64(per_layer: jax.Array[[L]]) -> int:
         return int(np.asarray(per_layer).astype(np.int64).sum())
 
     dropped_assignments_host = _sum_int64(dropped_assignments)
@@ -831,7 +834,7 @@ def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_c
     z_loss = z_loss_weight if z_loss_weight > 0 else None
 
     @jax.jit
-    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
+    def diagnostic_watch_step[L: IntVar, E: IntVar](params: Transformer, batch, pending_qb_betas: jax.Array[[L, E]]):
         params = _apply_qb_betas(params, pending_qb_betas)
         return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
 

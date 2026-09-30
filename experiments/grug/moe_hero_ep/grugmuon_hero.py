@@ -16,6 +16,8 @@ array-stacked. The transform orthogonalizes each Muon leaf:
 The optimizer config (routing, LR groups, the MuonH hyperball step) lives in ``optimizer.py``.
 """
 
+from __future__ import annotations
+
 import math
 from importlib import import_module
 
@@ -28,6 +30,7 @@ from levanter.grug.sharding import _axis_names
 from levanter.optim.muon import ScaleByMuonState
 from levanter.optim.util import NEWTON_SCHULZ_COEFFICIENTS, CoefficientType
 from optax import tree_utils as otu
+from shape_extensions import IntVar
 
 
 def _intra_rack_axes(mesh) -> list[tuple[str, int]]:
@@ -121,12 +124,12 @@ def _grug_scale_with_muon_hero(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def _zeropower_via_newtonschulz_replicated(
-    X: jax.Array,
+def _zeropower_via_newtonschulz_replicated[M: IntVar, N: IntVar](
+    X: jax.Array[[M, N]],
     steps: int = 5,
     eps: float = 1e-7,
     coefficient_type: CoefficientType = "quintic",
-) -> jax.Array:
+) -> jax.Array[[M, N]]:
     """Newton-Schulz on a single matrix, fully replicated across devices.
 
     Replicates before iterating to avoid sharding ambiguity in the X @ X.T contractions. Runs in
@@ -135,97 +138,94 @@ def _zeropower_via_newtonschulz_replicated(
     P = PartitionSpec
     assert X.ndim == 2
     orig_dtype = X.dtype
-    X = X.astype(jnp.bfloat16)
+    normalized = X.astype(jnp.bfloat16)
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
     if has_mesh:
-        X = reshard(X, P(None, None))
-    X = X / (jnp.linalg.norm(X) + eps)
+        normalized = reshard(normalized, P(None, None))
+    normalized = normalized / (jnp.linalg.norm(normalized) + eps)
 
-    transpose = X.shape[0] > X.shape[1]
-    if transpose:
-        X = X.T
+    # The transpose gets a new name: rebinding the [M, N] parameter to an [N, M] value is a type error.
+    transpose = normalized.shape[0] > normalized.shape[1]
+    work: jax.Array[[int, int]] = normalized.T if transpose else normalized
 
     for i in range(steps):
         a, b, c = coeffs[i % len(coeffs)]
         out_sharding = P(None, None) if has_mesh else None
-        A = jnp.einsum("ik,jk->ij", X, X, out_sharding=out_sharding)
+        A = jnp.einsum("ik,jk->ij", work, work, out_sharding=out_sharding)
         B = b * A + c * jnp.einsum("ik,kj->ij", A, A, out_sharding=out_sharding)
-        X = a * X + jnp.einsum("ik,kj->ij", B, X, out_sharding=out_sharding)
+        work = a * work + jnp.einsum("ik,kj->ij", B, work, out_sharding=out_sharding)
 
-    if transpose:
-        X = X.T
-    return X.astype(orig_dtype)
+    result = work.T if transpose else work
+    return result.astype(orig_dtype)
 
 
-def _zeropower_via_newtonschulz_local(
-    X: jax.Array,
+def _zeropower_via_newtonschulz_local[M: IntVar, N: IntVar](
+    X: jax.Array[[M, N]],
     steps: int = 5,
     eps: float = 1e-7,
     coefficient_type: CoefficientType = "quintic",
-) -> jax.Array:
+) -> jax.Array[[M, N]]:
     """Run Newton-Schulz on a matrix that is already local to one device."""
     assert X.ndim == 2
     orig_dtype = X.dtype
-    X = X.astype(jnp.bfloat16)
+    normalized = X.astype(jnp.bfloat16)
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
-    X = X / (jnp.linalg.norm(X) + eps)
+    normalized = normalized / (jnp.linalg.norm(normalized) + eps)
 
-    transpose = X.shape[0] > X.shape[1]
-    if transpose:
-        X = X.T
+    # See `_zeropower_via_newtonschulz_replicated` for why the transpose uses a new name.
+    transpose = normalized.shape[0] > normalized.shape[1]
+    work: jax.Array[[int, int]] = normalized.T if transpose else normalized
 
     for i in range(steps):
         a, b, c = coeffs[i % len(coeffs)]
-        A = jnp.einsum("ik,jk->ij", X, X)
+        A = jnp.einsum("ik,jk->ij", work, work)
         B = b * A + c * jnp.einsum("ik,kj->ij", A, A)
-        X = a * X + jnp.einsum("ik,kj->ij", B, X)
+        work = a * work + jnp.einsum("ik,kj->ij", B, work)
 
-    if transpose:
-        X = X.T
-    return X.astype(orig_dtype)
+    result = work.T if transpose else work
+    return result.astype(orig_dtype)
 
 
-def _newtonschulz_batched_syrk(
-    X: jax.Array,
+def _newtonschulz_batched_syrk[K: IntVar, M: IntVar, N: IntVar](
+    X: jax.Array[[K, M, N]],
     steps: int,
     eps: float,
     coefficient_type: CoefficientType,
-) -> jax.Array:
+) -> jax.Array[[K, M, N]]:
     """Run batched Newton-Schulz with QuACK symmetric products (X @ X.T)."""
     quack_symmetric_gemm = import_module("levanter.grug._moe.quack_symmetric_cute").quack_symmetric_gemm
 
     orig_dtype = X.dtype
-    X = X.astype(jnp.bfloat16)
+    normalized = X.astype(jnp.bfloat16)
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
-    X = X / (jnp.linalg.norm(X, axis=(-2, -1), keepdims=True) + eps)
+    normalized = normalized / (jnp.linalg.norm(normalized, axis=(-2, -1), keepdims=True) + eps)
 
-    transpose = X.shape[-2] > X.shape[-1]
-    if transpose:
-        X = jnp.swapaxes(X, -1, -2)
+    # See `_zeropower_via_newtonschulz_replicated` for why the transpose uses a new name.
+    transpose = normalized.shape[-2] > normalized.shape[-1]
+    work: jax.Array[[int, int, int]] = jnp.swapaxes(normalized, -1, -2) if transpose else normalized
 
     for i in range(steps):
         a, b, c = coeffs[i % len(coeffs)]
-        A = quack_symmetric_gemm(X)
+        A = quack_symmetric_gemm(work)
         B = b * A + c * quack_symmetric_gemm(A)
-        X = a * X + jnp.matmul(B, X)
+        work = a * work + jnp.matmul(B, work)
 
-    if transpose:
-        X = jnp.swapaxes(X, -1, -2)
-    return X.astype(orig_dtype)
+    result = jnp.swapaxes(work, -1, -2) if transpose else work
+    return result.astype(orig_dtype)
 
 
-def _newtonschulz_4d_distributed(
+def _newtonschulz_4d_distributed[L: IntVar, E: IntVar, D: IntVar, F: IntVar](
     path,
-    x: jax.Array,
+    x: jax.Array[[L, E, D, F]],
     steps: int,
     eps: float,
     coefficient_type: CoefficientType,
     use_syrk: bool,
     target_sharding: NamedSharding | None = None,
-) -> jax.Array:
+) -> jax.Array[[L, E, D, F]]:
     """Run Newton-Schulz without gathering matrix dimensions.
 
     Preserve the parameter layout in the update so a composite expert/context
@@ -315,14 +315,14 @@ def _newtonschulz_4d_distributed(
     return updated_bf16.astype(x.dtype)
 
 
-def _newtonschulz_padded_stack_sharded(
-    X: jax.Array,
+def _newtonschulz_padded_stack_sharded[L: IntVar, M: IntVar, N: IntVar](
+    X: jax.Array[[L, M, N]],
     steps: int = 5,
     eps: float = 1e-7,
     coefficient_type: CoefficientType = "quintic",
     *,
     target_sharding: NamedSharding | None = None,
-) -> jax.Array:
+) -> jax.Array[[L, M, N]]:
     """Distribute a matrix stack over the intra-rack batch axes, zero-padding the leading axis."""
     P = PartitionSpec
     assert X.ndim == 3

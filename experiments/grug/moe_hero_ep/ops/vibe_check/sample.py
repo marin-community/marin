@@ -3,6 +3,8 @@
 
 """Strict, weights-only native sampling of one pinned hero checkpoint."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -28,6 +30,7 @@ from levanter.tensorstore_serialization import build_kvstore_spec
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Timer, log_time
+from shape_extensions import IntVar
 from transformers import AutoTokenizer
 
 from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
@@ -92,7 +95,9 @@ def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transforme
 
 
 @eqx.filter_jit
-def next_logits(model: Transformer, tokens: jax.Array, positions: jax.Array) -> jax.Array:
+def next_logits[B: IntVar, S: IntVar](
+    model: Transformer, tokens: jax.Array[[B, S]], positions: jax.Array[[B]]
+) -> jax.Array[[B, int]]:  # [B, V]; V is not bound by any input (see Transformer.__call__)
     hidden, _ = model(tokens)
     last = hidden.at[jnp.arange(tokens.shape[0]), positions].get(out_sharding=P())
     scores = jnp.einsum("bh,hv->bv", last, model.output_proj, preferred_element_type=jnp.float32)
@@ -100,8 +105,11 @@ def next_logits(model: Transformer, tokens: jax.Array, positions: jax.Array) -> 
 
 
 @eqx.filter_jit
-def expected_logprobs(
-    model: Transformer, tokens: jax.Array, positions: jax.Array, targets: jax.Array
+def expected_logprobs[B: IntVar, S: IntVar, Pos: IntVar](
+    model: Transformer,
+    tokens: jax.Array[[B, S]],
+    positions: jax.Array[[B, Pos]],
+    targets: jax.Array[[B, Pos]],
 ) -> BatchLogprobs[jax.Array]:
     """Return target and top-five log probabilities for each supplied prediction position.
 

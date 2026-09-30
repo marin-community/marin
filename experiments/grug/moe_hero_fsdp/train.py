@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import dataclasses
 import functools
 import logging
@@ -51,6 +53,7 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from shape_extensions import IntVar
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -234,7 +237,9 @@ def build_tagged_evaluator(
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(BATCH_AXES, None))
 
-    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def eval_loss_fn(
+        model: Transformer, batch: LmExample | GrugLmExample
+    ) -> tuple[jax.Array[[int, int]], jax.Array[[int, int]], jax.Array[[int, int]]]:  # each [B, S]
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -328,14 +333,14 @@ def log_device_memory(step_info) -> None:
 @register_dataclass
 @dataclass(frozen=True)
 class GrugTrainState:
-    step: jax.Array
+    step: jax.Array[[]]
     params: Transformer
     opt_state: optax.OptState
     ema_params: Transformer | None
-    pending_qb_betas: jax.Array
+    pending_qb_betas: jax.Array[[int, int]]  # [num_layers, num_experts]
 
 
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
+def _apply_qb_betas[L: IntVar, E: IntVar](model: Transformer, qb_betas: jax.Array[[L, E]]) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
     new_bias = -qb_betas
     new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
@@ -381,10 +386,10 @@ def initial_state(
     )
 
 
-def _drop_metrics(
-    dropped_assignments: jax.Array,
-    skipped_padding_assignments: jax.Array,
-    valid_assignments: jax.Array,
+def _drop_metrics[L: IntVar](
+    dropped_assignments: jax.Array[[L]],
+    skipped_padding_assignments: jax.Array[[L]],
+    valid_assignments: jax.Array[[L]],
     *,
     batch_size: int,
     sequence_length: int,
@@ -392,7 +397,7 @@ def _drop_metrics(
     num_layers: int,
 ) -> dict[str, int | float]:
     # Per-layer int32 counts are summed on the host so large global totals cannot overflow.
-    def _sum_int64(per_layer: jax.Array) -> int:
+    def _sum_int64(per_layer: jax.Array[[L]]) -> int:
         return int(np.asarray(per_layer).astype(np.int64).sum())
 
     dropped_assignments_host = _sum_int64(dropped_assignments)

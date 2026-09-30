@@ -729,34 +729,6 @@
       "severity": "error"
     },
     {
-      "column": 29,
-      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 17,
-      "path": "experiments/grug/moe_hero_ep/grugmuon_hero.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
       "column": 20,
       "path": "experiments/grug/moe_hero_ep/harrier_mix_2026_08_17_1.py",
       "name": "bad-argument-type",
@@ -1135,31 +1107,10 @@
       "severity": "error"
     },
     {
-      "column": 24,
-      "path": "experiments/grug/moe_hero_ep/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 21,
       "path": "experiments/grug/moe_hero_ep/model.py",
       "name": "bad-index",
       "concise_description": "Too many indices for tensor: got 2, expected at most 0",
-      "severity": "error"
-    },
-    {
-      "column": 27,
-      "path": "experiments/grug/moe_hero_ep/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "experiments/grug/moe_hero_ep/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -1177,42 +1128,7 @@
       "severity": "error"
     },
     {
-      "column": 55,
-      "path": "experiments/grug/moe_hero_ep/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 44,
-      "path": "experiments/grug/moe_hero_ep/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "experiments/grug/moe_hero_ep/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/moe_hero_ep/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
       "column": 75,
-      "path": "experiments/grug/moe_hero_ep/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
       "path": "experiments/grug/moe_hero_ep/model.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
@@ -1254,45 +1170,38 @@
       "severity": "error"
     },
     {
-      "column": 78,
-      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 50,
       "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array` in function `next_logits`",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array[[@_, @_]]` in function `next_logits`",
       "severity": "error"
     },
     {
       "column": 55,
       "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `positions` with type `Array` in function `next_logits`",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `positions` with type `Array[[@_]]` in function `next_logits`",
       "severity": "error"
     },
     {
       "column": 70,
       "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array` in function `expected_logprobs`",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array[[@_, @_]]` in function `expected_logprobs`",
       "severity": "error"
     },
     {
       "column": 70,
       "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `positions` with type `Array` in function `expected_logprobs`",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `positions` with type `Array[[@_, @_]]` in function `expected_logprobs`",
       "severity": "error"
     },
     {
       "column": 70,
       "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `targets` with type `Array` in function `expected_logprobs`",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `targets` with type `Array[[@_, @_]]` in function `expected_logprobs`",
       "severity": "error"
     },
     {
@@ -1394,13 +1303,6 @@
       "severity": "error"
     },
     {
-      "column": 35,
-      "path": "experiments/grug/moe_hero_ep/train.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 23,
       "path": "experiments/grug/moe_hero_ep/train.py",
       "name": "bad-argument-type",
@@ -1474,35 +1376,35 @@
       "column": 66,
       "path": "experiments/grug/moe_hero_ep/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]] | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 60,
       "path": "experiments/grug/moe_hero_ep/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]] | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 28,
       "path": "experiments/grug/moe_hero_ep/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]] | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 36,
       "path": "experiments/grug/moe_hero_ep/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 63,
       "path": "experiments/grug/moe_hero_ep/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]] | Any` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
@@ -1538,34 +1440,6 @@
       "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_newtonschulz_4d_distributed`",
-      "severity": "error"
-    },
-    {
-      "column": 29,
-      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 17,
-      "path": "experiments/grug/moe_hero_fsdp/grugmuon_hero.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
       "severity": "error"
     },
     {
@@ -1660,45 +1534,10 @@
       "severity": "error"
     },
     {
-      "column": 24,
-      "path": "experiments/grug/moe_hero_fsdp/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 21,
       "path": "experiments/grug/moe_hero_fsdp/model.py",
       "name": "bad-index",
       "concise_description": "Too many indices for tensor: got 2, expected at most 0",
-      "severity": "error"
-    },
-    {
-      "column": 27,
-      "path": "experiments/grug/moe_hero_fsdp/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 30,
-      "path": "experiments/grug/moe_hero_fsdp/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
-      "column": 38,
-      "path": "experiments/grug/moe_hero_fsdp/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "experiments/grug/moe_hero_fsdp/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -1716,21 +1555,7 @@
       "severity": "error"
     },
     {
-      "column": 25,
-      "path": "experiments/grug/moe_hero_fsdp/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
       "column": 75,
-      "path": "experiments/grug/moe_hero_fsdp/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
       "path": "experiments/grug/moe_hero_fsdp/model.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
@@ -1755,13 +1580,6 @@
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
-      "column": 35,
-      "path": "experiments/grug/moe_hero_fsdp/train.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -1810,56 +1628,56 @@
       "column": 79,
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 23,
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 36,
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 28,
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 57,
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 104,
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 67,
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 63,
       "path": "experiments/grug/moe_hero_fsdp/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
