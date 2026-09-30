@@ -1084,6 +1084,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """MuonH LR multiplier for the attention-projection family (``_OKLS_FAMILIES['attn']``)."""
     muonh_routed_lr_mult: float = 1.0
     """MuonH LR multiplier for the routed-expert family (``_OKLS_FAMILIES['routed']``)."""
+    muonh_routed_momentum: float | None = None
+    """MuonH momentum for the routed-expert family (None: ``momentum``). Each expert sees ~1/64 of the tokens, so its
+    per-step gradient is mostly noise; a longer average may suit it better than the dense matrices."""
     okls_targets: tuple[str, ...] = ()
     """Matrix families (``_OKLS_FAMILIES``) whose direction comes from Online KL-Shampoo whitening instead
     of Newton-Schulz, still taking MuonH's hyperball step at the MuonH LR."""
@@ -1119,6 +1122,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     rule, run densely. Cuts the tables' optimizer state from two (three with AdEMAMix) copies to ``rows`` floats."""
     embed2_beta2: float = 0.95
     """Second-moment decay of ``embed2_row_sparse_adam``."""
+    embed2_update: str = "adam"
+    """Update rule for the bigram table: ``adam`` (the Adam groups' AdEMAMix) or ``sinkhorn`` (Sinkhorn momentum,
+    one buffer, at ``embed2_lr_mult * sinkhorn_lr_mult`` times the Adam LR)."""
     sinkhorn_momentum: float = 0.95
     sinkhorn_iters: int = 5
     sinkhorn_nesterov: bool = True
@@ -1251,17 +1257,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         )
 
         def optimizer(learning_rate, adam_lr, upper_qk_mult=None):
-            def muonh_transform_at(lr, magma_seed: int):
+            def muonh_transform_at(lr, magma_seed: int, momentum: float | None = None):
+                momentum = self.momentum if momentum is None else momentum
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 if self.muon_grad_power != 1.0:
                     components.append(scale_by_grad_power(self.muon_grad_power))
                 if self.muon_mars_gamma:
-                    components.append(scale_by_mars_correction(self.muon_mars_gamma, self.momentum))
+                    components.append(scale_by_mars_correction(self.muon_mars_gamma, momentum))
                 components.append(
                     scale_with_grug_muonh(
-                        momentum=self.momentum,
+                        momentum=momentum,
                         nesterov=self.nesterov,
                         steps=self.backend_steps,
                         muon_eps=self.muon_epsilon,
@@ -1391,7 +1398,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     _match_named_update_sharding(),
                 ),
                 "muonh_attn": muonh_transform_at(learning_rate * self.muonh_attn_lr_mult, 2),
-                "muonh_routed": muonh_transform_at(learning_rate * self.muonh_routed_lr_mult, 3),
+                "muonh_routed": muonh_transform_at(
+                    learning_rate * self.muonh_routed_lr_mult, 3, momentum=self.muonh_routed_momentum
+                ),
                 "muon_free": optax.chain(
                     scale_with_grug_muon_free(
                         momentum=self.momentum,
@@ -1420,7 +1429,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "embed2": (
                     row_adam_at(adam_lr * self.embed2_lr_mult)
                     if self.embed2_row_sparse_adam
-                    else plain_adam_at(adam_lr * self.embed2_lr_mult)
+                    else (
+                        optax.chain(
+                            scale_by_sinkhorn_momentum(
+                                momentum=self.sinkhorn_momentum,
+                                iters=self.sinkhorn_iters,
+                                nesterov=self.sinkhorn_nesterov,
+                            ),
+                            optax.scale(-adam_lr * self.embed2_lr_mult * self.sinkhorn_lr_mult),
+                        )
+                        if self.embed2_update == "sinkhorn"
+                        else plain_adam_at(adam_lr * self.embed2_lr_mult)
+                    )
                 ),
                 # The n-gram statistic table and its code are data statistics written by the trainer, not trained.
                 "frozen": optax.set_to_zero(),
@@ -1475,6 +1495,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         return optax.inject_hyperparams(optimizer)(**schedules)
 
     def __post_init__(self):
+        if self.embed2_update not in ("adam", "sinkhorn"):
+            raise ValueError(f"embed2_update must be adam or sinkhorn, got {self.embed2_update!r}")
+        if self.embed2_update == "sinkhorn" and self.embed2_row_sparse_adam:
+            raise ValueError("embed2_update=sinkhorn and embed2_row_sparse_adam are exclusive")
         if self.latent_proj_update not in LATENT_PROJ_UPDATES:
             raise ValueError(f"latent_proj_update must be one of {LATENT_PROJ_UPDATES}, got {self.latent_proj_update!r}")
         if self.lm_head_group not in ("adamh", "muonh", "sinkhornh"):
@@ -1508,7 +1532,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     return "upper_qk"
                 if self.muonh_attn_lr_mult != 1.0 and _OKLS_FAMILIES["attn"].search(path_lower):
                     return "muonh_attn"
-                if self.muonh_routed_lr_mult != 1.0 and _OKLS_FAMILIES["routed"].search(path_lower):
+                routed_own_group = self.muonh_routed_lr_mult != 1.0 or self.muonh_routed_momentum is not None
+                if routed_own_group and _OKLS_FAMILIES["routed"].search(path_lower):
                     return "muonh_routed"
             return group
 
@@ -1549,7 +1574,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if "token_embed_ple" in path_lower:
                 return "ple"
             if re.search(r"token_embed(2|3)", path_lower) and (
-                self.embed2_lr_mult != 1.0 or self.embed2_row_sparse_adam
+                self.embed2_lr_mult != 1.0 or self.embed2_row_sparse_adam or self.embed2_update != "adam"
             ):
                 return "embed2"
             if "token_embed" in path_lower:
