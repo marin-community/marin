@@ -17,9 +17,10 @@ from taskcompendium.verifiers.reasoning_gym import reasoning_gym_answer
 FAMILY = "other"
 CONVERTER = "nemotron_reasoning"
 IMPORTER_REVISION = "taskcompendium-tasktrove-reasoning-gym-v0.1"
+ANSWER_PATH = "/app/answer.txt"
 _INSTRUCTION_PREFIX = (
     "You are solving a procedurally-generated reasoning task from Reasoning Gym. Read the problem below and write "
-    "your final answer to `/app/answer.txt`. The verifier will try the upstream Reasoning Gym scorer first, then fall "
+    f"your final answer to `{ANSWER_PATH}`. The verifier will try the upstream Reasoning Gym scorer first, then fall "
     "back to normalized exact-match.\n\n---\n\n"
 )
 
@@ -50,7 +51,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         contract = parse_spec(archive.files["tests/verifier.toml"].decode())
         if not isinstance(contract, ReasoningGymSpec) or contract.entry != "entry.json":
             raise ValueError("TaskTrove archive must declare a Reasoning Gym verifier with entry.json")
-        if contract.output != "/app/answer.txt":
+        if contract.output != ANSWER_PATH:
             raise ValueError("TaskTrove Reasoning Gym archive has an unsupported answer path")
         entry = json.loads(archive.files[f"tests/{contract.entry}"])
         if not isinstance(entry, dict):
