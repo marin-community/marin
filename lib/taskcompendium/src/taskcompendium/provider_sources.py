@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage Git-pinned Python providers without fetching source during a trial."""
+"""Stage pinned Python tool providers without fetching source during a trial.
+
+Installed providers use ``python:module:Class``. Git providers use
+``python+git+https://host/repo@<40-hex-sha>:module:Class``. The trusted export
+caller supplies a checkout of that exact commit; trials use only staged files.
+"""
 
 import ast
 import base64
@@ -301,6 +306,7 @@ def import_staged_provider(provider: str, source: Path) -> type:
         if not init_file.is_file():
             raise ValueError("Git provider must be an importable Python package")
         alias = f"_taskcompendium_git_{cache_key[:24]}"
+        # Relative imports stay in this alias, even if another copy of the package is installed.
         if alias not in sys.modules:
             package_spec = importlib.util.spec_from_file_location(
                 alias, init_file, submodule_search_locations=[str(package_dir)]
