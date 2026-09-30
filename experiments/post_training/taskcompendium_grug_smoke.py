@@ -46,9 +46,9 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "b8c07f7df1df65525abbfdbcd1572318ba11c42f"
-TASKCOMPENDIUM_COMMIT = "6a67b2666cd219b55c9d08db8659a7e91b23f08a"
+TASKCOMPENDIUM_COMMIT = "67320d80d6d768158d5183e4c0464a33fef3d39c"
 TASKCOMPENDIUM_REQUIREMENT = (
-    "taskcompendium[harbor,workplace] @ "
+    "taskcompendium[harbor] @ "
     f"git+https://github.com/marin-community/marin.git@{TASKCOMPENDIUM_COMMIT}#subdirectory=lib/taskcompendium"
 )
 CLUSTER = "cw-us-east-02a"
@@ -90,6 +90,7 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
     """Lower one direct chat task and the pinned Workplace row into a private artifact."""
     from taskcompendium.grading import exact_answer  # noqa: PLC0415
     from taskcompendium.importers.nemo_workplace import (  # noqa: PLC0415
+        PROVIDER,
         PROVIDER_GIT_REVISION,
         PROVIDER_REPOSITORY,
         SOURCE_EXAMPLE_MAX_BYTES,
@@ -106,6 +107,7 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
         TaskSpec,
         TextMessage,
     )
+    from taskcompendium.provider_sources import stage_git_provider  # noqa: PLC0415
     from taskcompendium.submission import PlainText  # noqa: PLC0415
 
     if config.taskcompendium_commit != TASKCOMPENDIUM_COMMIT:
@@ -119,10 +121,6 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
         answer_type=AnswerType.NUMBER,
     )
     convention = PlainText(id="plain")
-    with urlopen(SOURCE_EXAMPLE_URL, timeout=30) as source:
-        workplace, workplace_convention, workplace_binding = import_row(
-            select_row_zero(source.read(SOURCE_EXAMPLE_MAX_BYTES + 1))
-        )
     with (
         tempfile.TemporaryDirectory(prefix="taskcompendium-smoke-") as temporary,
         tempfile.TemporaryDirectory(prefix="workplace-source-") as provider_temporary,
@@ -137,6 +135,12 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
             check=True,
             timeout=30,
         )
+        provider_source = Path(provider_temporary) / "provider-snapshot"
+        stage_git_provider(PROVIDER, checkout, provider_source)
+        with urlopen(SOURCE_EXAMPLE_URL, timeout=30) as source:
+            workplace, workplace_convention, workplace_binding = import_row(
+                select_row_zero(source.read(SOURCE_EXAMPLE_MAX_BYTES + 1)), provider_source
+            )
         for repeat in range(TASK_COUNT // 2):
             lower_to_harbor(
                 chat.model_copy(update={"id": f"{chat.id}-repeat-{repeat}"}),
@@ -168,7 +172,7 @@ def task_packages_step(version: str) -> ArtifactStep[Artifact]:
             resources=ResourceConfig.with_cpu(cpu=2, ram="8g", disk="8g"),
             # Harbor's LiteLLM dependency can upgrade botocore without upgrading
             # the aiobotocore version in Marin's locked CPU environment.
-            pip_packages=[TASKCOMPENDIUM_REQUIREMENT, "boto3==1.41.5", "botocore==1.41.5"],
+            pip_packages=[TASKCOMPENDIUM_REQUIREMENT, "pandas>=2.2", "boto3==1.41.5", "botocore==1.41.5"],
         ),
         build_config=lambda ctx: TaskPackagesConfig(
             output_path=ctx.output_path, taskcompendium_commit=TASKCOMPENDIUM_COMMIT
