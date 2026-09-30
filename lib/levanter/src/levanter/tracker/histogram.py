@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from typing import TypeAlias
 
 import equinox
@@ -8,7 +10,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import PartitionSpec as P
-from jaxtyping import ArrayLike, Scalar
+from jax.typing import ArrayLike
+from shape_extensions import IntVar
 
 import haliax as hax
 from haliax import NamedArray
@@ -37,25 +40,25 @@ class SummaryStats(equinox.Module):
     access, so reading them from a background thread never calls JAX.
     """
 
-    min: Scalar
-    max: Scalar
-    num: Scalar
-    nonzero_count: Scalar
-    sum: Scalar
-    sum_squares: Scalar
-    mean: Scalar
-    variance: Scalar
-    rms: Scalar
+    min: jax.Array[[]]
+    max: jax.Array[[]]
+    num: jax.Array[[]]
+    nonzero_count: jax.Array[[]]
+    sum: jax.Array[[]]
+    sum_squares: jax.Array[[]]
+    mean: jax.Array[[]]
+    variance: jax.Array[[]]
+    rms: jax.Array[[]]
     histogram: Histogram | None = None
 
     @staticmethod
     def from_reduced_values(
-        min: Scalar,
-        max: Scalar,
-        num: Scalar,
-        nonzero_count: Scalar,
-        sum: Scalar,
-        sum_squares: Scalar,
+        min: jax.Array[[]],
+        max: jax.Array[[]],
+        num: jax.Array[[]],
+        nonzero_count: jax.Array[[]],
+        sum: jax.Array[[]],
+        sum_squares: jax.Array[[]],
         histogram: Histogram | None = None,
     ) -> "SummaryStats":
         """Build a ``SummaryStats`` from already-reduced summary values."""
@@ -70,8 +73,8 @@ class SummaryStats(equinox.Module):
         num_bins: int = 31,
         *,
         include_histogram: bool = True,
-        min_value: Scalar | None = None,
-        max_value: Scalar | None = None,
+        min_value: jax.Array[[]] | None = None,
+        max_value: jax.Array[[]] | None = None,
     ) -> "SummaryStats":
         return SummaryStats.from_sharded_array(
             array,
@@ -87,8 +90,8 @@ class SummaryStats(equinox.Module):
         num_bins: int = 31,
         *,
         include_histogram: bool = True,
-        min_value: Scalar | None = None,
-        max_value: Scalar | None = None,
+        min_value: jax.Array[[]] | None = None,
+        max_value: jax.Array[[]] | None = None,
     ) -> "SummaryStats":
         array = array.ravel()
         min = array.min() if min_value is None else jnp.asarray(min_value, dtype=array.dtype)
@@ -136,25 +139,28 @@ def sharded_histogram(a: NamedArray, bins: int | ArrayLike = 10) -> tuple[jnp.nd
     return _shardmap_histogram(a, edges), edges
 
 
-def sharded_histogram_array(a: jax.Array, bin_edges: ArrayLike) -> jnp.ndarray:
+def sharded_histogram_array[N: IntVar](a: jax.Array, bin_edges: jax.Array[[N]]) -> jax.Array[[N - 1]]:
     spec = _array_spec(a)
     flattened_spec = _flattened_spec(spec)
 
     if len(flattened_spec) == 0:
         return _single_shard_histogram_array(a, bin_edges, ())
 
-    def _wrapped_hist(arr: jax.Array, edges: jax.Array) -> jax.Array:
+    def _wrapped_hist(arr: jax.Array, edges: jax.Array[[N]]) -> jax.Array[[N - 1]]:
         return _single_shard_histogram_array(arr, bin_edges=edges, reduce_mesh=flattened_spec)
 
-    return jax.shard_map(
+    result: jax.Array[[N - 1]] = jax.shard_map(
         _wrapped_hist,
         in_specs=(spec, P(None)),
         out_specs=P(None),
         check_vma=False,
     )(a, bin_edges)
+    return result
 
 
-def _single_shard_histogram(a: NamedArray, bin_edges: jax.Array, reduce_mesh: ReduceMesh) -> jax.Array:
+def _single_shard_histogram[N: IntVar](
+    a: NamedArray, bin_edges: jax.Array[[N]], reduce_mesh: ReduceMesh
+) -> jax.Array[[N - 1]]:
     """Histogram counts for one NamedArray shard using logical axis mapping."""
     a_flat = a.array.flatten()
     left_edges = bin_edges[:-1, None]
@@ -170,7 +176,9 @@ def _single_shard_histogram(a: NamedArray, bin_edges: jax.Array, reduce_mesh: Re
     return counts
 
 
-def _single_shard_histogram_array(a: jax.Array, bin_edges: jax.Array, reduce_mesh: ReduceMesh) -> jax.Array:
+def _single_shard_histogram_array[N: IntVar](
+    a: jax.Array, bin_edges: jax.Array[[N]], reduce_mesh: ReduceMesh
+) -> jax.Array[[N - 1]]:
     """Histogram counts for one shard with the last bin inclusive."""
     a = a.flatten()
     num_bins = bin_edges.shape[0] - 1

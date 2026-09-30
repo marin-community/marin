@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import dataclasses
 from dataclasses import dataclass
 from typing import Literal, Sequence, TypeVar, Union, cast
@@ -21,6 +23,10 @@ M = TypeVar("M", bound=PyTree)
 S = TypeVar("S", bound=TrainerState)
 VALID_WATCH_TARGETS = {"grads", "params", "opt_state", "updates"}
 
+# jax.Array is not subscriptable at runtime. A PEP 695 alias is evaluated lazily, so the
+# WatchCallback base list below can use this shaped type without evaluating it at import.
+type WatchStats = dict[str, jax.Array[[]] | SummaryStats]
+
 
 def _validate_watch_targets(watch_targets: Sequence[str]) -> None:
     invalid_targets = set(watch_targets) - VALID_WATCH_TARGETS
@@ -40,7 +46,7 @@ def compute_watch_stats(
     updates: PyTree | None = None,
     opt_state: PyTree | None = None,
     model_tree_type: type | None = None,
-) -> dict[str, jax.Array | SummaryStats]:
+) -> WatchStats:
     """Compute watch metrics for selected training targets.
 
     Args:
@@ -60,7 +66,7 @@ def compute_watch_stats(
     """
     _validate_watch_targets(watch_targets)
 
-    to_log: dict[str, jax.Array | SummaryStats] = {}
+    to_log: WatchStats = {}
     tree_targets: dict[Target, tuple[str, PyTree | None]] = {
         "grads": ("grad", grads),
         "params": ("params", params),
@@ -141,7 +147,7 @@ class WatchConfig:
         )
 
 
-class WatchCallback(JitCallback[S, M, dict[str, jax.Array | SummaryStats]]):
+class WatchCallback(JitCallback[S, M, WatchStats]):
     """
     A unified callback for watching various aspects of training (gradients, parameters, optimizer state, updates).
     This callback combines the functionality of GradWatchCallback, ParamWatchCallback, OptStateWatchCallback,
@@ -178,9 +184,7 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | SummaryStats]]):
         # Validate watch targets
         _validate_watch_targets(watch_targets)
 
-    def inside_step(
-        self, state: TrainerState[M], inside_info: InsideJitInfo[M]
-    ) -> dict[str, jax.Array | SummaryStats]:
+    def inside_step(self, state: TrainerState[M], inside_info: InsideJitInfo[M]) -> WatchStats:
         return compute_watch_stats(
             watch_targets=self.watch_targets,
             include_norms=self.include_norms,
@@ -194,5 +198,5 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | SummaryStats]]):
             model_tree_type=type(state.model),
         )
 
-    def on_step(self, step_info: S, cb_info: dict[str, jax.Array | SummaryStats]):
+    def on_step(self, step_info: S, cb_info: WatchStats):
         levanter.tracker.log(cb_info, step=int(step_info.step))

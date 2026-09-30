@@ -108,11 +108,11 @@ class BackwardFlowRenderHints:
 class SummaryStats:
     """Scalar summaries for a tensor logged by backward-flow probes."""
 
-    norm: jax.Array
-    rms: jax.Array
-    mean_abs: jax.Array
-    max_abs: jax.Array
-    finite_fraction: jax.Array
+    norm: jax.Array[[]]
+    rms: jax.Array[[]]
+    mean_abs: jax.Array[[]]
+    max_abs: jax.Array[[]]
+    finite_fraction: jax.Array[[]]
 
     @classmethod
     def from_tensor(cls, tensor: jax.Array) -> "SummaryStats":
@@ -126,7 +126,7 @@ class SummaryStats:
             finite_fraction=jnp.mean(jnp.isfinite(tensor).astype(jnp.float32)),
         )
 
-    def to_metrics(self, prefix: str) -> dict[str, jax.Array]:
+    def to_metrics(self, prefix: str) -> dict[str, jax.Array[[]]]:
         return {
             f"{prefix}_norm": self.norm,
             f"{prefix}_rms": self.rms,
@@ -291,14 +291,14 @@ _tagged_identity.defvjp(_tagged_identity_fwd, _tagged_identity_bwd)
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
 def _tagged_identity_with_scale(
-    metric_prefix: str, site: BackwardFlowSite, gradient_scale: jax.Array, x: jax.Array
+    metric_prefix: str, site: BackwardFlowSite, gradient_scale: jax.Array[[]], x: jax.Array
 ) -> jax.Array:
     return x
 
 
 def _tagged_identity_with_scale_fwd(
-    metric_prefix: str, site: BackwardFlowSite, gradient_scale: jax.Array, x: jax.Array
-) -> tuple[jax.Array, jax.Array]:
+    metric_prefix: str, site: BackwardFlowSite, gradient_scale: jax.Array[[]], x: jax.Array
+) -> tuple[jax.Array, jax.Array[[]]]:
     levanter.tracker.jit_log(_tensor_metrics(metric_prefix, x, site=site, kind=_TENSOR_KIND_ACTIVATION), step=None)
     return x, gradient_scale
 
@@ -306,9 +306,9 @@ def _tagged_identity_with_scale_fwd(
 def _tagged_identity_with_scale_bwd(
     metric_prefix: str,
     site: BackwardFlowSite,
-    gradient_scale: jax.Array,
+    gradient_scale: jax.Array[[]],
     cotangent: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array[[]], jax.Array]:
     levanter.tracker.jit_log(
         _tensor_metrics(
             metric_prefix,
@@ -553,8 +553,8 @@ def _tensor_metrics(
     *,
     site: BackwardFlowSite,
     kind: _BackwardFlowTensorKind,
-    gradient_scale: jax.Array | None = None,
-) -> dict[str, jax.Array]:
+    gradient_scale: jax.Array[[]] | None = None,
+) -> dict[str, jax.Array[[]]]:
     summary = SummaryStats.from_tensor(tensor)
     metrics = summary.to_metrics(f"{metric_prefix}/{site}_{kind}")
     if kind == _TENSOR_KIND_GRADIENT and gradient_scale is not None:

@@ -1,7 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, cast
+from __future__ import annotations
+
+from typing import Any
 
 import jax
 import optax
@@ -52,7 +54,7 @@ def summary_statistics_for_tree(
     include_histogram: bool = False,
     include_norms: bool = True,
     include_per_parameter_norms: bool = True,
-) -> dict[str, jax.Array | SummaryStats]:
+) -> dict[str, jax.Array[[]] | SummaryStats]:
     """
     Computes the summary statistics for a tree of (named) arrays.
 
@@ -136,18 +138,20 @@ def summary_statistics_for_tree(
 
         return norms, hists
 
-    norms_to_log: dict[str, jax.Array] = {}
+    norms_to_log: dict[str, jax.Array[[]]] = {}
     hists_to_log: dict[str, SummaryStats] = {}
 
     _rec_log_magnitudes(norms_to_log, hists_to_log, None, tree)
 
-    to_log: dict[str, jax.Array | SummaryStats] = {}
+    to_log: dict[str, jax.Array[[]] | SummaryStats] = {}
 
     for key, value in norms_to_log.items():
         if include_per_parameter_norms:
             to_log[f"{prefix}/norm/{key}"] = value
 
-    to_log[f"{prefix}/norm/total"] = cast(jax.Array, optax.global_norm(tree))
+    # optax.global_norm's stub returns a broad numeric union, so coerce it to a jax.Array[[]].
+    total_norm: jax.Array[[]] = jax.numpy.asarray(optax.global_norm(tree))
+    to_log[f"{prefix}/norm/total"] = total_norm
 
     for key, hist in hists_to_log.items():
         to_log[f"{prefix}/hist/{key}"] = hist

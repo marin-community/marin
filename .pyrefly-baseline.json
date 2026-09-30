@@ -1117,14 +1117,14 @@
       "column": 36,
       "path": "experiments/grug/moe_hero_ep/memory_soak.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ndarray[tuple[int], dtype[signedinteger[_32Bit]]]` is not assignable to parameter `tokens` with type `Array` in function `levanter.data.text.examples.GrugLmExample.__init__`",
+      "concise_description": "Argument `ndarray[tuple[int], dtype[signedinteger[_32Bit]]]` is not assignable to parameter `tokens` with type `Array[[*@_, @_]]` in function `levanter.data.text.examples.GrugLmExample.__init__`",
       "severity": "error"
     },
     {
       "column": 56,
       "path": "experiments/grug/moe_hero_ep/memory_soak.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ndarray[tuple[int], dtype[floating[_32Bit]]]` is not assignable to parameter `loss_weight` with type `Array` in function `levanter.data.text.examples.GrugLmExample.__init__`",
+      "concise_description": "Argument `ndarray[tuple[int], dtype[floating[_32Bit]]]` is not assignable to parameter `loss_weight` with type `Array[[*@_, @_]]` in function `levanter.data.text.examples.GrugLmExample.__init__`",
       "severity": "error"
     },
     {
@@ -1467,14 +1467,14 @@
       "column": 33,
       "path": "experiments/grug/moe_hero_ep/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array` in function `levanter.data.text.examples.GrugLmExample.__init__`",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array[[*@_, @_]]` in function `levanter.data.text.examples.GrugLmExample.__init__`",
       "severity": "error"
     },
     {
       "column": 53,
       "path": "experiments/grug/moe_hero_ep/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `loss_weight` with type `Array` in function `levanter.data.text.examples.GrugLmExample.__init__`",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `loss_weight` with type `Array[[*@_, @_]]` in function `levanter.data.text.examples.GrugLmExample.__init__`",
       "severity": "error"
     },
     {
@@ -4806,7 +4806,7 @@
       "column": 43,
       "path": "lib/levanter/src/levanter/data/text/trace_chat.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `ndarray` is not assignable to parameter `tokens` with type `Array` in function `levanter.data.text.examples.LabeledLmExample.__init__`",
+      "concise_description": "Argument `ndarray` is not assignable to parameter `tokens` with type `Array[[*@_, @_]]` in function `levanter.data.text.examples.LabeledLmExample.__init__`",
       "severity": "error"
     },
     {
@@ -5919,7 +5919,7 @@
       "column": 21,
       "path": "lib/levanter/src/levanter/main/eval_lm.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `(model: LmHeadModel[Unknown], batch: LmExample) -> tuple[Array, Array, Array]` is not assignable to parameter `loss_fn` with type `(LmHeadModel[Unknown], GrugLmExample | LmExample) -> tuple[Array, Array, Array]` in function `levanter.eval.TaggedEvaluator.__init__`",
+      "concise_description": "Argument `(model: LmHeadModel[Unknown], batch: LmExample) -> tuple[Array, Array, Array]` is not assignable to parameter `loss_fn` with type `(LmHeadModel[Unknown], GrugLmExample[Unknown, int] | LmExample) -> tuple[Array, Array, Array]` in function `levanter.eval.TaggedEvaluator.__init__`",
       "severity": "error"
     },
     {
@@ -6073,7 +6073,7 @@
       "column": 45,
       "path": "lib/levanter/src/levanter/main/train_dpo.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `(model: DpoModel | LmHeadModel[Unknown], example: CachedDpoExample | DpoExample, *, key: Unknown | None = None) -> tuple[Array, dict[str, Metric]]` is not assignable to parameter `loss_fn` with type `ComputeLossFunction[Unknown, Unknown]` in function `levanter.trainer.Trainer.__init__`",
+      "concise_description": "Argument `(model: DpoModel | LmHeadModel[Unknown], example: CachedDpoExample | DpoExample, *, key: Unknown | None = None) -> tuple[Array[[]], dict[str, Metric]]` is not assignable to parameter `loss_fn` with type `ComputeLossFunction[Unknown, Unknown]` in function `levanter.trainer.Trainer.__init__`",
       "severity": "error"
     },
     {
@@ -6185,7 +6185,7 @@
       "column": 22,
       "path": "lib/levanter/src/levanter/metrics.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | float | Unknown` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "concise_description": "Argument `Array[[]] | float | Unknown` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
       "severity": "error"
     },
     {
@@ -7848,27 +7848,6 @@
       "severity": "error"
     },
     {
-      "column": 53,
-      "path": "lib/levanter/src/levanter/tracker/histogram.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `bin_edges` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `sharded_histogram_array`",
-      "severity": "error"
-    },
-    {
-      "column": 49,
-      "path": "lib/levanter/src/levanter/tracker/histogram.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` is not assignable to parameter `bin_edges` with type `jax._array.Array` in function `_single_shard_histogram_array`",
-      "severity": "error"
-    },
-    {
-      "column": 10,
-      "path": "lib/levanter/src/levanter/tracker/histogram.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` is not assignable to parameter `edges` with type `jax._array.Array` in function `_wrapped_hist`",
-      "severity": "error"
-    },
-    {
       "column": 60,
       "path": "lib/levanter/src/levanter/tracker/histogram.py",
       "name": "bad-argument-type",
@@ -7879,21 +7858,21 @@
       "column": 41,
       "path": "lib/levanter/src/levanter/tracker/tensorboard.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 51,
       "path": "lib/levanter/src/levanter/tracker/tensorboard.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
       "column": 21,
       "path": "lib/levanter/src/levanter/tracker/tensorboard.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {

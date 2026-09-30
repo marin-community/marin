@@ -7,6 +7,8 @@ Metric abstraction for correct aggregation across microbatches.
 See docs/metrics.md for design rationale.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -49,8 +51,8 @@ class Metric:
     Forms a monoid: fold is associative.
     """
 
-    _value: float | jax.Array = 0.0
-    _count: float | jax.Array = 0.0
+    _value: float | jax.Array[[]] = 0.0
+    _count: float | jax.Array[[]] = 0.0
     reduction: ReductionType = ReductionType.MEAN
 
     def value(self):
@@ -67,7 +69,7 @@ class Metric:
         return float(self.value())
 
     @classmethod
-    def from_value(cls, value: float | jax.Array, reduction: ReductionType) -> "Metric":
+    def from_value(cls, value: float | jax.Array[[]], reduction: ReductionType) -> "Metric":
         """Create metric from single observation."""
         # Float literals (not int) keep dtype consistent across scan iterations.
         count = 1.0 if reduction is ReductionType.MEAN else 0.0
@@ -111,7 +113,7 @@ def fold(m1: Metric, m2: Metric) -> Metric:
     return Metric(_value=new_value, _count=0.0, reduction=reduction)
 
 
-def auto_metric_from_name(name: str, value: float | jax.Array) -> Metric:
+def auto_metric_from_name(name: str, value: float | jax.Array[[]]) -> Metric:
     """
     Infer metric type from name and create Metric with appropriate reduction.
 
@@ -183,4 +185,4 @@ class LossFunctionWithMetrics(Protocol):
 
     def __call__(
         self, model: Any, batch: Any, **batch_kwargs: dict[str, Any]
-    ) -> tuple[jax.Array, dict[str, Metric]]: ...
+    ) -> tuple[jax.Array[[]], dict[str, Metric]]: ...

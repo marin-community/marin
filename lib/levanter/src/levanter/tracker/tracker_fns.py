@@ -13,7 +13,6 @@ from typing import Any, Literal, Optional
 
 import draccus
 import jax
-from jaxtyping import Scalar
 
 from levanter.tracker.helpers import hparams_to_dict
 from levanter.tracker.histogram import SummaryStats
@@ -30,7 +29,7 @@ _should_use_callback = True
 _global_tracker: Optional["Tracker"] = None
 _has_logged_missing_tracker = False
 
-LoggableValue: typing.TypeAlias = Scalar | jax.Array | str | dict | SummaryStats
+type LoggableValue = jax.Array | str | dict | SummaryStats
 
 
 def _log_missing_tracker_once() -> None:

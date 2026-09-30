@@ -3,6 +3,8 @@
 
 """Functions for computing and visualizing token-level entropy."""
 
+from __future__ import annotations
+
 import logging
 from typing import Callable, TypeVar
 
@@ -13,6 +15,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
 from jaxtyping import PyTree
+from shape_extensions import IntVar
 
 import levanter.tracker
 from levanter.callbacks import StepInfo
@@ -23,7 +26,7 @@ B = TypeVar("B")
 
 logger = logging.getLogger(__name__)
 
-OnDeviceFn = Callable[[Callable, PyTree, B, hax.AxisSelector], jnp.ndarray]
+OnDeviceFn = Callable[[Callable, PyTree, B, hax.AxisSelector], jax.Array]
 
 
 @named_call
@@ -66,19 +69,21 @@ def top2_gap_from_logits(logits: hax.NamedArray, axis: hax.AxisSelector) -> hax.
 
 # Top level to avoid recompilation
 @eqx.filter_jit
-def _compute_entropy_on_device(logit_fn, model, batch: B, Vocab) -> jnp.ndarray:
+def _compute_entropy_on_device[T: IntVar, Batch](logit_fn, model, batch: Batch, Vocab) -> jax.Array[[T]]:
     with jax.named_scope("logits"):
         logits = logit_fn(model, batch)
     entropies = entropy_from_logits(logits, axis=Vocab)
-    return entropies.flatten("token").array
+    result: jax.Array[[T]] = entropies.flatten("token").array
+    return result
 
 
 @eqx.filter_jit
-def _compute_top2_gap_on_device(logit_fn, model, batch: B, Vocab) -> jnp.ndarray:
+def _compute_top2_gap_on_device[T: IntVar, Batch](logit_fn, model, batch: Batch, Vocab) -> jax.Array[[T]]:
     with jax.named_scope("logits"):
         logits = logit_fn(model, batch)
     gaps = top2_gap_from_logits(logits, axis=Vocab)
-    return gaps.flatten("token").array
+    result: jax.Array[[T]] = gaps.flatten("token").array
+    return result
 
 
 def _collect_per_token_values(
@@ -89,13 +94,13 @@ def _collect_per_token_values(
     *,
     on_device_fn: OnDeviceFn,
     max_tokens: int,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Run ``on_device_fn`` over batches until ``max_tokens`` and concatenate.
 
     Raises:
         ValueError: if no tokens were produced.
     """
-    chunks: list[jnp.ndarray] = []
+    chunks: list[jax.Array] = []
     total_tokens = 0
     for batch in test_data:
         values = on_device_fn(logit_fn, model, batch, Vocab)

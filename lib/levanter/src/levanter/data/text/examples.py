@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
@@ -8,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.tree_util import register_dataclass
+from shape_extensions import Int, IntTuple, IntVar
 
 import haliax as hax
 from haliax import Axis, AxisSelector, NamedArray, NamedOrNumeric
@@ -90,12 +93,12 @@ class LossLabelSpec:
         return tuple(tuple(label_ids) for label_ids in self._aggregate_mapping().values())
 
 
-def loss_labels_from_spans(
-    seq_len: int,
+def loss_labels_from_spans[N: IntVar](
+    seq_len: Int[N],
     spans: Sequence[LossLabelSpan],
     *,
     default_label: int = LOSS_IGNORE_LABEL,
-) -> jax.Array:
+) -> jax.Array[[N]]:
     labels = np.full(seq_len, default_label, dtype=np.int32)
     claimed = np.zeros(seq_len, dtype=bool)
 
@@ -113,11 +116,15 @@ def loss_labels_from_spans(
 
 @register_dataclass
 @dataclass(frozen=True)
-class GrugLmExample:
-    """A grug-conformant LM example that stores raw JAX arrays."""
+class GrugLmExample[Batch: IntTuple, S: IntVar]:
+    """A grug-conformant LM example that stores raw JAX arrays.
 
-    tokens: jax.Array
-    loss_weight: jax.Array
+    ``tokens``/``loss_weight`` are rank-1 ``(S,)`` for a single example or rank-2
+    ``(*Batch, S)`` for a batch; the two fields always share a shape.
+    """
+
+    tokens: jax.Array[[*Batch, S]]
+    loss_weight: jax.Array[[*Batch, S]]
     attn_mask: GrugAttentionMask = GrugAttentionMask.causal()
 
     @staticmethod
@@ -210,7 +217,7 @@ class GrugLmExample:
 
 @register_dataclass
 @dataclass(frozen=True)
-class LabeledLmExample:
+class LabeledLmExample[Batch: IntTuple, S: IntVar]:
     """A grug-conformant LM example with exclusive labels for loss evaluation.
 
     Use this when an eval needs to report loss by token or span type, such as
@@ -220,8 +227,8 @@ class LabeledLmExample:
     token to predict.
     """
 
-    tokens: jax.Array
-    loss_labels: jax.Array
+    tokens: jax.Array[[*Batch, S]]
+    loss_labels: jax.Array[[*Batch, S]]
     attn_mask: GrugAttentionMask = GrugAttentionMask.causal()
 
 

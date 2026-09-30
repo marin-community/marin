@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import asyncio
 import dataclasses
 import json
@@ -18,7 +20,7 @@ import jmp
 import numpy as np
 from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
-from jaxtyping import Array, Float, Int
+from shape_extensions import IntTuple, IntVar
 from tqdm_loggable.auto import tqdm
 
 import haliax as hax
@@ -54,8 +56,10 @@ Ex = TypeVar("Ex")
 LmEvalExample = LmExample | GrugLmExample
 LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 LabeledLossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
-TagArray = Int[Array, "tag"]
-BatchedTagArray = Int[Array, "... tag"]
+type TagArray[N: IntVar] = jax.Array[[N]]
+"""A single example's tag-hierarchy ids, shape (num_tag_levels,)."""
+type BatchedTagArray[Batch: IntTuple, N: IntVar] = jax.Array[[*Batch, N]]
+"""A batch of tag-hierarchy ids, shape (..., num_tag_levels)."""
 
 
 @dataclasses.dataclass
@@ -179,7 +183,7 @@ def _join_prefix(prefix: str, tag: str) -> str:
     return tag
 
 
-def _calculate_bytes_per_token_type(tokenizer: MarinTokenizer) -> Optional[Int[Array, "vocab"]]:
+def _calculate_bytes_per_token_type[V: IntVar](tokenizer: MarinTokenizer) -> Optional[jax.Array[[V]]]:
     if tokenizer is None:
         return None
 
@@ -835,7 +839,7 @@ class _EvalRunningMeans(eqx.Module):
     bpb_per_tag: RunningMean  # bits per byte per tag
 
     @staticmethod
-    def zeros_like(total: Float[Array, "..."], per_tag: Float[Array, "tag"]) -> "_EvalRunningMeans":
+    def zeros_like[Tag: IntVar](total: jax.Array[[]], per_tag: jax.Array[[Tag]]) -> "_EvalRunningMeans":
         z = RunningMean.zeros_like(total)
         per_tag_mean = RunningMean.zeros_like(per_tag)
         return _EvalRunningMeans(z, per_tag_mean, z, per_tag_mean)
@@ -846,6 +850,6 @@ class _LabeledEvalRunningMeans(eqx.Module):
     bpb_per_label: RunningMean
 
     @staticmethod
-    def zeros_like(per_label: Float[Array, "label"]) -> "_LabeledEvalRunningMeans":
+    def zeros_like[Label: IntVar](per_label: jax.Array[[Label]]) -> "_LabeledEvalRunningMeans":
         per_label_mean = RunningMean.zeros_like(per_label)
         return _LabeledEvalRunningMeans(per_label_mean, per_label_mean)

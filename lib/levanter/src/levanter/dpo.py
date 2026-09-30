@@ -3,6 +3,8 @@
 
 """Shared DPO runtime helpers."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
@@ -116,7 +118,7 @@ def dpo_loss_from_logps(
     delta_ref: hax.NamedArray,
     *,
     beta: float,
-) -> tuple[jnp.ndarray, dict[str, Metric]]:
+) -> tuple[jax.Array[[]], dict[str, Metric]]:
     logits = (delta_pi - delta_ref) * beta
     loss = hax.mean(hax.nn.softplus(-logits)).scalar()
     metrics = {
@@ -169,7 +171,7 @@ def dpo_loss(
     beta: float,
     key_chosen=None,
     key_rejected=None,
-) -> tuple[jnp.ndarray, dict[str, Metric]]:
+) -> tuple[jax.Array[[]], dict[str, Metric]]:
     with jax.named_scope("policy_chosen"):
         logp_pi_chosen = logp_sum(policy_model, example.chosen, key=key_chosen)
     with jax.named_scope("policy_rejected"):

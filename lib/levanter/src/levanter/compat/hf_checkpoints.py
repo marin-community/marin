@@ -49,7 +49,7 @@ from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.experimental import multihost_utils
 from jax.random import PRNGKey
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import PRNGKeyArray
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -1621,10 +1621,10 @@ def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key
 
 
 def _shard_hf_checkpoint(
-    state_dict: dict[str, Array | ShapeDtypeStruct],
+    state_dict: dict[str, jax.Array | ShapeDtypeStruct],
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
     weights_name: str = SAFE_TENSORS_MODEL,
-) -> tuple[dict[str, dict[str, Array | ShapeDtypeStruct]], dict | None]:
+) -> tuple[dict[str, dict[str, jax.Array | ShapeDtypeStruct]], dict | None]:
     """
     Splits a model state dictionary in sub-checkpoints so that the final size of each sub-checkpoint does not exceed a
     given size.
@@ -1642,7 +1642,7 @@ def _shard_hf_checkpoint(
     </Tip>
 
     Args:
-        state_dict (`dict[str, Array]`): The state dictionary of a model to save.
+        state_dict (`dict[str, jax.Array]`): The state dictionary of a model to save.
         max_shard_size (`int`):
             The maximum size of each sub-checkpoint.
         weights_name (`str`, *optional*, defaults to `"pytorch_model.bin"`):
@@ -1655,7 +1655,7 @@ def _shard_hf_checkpoint(
 
         The index may be None if there is only one shard.
     """
-    sharded_state_dicts: list[dict[str, Array | ShapeDtypeStruct]] = [{}]
+    sharded_state_dicts: list[dict[str, jax.Array | ShapeDtypeStruct]] = [{}]
     last_block_size = 0
     total_size = 0
 
@@ -1678,7 +1678,7 @@ def _shard_hf_checkpoint(
 
     # Otherwise, let's build the index
     weight_map = {}
-    shards: dict[str, dict[str, Array | ShapeDtypeStruct]] = {}
+    shards: dict[str, dict[str, jax.Array | ShapeDtypeStruct]] = {}
     for idx, shard in enumerate(sharded_state_dicts):
         # NOTE(dlwh): this is how it is in the HF code. it hurts me
         shard_file = weights_name.replace(".bin", f"-{idx + 1:05d}-of-{len(sharded_state_dicts):05d}.bin")
