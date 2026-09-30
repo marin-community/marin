@@ -6,10 +6,20 @@ router updates. Standard 1F1B is the default. Each process initializes only its
 own stage. CPU tests compare sequential-stage hidden states, routing statistics,
 losses, and gradients against the unsplit model.
 
-The synthetic runner does not restore or save checkpoints. Its AdamW default is
-a bring-up configuration; the validated long-context recipe explicitly selects
-BF16 MuonH and both host offloads. Production continuation and long-run training
-stability remain unvalidated.
+The synthetic runner can save and resume complete pipeline checkpoints. Its
+AdamW default is a bring-up configuration; the validated long-context recipe
+explicitly selects BF16 MuonH and both host offloads. Production continuation
+and long-run training stability remain unvalidated.
+
+Set `--checkpoint-root` to restore the latest complete `step-N` checkpoint and
+`--checkpoint-every-steps` to save at that interval and on the final step. Keep
+`--steps` at the same total update count when restarting: it sets the MuonH
+schedule as well as the stopping point. The checkpoint contains model weights,
+optimizer state, and pending QB router updates under global layer paths, so a
+run may resume with a different pipeline layer split. The checkpoint root must
+be shared by every worker. A checkpoint written by the standard Hero FSDP
+trainer has a different state tree, including optional master and EMA weights;
+loading that format into this pipeline has not been implemented or validated.
 
 ## Validated result
 
