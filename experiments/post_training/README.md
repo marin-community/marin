@@ -50,6 +50,29 @@ uv run python -m experiments.post_training.cat_count_canary \
 dependencies before the training job. A `dev` version is mutable and rebuilds
 on each run.
 
+To request a coordinator with 4 CPUs, 16 GB of memory and 8 GB of disk, run
+the same artifact main inside an Iris job. From the repository root:
+
+```bash
+uv run iris --cluster marin job run \
+  --target-cluster cw-rno2a --job-name cat-count-dry-20260930 \
+  --priority interactive --cpu 4 --memory 16GB --disk 8GB \
+  --enable-extra-resources --extra cpu --timeout 1800 \
+  --max-retries 0 --no-wait -- \
+  python -m experiments.post_training.cat_count_canary \
+  --cluster cw-rno2a --version 2026.09.30 --preset dry \
+  --job-timeout-seconds 1800 --run
+```
+
+Choose a fresh job name and artifact version for each measured run. The main
+recognizes its existing Iris job and builds the artifact graph there. These
+resource flags apply to the coordinator; each training task still requests
+65 CPUs and two H100s. Check the receiving cluster's remaining user budget
+before submission. Run comparisons sequentially when their combined active
+resource requests exceed that budget. The coordinator timeout bounds its
+execution; also monitor queue time and cancel the owned job tree at the
+chosen submission-to-completion deadline.
+
 After the one-step check succeeds, use `calibrate` for exploratory settings.
 Compare step-0 and final exact-match rates at N=10 and N=20, greedy evaluation
 reward, and train reward. A setting qualifies for the gate when two seeds pass
