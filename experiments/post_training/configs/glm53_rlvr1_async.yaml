@@ -6,7 +6,7 @@ context_budget:
   max_turns: 999999
   generated_budget_fraction: 0.25
   overlong_cache_fraction: 0.5
-  overlong_penalty_scale: 0.0
+  overlong_penalty_scale: 0.1
 trainer:
   strategy: megatron
   seed: 42
@@ -31,7 +31,7 @@ trainer:
     tis_imp_ratio_cap: 2.0
     tito_full: true
   epochs: 2
-  max_steps: 16
+  max_steps: 128
   train_batch_size: 512
   policy_mini_batch_size: 512
   update_epochs_per_batch: 1
@@ -40,7 +40,7 @@ trainer:
   micro_train_batch_size_per_gpu: 1
   use_sample_packing: true
   eval_before_train: true
-  eval_interval: 2
+  eval_interval: 4
   ckpt_interval: 4
   max_ckpts_to_keep: 5
   resume_mode: none
@@ -89,7 +89,7 @@ trainer:
     ref_num_nodes: 10
     ref_num_gpus_per_node: 8
     policy_strict_spread_pg: true
-  run_name: datakit-rlvr1-16k-loop1-length0-20260929
+  run_name: datakit-rlvr1-loop2-length01-20260930-v1
   hf_hub_repo_id: null
   debug_mode: light
   restore_dataloader_state: true
@@ -102,7 +102,7 @@ trainer:
     # 128 groups × 16 responses exceed the engines' 768 sequence slots.
     max_in_flight: 128
     # Expiring checkpoint prefix: checkpoints store URIs instead of copying route payloads.
-    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-16k-2026.09.29.19
+    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-loop2-length01-2026.09.30.1
 generator:
   # Frozen EAGLE-3 recipe from Echo wiki 541; no online draft training.
   speculative_decoding:
@@ -117,8 +117,8 @@ generator:
       max_period_tokens: 256
       tail_tokens: 2048
       minimum_occurrences: 8
-      advantage_penalty_per_token: 1.0
-      max_advantage_penalty: 32768.0
+      advantage_penalty_per_token: 2.0
+      max_advantage_penalty: 65536.0
   trajectory_retention:
     phases: [train, eval]
     sample_count_per_step: 100
