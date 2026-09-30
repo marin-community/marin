@@ -113,6 +113,11 @@ permanently latches this database into shared-deployment mode. Clearing the
 setting, removing users, or completing workloads never restores implicit
 loopback or machine-token administration.
 
+`github.trigger_allowed_user_ids` grants signed GitHub issue and PR triggers
+to the listed numeric GitHub identities. It does not bind those identities to
+Loom users or grant browser sign-in, so existing account roles are unchanged.
+Remove an ID from the setting to revoke this trigger grant.
+
 The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. The profile names `marin-community/marin` in

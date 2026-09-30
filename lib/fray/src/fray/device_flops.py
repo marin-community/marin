@@ -16,7 +16,8 @@ FlopDtype = Literal["bf16", "fp16", "fp32", "fp64", "tf32", "int8", "int4", "fp8
 # Peak FLOPS per device type. Keys are lowercase device identifiers.
 DEVICE_FLOPS: dict[str, dict[str, float]] = {
     # NVIDIA GPUs
-    # source: https://resources.nvidia.com/en-us-tensor-core/nvidia-tensor-core-gpu-datasheet
+    # H100 SXM column of the datasheet.
+    # source: https://resources.nvidia.com/en-us-gpu-resources/h100-datasheet-24306
     # nvidia publishes spec sheet with a 2x sparsity factor
     "h100": {
         "fp64": 67e12,
@@ -27,6 +28,9 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 3.958e15 / 2,
         "int8": 3.958e15 / 2,
     },
+    # PCIe column of the 2022 H100 datasheet. The current revision lists only the SXM and
+    # NVL variants.
+    # source: https://web.archive.org/web/20221220065836/https://nvdam.widen.net/content/vuzumiozpb/original/h100-datasheet-2287922.pdf
     "h100-pcie": {
         "fp64": 51e12,
         "fp32": 51e12,
@@ -90,8 +94,9 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "bf16": 149.7e12,
     },
     # Source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/proviz-print-nvidia-rtx-a6000-datasheet-us-nvidia-1454980-r9-web%20(1).pdf
+    # The datasheet marks only the 309.7 TFLOPS tensor figure as using sparsity.
     "a6000": {
-        "fp32": 38.7e12 / 2,
+        "fp32": 38.7e12,
         "tf32": 309.7e12 / 2,
         "fp16": 309.7e12 / 2,
         "bf16": 309.7e12 / 2,
@@ -145,14 +150,15 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "int8": 130e12,
         "int4": 260e12,
     },
-    # source: https://images.nvidia.com/content/Solutions/data-center/vgpu-L4-background-image-background-image/l4-datasheet.pdf
+    # source: https://resources.nvidia.com/en-us-gpu-resources/l4-tensor-datasheet
+    # nvidia publishes the tensor core figures with a 2x sparsity factor
     "l4": {
         "fp32": 30.3e12,
-        "tf32": 120e12,
-        "fp16": 242e12,
-        "bf16": 242e12,
-        "fp8": 485e12,
-        "int8": 485e12,
+        "tf32": 120e12 / 2,
+        "fp16": 242e12 / 2,
+        "bf16": 242e12 / 2,
+        "fp8": 485e12 / 2,
+        "int8": 485e12 / 2,
     },
     # source: https://www.nvidia.com/en-us/data-center/l40s/
     # nvidia publishes spec sheet with a 2x sparsity factor
