@@ -169,6 +169,8 @@ def export(config: ExportConfig) -> None:
     All JAX processes call this with the same config after distributed initialization.
     A destination belongs to exactly one exporting gang at a time.
     """
+    if re.fullmatch(r"[0-9a-f]{40}", config.source_revision) is None:
+        raise ValueError("source_revision must be a 40-character lowercase hexadecimal Marin commit")
     root = StoragePath(config.destination)
     hf_config = config.model.to_hf_config(config.model.vocab_size).to_dict()
     request = {"export_version": EXPORT_VERSION, "config": draccus.encode(config), "hf_config": hf_config}

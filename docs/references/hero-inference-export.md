@@ -11,7 +11,7 @@ checkpoint: s3://marin-us-east-02a/marin/<run>/checkpoints/step-144000
 metadata_digest: <SHA-256 of canonical checkpoint metadata JSON>
 model: <complete GrugModelConfig mapping from the training run>
 destination: s3://marin-us-east-02a/marin/<new-export-root>
-source_revision: <40-character Marin producer commit>
+source_revision: <40-character lowercase hexadecimal Marin producer commit>
 expert_axis_size: 32
 replica_axis_size: 1
 ```
@@ -36,7 +36,7 @@ compact Grug mesh; they default to one for local fixtures. Full Hero previously
 used 32 GB200s, four GPUs per task and 400 GB host RAM per task. These are
 execution choices, not constraints imposed by the producer. Use region-local
 CW storage and interactive priority for validation. Iris launch and dev-GPU
-procedures are in [Iris operations](../../lib/iris/OPS.md).
+procedures are in [Iris operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md).
 
 ## Weight and file contract
 
@@ -70,6 +70,7 @@ shard is written. Re-running the same YAML resumes partial output.
 
 Before reusing a shard, the producer checks its identity and exact expected
 tensor names, byte size and freshly computed SHA-256 of its stored contents.
+Resume therefore re-reads all completed shards from storage before reusing them.
 Corruption stops the export and preserves the object for inspection. An upload
 without its progress record may be rewritten on resume. Shards with verified
 progress are preserved. Changed inputs require a fresh destination.
