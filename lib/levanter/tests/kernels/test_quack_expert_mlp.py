@@ -91,6 +91,34 @@ def test_expert_mlp_forward_and_all_gradients_match_reference(tail_rows):
         _assert_bfloat16_close(got, want)
 
 
+@pytest.mark.parametrize("tail_rows", [0, 32])
+def test_dswiglu_gemm_matches_the_swiglu_backward_of_dh(tail_rows):
+    _require_sm100()
+    kernels = importlib.import_module("levanter.grug._moe.quack_moe_cute")
+    rng = np.random.default_rng(13)
+    dy = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    gate_up = jnp.asarray(rng.normal(0, 1.0, (_NUM_TOKENS, 128)), dtype=jnp.bfloat16)
+    w2 = jnp.asarray(rng.normal(0, 0.2, (3, 64, 64)), dtype=jnp.bfloat16)
+    # Rows past the last group are unspecified input and must not reach the active rows.
+    dy = jnp.pad(dy, ((0, tail_rows), (0, 0)), constant_values=jnp.nan)
+    gate_up = jnp.pad(gate_up, ((0, tail_rows), (0, 0)), constant_values=jnp.nan)
+    cu = jnp.asarray(_CU_SEQLENS, dtype=jnp.int32)
+
+    d_gate_up, row_dot = jax.jit(lambda dy, gu: kernels.quack_grouped_dswiglu_gemm(dy, w2, gu, cu))(dy, gate_up)
+
+    rows = []
+    for expert, start, stop in [(0, 0, _EXPERT_SPLIT), (2, _EXPERT_SPLIT, _NUM_TOKENS)]:
+        rows.append(dy[start:stop].astype(jnp.float32) @ w2[expert].astype(jnp.float32).T)
+    dh = jnp.concatenate(rows)
+    gate = gate_up[:_NUM_TOKENS, 0::2].astype(jnp.float32)
+    up = gate_up[:_NUM_TOKENS, 1::2].astype(jnp.float32)
+    h, pullback = jax.vjp(lambda g, u: jax.nn.silu(g) * u, gate, up)
+    d_gate, d_up = pullback(dh)
+    expected = jnp.stack([d_gate, d_up], axis=-1).reshape(_NUM_TOKENS, 128)
+    _assert_bfloat16_close(d_gate_up[:_NUM_TOKENS], expected)
+    _assert_bfloat16_close(row_dot[:_NUM_TOKENS], jnp.sum(h * dh, axis=-1))
+
+
 def test_expert_mlp_backward_row_dot_is_the_output_scale_gradient():
     _require_sm100()
     sonic = importlib.import_module("levanter.grug._moe.sonic_cute")
