@@ -4,7 +4,6 @@
 """Build a local public Workplace candidate for the TaskCompendium alpha dataset."""
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -27,17 +26,9 @@ from taskcompendium.importers.nemo_workplace import (
 )
 from taskcompendium.models import SCHEMA_VERSION
 from taskcompendium.public_projection import public_task
+from taskcompendium.release_common import REPO_ID, sha256_file
 
-REPO_ID = "open-athena/taskcompendium-alpha-1"
 WORKPLACE_SPLITS: tuple[WorkplaceSplit, ...] = ("train", "validation")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _write_workplace_split(source_path: Path, destination: Path, split: WorkplaceSplit) -> tuple[int, dict[str, int]]:
@@ -101,7 +92,7 @@ completed TaskTrove conversions and Harbor sample evidence for each included sou
 def _manifest(
     files: dict[str, dict[str, object]], row_counts: dict[WorkplaceSplit, int], builder_revision: str
 ) -> dict[str, object]:
-    """Compute release provenance separately from writing release files."""
+    """Describe pinned source, output, and Harbor evidence for a Workplace candidate."""
     return {
         "format_version": 1,
         "visibility": "agent",
@@ -191,7 +182,7 @@ def build_workplace_candidate(
             files[split] = {
                 "path": f"data/{split}.jsonl",
                 "rows": rows,
-                "sha256": _sha256(output),
+                "sha256": sha256_file(output),
                 "categories": categories,
             }
         manifest = _manifest(files, row_counts, builder_revision)

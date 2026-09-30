@@ -4,7 +4,6 @@
 """Assemble a local mixed public candidate from accepted agent-visible records."""
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -15,10 +14,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from taskcompendium.models import SHA256_PATTERN
 from taskcompendium.public_projection import PublicTask
+from taskcompendium.release_common import REPO_ID, sha256_file
 
-REPO_ID = "open-athena/taskcompendium-alpha-1"
-SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 REGIONAL_PIN_PATTERN = re.compile(
     r"[^#]+#manifest-sha256=[0-9a-f]{64}#parquet-size=\d+#parquet-etag=([^#]*)#parquet-version-id=([^#]*)\Z"
@@ -211,14 +210,6 @@ class CohortInput(BaseModel):
         return self
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _workplace_record(task: PublicTask, cohort: CohortInput) -> AcceptedPublicRecord:
     parts = task.source.row.split(":")
     if len(parts) != 3 or parts[0] != cohort.split or not parts[1].isdigit() or not SHA256_PATTERN.fullmatch(parts[2]):
@@ -280,7 +271,7 @@ def _write_cohort(
     seen_ids: set[str],
     seen_source_rows: set[tuple[str, str]],
 ) -> tuple[int, str]:
-    if _sha256(cohort.input_path) != cohort.input_sha256:
+    if sha256_file(cohort.input_path) != cohort.input_sha256:
         raise ValueError(f"Accepted input digest mismatch: {cohort.cohort}")
     count = 0
     source_assets = {(asset.path, asset.pin) for asset in cohort.source_assets}
@@ -302,7 +293,7 @@ def _write_cohort(
             count += 1
     if count != cohort.accepted_rows:
         raise ValueError(f"Accepted row count mismatch: {cohort.cohort}")
-    return count, _sha256(destination)
+    return count, sha256_file(destination)
 
 
 def _card(cohorts: tuple[CohortInput, ...], data_files: list[dict[str, object]]) -> str:
