@@ -30,6 +30,7 @@ RESCORE_AGAIN_SCORER = "vllm.rescore_again"
 FROZEN_RESCORE_SCORER = "vllm.rescore_frozen"
 TRAINER_SCORER = "trainer"
 UPDATE_PREFIX = "update@"
+TRAINING_PASS_PREFIX = "training_pass@"
 CACHE_OFF = "off"
 
 ANALYSIS_VERSION = 3
@@ -816,6 +817,41 @@ def _display_metric(value, *, percent_digits: int | None = None, scale: float = 
     return f"{value:.{percent_digits}%}" if percent_digits is not None else f"{value:.5g}"
 
 
+def _training_pass_lines(timing: dict) -> list[str]:
+    """Render timed forward+backward passes: median of the repetitions (slowest rank each) against native."""
+    passes: dict[tuple[str, str], dict] = {}
+    for name, value in timing.items():
+        if not name.startswith(TRAINING_PASS_PREFIX):
+            continue
+        label, metric = name.rsplit("/", 1)
+        update, mode = label.removeprefix(TRAINING_PASS_PREFIX).split(":", 1)
+        passes.setdefault((update, mode), {})[metric] = value
+    if not passes:
+        return []
+    lines = [
+        "## Training-pass timing",
+        "",
+        "Forward and backward on the probe batch at zero learning rate, one warmup, median of the timed "
+        "repetitions (each the slowest rank). Change is against `native` at the same update.",
+        "",
+        "| Update | Mode | seconds (median) | repetitions | change vs native | peak memory GiB |",
+        "|---|---|---:|---|---:|---:|",
+    ]
+    for (update, mode), metrics in sorted(passes.items()):
+        seconds = metrics.get("seconds", [])
+        median = float(np.median(seconds)) if seconds else math.nan
+        native = passes.get((update, "native"), {}).get("seconds", [])
+        change = median / float(np.median(native)) - 1 if native else math.nan
+        repetitions = ", ".join(f"{value:.4g}" for value in seconds)
+        memory = metrics.get("peak_memory_bytes", math.nan) / 2**30
+        lines.append(
+            f"| {update} | {mode} | {_display_metric(median)} | {repetitions} | "
+            f"{_display_metric(change, percent_digits=1)} | {_display_metric(memory)} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _display_interval(value, *, percent_digits: int | None = None, scale: float = 1.0) -> str:
     if value is None:
         return "-"
@@ -993,6 +1029,7 @@ def render_markdown(report: dict) -> str:
             if isinstance(seconds, (int, float)):
                 lines.append(f"| {name} | {_display_metric(seconds)} |")
         lines.append("")
+        lines.extend(_training_pass_lines(report["timing"]))
     step_timings = [
         (step, name, value)
         for step, metrics in sorted(report["step_metrics"].items())
