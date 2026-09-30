@@ -18,6 +18,7 @@ class TaskArchive:
     archive_path: str
     release_uri: str
     release_revision: str
+    archive_sha256: str
     files: dict[str, bytes]
 
     @property
