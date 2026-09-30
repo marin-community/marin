@@ -14,8 +14,10 @@ import concurrent.futures
 import io
 import logging
 
+import equinox as eqx
 import fsspec
 import jax
+import jax.numpy as jnp
 import numpy as np
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
@@ -69,6 +71,67 @@ def capture_matrices(tree) -> dict[str, jax.Array]:
     sites.update(_mlp_sites(0, kda, _KDA_STACK_INDICES[0]))
     sites.update(_mlp_sites(5, mla, _MLA_STACK_INDICES[5]))
     return sites
+
+
+def _add_at(value: jax.Array, delta: jax.Array, *index: int) -> jax.Array:
+    """``value`` with ``delta`` added at the leading ``index`` (a one-hot mask, so the stacked leaf keeps its
+    sharding: a scatter into an expert-sharded axis would need an explicit output sharding)."""
+    mask = jnp.ones((), value.dtype)
+    for axis, i in enumerate(index):
+        shape = [1] * value.ndim
+        shape[axis] = value.shape[axis]
+        mask = mask * (jnp.arange(value.shape[axis]) == i).astype(value.dtype).reshape(shape)
+    return value + mask * delta.astype(value.dtype)
+
+
+def add_to_captured(tree, deltas: dict[str, jax.Array]):
+    """The inverse of ``capture_matrices``: ``tree`` with ``deltas[site]`` added to each named site's matrix. Sites
+    missing from ``deltas`` are unchanged. Call under ``jax.jit``."""
+    unknown = set(deltas) - set(jax.eval_shape(capture_matrices, tree))
+    if unknown:
+        raise ValueError(f"unknown capture sites: {sorted(unknown)}")
+    for layer, index in _KDA_STACK_INDICES.items():
+        for name in _KDA_PROJECTIONS:
+            site = f"L{layer}.kda.{name}"
+            if site in deltas:
+                tree = eqx.tree_at(
+                    lambda t, n=name: getattr(t.kda_blocks.stacked.attn, n),
+                    tree,
+                    replace_fn=lambda v, d=deltas[site], i=index: _add_at(v, d, i),
+                )
+    for layer, index in _MLA_STACK_INDICES.items():
+        for name in _MLA_PROJECTIONS:
+            site = f"L{layer}.mla.{name}"
+            if site in deltas:
+                tree = eqx.tree_at(
+                    lambda t, n=name: getattr(t.stacked_blocks.stacked.attn, n),
+                    tree,
+                    replace_fn=lambda v, d=deltas[site], i=index: _add_at(v, d, i),
+                )
+    for layer, stack_of, index in (
+        (0, lambda t: t.kda_blocks.stacked, _KDA_STACK_INDICES[0]),
+        (5, lambda t: t.stacked_blocks.stacked, _MLA_STACK_INDICES[5]),
+    ):
+        leaves = {
+            f"L{layer}.shared.w_up": lambda t, s=stack_of: s(t).shared[0].w_up,
+            f"L{layer}.shared.w_down": lambda t, s=stack_of: s(t).shared[0].w_down,
+            f"L{layer}.latent.w_down": lambda t, s=stack_of: s(t).mlp.w_latent_down,
+            f"L{layer}.latent.w_up": lambda t, s=stack_of: s(t).mlp.w_latent_up,
+            f"L{layer}.router": lambda t, s=stack_of: s(t).mlp.router,
+        }
+        for site, where in leaves.items():
+            if site in deltas:
+                tree = eqx.tree_at(where, tree, replace_fn=lambda v, d=deltas[site], i=index: _add_at(v, d, i))
+        for expert in CAPTURE_EXPERTS:
+            for name in ("w_up", "w_down"):
+                site = f"L{layer}.expert{expert}.{name}"
+                if site in deltas:
+                    tree = eqx.tree_at(
+                        lambda t, s=stack_of, n=name: getattr(s(t).mlp.expert_mlp, n),
+                        tree,
+                        replace_fn=lambda v, d=deltas[site], i=index, e=expert: _add_at(v, d, i, e),
+                    )
+    return tree
 
 
 def capture_steps(starts: tuple[int, ...], length: int) -> frozenset[int]:

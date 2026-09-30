@@ -59,7 +59,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.byte_targets import token_byte_table
-from experiments.grug.fast_track.grad_capture import CaptureWriter, capture_matrices, capture_steps
+from experiments.grug.fast_track.grad_capture import CaptureWriter, add_to_captured, capture_matrices, capture_steps
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_HIDDEN_KEY,
@@ -75,6 +75,7 @@ from experiments.grug.fast_track.model import (
 )
 from experiments.grug.fast_track.muon_probe import MuonProbe
 from experiments.grug.fast_track.optimizer import expert_consistency_metrics, magma_metrics, optimizer_diagnostics
+from experiments.grug.fast_track.snr_probe import SnrProbe
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -266,6 +267,9 @@ class GrugTrainerConfig:
     # ``<muon_probe_path>/muon_probe_step<N>.npz``.
     muon_probe_steps: tuple[int, ...] = ()
     muon_probe_path: str | None = None
+    # SNR probe (``snr_probe.py``): at each of these steps, compare Muon's update with SNR-weighted ones on held-out
+    # payoff and loss; writes ``<muon_probe_path>/snr_probe_step<N>.npz``.
+    snr_probe_steps: tuple[int, ...] = ()
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -991,6 +995,19 @@ def _make_grad_capture_step(mp: jmp.Policy, *, z_loss_weight: float):
     return capture
 
 
+def _make_probe_loss(mp: jmp.Policy):
+    """``loss(params, batch, pending_qb_betas, deltas)``: the plain next-token loss on ``batch`` after adding
+    ``deltas`` to the captured matrices (``grad_capture.add_to_captured``)."""
+
+    @jax.jit
+    def loss(params: Transformer, batch, pending_qb_betas, deltas):
+        params = add_to_captured(_apply_qb_betas(params, pending_qb_betas), deltas)
+        compute_params = _cast_to_compute(mp, params)
+        return compute_params.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask)
+
+    return loss
+
+
 _captured_params = jax.jit(capture_matrices)
 # Probe batches start this many steps past the run's last step (disjoint from the training data).
 _MUON_PROBE_DATA_OFFSET = 1000
@@ -1621,9 +1638,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             grad_capture_step = _make_grad_capture_step(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
             capture_writer = CaptureWriter(config.trainer.grad_capture_path)
         muon_probes: list[MuonProbe] = []
-        if config.trainer.muon_probe_steps:
+        snr_probes: list[SnrProbe] = []
+        if config.trainer.muon_probe_steps or config.trainer.snr_probe_steps:
             if config.trainer.muon_probe_path is None:
-                raise ValueError("muon_probe_steps needs muon_probe_path")
+                raise ValueError("muon_probe_steps and snr_probe_steps need muon_probe_path")
             probe_gradients = _make_grad_capture_step(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
             # Probe batches come from past the run's end, so the run's own data order is untouched.
             probe_batches = iter(train_loader.iter_from_step(trainer.num_train_steps + _MUON_PROBE_DATA_OFFSET))
@@ -1636,6 +1654,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     ns_steps=config.optimizer.backend_steps,
                 )
                 for step in config.trainer.muon_probe_steps
+            ]
+            probe_loss = _make_probe_loss(trainer.mp)
+            snr_probes = [
+                SnrProbe(
+                    step,
+                    config.trainer.muon_probe_path,
+                    _captured_params,
+                    probe_batches,
+                    ns_steps=config.optimizer.backend_steps,
+                )
+                for step in config.trainer.snr_probe_steps
             ]
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
@@ -1777,6 +1806,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             lambda p, b, st, betas=pending_betas, la=loop_active, rt=router_tie_active: probe_gradients(
                                 p, b, betas, st, loop_active=la, router_tie_active=rt
                             ),
+                        )
+                    for snr_probe in snr_probes:
+                        pending_betas = state.pending_qb_betas
+                        snr_probe.before_step(
+                            current_step,
+                            state.params,
+                            state.step,
+                            lambda p, b, st, betas=pending_betas, la=loop_active, rt=router_tie_active: probe_gradients(
+                                p, b, betas, st, loop_active=la, router_tie_active=rt
+                            ),
+                            lambda p, b, d, betas=pending_betas: probe_loss(p, b, betas, d),
                         )
                     captured_before = None
                     if grad_capture_step is not None and current_step in grad_capture_due:
