@@ -227,6 +227,9 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
         add(f"mismatch_after_{update}", _trainer_scoring(update, NATIVE_MODE), reread(update))
         for mode in _trainer_modes(scores):
             add(f"{mode}_after_{update}", _trainer_scoring(update, mode), reread(update))
+            # Same mode before and after the update: under replay the routes are fixed, so this isolates
+            # the weight change from routing flips.
+            add(f"{mode}_drift_after_{update}", _trainer_scoring(update, mode), _trainer_scoring(0, mode))
     return comparisons
 
 
