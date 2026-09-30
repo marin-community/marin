@@ -62,9 +62,10 @@ def snowball_recipe(
     response_tokens: int,
     capture: bool = False,
     timing_modes: tuple[str, ...] = (),
+    extra_modes: tuple[str, ...] = (),
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
-    modes = NUMERICS_MODES if campaign is Campaign.MISMATCH else REPLAY_MODES if replay else ()
+    modes = (*(NUMERICS_MODES if campaign is Campaign.MISMATCH else REPLAY_MODES if replay else ()), *extra_modes)
     probe = probe_block(
         settings,
         router_replay=replay,
@@ -156,6 +157,7 @@ def build_spec(
     response_tokens: int,
     capture: bool = False,
     timing_modes: tuple[str, ...] = (),
+    extra_modes: tuple[str, ...] = (),
 ) -> tuple[SkyRLSpec, IrisSkyRLExecution]:
     if campaign is Campaign.MISMATCH and (settings.updates != (0,) or routing is not Routing.NATIVE):
         raise ValueError("the mismatch campaign scores starting weights in all modes without training updates")
@@ -174,6 +176,7 @@ def build_spec(
                 response_tokens=response_tokens,
                 capture=capture,
                 timing_modes=timing_modes,
+                extra_modes=extra_modes,
             ),
             runtime=SkyRLRuntime(profile=SNOWBALL_RECIPE.profile),
             model=ArtifactHfModel(
@@ -241,6 +244,7 @@ def build_run(**kwargs) -> ArtifactStep[SkyRLRun]:
 @click.option("--reuse-probe")
 @click.option("--capture/--no-capture", default=False, help="Record trainer regions at the capture layers.")
 @click.option("--timing-mode", "timing_modes", multiple=True, help="Time forward + backward for this mode.")
+@click.option("--extra-mode", "extra_modes", multiple=True, help="Score this trainer mode as well (a candidate).")
 @rl_build_options
 def main(
     campaign: str,
@@ -262,6 +266,7 @@ def main(
     reuse_probe: str | None,
     capture: bool,
     timing_modes: tuple[str, ...],
+    extra_modes: tuple[str, ...],
 ) -> ArtifactStep[SkyRLRun]:
     selected = Campaign(campaign)
     return build_run(
@@ -287,6 +292,7 @@ def main(
         response_tokens=response_tokens,
         capture=capture,
         timing_modes=timing_modes,
+        extra_modes=extra_modes,
     )
 
 
