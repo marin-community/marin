@@ -34,6 +34,9 @@ class VerifierKind(StrEnum):
     NUMERIC_ANSWER = "numeric"
     MATHEMATICAL_ANSWER = "math"
     MCQ_ANSWER = "mcq"
+    IFEVAL = "ifeval"
+    XML_ELEMENTS = "xml-elements"
+    CSV_COLUMNS = "csv-columns"
 
 
 class Source(BaseModel):
