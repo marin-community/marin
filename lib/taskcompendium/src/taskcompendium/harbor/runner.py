@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
+    ENVIRONMENT_DIR,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
     HarborEnvironmentConfig,
@@ -55,7 +56,7 @@ async def run_trial(
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
     provider_sources = {
-        name: task_dir / "environment" / PROVIDER_SOURCES_DIR / name
+        name: task_dir / ENVIRONMENT_DIR / PROVIDER_SOURCES_DIR / name
         for name, binding in environment_config.tool_providers.items()
         if parse_git_provider(binding.provider) is not None
     }
