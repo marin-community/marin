@@ -54,9 +54,9 @@ async def grade_answer(
     specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt
 ) -> GradeResult:
     """Grade a task attempt, assigning zero reward to invalid agent submissions."""
+    verifier = resolve_verifier(specification.verifier)
     try:
         submission = await convention.extract(attempt)
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
-    verifier = resolve_verifier(specification.verifier)
     return await verifier.grade(submission, attempt=attempt)

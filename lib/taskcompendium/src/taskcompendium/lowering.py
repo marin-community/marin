@@ -31,7 +31,7 @@ from taskcompendium.submission import (
     ProviderState,
     SubmissionConvention,
     render_instruction,
-    submission_compatible,
+    submission_compatibility,
 )
 from taskcompendium.tool_provider import ToolProviderFactory
 from taskcompendium.verifier_registry import validate_verifier
@@ -172,7 +172,7 @@ def compatible_lowerings(
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
-        if submission_compatible(specification, convention).compatible
+        if submission_compatibility(specification, convention).compatible
         for environment_config in environment_configs
         if is_compatible_lowering(
             specification, convention, environment_config, trusted_provider_sources=trusted_provider_sources
@@ -334,7 +334,7 @@ def lower_to_harbor(
     }
     if not git_bindings:
         validate_environment_config(specification, convention, environment_config)
-    compatibility = submission_compatible(specification, convention)
+    compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
     validate_submission_tools(specification, convention, environment_config)
