@@ -46,3 +46,26 @@ chunk, so the backward writes into the later chunks' cotangent). Lowered StableH
 Gate: `autoresearch/loop-260930-mfu30/b/routing_gate.py` compares main's module (frozen copy), the
 inverse-only module and the branch module on a GB200x4 node: bitwise output and gradients (x, combine
 weights, w13, w2), control repeatability, and component timing at hero per-shard shapes.
+
+## M30B-004 GB200x4 gate: both changes bitwise exact (2026-09-30)
+
+Job `/mwittmann/m30b-gate-chain-02` (branch c67ee1f965 + gate script), 4 GB200, expert axis 4, hero env
+(`cuda_async`, fraction 0.75, device-kernel ragged a2a with symmetric buffers). The first attempt
+(`m30b-gate-inv-01`) ran with the default BFC allocator, and NCCL failed to register the whole 138 GiB pool as
+symmetric memory; the hero env fixes it.
+
+| case | T/shard, H=I | drops | inverse vs main | inverse+chain vs main | fwd+bwd ms: main / inverse / both |
+|---|---|---|---|---|---|
+| small-uniform | 2048, 512 | 0 | bitwise | bitwise | - |
+| small-skewed-drops | 2048, 512 | 12685 | bitwise | bitwise | - |
+| small-padded | 2048, 512 | 0 | bitwise | bitwise | - |
+| small-one-hot | 2048, 512 | 3668 | bitwise | bitwise | - |
+| hero-uniform | 65536, 3072 | 0 | bitwise | bitwise | 86.81 / 86.52 / 84.73 |
+| hero-skewed-drops (+padding) | 65536, 3072 | 358395 | bitwise | bitwise | 83.13 / 82.78 / 80.61 |
+
+Bitwise covers the output, the drop count and the gradients of x, the combine weights, w13 and w2. Main is
+repeatable (two runs bitwise equal). One MoE layer, forward plus backward without remat: inverse routing
+saves 0.3 ms (0.3%), the chained cotangents a further 1.8-2.2 ms (2.4-3.1% combined). Compiler temp drops
+by 1.37 GB (one [TK, H] buffer). Scaled to 48 layers: ~0.1 s/step, before any remat or contention effect.
+In isolation the inverse sort costs far less than the 0.107 s/step the training trace attributes to it,
+consistent with its kernels being stretched by the concurrent device-initiated a2a in training.
