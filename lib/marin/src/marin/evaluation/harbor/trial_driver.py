@@ -425,6 +425,21 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                 archive_dataset=dataset_metadata.selector,
             ),
         )
+        effective_agent = effective.agents[0]
+        if effective_agent.name == AgentName.PI:
+            try:
+                AgentFactory.create_agent_from_name(
+                    AgentName.PI,
+                    logs_dir=Path(jobs_dir) / "agent",
+                    model_name=effective_agent.model_name,
+                    **effective_agent.kwargs,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid hosted Pi configuration: {exc}. "
+                    "Check the model YAML's agent.agent_kwargs or the Harbor policy's agents[0].kwargs; "
+                    "hosted Pi requires an explicit thinking_format."
+                ) from exc
         job = asyncio.run(Job.create(effective))
     if len(job.benchmark_metadata) != 1:
         raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")
