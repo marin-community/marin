@@ -17,9 +17,6 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "pandas>=2.2"]
 
 [tool.uv.workspace]
 
-[tool.hatch.metadata]
-allow-direct-references = true
-
 [tool.uv.sources]
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
 tasktrove-verify = { path = "../tasktrove-verify", editable = true }
