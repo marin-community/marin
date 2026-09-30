@@ -41,9 +41,7 @@ class Verifier(BaseModel, ABC):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     @abstractmethod
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         """Grade a submission using this verifier's configuration."""
 
 
@@ -61,9 +59,7 @@ class ExactAnswerVerifier(Verifier):
             raise ValueError("An exact answer is required")
         return value
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, (TextSubmission, StateSubmission)) or not isinstance(submission.value, str):
             raise TypeError("Exact-answer verifier requires a string value")
         contract = ExactSpec(
@@ -90,9 +86,7 @@ class NumericAnswerVerifier(Verifier):
             raise ValueError(f"Invalid numeric verifier contract: {error}") from error
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("Numeric verifier requires a text submission")
         try:
@@ -105,18 +99,20 @@ class NumericAnswerVerifier(Verifier):
         return GradeResult(Outcome.GRADED, grade_numeric_candidate(contract, value).reward)
 
 
-def _structured_equal(expected: JsonValue, actual: JsonValue) -> bool:
-    """Compare JSON values with exact scalar types and ordered arrays."""
+def json_values_equal(expected: JsonValue, actual: JsonValue, numeric_tolerance: float | None = None) -> bool:
+    """Compare JSON types and ordered arrays, optionally tolerating float differences."""
     if type(expected) is not type(actual):
         return False
     if isinstance(expected, dict) and isinstance(actual, dict):
         return expected.keys() == actual.keys() and all(
-            _structured_equal(value, actual[key]) for key, value in expected.items()
+            json_values_equal(value, actual[key], numeric_tolerance) for key, value in expected.items()
         )
     if isinstance(expected, list) and isinstance(actual, list):
         return len(expected) == len(actual) and all(
-            _structured_equal(left, right) for left, right in zip(expected, actual, strict=True)
+            json_values_equal(left, right, numeric_tolerance) for left, right in zip(expected, actual, strict=True)
         )
+    if isinstance(expected, float) and isinstance(actual, float) and numeric_tolerance is not None:
+        return abs(expected - actual) <= numeric_tolerance
     return expected == actual
 
 
@@ -125,12 +121,10 @@ class StructuredExactVerifier(Verifier):
 
     expected: JsonValue
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, StateSubmission):
             raise TypeError("Structured exact verifier requires a state submission")
-        return GradeResult(Outcome.GRADED, float(_structured_equal(self.expected, submission.value)))
+        return GradeResult(Outcome.GRADED, float(json_values_equal(self.expected, submission.value)))
 
 
 def structured_exact(expected: JsonValue) -> VerifierSpec:

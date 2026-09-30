@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
+    ENVIRONMENT_DIR,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
     HarborEnvironmentConfig,
@@ -22,7 +23,7 @@ from taskcompendium.lowering import (
     validate_submission_tools,
 )
 from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider, validate_staged_git_provider
-from taskcompendium.submission import chat_request, submission_compatible
+from taskcompendium.submission import chat_request, submission_compatibility
 
 DEFAULT_CHAT_TIMEOUT = 120
 
@@ -55,14 +56,14 @@ async def run_trial(
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
     provider_sources = {
-        name: task_dir / "environment" / PROVIDER_SOURCES_DIR / name
+        name: task_dir / ENVIRONMENT_DIR / PROVIDER_SOURCES_DIR / name
         for name, binding in environment_config.tool_providers.items()
         if parse_git_provider(binding.provider) is not None
     }
     for name, source in provider_sources.items():
         validate_staged_git_provider(environment_config.tool_providers[name].provider, source)
     validate_environment_config(specification, convention, environment_config, provider_sources=provider_sources)
-    compatibility = submission_compatible(specification, convention)
+    compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention differs from task contract: {'; '.join(compatibility.reasons)}")
 
