@@ -14,7 +14,6 @@ import numpy as np
 LOG_TWO = math.log(2.0)
 LOG_FLOAT64_MAX = math.log(np.finfo(np.float64).max)
 PERCENTILES = (0, 50, 75, 90, 99, 99.9, 100)
-DEFAULT_EPS_CLIP = 0.2
 
 
 @dataclass(frozen=True)
@@ -46,10 +45,7 @@ def comparison_metrics(
     reference: Sequence[Sequence[float]],
     masks: Sequence[Sequence[bool]],
     *,
-    advantages: Sequence[float | None] | None = None,
     tis_cap: float | None = None,
-    eps_clip_low: float = DEFAULT_EPS_CLIP,
-    eps_clip_high: float = DEFAULT_EPS_CLIP,
 ) -> dict[str, float | int]:
     """Compute metrics on precisely aligned valid response tokens.
 
@@ -61,7 +57,6 @@ def comparison_metrics(
         raise ValueError("comparison rows must align one-for-one")
     pieces = []
     per_sequence = []
-    sign_values = []
     for index, (left, right, mask) in enumerate(zip(target, reference, masks, strict=True)):
         if not (len(left) == len(right) == len(mask)):
             raise ValueError(f"comparison token lengths differ in sample {index}")
@@ -72,8 +67,6 @@ def comparison_metrics(
         if delta.size:
             pieces.append(delta)
             per_sequence.append(float(delta.sum()))
-            sign = None if advantages is None else advantages[index]
-            sign_values.extend([0.0 if sign is None else float(sign)] * len(delta))
     if not pieces:
         raise ValueError("comparison has no unmasked tokens")
     delta = np.concatenate(pieces)
@@ -118,16 +111,6 @@ def comparison_metrics(
         result["token_ess_fraction_capped"] = _ess_fraction(capped)
         result["sequence_ess_fraction_capped"] = _ess_fraction(np.asarray(capped_sequence))
         result["tis_cap_occupancy"] = float(np.mean(delta > math.log(tis_cap)))
-    if advantages is not None:
-        signs = np.asarray(sign_values)
-        positive = signs > 0
-        negative = signs < 0
-        result["positive_advantage_clip_occupancy"] = (
-            float(np.mean(delta[positive] > math.log1p(eps_clip_high))) if positive.any() else math.nan
-        )
-        result["negative_advantage_clip_occupancy"] = (
-            float(np.mean(delta[negative] < math.log1p(-eps_clip_low))) if negative.any() else math.nan
-        )
     return result
 
 

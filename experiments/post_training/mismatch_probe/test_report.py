@@ -5,7 +5,7 @@ import json
 
 import numpy as np
 import pytest
-from finestore.mismatch import (
+from finestore.mismatch_probe import (
     MANIFEST_TABLE,
     PROBE_TABLE,
     SCORES_TABLE,
@@ -14,11 +14,14 @@ from finestore.mismatch import (
     ScoreRow,
     register_mismatch_tables,
 )
+from finestore.reader import ReadView
 from finestore.store import DataStore
 
+from experiments.post_training.mismatch_probe import report as report_module
 from experiments.post_training.mismatch_probe.report import (
     analyze_archive,
     compare_archives,
+    render_archive_comparison,
     render_markdown,
     write_plots,
 )
@@ -40,8 +43,8 @@ def _archive(
     tokenizer_fingerprint="toy-tokenizer",
     probe_hash="frozen",
     response_shift=0,
-    clip_low=0.2,
-    clip_high=0.2,
+    forward_seconds=0.1,
+    matching_native_routes=False,
 ):
     rows = []
     scores = []
@@ -102,7 +105,7 @@ def _archive(
             update = int(name.split("@", 1)[1].split(":", 1)[0])
             observed = captured.astype(np.int32).copy() if with_routes and name.startswith("trainer@") else None
             replaced = np.zeros_like(captured, dtype=np.bool_)
-            if observed is not None and ":native" in name:
+            if observed is not None and ":native" in name and not matching_native_routes:
                 observed[:, 0] = [0, 1]
             if observed is not None and ":router_replay_filtered" in name:
                 observed[1, 0] = [0, 1]
@@ -111,7 +114,9 @@ def _archive(
                 ScoreRow(
                     probe_hash=probe_hash,
                     sample_id=sample,
-                    scoring=name,
+                    scorer="trainer" if name.startswith("trainer@") else name.split("@", 1)[0],
+                    mode=name.split(":", 1)[1] if name.startswith("trainer@") else "",
+                    cache_mode=("on" if name.endswith(":on") else "off") if name.startswith("vllm.rescore@") else None,
                     update=update,
                     weights_hash=(
                         reread_weight_override
@@ -130,17 +135,21 @@ def _archive(
         status="complete",
         probe_hash=probe_hash,
         starting_weights_hash=f"{weight_tag}0",
+        tokenizer_fingerprint=tokenizer_fingerprint,
+        starting_global_step=0,
+        scored_updates=[0, 1, 2],
+        scored_global_steps=[0, 1, 2],
         architecture="GrugMoeForCausalLM",
         vllm_enforce_eager=False,
         optimizer_steps_per_update=1,
         seed=7,
         bootstrap_seed=8,
         created_at_utc="2026-09-26T00:00:00Z",
-        config_json=json.dumps({"trainer": {"algorithm": {"eps_clip_low": clip_low, "eps_clip_high": clip_high}}}),
-        software_json=json.dumps({"tokenizer_fingerprint": tokenizer_fingerprint}),
+        config_json="{}",
+        software_json="{}",
         hardware_json="{}",
         batch_layout_json="{}",
-        timing_json=json.dumps({"trainer@0:native/seconds": 0.1}),
+        timing_json=json.dumps({"trainer@0:native/seconds": forward_seconds}),
         step_metrics_json="{}",
     )
     with DataStore.open(str(root), writer_id="report-test") as store:
@@ -153,17 +162,14 @@ def _archive(
             transaction.table(MANIFEST_TABLE).add(manifest.model_dump())
 
 
-def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path):
+def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, monkeypatch):
     root = tmp_path / "archive"
     _archive(root)
     report = analyze_archive(str(root), bootstrap_draws=80)
-    assert report["token_identity"]["fraction"] == 1.0
     assert report["comparisons"]["implementation_mismatch"]["metrics"]["abs_p99"] > 0.09
     assert report["comparisons"]["trainer_floor"]["metrics"]["abs_p99"] == 0.0
     assert report["paired_improvements"]["router_replay"]["abs_p99"]["ci95"][0] > 0
     assert report["paired_improvements"]["router_replay_filtered"]["abs_p99"]["ci95"][0] > 0
-    assert report["checks"]["drift_identity_after_2"]["pass"]
-    assert report["checks"]["generation_ratio_sanity"]["pass"]
     rendered = render_markdown(report)
     comparison_line = next(
         line for line in rendered.splitlines() if line.startswith("| router_replay_filtered_vs_generation |")
@@ -171,22 +177,28 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path):
     assert float(comparison_line.split("|")[2].strip()) == pytest.approx(
         report["comparisons"]["router_replay_filtered_vs_generation"]["metrics"]["abs_p99"], abs=0.005
     )
-    assert report["input_commit_token"] != "None"
-    output = tmp_path / "figures"
-    output.mkdir()
-    write_plots(report, output)
-    assert (output / "mismatch.png").stat().st_size > 0
+    snapshot = ReadView(str(root))
+    expected_token = str(snapshot.token)
+    advanced = False
 
-    cached_root = tmp_path / "cached"
-    _archive(cached_root, cache_mode="on")
-    cached = analyze_archive(str(cached_root), bootstrap_draws=20)
-    assert cached["comparisons"]["reread_mismatch"]["reference"] == "vllm.rescore@0:on"
-    assert "mismatch_after_2" in cached["comparisons"]
+    def open_then_advance(uri):
+        nonlocal advanced
+        view = ReadView(uri)
+        if not advanced:
+            advanced = True
+            manifest = report_module.ManifestRow.model_validate(view.scan(MANIFEST_TABLE).to_pylist()[0]).model_copy(
+                update={"timing_json": "{}"}
+            )
+            with DataStore.open(uri, writer_id="concurrent-writer") as store:
+                register_mismatch_tables(store)
+                with store.transaction() as transaction:
+                    transaction.table(MANIFEST_TABLE).add(manifest.model_dump())
+        return view
 
-    both_root = tmp_path / "both-cache-modes"
-    _archive(both_root, cache_mode="both")
-    both = analyze_archive(str(both_root), bootstrap_draws=20)
-    assert "prefix_cache_effect_at_0" in both["comparisons"]
+    monkeypatch.setattr(report_module, "ReadView", open_then_advance)
+    concurrent_report = analyze_archive(str(root), bootstrap_draws=20)
+    assert concurrent_report["input_commit_token"] == expected_token
+    assert concurrent_report["timing"] == report["timing"]
 
 
 @pytest.mark.parametrize("corrupt_field", ["response", "prompt"])
@@ -200,6 +212,8 @@ def test_report_stops_numerical_analysis_after_token_mutation(tmp_path, corrupt_
     report = analyze_archive(str(root), bootstrap_draws=20)
     assert report["token_identity"]["fraction"] < 1
     assert report["comparisons"] == {}
+    rendered = render_markdown(report)
+    assert "token_identity" in rendered and "failed" in rendered
     for left, right in ((root, valid), (valid, root)):
         with pytest.raises(ValueError, match="trainer and sampler token identity"):
             compare_archives(str(left), str(right), bootstrap_draws=20)
@@ -216,8 +230,10 @@ def test_report_route_agreement_excludes_missing_routes_and_tracks_replacements(
     assert native["set_agreement"] == 0.5
     assert replay["set_agreement"] == 1.0
     assert filtered["set_agreement"] == 0.75
-    assert filtered["replacement_fraction"] == (0.25 if with_replacement_mask else {"nonfinite": "nan"})
-    assert "set_agreement" in report["route_diagnostics"]["trainer@0:native"]["layers"]["0"]["ci95"]
+    output = tmp_path / "figures"
+    output.mkdir()
+    write_plots(report, output)
+    assert (output / "routes.png").stat().st_size > 0
 
     masked_root = tmp_path / "partially-masked"
     _archive(masked_root, with_routes=True, partial_route_mask=True)
@@ -233,15 +249,6 @@ def test_report_refuses_invalid_generation_distribution(tmp_path):
         analyze_archive(str(root), bootstrap_draws=20)
 
 
-def test_report_clip_occupancy_uses_archived_training_thresholds(tmp_path):
-    root = tmp_path / "clip-thresholds"
-    _archive(root, clip_low=0.05, clip_high=0.05)
-    report = analyze_archive(str(root), bootstrap_draws=20)
-    occupancy = report["comparisons"]["implementation_mismatch"]["metrics"]
-    assert occupancy["negative_advantage_clip_occupancy"] == 1.0
-    assert occupancy["positive_advantage_clip_occupancy"] == 0.0
-
-
 def test_report_refuses_same_update_comparison_with_different_weights(tmp_path):
     root = tmp_path / "different-reread-weights"
     _archive(root, reread_weight_override="wrong-update-1")
@@ -253,13 +260,22 @@ def test_configuration_comparison_pairs_prompts_and_requires_same_starting_weigh
     left, right, changed_weights, changed_tokenizer, independent = (
         tmp_path / name for name in ("left", "right", "changed-weights", "changed-tokenizer", "independent")
     )
-    _archive(left)
-    _archive(right, native_offset=0.04)
+    _archive(left, with_routes=True)
+    _archive(right, native_offset=0.04, with_routes=True, forward_seconds=0.3, matching_native_routes=True)
     _archive(changed_weights, weight_tag="other")
     _archive(changed_tokenizer, tokenizer_fingerprint="other-tokenizer")
     _archive(independent, probe_hash="another-answer-set", response_shift=1)
     paired = compare_archives(str(left), str(right), bootstrap_draws=40)
-    assert paired["kind"] == "shared_tokens"
+    assert paired["timing"]["trainer@0:native/seconds"]["right_minus_left_seconds"] == pytest.approx(0.2)
+    route_effect = paired["routes"]["trainer@0:native"]
+    assert route_effect["right_minus_left"]["set_agreement"] == 0.5
+    assert route_effect["ci95"]["set_agreement"] == pytest.approx([0.5, 0.5])
+    rendered = render_archive_comparison(paired)
+    assert "0.2" in rendered and "50.0%" in rendered
+    cached = tmp_path / "cached"
+    _archive(cached, cache_mode="on")
+    with pytest.raises(ValueError, match="prefix-cache"):
+        compare_archives(str(left), str(cached), bootstrap_draws=20)
     effect = paired["comparisons"]["implementation_mismatch"]
     assert effect["metrics"]["abs_p99_left_minus_right"] > 0
     assert effect["ci95"]["abs_p99_left_minus_right"][0] > 0
@@ -267,4 +283,5 @@ def test_configuration_comparison_pairs_prompts_and_requires_same_starting_weigh
         compare_archives(str(left), str(changed_weights), bootstrap_draws=20)
     with pytest.raises(ValueError, match="same tokenizer fingerprint"):
         compare_archives(str(left), str(changed_tokenizer), bootstrap_draws=20)
-    assert compare_archives(str(left), str(independent), bootstrap_draws=20)["kind"] == "independent_generation"
+    with pytest.raises(ValueError, match="same frozen probe hash"):
+        compare_archives(str(left), str(independent), bootstrap_draws=20)

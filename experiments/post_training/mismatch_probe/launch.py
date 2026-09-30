@@ -29,15 +29,26 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.provenance import Provenance
+from omegaconf import OmegaConf
 
-CLUSTER = "cw-rno2a"
-TOKENIZER = "Qwen/Qwen2.5-0.5B-Instruct"
-TOKENIZER_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
+from experiments.post_training.curriculum_rl.launch import PolicySpec
+
+TINY_GRUG_POLICY = PolicySpec(
+    label="tiny-grug",
+    cluster="cw-us-east-02a",
+    tokenizer_uri="Qwen/Qwen2.5-0.5B-Instruct",
+    tokenizer_revision="7ae557604adf67be50417f59c2c2f167def9a775",
+    model_relative_path="",
+    enable_thinking=None,
+    task_memory="128GB",
+    serve_gpus=2,
+)
+
+WARMUP_UPDATES = 3
 
 
 @dataclass(frozen=True)
-class ArmSpec:
+class ProbeLayout:
     name: str
     use_sample_packing: bool
 
@@ -54,22 +65,56 @@ class ProbeSettings:
     resume_path: str | None
 
 
-ARMS = {
+PROBE_LAYOUTS = {
     arm.name: arm
     for arm in (
-        ArmSpec("native-layout", use_sample_packing=False),
-        ArmSpec("packed-layout", use_sample_packing=True),
+        ProbeLayout("native-layout", use_sample_packing=False),
+        ProbeLayout("packed-layout", use_sample_packing=True),
     )
 }
 
 
-def probe_recipe(
-    arm: ArmSpec,
+def probe_block(settings: ProbeSettings) -> dict:
+    """Render fixed-token collection settings for a synchronous Megatron recipe."""
+    return {
+        "trainer": {
+            "mismatch_probe": {
+                "enabled": True,
+                "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
+                "seed": settings.seed,
+                "archive_uri": None,
+                "reuse_probe": settings.reuse_probe,
+                "score_after_updates": list(settings.updates),
+                "extra_trainer_modes": ["router_replay", "router_replay_filtered"],
+                "filtered_replay": {"keep_fraction": settings.keep_fraction},
+                "rescore_prefix_cache": settings.cache_mode,
+            }
+        },
+        "generator": {
+            "require_exact_chat_transport": True,
+            "enable_prefix_caching": settings.cache_mode != "off",
+            "engine_init_kwargs": {
+                "enable_return_routed_experts": True,
+                "logprobs_mode": "processed_logprobs",
+                "generation_config": "vllm",
+            },
+            "sampling_params": {
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "top_k": -1,
+                "min_p": 0.0,
+                "repetition_penalty": 1.0,
+                "logprobs": 0,
+            },
+        },
+    }
+
+
+def tiny_grug_recipe(
+    arm: ProbeLayout,
     settings: ProbeSettings,
     *,
     warmup: bool,
-    marin_commit: str,
-    skyrl_commit: str,
 ) -> str:
     """Render one role-independent training recipe for the selected arm."""
     config = {
@@ -80,16 +125,16 @@ def probe_recipe(
             "strategy": "megatron",
             "flash_attn": False,
             "use_sample_packing": arm.use_sample_packing,
-            "epochs": 8,
-            "max_steps": 1 if warmup else max(settings.updates),
+            "epochs": 1,
+            "max_steps": WARMUP_UPDATES if warmup else max(settings.updates),
             "update_epochs_per_batch": 1,
             "micro_forward_batch_size_per_gpu": 2,
             "ckpt_interval": 1,
             "eval_before_train": False,
             "eval_interval": -1,
-            "resume_mode": "from_path" if settings.resume_path else "latest",
+            "resume_mode": "from_path" if settings.resume_path else "none",
             "resume_path": settings.resume_path,
-            "reset_global_step_on_resume": bool(settings.resume_path),
+            "reset_global_step_on_resume": False,
             "logger": "console",
             "project_name": "marin-mismatch-probe",
             "algorithm": {"advantage_estimator": "grpo", "use_kl_loss": False, "use_kl_in_reward": False},
@@ -97,25 +142,11 @@ def probe_recipe(
                 "optimizer_config": {"lr": 0.02, "max_grad_norm": 0.0},
                 "megatron_config": {
                     "tensor_model_parallel_size": 1,
-                    "pipeline_model_parallel_size": 2,
+                    "pipeline_model_parallel_size": 1,
                     "context_parallel_size": 1,
                     "expert_model_parallel_size": 1,
                     "moe_router_replay": True,
                 },
-            },
-            "mismatch_probe": {
-                "enabled": not warmup,
-                "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
-                "seed": settings.seed,
-                "archive_uri": None,
-                "reuse_probe": settings.reuse_probe,
-                "score_after_updates": list(settings.updates),
-                "extra_trainer_modes": ["router_replay", "router_replay_filtered"],
-                "filtered_replay": {"keep_fraction": settings.keep_fraction},
-                "rescore_prefix_cache": settings.cache_mode,
-                "layer_tokens": 0,
-                "marin_commit": marin_commit,
-                "skyrl_commit": skyrl_commit,
             },
         },
         "generator": {
@@ -143,17 +174,18 @@ def probe_recipe(
         },
         "data": {"kind": "parquet", "train_data": [], "val_data": []},
     }
+    if not warmup:
+        config = OmegaConf.to_container(OmegaConf.merge(config, probe_block(settings)), resolve=True)
     return yaml.safe_dump(config, sort_keys=False)
 
 
 def build_arms(
     *,
-    arms: tuple[ArmSpec, ...],
+    arms: tuple[ProbeLayout, ...],
     settings: ProbeSettings,
     model_uri: str,
     data_uri: str,
     fixture_version: str,
-    runtime_commit: str,
     warmup: bool,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     """Build separate training artifacts for arms sharing model and data inputs."""
@@ -182,36 +214,36 @@ def build_arms(
     )
     topology = SkyRLTopology(num_nodes=1, gpus_per_node=2, gpu_variant="H100", role_plan=role_plan)
     execution = IrisSkyRLExecution(
-        cluster=CLUSTER,
-        cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+        cluster=TINY_GRUG_POLICY.cluster,
+        cluster_config=f"lib/iris/config/{TINY_GRUG_POLICY.cluster}.yaml",
         cpu=16,
-        memory="128GB",
+        memory=TINY_GRUG_POLICY.task_memory,
         disk="256GB",
         priority="interactive",
         max_retries=1,
-        target_cluster=CLUSTER,
+        target_cluster=TINY_GRUG_POLICY.cluster,
         parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
         coordinator_timeout_hours=12,
         wandb_entity="marin-community",
     )
     result = {}
-    marin_commit = Provenance.capture().base_commit
     for arm in arms:
         name = user_owned_name(f"checkpoints/mismatch-probe/{arm.name}{'-warmup' if warmup else ''}")
         result[arm.name] = skyrl_step(
             SkyRLSpec(
                 name=name,
                 version=resolve_version(name, None),
-                config_yaml=probe_recipe(
+                config_yaml=tiny_grug_recipe(
                     arm,
                     settings,
                     warmup=warmup,
-                    marin_commit=marin_commit,
-                    skyrl_commit=runtime_commit,
                 ),
-                runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON, commit=runtime_commit),
+                runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
                 model=ArtifactHfModel(
-                    step=model, tokenizer_uri=TOKENIZER, tokenizer_revision=TOKENIZER_REVISION, relative_path=""
+                    step=model,
+                    tokenizer_uri=TINY_GRUG_POLICY.tokenizer_uri,
+                    tokenizer_revision=TINY_GRUG_POLICY.tokenizer_revision,
+                    relative_path=TINY_GRUG_POLICY.model_relative_path,
                 ),
                 train_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
                 validation_data=(ArtifactDataSource(data, relative_path="validation.parquet"),),
@@ -226,11 +258,10 @@ def build_arms(
 
 
 @click.command(help=__doc__)
-@click.option("--arm", "arm_names", multiple=True, type=click.Choice(sorted(ARMS)), default=("native-layout",))
+@click.option("--arm", "arm_names", multiple=True, type=click.Choice(sorted(PROBE_LAYOUTS)), default=("native-layout",))
 @click.option("--model-uri", required=True)
 @click.option("--data-uri", required=True)
 @click.option("--fixture-version", required=True)
-@click.option("--runtime-commit", required=True, help="Full SHA of the reviewed MarinSkyRL probe runtime.")
 @click.option("--resume-path")
 @click.option("--reuse-probe")
 @click.option("--warmup", is_flag=True)
@@ -246,7 +277,6 @@ def main(
     model_uri: str,
     data_uri: str,
     fixture_version: str,
-    runtime_commit: str,
     resume_path: str | None,
     reuse_probe: str | None,
     warmup: bool,
@@ -268,12 +298,11 @@ def main(
         resume_path=resume_path,
     )
     return build_arms(
-        arms=tuple(ARMS[name] for name in arm_names),
+        arms=tuple(PROBE_LAYOUTS[name] for name in arm_names),
         settings=settings,
         model_uri=model_uri,
         data_uri=data_uri,
         fixture_version=fixture_version,
-        runtime_commit=runtime_commit,
         warmup=warmup,
     )
 
