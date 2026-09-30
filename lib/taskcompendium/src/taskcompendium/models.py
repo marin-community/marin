@@ -254,7 +254,9 @@ class ProviderRequirement(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # Versioned action contract expected from the selected provider.
     action_interface: str
+    # Digest of the immutable state used to initialize each trial.
     seed_sha256: str
 
     @model_validator(mode="after")
