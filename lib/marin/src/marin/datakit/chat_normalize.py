@@ -8,7 +8,7 @@ import re
 from collections import deque
 from collections.abc import Callable, Iterator
 from enum import StrEnum
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypedDict
 
 import dupekit
 import pyarrow as pa
@@ -45,12 +45,19 @@ class ConvertedChatData(BaseModel):
     counters: dict[str, int | float]
 
 
+class ChatStageCounters(TypedDict):
+    """Counters from the two executions that produce a normalized chat source."""
+
+    conversion: dict[str, int | float]
+    normalization: dict[str, int | float]
+
+
 class ChatSourceData(BaseModel):
     """Normalized chat output with counters grouped by conversion and normalization."""
 
     main_output_dir: DatakitArtifactPath
     dup_output_dir: DatakitArtifactPath
-    counters: dict[str, dict[str, int | float]]
+    counters: ChatStageCounters
 
 
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
