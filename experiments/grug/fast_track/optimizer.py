@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import functools
 import re
 from dataclasses import dataclass
@@ -478,8 +479,16 @@ class MuonMomentumState(NamedTuple):
     slow: optax.Updates | None
 
 
-_BIMAXWELL_FAST, _BIMAXWELL_SLOW = 0.15, 0.02
-_BIMAXWELL_FAST_WEIGHT, _BIMAXWELL_SLOW_WEIGHT = 0.4385, 0.5615
+@dataclass(frozen=True)
+class BiMaxwellRails:
+    """Bi-Maxwell's twin rails (ANVIL II): EMA rates of the fast and slow rail, and the slow rail's blend weight."""
+
+    fast_rate: float = 0.15
+    slow_rate: float = 0.02
+    slow_weight: float = 0.5615
+
+
+DEFAULT_RAILS = BiMaxwellRails()
 
 
 def _upper_qk_schedule(mult: float, release_step: int, ramp_steps: int):
@@ -502,15 +511,18 @@ def _momentum_warmup_schedule(start: float, end: float, warmup_steps: int):
     return schedule
 
 
-def scale_by_muon_momentum(momentum_schedule, nesterov: bool, switch_step: int | None) -> optax.GradientTransformation:
+def scale_by_muon_momentum(
+    momentum_schedule, nesterov: bool, switch_step: int | None, rails: BiMaxwellRails = DEFAULT_RAILS
+) -> optax.GradientTransformation:
     """MuonH momentum outside Newton-Schulz, with a step-dependent coefficient ``momentum_schedule(step)``
     (``step`` 0-based) and optionally Bi-Maxwell (modded-nanogpt #339) from ``switch_step`` on.
 
     Before ``switch_step`` (or always, when it is None) it is (Nesterov) momentum: ``buf = m buf + g``, out
-    ``m buf + g`` (``buf`` without ``nesterov``). From ``switch_step`` on, a fast (0.15) and a slow (0.02) EMA
-    of the gradient, both started from ``(1 - m) buf``, mix as ``M = 0.4385 fast + 0.5615 slow`` (mean age
-    about 30 steps) and the output is ``g + m (M - g)``. Newton-Schulz is scale-invariant per matrix, so the
-    two regimes' different scales don't matter."""
+    ``m buf + g`` (``buf`` without ``nesterov``). From ``switch_step`` on, a fast and a slow EMA of the gradient
+    (``rails``: by default rates 0.15 and 0.02), both started from ``(1 - m) buf``, mix as
+    ``M = (1 - w) fast + w slow`` (by default w = 0.5615, mean age about 30 steps) and the output is
+    ``g + m (M - g)``. Newton-Schulz is scale-invariant per matrix, so the two regimes' different scales don't
+    matter."""
 
     def init(params):
         zeros = lambda: jax.tree.map(jnp.zeros_like, params)  # noqa: E731
@@ -544,9 +556,9 @@ def scale_by_muon_momentum(momentum_schedule, nesterov: bool, switch_step: int |
                 start = (1.0 - momentum) * buf
                 fast = jnp.where(first, start, fast)
                 slow = jnp.where(first, start, slow)
-                fast = fast + _BIMAXWELL_FAST * (g - fast)
-                slow = slow + _BIMAXWELL_SLOW * (g - slow)
-                mix = _BIMAXWELL_FAST_WEIGHT * fast + _BIMAXWELL_SLOW_WEIGHT * slow
+                fast = fast + rails.fast_rate * (g - fast)
+                slow = slow + rails.slow_rate * (g - slow)
+                mix = (1.0 - rails.slow_weight) * fast + rails.slow_weight * slow
                 return (g + momentum * (mix - g)).astype(g.dtype), fast.astype(buf.dtype), slow.astype(buf.dtype)
 
             res = jax.tree.map(leaf, g_tree, buf_tree, fast_tree, slow_tree)
@@ -564,15 +576,17 @@ def scale_by_muon_momentum(momentum_schedule, nesterov: bool, switch_step: int |
     return optax.GradientTransformation(init, update)
 
 
-def _muon_first_moment(state: MuonMomentumState, switch_step: int | None) -> optax.Updates:
+def _muon_first_moment(
+    state: MuonMomentumState, switch_step: int | None, rails: BiMaxwellRails = DEFAULT_RAILS
+) -> optax.Updates:
     """The momentum stage's first-moment estimate after its update: ``buf`` (Nesterov phase) or the
-    Bi-Maxwell mix ``0.4385 fast + 0.5615 slow``. Only its direction matters (Magma's cosine)."""
+    Bi-Maxwell rail mix. Only its direction matters (Magma's cosine)."""
     if switch_step is None:
         return state.buf
     assert state.fast is not None and state.slow is not None
     late = state.count > switch_step
     return jax.tree.map(
-        lambda b, f, s: jnp.where(late, _BIMAXWELL_FAST_WEIGHT * f + _BIMAXWELL_SLOW_WEIGHT * s, b),
+        lambda b, f, s: jnp.where(late, (1.0 - rails.slow_weight) * f + rails.slow_weight * s, b),
         state.buf,
         state.fast,
         state.slow,
@@ -674,6 +688,7 @@ def scale_with_grug_muonh(
     precond_beta2: float | None = None,
     momentum_schedule=None,
     bimaxwell_switch_step: int | None = None,
+    bimaxwell_rails: BiMaxwellRails = DEFAULT_RAILS,
     magma_keep_prob: float | None = None,
     magma_seed: int = 0,
     retraction: str = "frobenius",
@@ -716,6 +731,7 @@ def scale_with_grug_muonh(
             momentum_schedule if momentum_schedule is not None else (lambda _: momentum),
             nesterov,
             bimaxwell_switch_step,
+            bimaxwell_rails,
         )
         if external_momentum
         else None
@@ -785,7 +801,7 @@ def scale_with_grug_muonh(
             lr_mults, magma_state = _magma_lr_mults(
                 state.magma,
                 updates,
-                _muon_first_moment(momentum_state, bimaxwell_switch_step),
+                _muon_first_moment(momentum_state, bimaxwell_switch_step, bimaxwell_rails),
                 keep_prob=magma_keep_prob,
                 seed=magma_seed,
             )
@@ -1232,6 +1248,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muonh_qk_momentum: float | None = None
     """MuonH momentum for the query/key projections (None: ``momentum``)."""
     muonh_routed_momentum: float | None = None
+    muonh_routed_slow_rate: float | None = None
+    """The routed experts' Bi-Maxwell slow-rail EMA rate (None: ``BiMaxwellRails``'s default, 0.02)."""
+    muonh_routed_slow_weight: float | None = None
+    """The routed experts' Bi-Maxwell slow-rail blend weight (None: the default, 0.5615)."""
+    muonh_routed_bimaxwell_start_step: int | None = None
+    """Step at which the routed experts' Bi-Maxwell rails engage (None: ``bimaxwell_start_frac`` of training)."""
     muonh_routed_consistency_beta2: float | None = None
     """Scale each routed expert's MuonH update by its gradient consistency (``scale_by_expert_consistency``), with
     this beta2 for the squared-norm EMA. None: off."""
@@ -1414,8 +1436,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         )
 
         def optimizer(learning_rate, adam_lr, upper_qk_mult=None):
-            def muonh_transform_at(lr, magma_seed: int, momentum: float | None = None):
+            default_switch = int(self.bimaxwell_start_frac * num_train_steps) if self.muon_bimaxwell else None
+
+            def muonh_transform_at(
+                lr,
+                magma_seed: int,
+                momentum: float | None = None,
+                rails: BiMaxwellRails = DEFAULT_RAILS,
+                switch_step: int | None = None,
+            ):
                 momentum = self.momentum if momentum is None else momentum
+                switch_step = default_switch if switch_step is None else switch_step
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
@@ -1440,9 +1471,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         retraction=self.muonh_retraction,
                         spectral_radius_c=self.spectral_radius_c,
                         momentum_schedule=momentum_schedule,
-                        bimaxwell_switch_step=(
-                            int(self.bimaxwell_start_frac * num_train_steps) if self.muon_bimaxwell else None
-                        ),
+                        bimaxwell_switch_step=switch_step,
+                        bimaxwell_rails=rails,
                         magma_keep_prob=self.magma_keep_prob if self.magma else None,
                         magma_seed=magma_seed,
                     )
@@ -1560,7 +1590,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     learning_rate * self.muonh_qk_lr_mult, 4, momentum=self.muonh_qk_momentum
                 ),
                 "muonh_routed": self._routed_transform(
-                    muonh_transform_at(learning_rate * self.muonh_routed_lr_mult, 3, momentum=self.muonh_routed_momentum)
+                    muonh_transform_at(
+                        learning_rate * self.muonh_routed_lr_mult,
+                        3,
+                        momentum=self.muonh_routed_momentum,
+                        rails=self._routed_rails(),
+                        switch_step=self.muonh_routed_bimaxwell_start_step,
+                    )
                 ),
                 "muon_free": optax.chain(
                     scale_with_grug_muon_free(
@@ -1655,6 +1691,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         return optax.inject_hyperparams(optimizer)(**schedules)
 
+    def _routed_rails(self) -> BiMaxwellRails:
+        rails = DEFAULT_RAILS
+        if self.muonh_routed_slow_rate is not None:
+            rails = dataclasses.replace(rails, slow_rate=self.muonh_routed_slow_rate)
+        if self.muonh_routed_slow_weight is not None:
+            rails = dataclasses.replace(rails, slow_weight=self.muonh_routed_slow_weight)
+        return rails
+
     def _routed_transform(self, inner: optax.GradientTransformation) -> optax.GradientTransformation:
         if self.muonh_routed_cautious:
             inner = cautious_matrix_deltas(inner)
@@ -1713,6 +1757,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     or self.muonh_routed_momentum is not None
                     or self.muonh_routed_consistency_beta2 is not None
                     or self.muonh_routed_cautious
+                    or self.muonh_routed_slow_rate is not None
+                    or self.muonh_routed_slow_weight is not None
+                    or self.muonh_routed_bimaxwell_start_step is not None
                 )
                 if routed_own_group and _OKLS_FAMILIES["routed"].search(path_lower):
                     return "muonh_routed"

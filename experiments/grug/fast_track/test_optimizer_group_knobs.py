@@ -4,6 +4,8 @@
 """Per-group optimizer knobs: routed-expert momentum / consistency scaling / cautious masking / Adam, and Sinkhorn
 momentum on the bigram table."""
 
+import dataclasses
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -15,11 +17,13 @@ from jax.sharding import reshard
 
 import experiments.grug.fast_track.test_ngram_stat as t
 from experiments.grug.fast_track.optimizer import (
+    BiMaxwellRails,
     GrugMoeMuonHConfig,
     cautious_matrix_deltas,
     expert_consistency_metrics,
     retract_to_param_sphere,
     scale_by_expert_consistency,
+    scale_by_muon_momentum,
 )
 
 _BIGRAM = dict(ngram_stat_rows=0, second_embed=True, second_embed_bigram=True, embed2_rows=64)
@@ -196,3 +200,54 @@ def test_consistency_metrics_report_the_per_expert_multipliers():
         metrics = run(jnp.ones((2, 6, 5)), list(jax.random.split(jax.random.PRNGKey(0), 40)))
     assert float(metrics["train/optim/expert_consistency_p90"]) > 0.9
     assert float(metrics["train/optim/expert_consistency_p10"]) < 0.3
+
+
+def _late_updates(config: GrugMoeMuonHConfig, params, steps: int = 4):
+    """The last update after ``steps`` independent random gradients (past a Bi-Maxwell switch at step 1)."""
+    opt = config.build(10)
+
+    @eqx.filter_jit
+    def run(params):
+        params = jax.tree.map(lambda p: reshard(p, P(*(None,) * p.ndim)), params)
+        leaves, treedef = jax.tree.flatten(params)
+        state = opt.init(params)
+        updates = None
+        for step in range(steps):
+            keys = jax.random.split(jax.random.PRNGKey(step), len(leaves))
+            grads = jax.tree.unflatten(
+                treedef, [0.01 * jax.random.normal(k, p.shape) for k, p in zip(keys, leaves, strict=True)]
+            )
+            updates, state = opt.update(grads, state, params)
+        return updates
+
+    return run(params)
+
+
+def test_routed_rails_change_only_the_routed_experts():
+    mesh, model = t._model(**_BIGRAM)
+    params = eqx.filter(model, eqx.is_inexact_array)
+    base_config = GrugMoeMuonHConfig(muon_bimaxwell=True, bimaxwell_start_frac=0.1)
+    slow = dataclasses.replace(base_config, muonh_routed_slow_rate=0.005, muonh_routed_slow_weight=0.8)
+    assert slow.create_mask(params).kda_blocks.stacked.mlp.expert_mlp.w_up == "muonh_routed"
+    with jax.set_mesh(mesh):
+        base = _late_updates(base_config, params)
+        out = _late_updates(slow, params)
+    np.testing.assert_allclose(
+        np.asarray(out.kda_blocks.stacked.attn.w_q), np.asarray(base.kda_blocks.stacked.attn.w_q), rtol=1e-6
+    )
+    routed, routed_base = (np.asarray(u.kda_blocks.stacked.mlp.expert_mlp.w_up) for u in (out, base))
+    assert not np.allclose(routed, routed_base)
+
+
+def test_rails_blend_follows_the_configured_rates():
+    rails = BiMaxwellRails(fast_rate=0.5, slow_rate=0.1, slow_weight=1.0)
+    opt = scale_by_muon_momentum(lambda _: 1.0, nesterov=False, switch_step=0, rails=rails)
+    grads = [jnp.full((2, 2), v) for v in (1.0, 2.0, 3.0)]
+    state = opt.init(grads[0])
+    for g in grads:
+        out, state = opt.update(g, state)
+    # With momentum 1 the output is the blend itself (both rails start at 0); slow_weight 1 leaves the slow rail.
+    slow = 0.0
+    for v in (1.0, 2.0, 3.0):
+        slow = slow + 0.1 * (v - slow)
+    np.testing.assert_allclose(np.asarray(out), slow, rtol=1e-6)
