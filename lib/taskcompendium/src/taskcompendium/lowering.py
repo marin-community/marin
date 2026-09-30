@@ -39,6 +39,7 @@ from taskcompendium.verifier_registry import validate_verifier
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
+ENVIRONMENT_DIR = "environment"
 
 
 class ToolBinding(BaseModel):
@@ -341,12 +342,12 @@ def lower_to_harbor(
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     try:
-        (destination / "environment").mkdir()
+        (destination / ENVIRONMENT_DIR).mkdir()
         staged_sources: dict[str, Path] = {}
         for name, binding in git_bindings.items():
             if trusted_provider_sources is None or name not in trusted_provider_sources:
                 raise ValueError(f"Git provider requires a trusted source checkout: {name}")
-            source = destination / "environment" / PROVIDER_SOURCES_DIR / name
+            source = destination / ENVIRONMENT_DIR / PROVIDER_SOURCES_DIR / name
             source.parent.mkdir(parents=True, exist_ok=True)
             stage_git_provider(binding.provider, trusted_provider_sources[name], source)
             staged_sources[name] = source

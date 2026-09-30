@@ -3,9 +3,9 @@
 
 """Grade typed final function calls without depending on a harness wire protocol."""
 
-from pydantic import JsonValue, field_validator, model_validator
+from pydantic import field_validator, model_validator
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, json_values_equal
 from taskcompendium.models import (
     AssistantMessage,
     ConversationToolCall,
@@ -18,26 +18,10 @@ from taskcompendium.models import (
 from taskcompendium.submission import ActionSubmission, Submission
 
 
-def _arguments_match(expected: JsonValue, actual: JsonValue, config: ToolCallComparatorConfig) -> bool:
-    if type(actual) is not type(expected):
-        return False
-    if isinstance(expected, dict) and isinstance(actual, dict):
-        return expected.keys() == actual.keys() and all(
-            _arguments_match(value, actual[key], config) for key, value in expected.items()
-        )
-    if isinstance(expected, list) and isinstance(actual, list):
-        return len(expected) == len(actual) and all(
-            _arguments_match(left, right, config) for left, right in zip(expected, actual, strict=True)
-        )
-    if isinstance(expected, float) and isinstance(actual, float) and config.numeric_tolerance is not None:
-        return abs(expected - actual) <= config.numeric_tolerance
-    return expected == actual
-
-
 def _call_matches(expected: FunctionCall, actual: ConversationToolCall, config: ToolCallComparatorConfig) -> bool:
     if expected.name != actual.name:
         return False
-    return _arguments_match(expected.arguments, actual.arguments, config)
+    return json_values_equal(expected.arguments, actual.arguments, config.numeric_tolerance)
 
 
 def _matching_count(

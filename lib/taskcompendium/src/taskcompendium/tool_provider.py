@@ -28,6 +28,7 @@ class ManagedToolProvider(Protocol):
 class ToolProviderFactory(Protocol):
     """A provider implementation with pinned identity and a per-trial constructor."""
 
+    __module__: str
     ACTION_INTERFACE: str
     SEED_SHA256: str
     PROVIDER_REVISION: str
