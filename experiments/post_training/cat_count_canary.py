@@ -54,7 +54,6 @@ CPUS_PER_NODE = 65
 TRAIN_NS = DEFAULT_TRAIN_NS
 TRAIN_BATCH_SIZE = 64
 MICRO_TRAIN_BATCH_SIZE = 16
-MICRO_FORWARD_BATCH_SIZE = 32
 GROUP_SIZE = 8
 SEED = 17
 JOB_TIMEOUT_SECONDS = 7200
@@ -227,7 +226,7 @@ def training_config(
             "epochs": 2,
             "max_steps": max_steps,
             "update_epochs_per_batch": 1 if preset == "on-policy" else 2,
-            "micro_forward_batch_size_per_gpu": MICRO_FORWARD_BATCH_SIZE,
+            "micro_forward_batch_size_per_gpu": micro_train_batch_size,
             "eval_batch_size": len(train_ns) + len(HELDOUT_NS) + len(EXTRAPOLATION_NS),
             "eval_interval": 1 if preset == "dry" else 5,
             "hf_save_interval": max_steps,

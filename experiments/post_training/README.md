@@ -109,8 +109,8 @@ optimization setting needs its own calibration and spec. Changing `--seed`
 tests another run of the same recipe.
 
 The initial throughput settings are 64 prompts with eight training samples
-each, training micro-batch 16 and forward micro-batch 32 per GPU. Phase B
-compares training micro-batches 8, 16 and 32 on the new runtime pin and records
+each, matching training and forward micro-batches of 16 per GPU. Phase B
+compares matching micro-batches of 8, 16 and 32 on the new runtime pin and records
 step time and memory. Inference running-request and queue metrics remain
 active alongside the explicit training telemetry.
 
