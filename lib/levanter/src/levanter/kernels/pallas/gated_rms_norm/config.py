@@ -16,13 +16,13 @@ class GatedRmsNormBlockSizes:
     Triton lowering constraint) and divide the hidden size.
     """
 
-    t_block_size: int = 64
-    stats_d_block_size: int = 128
-    out_d_block_size: int = 256
+    t_block_size: int = 128
+    stats_d_block_size: int = 32
+    out_d_block_size: int = 128
     stats_num_warps: int = 4
-    stats_num_stages: int = 3
-    out_num_warps: int = 4
-    out_num_stages: int = 2
+    stats_num_stages: int = 4
+    out_num_warps: int = 8
+    out_num_stages: int = 3
     out_loop: bool = False
     """Run the output kernel as one program per row block that loops over the hidden axis
     (pipelined loads), instead of one program per ``[t, d]`` tile."""
