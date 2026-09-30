@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from taskcompendium.resources import SHA256_PATTERN, TaskResource, validate_resource_paths
 
-SCHEMA_VERSION = "0.12"
+SCHEMA_VERSION = "0.15"
 
 
 class AnswerType(StrEnum):
@@ -228,27 +228,6 @@ class ConversationTrace(BaseModel):
         return self
 
 
-FINAL_TOOL_CHOICES = frozenset({"auto", "none", "required"})
-
-
-class FinalTools(BaseModel):
-    """Terminal functions and call policy advertised at the decision point."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    functions: tuple[FunctionDefinition, ...] = ()
-    tool_choice: str | None = None
-    parallel_tool_calls: bool | None = None
-
-    @model_validator(mode="after")
-    def validate_tools(self) -> "FinalTools":
-        if len({function.name for function in self.functions}) != len(self.functions):
-            raise ValueError("Advertised function names must be unique")
-        if self.tool_choice is not None and self.tool_choice not in FINAL_TOOL_CHOICES:
-            raise ValueError("Unsupported native tool choice")
-        return self
-
-
 class ProviderRequirement(BaseModel):
     """One seeded action interface required by the task."""
 
@@ -285,7 +264,7 @@ class TaskSpec(BaseModel):
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
     tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
-    final_tools: FinalTools = Field(default_factory=FinalTools)
+    final_tools: tuple[FunctionDefinition, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
@@ -301,6 +280,8 @@ class TaskSpec(BaseModel):
         if any(not name for name in self.tool_providers):
             raise ValueError("Provider requirement names must be nonempty")
         validate_resource_paths(self.resources)
-        if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools.functions:
+        if len({function.name for function in self.final_tools}) != len(self.final_tools):
+            raise ValueError("Advertised function names must be unique")
+        if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:
             raise ValueError("Native-action tasks require advertised functions")
         return self

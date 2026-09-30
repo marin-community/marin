@@ -23,7 +23,6 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
-    FinalTools,
     FunctionCall,
     FunctionDefinition,
     ProviderRequirement,
@@ -156,20 +155,18 @@ def _specification(answer_type: AnswerType) -> TaskSpec:
         answer_type=answer_type,
         verifier=verifier,
         final_tools=(
-            FinalTools(
-                functions=(
-                    FunctionDefinition(
-                        name="finish",
-                        parameters={
-                            "type": "object",
-                            "properties": {"answer": {"type": "string"}},
-                            "required": ["answer"],
-                        },
-                    ),
-                )
+            (
+                FunctionDefinition(
+                    name="finish",
+                    parameters={
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                    },
+                ),
             )
             if answer_type == AnswerType.NATIVE_ACTION
-            else FinalTools()
+            else ()
         ),
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
     )
