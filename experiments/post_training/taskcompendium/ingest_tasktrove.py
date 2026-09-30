@@ -11,6 +11,7 @@ import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType, MappingProxyType
 from typing import Any, BinaryIO
 
 import pyarrow as pa
@@ -32,13 +33,16 @@ from experiments.post_training.taskcompendium.records import (
 )
 
 RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3"
+MCQA_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 SPLITS = ("tasks", "sft")
 SUPPORTED_MODES = frozenset({"mcq", "math", "numeric"})
-PUBLIC_CANDIDATE_COHORTS = {
-    "laion__nemotron-gym-knowledge-mcqa-v2": "mcq",
-    "laion__nemotron-gym-math-openmathreasoning-v2": "math",
-    "laion__nemo-prism-math-v3": "math",
-}
+PUBLIC_CANDIDATE_COHORTS = MappingProxyType(
+    {
+        MCQA_SOURCE: "mcq",
+        "laion__nemotron-gym-math-openmathreasoning-v2": "math",
+        "laion__nemo-prism-math-v3": "math",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -542,7 +546,7 @@ def ingest(
 
 
 def main() -> None:
-    def stop_at_runtime_limit(signum: int, frame: Any) -> None:
+    def stop_at_runtime_limit(signum: int, frame: FrameType | None) -> None:
         del signum, frame
         raise TimeoutError("TaskTrove ingestion reached its internal runtime limit")
 

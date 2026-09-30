@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from experiments.post_training.taskcompendium.audit_tasktrove_rights_metadata import audit_rights_metadata
-from experiments.post_training.taskcompendium.export_tasktrove_accepted import export_accepted_records
+from experiments.post_training.taskcompendium.export_tasktrove_accepted import RightsClearance, export_accepted_records
 from experiments.post_training.taskcompendium.ingest_tasktrove import PUBLIC_CANDIDATE_COHORTS
 from rigging.filesystem.storage_path import StoragePath
 
@@ -209,7 +209,7 @@ def test_export_writes_proof_wrapped_record_for_exact_cleared_cohort(tmp_path):
         ingestion_manifest=manifest,
         builder_revision="d" * 40,
         clearance_audit_manifest_sha256="ab71556290d1ce54e596588b549de95ddd68366cd8fd3bb18b77ed9e99f0eed1",
-        clearances={clearance_key: {"source_card_revision": "synthetic-card", "expected_rows": 1}},
+        clearances={clearance_key: RightsClearance("synthetic-card", 1)},
     )
 
     output_record_path = output / "tasktrove_clean" / "train" / SOURCE / "qa-short-answer.jsonl"

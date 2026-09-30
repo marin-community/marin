@@ -9,6 +9,7 @@ import json
 import os
 from io import BytesIO
 from pathlib import Path
+from types import MappingProxyType
 from unittest.mock import patch
 
 import pyarrow.parquet as pq
@@ -22,15 +23,19 @@ from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import VerifierKind
 from taskcompendium.submission import PlainText
 
+from experiments.post_training.taskcompendium.audit_tasktrove_ingest import BATCH_SIZE
+from experiments.post_training.taskcompendium.ingest_tasktrove import MCQA_SOURCE
 from experiments.post_training.taskcompendium.records import public_task_record
 
-SOURCE_NAMES = {
-    "laion__nemotron-gym-knowledge-mcqa-v2": "mcqa",
-    "laion__nemo-prism-math-v3": "prism",
-    "laion__nemotron-gym-math-openmathreasoning-v2": "openmath",
-}
+SOURCE_NAMES = MappingProxyType(
+    {
+        MCQA_SOURCE: "mcqa",
+        "laion__nemo-prism-math-v3": "prism",
+        "laion__nemotron-gym-math-openmathreasoning-v2": "openmath",
+    }
+)
 PROJECTED_SOURCES = (
-    "laion__nemotron-gym-knowledge-mcqa-v2",
+    MCQA_SOURCE,
     "laion__nemo-prism-math-v3",
 )
 LEDGER_JOIN_COLUMNS = (
@@ -56,7 +61,7 @@ def _source_row_index(ledger_path: StoragePath, candidate: dict, proof: dict) ->
         parquet = pq.ParquetFile(opened)
         if set(LEDGER_JOIN_COLUMNS) - set(parquet.schema_arrow.names):
             raise ValueError("Ingestion ledger is missing source-row join fields")
-        for batch in parquet.iter_batches(columns=list(LEDGER_JOIN_COLUMNS), batch_size=65_536):
+        for batch in parquet.iter_batches(columns=list(LEDGER_JOIN_COLUMNS), batch_size=BATCH_SIZE):
             for row in batch.to_pylist():
                 if (
                     row["input_split"] == "tasks"
@@ -142,7 +147,7 @@ async def _run(group_path: str, ledger_path: StoragePath, workdir: Path, artifac
     if archive_sha256 != proof["archive_sha256"]:
         raise ValueError("Sampled archive SHA256 differs from exact accepted source proof")
     archive = _read_candidate_archive(archive_bytes, candidate, source_subset, archive_path)
-    if source_subset == "laion__nemotron-gym-knowledge-mcqa-v2":
+    if source_subset == MCQA_SOURCE:
         specification = import_mcqa(archive)
         family = "qa-short-answer"
     else:

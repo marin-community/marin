@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from types import MappingProxyType
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -15,10 +16,12 @@ from experiments.post_training.taskcompendium.trial_tasktrove_projection import 
 
 MAX_WRAPPER_BYTES = 128 * 1024
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024
-COHORTS = {
-    "laion__nemotron-gym-knowledge-mcqa-v2": "qa-short-answer",
-    "laion__nemo-prism-math-v3": "math-answer",
-}
+COHORTS = MappingProxyType(
+    {
+        "laion__nemotron-gym-knowledge-mcqa-v2": "qa-short-answer",
+        "laion__nemo-prism-math-v3": "math-answer",
+    }
+)
 
 
 def _first_line(path: StoragePath) -> bytes:

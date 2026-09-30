@@ -10,8 +10,10 @@ import re
 import sqlite3
 import tempfile
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pyarrow as pa
@@ -21,12 +23,13 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import SCHEMA_VERSION
 
 from experiments.post_training.taskcompendium.audit_tasktrove_ingest import (
+    BATCH_SIZE,
     PROOF_FIELDS,
     PUBLIC_FIELDS,
     HashDigest,
     audit_artifacts,
 )
-from experiments.post_training.taskcompendium.ingest_tasktrove import PUBLIC_CANDIDATE_COHORTS
+from experiments.post_training.taskcompendium.ingest_tasktrove import MCQA_SOURCE, PUBLIC_CANDIDATE_COHORTS
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 REGIONAL_PIN_RE = re.compile(
@@ -63,34 +66,36 @@ RIGHTS_TERM_KEYS = (
 )
 RIGHTS_AUDIT_MANIFEST_SHA256 = "ab71556290d1ce54e596588b549de95ddd68366cd8fd3bb18b77ed9e99f0eed1"
 RIGHTS_INVENTORY_SHA256 = "165124b2f8fa95b3c2d013136eb5be0638cf0a170142cc0b4bfebd5297de0389"
-RIGHTS_CLEARANCES = {
-    (
-        "laion__nemotron-gym-knowledge-mcqa-v2",
-        "mcq",
-        "qa-short-answer",
-        "nemotron_mcqa",
-        "c814af4f124d",
-        "tasks",
-    ): {
-        "source_card_revision": "5d35ead3ba07abda719b3d24f6f395fee8108efd",
-        "license": "CC-BY-4.0",
-        "attribution": "NVIDIA",
-        "expected_rows": 23_711,
-    },
-    (
-        "laion__nemo-prism-math-v3",
-        "math",
-        "math-answer",
-        "nemotron_math",
-        "5ee94cf985a9",
-        "tasks",
-    ): {
-        "source_card_revision": "8a35a0602167ad1f1ec9d6db5e72281e486738a7",
-        "license": "CC-BY-4.0",
-        "attribution": "NVIDIA",
-        "expected_rows": 2_219,
-    },
-}
+
+
+@dataclass(frozen=True)
+class RightsClearance:
+    source_card_revision: str
+    expected_rows: int
+    license: str | None = None
+    attribution: str | None = None
+
+
+RIGHTS_CLEARANCES = MappingProxyType(
+    {
+        (
+            MCQA_SOURCE,
+            "mcq",
+            "qa-short-answer",
+            "nemotron_mcqa",
+            "c814af4f124d",
+            "tasks",
+        ): RightsClearance("5d35ead3ba07abda719b3d24f6f395fee8108efd", 23_711, "CC-BY-4.0", "NVIDIA"),
+        (
+            "laion__nemo-prism-math-v3",
+            "math",
+            "math-answer",
+            "nemotron_math",
+            "5ee94cf985a9",
+            "tasks",
+        ): RightsClearance("8a35a0602167ad1f1ec9d6db5e72281e486738a7", 2_219, "CC-BY-4.0", "NVIDIA"),
+    }
+)
 
 
 def _valid_object_pin(value: Any) -> bool:
@@ -102,7 +107,7 @@ def _valid_object_pin(value: Any) -> bool:
     return match is not None and bool(match[1] or match[2])
 
 
-def _jsonl_rows(path: StoragePath, digest: Any) -> Iterator[dict[str, Any]]:
+def _jsonl_rows(path: StoragePath, digest: HashDigest) -> Iterator[dict[str, Any]]:
     with path.open("rb") as opened:
         with opened as stream:
             for line in stream:
@@ -174,7 +179,7 @@ def _stream_rows(path: StoragePath) -> Iterator[pa.RecordBatch]:
             parquet = pq.ParquetFile(stream)
             if set(LEDGER_COLUMNS) - set(parquet.schema_arrow.names):
                 raise ValueError("TaskTrove ledger is missing required export fields")
-            yield from parquet.iter_batches(columns=list(LEDGER_COLUMNS), batch_size=65_536)
+            yield from parquet.iter_batches(columns=list(LEDGER_COLUMNS), batch_size=BATCH_SIZE)
 
 
 def _stream_catalog_metadata(path: StoragePath) -> Iterator[pa.RecordBatch]:
@@ -184,7 +189,7 @@ def _stream_catalog_metadata(path: StoragePath) -> Iterator[pa.RecordBatch]:
             parquet = pq.ParquetFile(stream)
             if set(columns) - set(parquet.schema_arrow.names):
                 raise ValueError("TaskTrove catalog is missing source-rights metadata fields")
-            yield from parquet.iter_batches(columns=list(columns), batch_size=65_536)
+            yield from parquet.iter_batches(columns=list(columns), batch_size=BATCH_SIZE)
 
 
 def export_accepted_records(
@@ -197,7 +202,7 @@ def export_accepted_records(
     ingestion_manifest: dict[str, Any],
     builder_revision: str,
     clearance_audit_manifest_sha256: str | None = None,
-    clearances: dict[tuple[str, str, str, str, str, str], dict[str, Any]] | None = None,
+    clearances: Mapping[tuple[str, str, str, str, str, str], RightsClearance] | None = None,
 ) -> dict[str, Any]:
     """Join, rights-gate, and project candidate rows with exact source proof."""
     if ingestion_manifest.get("status") != "complete":
@@ -382,9 +387,7 @@ def export_accepted_records(
                         f"observed={sorted(observed_clearance_groups)}, expected={sorted(expected_clearance_groups)}"
                     )
                 for source, mode, family, converter, template_id, split in sorted(expected_clearance_groups):
-                    expected_rows = clearance_rules[(source, mode, family, converter, template_id, split)][
-                        "expected_rows"
-                    ]
+                    expected_rows = clearance_rules[(source, mode, family, converter, template_id, split)].expected_rows
                     observed_rows = group_counts[(source, family, mode, converter, template_id, split)]
                     if observed_rows != expected_rows:
                         raise ValueError(
@@ -754,7 +757,12 @@ def export_accepted_records(
         "clearance_audit_manifest_sha256": clearance_audit_manifest_sha256,
         "clearance_rights_inventory_sha256": RIGHTS_INVENTORY_SHA256 if clearance_manifest_verified else None,
         "rights_clearance_source_cards": {
-            f"{source}/{family}/{split}": clearance
+            f"{source}/{family}/{split}": {
+                "source_card_revision": clearance.source_card_revision,
+                "license": clearance.license,
+                "attribution": clearance.attribution,
+                "expected_rows": clearance.expected_rows,
+            }
             for (source, _mode, family, _converter, _template_id, split), clearance in clearance_rules.items()
         },
         "outputs": output_files,

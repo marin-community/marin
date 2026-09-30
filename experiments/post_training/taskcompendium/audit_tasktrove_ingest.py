@@ -11,7 +11,7 @@ import sqlite3
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -19,11 +19,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.taskcompendium.ingest_tasktrove import PUBLIC_CANDIDATE_COHORTS
 
-
-class HashDigest(Protocol):
-    def update(self, data: bytes, /) -> None: ...
-
-    def hexdigest(self) -> str: ...
+HashDigest = type(hashlib.sha256())
 
 
 BATCH_SIZE = 65_536
