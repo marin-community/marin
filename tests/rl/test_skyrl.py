@@ -144,6 +144,7 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
         target_cluster=None,
         parent_cluster_config=None,
         coordinator_timeout_hours=12,
+        job_timeout_seconds=1800,
     )
 
 
@@ -387,6 +388,7 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert model.global_step == 8
     assert model.iris_job_id == "01KTEST"
     launch = launch_configs[0]
+    assert launch["iris"]["timeout"] == 1800
     assert launch["schema_version"] == 1
     assert launch["run"]["export_hf"] is True
     assert launch["runtime"]["launcher_commit"] == MARIN_SKYRL.commit

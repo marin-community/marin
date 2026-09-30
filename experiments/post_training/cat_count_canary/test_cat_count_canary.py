@@ -10,8 +10,8 @@ import pytest
 import yaml
 from marin.execution.lazy import StepContext
 
-from experiments.post_training.cat_count_canary import MODELS, build_run, training_config
-from experiments.post_training.cat_count_data import (
+from experiments.post_training.cat_count_canary.launcher import MODELS, build_run, training_config
+from experiments.post_training.cat_count_canary.data import (
     DEFAULT_TRAIN_NS,
     EXTRAPOLATION_NS,
     HELDOUT_NS,
@@ -128,4 +128,3 @@ def test_downloaded_model_root_resolves_as_the_hf_snapshot(tmp_path: Path, monke
     )
 
     assert config.model.uri == str(model_root)
-    assert yaml.safe_load(config.launch_config_yaml)["iris"]["timeout"] == 1800

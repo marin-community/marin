@@ -35,7 +35,7 @@ from marin.rl.skyrl import (
 )
 
 from experiments.models import qwen2_5_0_5b, qwen2_5_0_5b_instruct, qwen3_0_6b
-from experiments.post_training.cat_count_data import (
+from experiments.post_training.cat_count_canary.data import (
     DEFAULT_TRAIN_NS,
     ENV_CLASS,
     EXTRAPOLATION_NS,
@@ -49,12 +49,12 @@ EXPERIMENT_NAME = "cat-count-canary"
 CLUSTER = "cw-rno2a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 2
-# Each task exceeds half of the H100 host's 128 CPUs.
+# The 65-CPU request places the two tasks on separate 128-CPU hosts.
 CPUS_PER_NODE = 65
-TRAIN_NS = DEFAULT_TRAIN_NS
 TRAIN_BATCH_SIZE = 64
 MICRO_TRAIN_BATCH_SIZE = 16
 GROUP_SIZE = 8
+SAMPLED_EVAL_SAMPLES = 8
 SEED = 17
 JOB_TIMEOUT_SECONDS = 7200
 
@@ -84,7 +84,20 @@ MODELS = MappingProxyType(
     }
 )
 
-PRESET_STEPS = MappingProxyType({"dry": 1, "calibrate": 30, "gate": 60, "gate-filter": 60, "on-policy": 30})
+@dataclass(frozen=True)
+class Preset:
+    async_steps: int
+    sync_steps: int
+    reward_rise: float | None
+
+
+PRESETS = MappingProxyType({
+    "dry": Preset(1, 1, None),
+    "calibrate": Preset(30, 30, None),
+    "gate": Preset(60, 60, 0.2),
+    "gate-filter": Preset(60, 60, 0.2),
+    "on-policy": Preset(30, 30, None),
+})
 
 
 def role_plan(
@@ -190,11 +203,11 @@ def training_config(
     group_size: int = GROUP_SIZE,
     micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
     eval_reward_rise: float | None = None,
-    train_ns: tuple[int, ...] = TRAIN_NS,
+    train_ns: tuple[int, ...] = DEFAULT_TRAIN_NS,
     seed: int = SEED,
     settings: tuple[str, ...] = (),
 ) -> dict:
-    if preset not in PRESET_STEPS:
+    if preset not in PRESETS:
         raise ValueError(f"unknown preset {preset!r}")
     if lane not in ("async", "sync"):
         raise ValueError(f"unknown lane {lane!r}")
@@ -202,7 +215,10 @@ def training_config(
         raise ValueError("batch, group and micro-batch sizes must be positive")
     choice = MODELS[model]
     plan = role_plan(batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size)
-    max_steps = PRESET_STEPS[preset]
+    preset_config = PRESETS[preset]
+    max_steps = preset_config.async_steps if lane == "async" else preset_config.sync_steps
+    if eval_reward_rise is None:
+        eval_reward_rise = preset_config.reward_rise
     geometry = {
         "tensor_model_parallel_size": 1,
         "pipeline_model_parallel_size": 1,
@@ -223,7 +239,7 @@ def training_config(
             "flash_attn": False,
             "use_sample_packing": False,
             "gradient_checkpointing": False,
-            "epochs": 2,
+            "epochs": 1,
             "max_steps": max_steps,
             "update_epochs_per_batch": 1 if preset == "on-policy" else 2,
             "micro_forward_batch_size_per_gpu": micro_train_batch_size,
@@ -298,7 +314,10 @@ def training_config(
     for profile in ("eval", "eval/sampled"):
         for split, counts in (("train", train_ns), ("heldout", HELDOUT_NS), ("extrapolation", EXTRAPOLATION_NS)):
             for metric in ("avg_score", "environment/exact"):
-                metric_groups[f"{profile}/{split}/{metric}"] = [f"{profile}/cat_count_n{n}/{metric}" for n in counts]
+                source_metric = "environment/cat_count/exact" if metric == "environment/exact" else metric
+                metric_groups[f"{profile}/{split}/{metric}"] = [
+                    f"{profile}/cat_count_n{n}/{source_metric}" for n in counts
+                ]
     if eval_reward_rise is not None and (
         not math.isfinite(eval_reward_rise) or eval_reward_rise <= 0 or trainer["eval_interval"] <= 0
     ):
@@ -310,7 +329,7 @@ def training_config(
             "eval_steps": trainer["eval_interval"],
             "eval_before_train": trainer["eval_before_train"],
             "additional_evaluations": {
-                "sampled": {"sampling_params": {"temperature": 1.0}, "n_samples_per_prompt": GROUP_SIZE}
+                "sampled": {"sampling_params": {"temperature": 1.0}, "n_samples_per_prompt": SAMPLED_EVAL_SAMPLES}
             },
             "metric_groups": metric_groups,
             "stop_on_improvement": {"eval/train/avg_score": eval_reward_rise} if eval_reward_rise is not None else {},
@@ -338,7 +357,7 @@ def build_run(
     group_size: int = GROUP_SIZE,
     micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
     eval_reward_rise: float | None = None,
-    train_ns: tuple[int, ...] = TRAIN_NS,
+    train_ns: tuple[int, ...] = DEFAULT_TRAIN_NS,
     seed: int = SEED,
     job_timeout_seconds: int = JOB_TIMEOUT_SECONDS,
     version: str | None = None,
@@ -364,7 +383,8 @@ def build_run(
     prefetch_rows = config["trainer"]["rollout_buffer"]["max_staleness_steps"] * batch_size
     train_rows = (batch_size * max_steps + prefetch_rows) * row_multiplier
     identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(config) + repr(train_ns))}"
-    data_name = f"documents/{EXPERIMENT_NAME}/{identity}"
+    data_identity = fingerprint_hash(repr((train_ns, train_rows, seed)))
+    data_name = f"documents/{EXPERIMENT_NAME}/{data_identity}"
     data = cat_count_data_step(
         data_name,
         version or resolve_version(data_name, None),
@@ -418,7 +438,7 @@ def build_run(
 
 
 @click.command(help=__doc__)
-@click.option("--preset", type=click.Choice(tuple(PRESET_STEPS)), default="dry", show_default=True)
+@click.option("--preset", type=click.Choice(tuple(PRESETS)), default="dry", show_default=True)
 @click.option("--cluster", type=click.Choice(("cw-rno2a", "cw-us-east-02a")), default=CLUSTER, show_default=True)
 @click.option("--lane", type=click.Choice(("sync", "async")), default="async", show_default=True)
 @click.option("--model", type=click.Choice(tuple(MODELS)), default="qwen2.5-0.5b-instruct")
@@ -454,7 +474,7 @@ def main(
         group_size=group_size,
         micro_train_batch_size=micro_train_batch_size,
         eval_reward_rise=eval_reward_rise,
-        train_ns=train_ns or TRAIN_NS,
+        train_ns=train_ns or DEFAULT_TRAIN_NS,
         seed=seed,
         job_timeout_seconds=job_timeout_seconds,
         settings=settings,
