@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from taskcompendium.grading import (
     ExactAnswerVerifier,
+    ExactListVerifier,
     GradeResult,
     NumericAnswerVerifier,
     Outcome,
@@ -30,6 +31,7 @@ from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
         VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
+        VerifierKind.EXACT_LIST_ANSWER: ExactListVerifier,
         VerifierKind.STRUCTURED_EXACT: StructuredExactVerifier,
         VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
