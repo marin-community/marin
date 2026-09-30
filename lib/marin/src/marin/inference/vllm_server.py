@@ -17,6 +17,7 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import chain
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
@@ -643,10 +644,9 @@ def _native_error_summary(log_dir: str | None) -> str:
     paths = _native_log_paths(log_dir)
     if paths is None:
         return _NO_NATIVE_LOG_DIRECTORY
-    lines = []
-    for path in (paths.stdout, paths.stderr):
-        lines.extend(_read_file(path).splitlines())
-    return "\n".join(extract_failure_highlights(lines, max_lines=_NATIVE_ERROR_SUMMARY_LINES))
+    with open(paths.stdout) as stdout, open(paths.stderr) as stderr:
+        lines = (line.rstrip("\r\n") for line in chain(stdout, stderr))
+        return "\n".join(extract_failure_highlights(lines, max_lines=_NATIVE_ERROR_SUMMARY_LINES))
 
 
 def validate_vllm_mode_env() -> None:
@@ -1051,40 +1051,45 @@ def _wait_for_vllm_server(
 ) -> None:
     process = handle.process
     assert handle.log_pump is not None
+    paths = _native_log_paths(handle.log_dir)
+    assert paths is not None
 
-    def _check_process_alive() -> None:
-        # A distributed loader worker can report this fault while the API parent stays alive and
-        # waits forever for the other ranks. Fail the task from the complete local logs so Iris
-        # can retry it without waiting for the parent to exit or the readiness timeout to expire.
-        has_streamer_fault = _RUNAI_STREAMER_READ_MARKER in _native_logs(handle.log_dir).lower()
-        if process.poll() is None:
-            if not has_streamer_fault:
-                return
-            raise RuntimeError(
-                "vLLM server logged a Run:ai streamer read fault before becoming ready.\n"
-                f"Command: {command}\n"
-                f"Logs: {handle.log_dir}\n"
-                f"{_native_logs_tail(handle.log_dir)}"
+    with open(paths.stdout) as stdout, open(paths.stderr) as stderr:
+
+        def _check_process_alive() -> None:
+            # A distributed loader worker can report this fault while the API parent stays alive
+            # and waits forever for the other ranks. Read only lines appended since the last poll.
+            has_streamer_fault = any(
+                _RUNAI_STREAMER_READ_MARKER in line.lower() for log_file in (stdout, stderr) for line in log_file
             )
-        # Child has exited; drain the readers before reading the tail so it has the final lines.
-        handle.log_pump.join(timeout=5)
-        message = (
-            "vLLM server process exited before becoming ready.\n"
-            f"Command: {command}\n"
-            f"Exit code: {process.returncode}\n"
-            f"Logs: {handle.log_dir}\n"
-            f"{_native_logs_tail(handle.log_dir)}\n"
-            "--- exception summary ---\n"
-            f"{_native_error_summary(handle.log_dir)}"
-        )
-        raise RuntimeError(message)
+            if process.poll() is None:
+                if not has_streamer_fault:
+                    return
+                raise RuntimeError(
+                    "vLLM server logged a Run:ai streamer read fault before becoming ready.\n"
+                    f"Command: {command}\n"
+                    f"Logs: {handle.log_dir}\n"
+                    f"{_native_logs_tail(handle.log_dir)}"
+                )
+            # Child has exited; drain the readers before reading the tail so it has the final lines.
+            handle.log_pump.join(timeout=5)
+            message = (
+                "vLLM server process exited before becoming ready.\n"
+                f"Command: {command}\n"
+                f"Exit code: {process.returncode}\n"
+                f"Logs: {handle.log_dir}\n"
+                f"{_native_logs_tail(handle.log_dir)}\n"
+                "--- exception summary ---\n"
+                f"{_native_error_summary(handle.log_dir)}"
+            )
+            raise RuntimeError(message)
 
-    _poll_until_ready(
-        handle.server_url,
-        timeout_seconds=timeout_seconds,
-        poll_interval_seconds=poll_interval_seconds,
-        check_alive=_check_process_alive,
-    )
+        _poll_until_ready(
+            handle.server_url,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            check_alive=_check_process_alive,
+        )
 
 
 def _vllm_serve_command(
