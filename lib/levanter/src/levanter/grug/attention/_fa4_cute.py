@@ -14,12 +14,11 @@ from jaxtyping import Array, Bool, Float, Int
 
 from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
-from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
+from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward, validate_sm100_layout
 from levanter.grug.attention._fa4_cute_config import (
-    SM100_GQA_RATIOS,
-    SM100_HEAD_DIM,
     Flash4CuteKernelConfig,
     flash4_cute_kernel_config,
+    runs_sm100_kernels,
     sm100_flash4_cute_kernel_config,
 )
 from levanter.sharding import partitioning_axes, partition_spec_of
@@ -255,10 +254,6 @@ def _fa4_cute_attention_forward_sharded(
                 f"FA4/CuTe requires {name} to match q's batch/head sharding with unsharded sequence/feature "
                 f"dimensions, got q={partition_spec_of(q)}, {name}={partition_spec_of(x)}."
             )
-    if q_dims[1] and kernel_config.sm90_backward is not None:
-        # Hopper's native segmented backward assumes local Q and K have equal lengths.
-        # The 64x64 segmented path handles the query offset used by context parallelism.
-        kernel_config = replace(kernel_config, sm90_backward=None)
     if not any(q_dims):
         return fa4_cute_attention_forward(
             q,
@@ -382,10 +377,10 @@ def gpu_fa4_cute_sm100_attention(
         raise RuntimeError("gpu_fa4_cute_sm100_attention requires the JAX GPU backend.")
     arch = gpu_compute_capability()
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_sm100")
-    if arch != 100 or q.dtype != jnp.bfloat16 or q.shape[-1] != SM100_HEAD_DIM or v.shape[-1] != SM100_HEAD_DIM:
-        raise ValueError(f"gpu_fa4_cute_sm100 requires SM100 with BF16 and D == Dv == {SM100_HEAD_DIM}.")
-    if q.shape[2] // k.shape[2] not in SM100_GQA_RATIOS:
-        raise ValueError(f"gpu_fa4_cute_sm100 requires a GQA ratio in {SM100_GQA_RATIOS}.")
+    # Only SM100 itself has been validated on hardware.
+    if not runs_sm100_kernels(arch):
+        raise ValueError(f"gpu_fa4_cute_sm100 requires compute capability 10.x, got SM{arch}.")
+    validate_sm100_layout(q, k, v)
     config = sm100_flash4_cute_kernel_config()
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
 
