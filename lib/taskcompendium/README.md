@@ -227,7 +227,7 @@ uv run --project lib/taskcompendium --with 'pandas>=2.2' \
   --builder-revision <full-marin-commit-sha>
 ```
 
-The candidate is not publication-ready. The mixed release requires measured TaskTrove conversions, per-source license and tag preservation, and a Harbor sample from every included source. Keep source files and output outside the Marin checkout. No Hugging Face repository is created by this command.
+The candidate is not publication-ready. Publishing additional source families requires pinned conversions, per-source license and tag preservation, and a Harbor sample from every included source. Keep source files and output outside the Marin checkout. No Hugging Face repository is created by this command.
 
 Run the package tests from the repository root:
 
