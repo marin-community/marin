@@ -8,7 +8,6 @@ import json
 import subprocess
 import sys
 import tarfile
-from pathlib import Path
 
 import pytest
 from tasktrove_verify.grade import grade as source_grade
@@ -24,26 +23,16 @@ from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
 
-FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
-TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
+TASKTROVE_SOURCE = "synthetic__mcqa-demo"
+TASKTROVE_PATH = "synthetic-mcqa.tar.gz"
+RELEASE_URI = "https://example.invalid/tasktrove-clean"
+RELEASE_REVISION = "synthetic-release-1"
 
 
-TASKTROVE_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
-RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"
-
-RELEASE_REVISION = "2026.09.10.9"
-PINNED_RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3"
-PINNED_RELEASE_REVISION = "2026.09.18.3"
-
-
-def _archive(release_revision: str = RELEASE_REVISION):
-    return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, release_revision)
-
-
-def _synthetic_supported_archive():
+def _archive_bytes():
     manifest = f"""[metadata]
 tasktrove_source = "{TASKTROVE_SOURCE}"
-tasktrove_path = "synthetic-mcqa.tar.gz"
+tasktrove_path = "{TASKTROVE_PATH}"
 family = "qa-short-answer"
 converter = "nemotron_mcqa"
 template_id = "c814af4f124d"
@@ -56,8 +45,9 @@ tags = ["qa", "mcq", "synthetic"]
         "The verifier extracts a single letter (A/B/C/...) from your answer file using a regex pattern; "
         "the simplest valid output is a file containing exactly\n`Answer: X` (where X is your chosen letter).\n\n"
         "---\n\nAnswer the following multiple choice question. The last line of your response "
-        "should be in the following format: 'Answer: A/B/C/D/E' (e.g. 'Answer: C').\n\n"
-        "Synthetic question: Which label is assigned to this example?\nA: Alpha\nB: Bravo\nC: Charlie\nD: Delta\nE: Echo"
+        "should be in the following format: 'Answer: A/B/C/D/E' (e.g. 'Answer: D').\n\n"
+        "Synthetic question: Which label is assigned to this example?\n"
+        "A: Alpha\nB: Bravo\nC: Charlie\nD: Delta\nE: Echo"
     )
     files = {
         "task.toml": manifest.encode(),
@@ -70,12 +60,16 @@ tags = ["qa", "mcq", "synthetic"]
             info = tarfile.TarInfo(name)
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
+    return archive_data.getvalue()
+
+
+def _archive(release_revision: str = RELEASE_REVISION):
     return read_archive(
-        archive_data.getvalue(),
+        _archive_bytes(),
         TASKTROVE_SOURCE,
-        "synthetic-mcqa.tar.gz",
-        PINNED_RELEASE_URI,
-        PINNED_RELEASE_REVISION,
+        TASKTROVE_PATH,
+        RELEASE_URI,
+        release_revision,
     )
 
 
@@ -84,13 +78,13 @@ def test_import_preserves_release_identity():
     assert specification.source.dataset == RELEASE_URI
     assert specification.source.revision == RELEASE_REVISION
     assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
-    later_release = import_task(_archive("2026.09.10.10"))
+    later_release = import_task(_archive("synthetic-release-2"))
     assert later_release.id != specification.id
 
 
 def test_import_preserves_ordered_source_tags_through_harbor_export(tmp_path):
     specification = import_task(_archive())
-    expected_tags = ("qa", "mcq", "nemotron")
+    expected_tags = ("qa", "mcq", "synthetic")
 
     assert specification.tags == expected_tags
     assert TaskSpec.model_validate_json(specification.model_dump_json()).tags == expected_tags
@@ -106,7 +100,7 @@ def test_import_preserves_ordered_source_tags_through_harbor_export(tmp_path):
 
 
 def test_supported_mcqa_template_preserves_synthetic_choices_and_tags():
-    specification = import_task(_synthetic_supported_archive())
+    specification = import_task(_archive())
     prompt = specification.context.events[0].content
 
     assert specification.tags == ("qa", "mcq", "synthetic")
@@ -123,7 +117,7 @@ def test_import_removes_source_submission_instructions():
     prompt = specification.context.events[0].content
     assert "verifier" not in prompt.lower()
     assert "/app/answer.txt" not in prompt
-    assert "theranostics clinical trials" in prompt
+    assert "Synthetic question" in prompt
     public = render_instruction(specification, PlainText(id="plain"))
     assert "verifier" not in public.lower()
     assert specification.environment_requirements.capabilities == ()
@@ -133,12 +127,12 @@ def test_import_removes_source_submission_instructions():
 async def test_imported_mcqa_matches_source_grading(tmp_path):
     specification = import_task(_archive())
     assert specification.verifier.kind is VerifierKind.MCQ_ANSWER
-    assert json.loads(specification.verifier.parameters_json) == {"expected": "C", "options": 10}
-    source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
+    assert json.loads(specification.verifier.parameters_json) == {"expected": "D", "options": 5}
+    source_contract = McqSpec(expected="D", options=5, output=str(tmp_path / "source-answer.txt"))
     convention = PlainText(id="plain")
     for source_response, response, reward in (
-        ("Answer: C", "C", 1.0),
-        ("Answer: D", "D", 0.0),
+        ("Answer: D", "D", 1.0),
+        ("Answer: C", "C", 0.0),
         ("Answer: Z", "Z", 0.0),
     ):
         (tmp_path / "source-answer.txt").write_text(source_response)
@@ -165,7 +159,7 @@ async def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
         JsonAnswer(id="json"),
         GradingAttempt(
             ConversationTrace(
-                events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
+                events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"D"}'))
             ),
             {},
             object(),
@@ -232,7 +226,7 @@ def test_import_accepts_plain_source_answer_line_template():
 
 def test_archive_rejects_caller_identity_that_disagrees_with_metadata():
     with pytest.raises(ValueError, match="source identity"):
-        read_archive(FIXTURE.read_bytes(), "other_source", TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
+        read_archive(_archive_bytes(), "other_source", TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
 
 
 def test_archive_rejects_excessive_empty_members():
@@ -255,7 +249,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
         tmp_path / "task",
     )
 
-    result = await run_replay_trial(task, {"role": "assistant", "content": "C"}, tmp_path / "trials", "mcqa")
+    result = await run_replay_trial(task, {"role": "assistant", "content": "D"}, tmp_path / "trials", "mcqa")
 
     outcome = json.loads((tmp_path / "trials/mcqa/verifier/taskcompendium-result.json").read_text())
     assert result.exception_info is None, result.exception_info
@@ -264,7 +258,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
 
 async def test_synthetic_mcqa_runs_positive_and_negative_harbor_trials(tmp_path):
     task = lower_to_harbor(
-        import_task(_synthetic_supported_archive()),
+        import_task(_archive()),
         PlainText(id="plain"),
         HarborEnvironmentConfig(),
         tmp_path / "task",
@@ -299,7 +293,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
         "result = asyncio.run(grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='C'))), {}, object()))); "
+        "TextMessage(role='assistant', content='D'))), {}, object()))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

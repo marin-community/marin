@@ -150,6 +150,7 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
     catalog_path = output_prefix / "private-catalog.parquet"
     ledger_path = output_prefix / "ingestion-ledger.parquet"
     candidates_path = output_prefix / "public-candidates.jsonl"
+    proof_path = output_prefix / "candidate-proof.jsonl"
     catalog_schema = _schema(
         {
             "id": pa.string(),
@@ -191,11 +192,13 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
     writers: dict[str, pq.ParquetWriter | None] = {"catalog": None, "ledger": None}
     writer_handles: dict[str, Any] = {}
     candidate_handle: Any | None = None
+    proof_handle: Any | None = None
     counts: Counter[str] = Counter()
     accepted_counts: Counter[str] = Counter()
     rejected_reasons: Counter[str] = Counter()
     source_metadata_counts: Counter[str] = Counter()
     public_candidate_counts: Counter[str] = Counter()
+    candidate_ids: set[str] = set()
     seen_ids: dict[tuple[str, str], str] = {}
     input_ordinal = 0
     input_files: list[dict[str, Any]] = []
@@ -293,6 +296,11 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
                                         elif previous_digest is not None:
                                             raise ValueError("repeated source identity has conflicting archive bytes")
                                         else:
+                                            is_candidate = (
+                                                split == "tasks" and PUBLIC_CANDIDATE_COHORTS.get(str(source)) == mode
+                                            )
+                                            if is_candidate and specification.id in candidate_ids:
+                                                raise ValueError("duplicate public candidate ID")
                                             seen_ids[source_identity] = archive_sha256
                                             disposition = Disposition.IMPORTED
                                             reason = None
@@ -315,13 +323,32 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
                                             buffers["catalog"].append(catalog_record(specification, **metadata))
                                             for key in json.loads(source_metadata_json):
                                                 source_metadata_counts[key] += 1
-                                            if split == "tasks" and PUBLIC_CANDIDATE_COHORTS.get(str(source)) == mode:
+                                            if is_candidate:
                                                 if candidate_handle is None:
                                                     candidate_handle = candidates_path.open("wb").open()
+                                                    proof_handle = proof_path.open("wb").open()
                                                 candidate = public_task_record(specification, family=metadata["family"])
                                                 candidate_handle.write(
                                                     json.dumps(candidate, sort_keys=True).encode() + b"\n"
                                                 )
+                                                assert proof_handle is not None
+                                                proof_handle.write(
+                                                    json.dumps(
+                                                        {
+                                                            "candidate_id": specification.id,
+                                                            "input_file": str(path),
+                                                            "input_row": row_number,
+                                                            "input_object_pin": input_object_pin,
+                                                            "source": source,
+                                                            "path": source_path,
+                                                            "archive_sha256": archive_sha256,
+                                                            "disposition": disposition.value,
+                                                        },
+                                                        sort_keys=True,
+                                                    ).encode()
+                                                    + b"\n"
+                                                )
+                                                candidate_ids.add(specification.id)
                                                 public_candidate_counts[f"source:{source}"] += 1
                                                 public_candidate_counts[f"mode:{mode}"] += 1
                                     except (ValueError, KeyError, UnicodeDecodeError) as error:
@@ -383,6 +410,8 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
             handle.close()
         if candidate_handle is not None:
             candidate_handle.close()
+        if proof_handle is not None:
+            proof_handle.close()
 
     report = {
         "status": "partial" if failure is not None else "complete",
@@ -411,8 +440,20 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
             "private_catalog": {"uri": str(catalog_path)},
             "ledger": {"uri": str(ledger_path)},
             "public_candidates": {"uri": str(candidates_path), "present": candidate_handle is not None},
+            "candidate_proof": {"uri": str(proof_path), "present": proof_handle is not None},
         },
         "public_candidate_projection_materialized": candidate_handle is not None,
+        "public_candidate_proof_count": len(candidate_ids),
+        "public_candidate_proof_fields": [
+            "candidate_id",
+            "input_file",
+            "input_row",
+            "input_object_pin",
+            "source",
+            "path",
+            "archive_sha256",
+            "disposition",
+        ],
         "public_candidate_schema": "PublicTask-v1",
         "public_projection_published": False,
         "public_candidate_routes": ["tasks"],
@@ -435,17 +476,23 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
     artifact_paths = {"private_catalog": catalog_path, "ledger": ledger_path}
     if candidate_handle is not None:
         artifact_paths["public_candidates"] = candidates_path
+    if proof_handle is not None:
+        artifact_paths["candidate_proof"] = proof_path
     for key, path in artifact_paths.items():
         opened = path.open("rb")
         info = opened.fs.info(opened.path)
+        artifact_digest = hashlib.sha256()
+        with opened as stream:
+            while chunk := stream.read(1024 * 1024):
+                artifact_digest.update(chunk)
         report["artifacts"][key].update(
             {
                 "size_bytes": _info_value(info, "size"),
                 "etag": _info_value(info, "etag"),
                 "version_id": _info_value(info, "versionid"),
+                "sha256": artifact_digest.hexdigest(),
             }
         )
-        opened.close()
     manifest_path = output_prefix / "ingestion-manifest.json"
     report["manifest_uri"] = str(manifest_path)
     with manifest_path.open("w") as stream:

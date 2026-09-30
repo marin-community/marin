@@ -12,15 +12,15 @@ dependencies = ["pydantic>=2.0", "tasktrove-verify"]
 [project.optional-dependencies]
 harbor = ["harbor"]
 math = ["tasktrove-verify[answer]"]
+ingest = ["pyarrow>=18", "marin-rigging"]
 
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 
-[tool.uv.workspace]
-
 [tool.uv.sources]
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
-tasktrove-verify = { path = "../tasktrove-verify", editable = true }
+marin-rigging = { workspace = true }
+tasktrove-verify = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]

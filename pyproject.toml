@@ -19,6 +19,7 @@ dependencies = [
     # `gcp-secret://` signing key in the operator's shell: the controller pod holds no
     # cloud credentials and reads the key from a projected Secret instead.
     "marin-rigging[secrets]",
+    "taskcompendium[ingest]",
     "marin-zephyr",
     "tasktrove-verify[answer,reasoning-gym,schema]",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
@@ -199,6 +200,7 @@ members = [
     "lib/rigging",
     "lib/zephyr",
     "lib/tasktrove-verify",
+    "lib/taskcompendium",
     "lib/finestore",
     "infra/pulumi",
     "infra/buckets",
@@ -228,6 +230,7 @@ marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
 tasktrove-verify = { workspace = true }
+taskcompendium = { workspace = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }

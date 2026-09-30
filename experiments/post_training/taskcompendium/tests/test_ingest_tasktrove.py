@@ -1,17 +1,50 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import io
 import json
-from pathlib import Path
+import tarfile
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from experiments.post_training.taskcompendium import ingest_tasktrove
 
-FIXTURE = Path(__file__).parents[4] / "lib/taskcompendium/tests/fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
-SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
-ARCHIVE_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
+SOURCE = "synthetic__mcqa-demo"
+ARCHIVE_PATH = "synthetic-mcqa.tar.gz"
+
+
+def _synthetic_archive() -> bytes:
+    manifest = f"""[metadata]
+tasktrove_source = "{SOURCE}"
+tasktrove_path = "{ARCHIVE_PATH}"
+source_dataset = "synthetic/demo"
+family = "qa-short-answer"
+template_id = "c814af4f124d"
+converter = "nemotron_mcqa"
+mode = "mcq"
+tags = ["qa", "mcq", "synthetic"]
+"""
+    files = {
+        "task.toml": manifest.encode(),
+        "instruction.md": (
+            b"You are answering a multiple-choice question. Read the question below and write your final "
+            b"answer to `/app/answer.txt`.\n\n"
+            b"The verifier extracts a single letter (A/B/C/...) from your answer file using a regex pattern; "
+            b"the simplest valid output is a file containing exactly\n`Answer: X` (where X is your chosen letter).\n\n"
+            b"---\n\nAnswer the following multiple choice question. The last line of your response "
+            b"should be in the following format: 'Answer: A/B/C/D/E' (e.g. 'Answer: D').\n\n"
+            b"Synthetic question: Which label is correct?\nA: Alpha\nB: Bravo\nC: Charlie\nD: Delta\nE: Echo"
+        ),
+        "tests/verifier.toml": b'mode = "mcq"\nexpected = "D"\noptions = 5\n',
+    }
+    archive_data = io.BytesIO()
+    with tarfile.open(fileobj=archive_data, mode="w:gz") as archive:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    return archive_data.getvalue()
 
 
 def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path, monkeypatch):
@@ -19,7 +52,6 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     (release / "tasks").mkdir(parents=True)
     (release / "sft").mkdir()
     (release / "manifest.json").write_text('{"tag":"2026.09.18.3"}')
-    archive = FIXTURE.read_bytes()
     rows = [
         {
             "path": ARCHIVE_PATH,
@@ -29,8 +61,8 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
             "converter": "nemotron_mcqa",
             "mode": "mcq",
             "route": "rl",
-            "tags": ["qa", "mcq", "nemotron"],
-            "task_binary": archive,
+            "tags": ["qa", "mcq", "synthetic"],
+            "task_binary": _synthetic_archive(),
         },
         {
             "path": "out-of-scope.tar.gz",
@@ -57,6 +89,7 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     ]
     pq.write_table(pa.Table.from_pylist(rows), release / "tasks/part-00000.parquet")
     monkeypatch.setattr(ingest_tasktrove, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(ingest_tasktrove, "PUBLIC_CANDIDATE_COHORTS", {SOURCE: "mcq"})
     report = ingest_tasktrove.ingest(str(release), str(tmp_path / "durable-output"), tmp_path / "iris-output")
 
     assert report["input_rows_processed"] == 3
@@ -74,12 +107,12 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     catalog = pq.read_table(output / "private-catalog.parquet").to_pylist()
     assert [row["disposition"] for row in ledger] == ["imported", "out-of-scope", "rejected"]
     assert len(catalog) == 1
-    assert catalog[0]["tags"] == ["qa", "mcq", "nemotron"]
+    assert catalog[0]["tags"] == ["qa", "mcq", "synthetic"]
     assert "expected" in catalog[0]["specification_json"]
-    assert json.loads(catalog[0]["source_metadata_json"])["source_dataset"] == "nvidia/Nemotron-RL-knowledge-mcqa"
+    assert json.loads(catalog[0]["source_metadata_json"])["source_dataset"] == "synthetic/demo"
     assert "#manifest-sha256=" in ledger[0]["input_object_pin"]
     assert ledger[1]["route"] == "sft"
-    assert ledger[0]["tags"] == ["qa", "mcq", "nemotron"]
+    assert ledger[0]["tags"] == ["qa", "mcq", "synthetic"]
     assert ledger[1]["tags"] == []
     assert ledger[2]["tags"] == ["qa", "mcq", "broken"]
     assert ledger[2]["mode"] == "mcq"
@@ -90,5 +123,11 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     candidate = json.loads((output / "public-candidates.jsonl").read_text().splitlines()[0])
     assert set(candidate) == set(report["public_allowlist_fields"])
     assert candidate["record_version"] == 1
+    proof = json.loads((output / "candidate-proof.jsonl").read_text().splitlines()[0])
+    assert set(proof) == set(report["public_candidate_proof_fields"])
+    assert proof["candidate_id"] == candidate["id"]
+    assert proof["archive_sha256"] == catalog[0]["archive_sha256"]
+    assert proof["disposition"] == "imported"
+    assert report["public_candidate_proof_count"] == 1
     assert "expected" not in json.dumps(candidate)
     assert (tmp_path / "iris-output/ingestion-summary.json").exists()
