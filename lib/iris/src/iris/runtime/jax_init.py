@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _SINGLE_PROCESS_AUTOTUNE_SUBDIR = "single-process"
+# The autotune cache fills while XLA compiles, at the start of a job, and a node's directory accumulates every
+# earlier job's files. Each sync walks that whole directory on a Python thread, which stalls the training loop
+# for tens of seconds, so sync rarely: the final sync at exit publishes what the job added.
+_AUTOTUNE_SYNC_INTERVAL = 1800.0
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
 # Object-store home for the per-build FineStore file set.
 _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
@@ -215,7 +219,7 @@ def sync_file_set_cache(prefix: str, local: str) -> FineStoreDirectory | None:
     if root is None:
         return None
     try:
-        return FineStoreDirectory(root, local)
+        return FineStoreDirectory(root, local, flush_interval=_AUTOTUNE_SYNC_INTERVAL)
     except OSError as exc:
         logger.warning("XLA autotune cache is unavailable; continuing with the node-local cache: %s", exc)
         return None
