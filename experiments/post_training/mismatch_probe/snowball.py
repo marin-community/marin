@@ -66,6 +66,7 @@ def snowball_recipe(
     timing_modes: tuple[str, ...] = (),
     extra_modes: tuple[str, ...] = (),
     train_numerics: str | None = None,
+    batch_invariant: bool = False,
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
     if campaign is Campaign.MISMATCH:
@@ -112,6 +113,7 @@ def snowball_recipe(
                 "advantage_estimator": "grpo",
                 "use_kl_loss": False,
                 "use_kl_in_reward": False,
+                "batch_invariant": batch_invariant,
             },
             "policy": {
                 # Timing and mismatch campaigns hold the weights; the drift campaign trains as production does.
@@ -169,6 +171,7 @@ def build_spec(
     timing_modes: tuple[str, ...] = (),
     extra_modes: tuple[str, ...] = (),
     train_numerics: str | None = None,
+    batch_invariant: bool = False,
 ) -> tuple[SkyRLSpec, IrisSkyRLExecution]:
     if campaign is Campaign.MISMATCH and (settings.updates != (0,) or routing is not Routing.NATIVE):
         raise ValueError("the mismatch campaign scores starting weights in all modes without training updates")
@@ -189,6 +192,7 @@ def build_spec(
                 timing_modes=timing_modes,
                 extra_modes=extra_modes,
                 train_numerics=train_numerics,
+                batch_invariant=batch_invariant,
             ),
             runtime=SkyRLRuntime(profile=SNOWBALL_RECIPE.profile),
             model=ArtifactHfModel(
@@ -258,6 +262,7 @@ def build_run(**kwargs) -> ArtifactStep[SkyRLRun]:
 @click.option("--timing-mode", "timing_modes", multiple=True, help="Time forward + backward for this mode.")
 @click.option("--extra-mode", "extra_modes", multiple=True, help="Score this trainer mode as well (a candidate).")
 @click.option("--train-numerics", help="MarinSkyRL numerics set the policy trains and scores under by default.")
+@click.option("--batch-invariant/--no-batch-invariant", default=False, help="vLLM and trainer batch-invariant kernels.")
 @click.option("--drift-updates", type=click.IntRange(min=1), default=1, show_default=True, help="Drift updates scored.")
 @rl_build_options
 def main(
@@ -282,6 +287,7 @@ def main(
     timing_modes: tuple[str, ...],
     extra_modes: tuple[str, ...],
     train_numerics: str | None,
+    batch_invariant: bool,
     drift_updates: int,
 ) -> ArtifactStep[SkyRLRun]:
     selected = Campaign(campaign)
@@ -310,6 +316,7 @@ def main(
         timing_modes=timing_modes,
         extra_modes=extra_modes,
         train_numerics=train_numerics,
+        batch_invariant=batch_invariant,
     )
 
 
