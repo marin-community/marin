@@ -3,7 +3,6 @@
 
 """Streaming content hashes for local and object-store files."""
 
-import base64
 import hashlib
 
 from fsspec import AbstractFileSystem
@@ -27,9 +26,3 @@ def file_md5_for_path(filesystem: AbstractFileSystem, path: str) -> bytes:
             md5.update(chunk)
     return md5.digest()
 
-
-def format_digest(digest: bytes, *, hexadecimal: bool) -> str:
-    """Format a digest as lowercase hexadecimal or RFC 4648 base64."""
-    if hexadecimal:
-        return digest.hex()
-    return base64.b64encode(digest).decode()
