@@ -61,6 +61,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.byte_targets import token_byte_table
 from experiments.grug.fast_track.grad_capture import CaptureWriter, capture_matrices, capture_steps
 from experiments.grug.fast_track.host_stall import HostStallSampler
+from experiments.grug.fast_track.logit_scale_eval import LogitScaleEvaluator
 from experiments.grug.fast_track.model import (
     FINAL_HIDDEN_KEY,
     NEWTON_GRAM_KEY,
@@ -69,6 +70,7 @@ from experiments.grug.fast_track.model import (
     HeadReplay,
     MtpMode,
     Transformer,
+    _logit_cap,
     ngram_stat_table_add,
     tie_routers,
     write_ngram_stats,
@@ -238,6 +240,10 @@ class GrugTrainerConfig:
     head_replay_scale: float = 0.1
     ema_group_sweep: bool = False
     ema_group_base_blend: float = 0.5
+    # After training, score the final weights (and the EMA and each ``ema_blend_sweep`` blend) at every logit
+    # scale here (``logit_scale_eval``): loss vs softmax temperature on fit / report halves of the eval sets
+    # plus scale-invariant top-1 and rank metrics, logged under ``evalscale_<weights>/``. Empty: off.
+    logit_scale_sweep: tuple[float, ...] = ()
     # Before step 0, fill the model's n-gram statistic table (``ngram_stat_rows``) from this many batches of the
     # training stream taken *after* the run's last step, i.e. tokens the run never trains on. Untimed: it runs
     # before the loop. 0: the table starts empty and fills online from the batches the run trains on.
@@ -1929,8 +1935,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     raise ValueError("EMA blend evals need ema_beta and the dropless evaluator")
                 for prefix, alpha_for in blends:
                     blended = jax.tree_util.tree_map_with_path(
-                        lambda path, e, p, alpha_for=alpha_for: (a := alpha_for(jax.tree_util.keystr(path))) * e
-                        + (1.0 - a) * p,
+                        lambda path, e, p, alpha_for=alpha_for: (
+                            (a := alpha_for(jax.tree_util.keystr(path))) * e + (1.0 - a) * p
+                        ),
                         state.ema_params,
                         state.params,
                     )
@@ -1940,6 +1947,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             blend_log = eval_model(dropless_evaluator, blended, prefix=prefix)
                     levanter.tracker.log(blend_log, step=int(state.step))
                     del blended
+            if config.trainer.logit_scale_sweep:
+                _log_logit_scale_sweeps(
+                    config,
+                    state,
+                    scales=config.trainer.logit_scale_sweep,
+                    mp=trainer.mp,
+                    train_mesh=mesh,
+                    train_evaluator=evaluator,
+                    dropless_evaluator=dropless_evaluator,
+                    dropless_eval_mesh=dropless_eval_mesh,
+                )
             if checkpointer is not None:
                 with callbacks.progress_event_scope(
                     state_callbacks.emit_event,
@@ -1959,6 +1977,56 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 HOST_GAP_WARN = 0.1
 # Post-step host work above this is logged with the Python stacks that ran during it (see `host_stall`).
 HOST_STALL_SAMPLE_THRESHOLD = 0.3
+
+
+def _log_logit_scale_sweeps(
+    config: GrugRunConfig,
+    state: GrugTrainState,
+    *,
+    scales: tuple[float, ...],
+    mp: jmp.Policy,
+    train_mesh: Mesh,
+    train_evaluator: TaggedEvaluator | None,
+    dropless_evaluator: TaggedEvaluator | None,
+    dropless_eval_mesh: Mesh | None,
+) -> None:
+    """Score the final weights, the EMA and each ``ema_blend_sweep`` blend at every logit scale (see
+    ``logit_scale_eval``), under the dropless evaluator's mesh when the run has one, and log each under
+    ``evalscale_<weights>/``."""
+    if dropless_evaluator is not None and dropless_eval_mesh is not None:
+        tagged, eval_mesh = dropless_evaluator, dropless_eval_mesh
+        assert config.eval is not None
+        transform = functools.partial(_to_dropless_local, implementation=config.eval.dropless_eval_moe_implementation)
+    elif train_evaluator is not None:
+        tagged, eval_mesh, transform = train_evaluator, train_mesh, None
+    else:
+        raise ValueError("logit_scale_sweep needs an evaluator (eval sets and an eval config)")
+
+    def prepare_model(model: Transformer) -> Transformer:
+        model = _cast_to_compute(mp, model)
+        return model if transform is None else transform(model)
+
+    candidates: list[tuple[str, Transformer]] = [("final", state.params)]
+    if state.ema_params is not None:
+        candidates.append(("ema", state.ema_params))
+        for a in config.trainer.ema_blend_sweep:
+            if 0.0 < a < 1.0:
+                blended = jax.tree_util.tree_map(lambda e, p, a=a: a * e + (1.0 - a) * p, state.ema_params, state.params)
+                candidates.append((f"blend{a:g}", blended))
+    with set_mesh(eval_mesh):
+        scale_evaluator = LogitScaleEvaluator(
+            tagged, scales=scales, prepare_model=prepare_model, logit_soft_cap=_logit_cap(config.model)
+        )
+        for name, params in candidates:
+            model = _reshard_tree_to_mesh(params, eval_mesh)
+            with _pgle_disabled():
+                metrics = scale_evaluator.evaluate(model)
+            levanter.tracker.log(
+                {f"evalscale_{name}/{key}": value for key, value in metrics.items()}, step=int(state.step)
+            )
+            del model
+
+
 # Parameter groups of the per-group EMA blend probe (regex over the pytree key path); "other" is the rest.
 EMA_BLEND_GROUPS: dict[str, str] = {
     "lmhead": r"output_proj",

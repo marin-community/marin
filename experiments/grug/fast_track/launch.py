@@ -48,6 +48,7 @@ from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.analyze_routing import token_strings_from_tokenizer
 from experiments.grug.fast_track.heuristic import MoeHeuristic
+from experiments.grug.fast_track.logit_scale_eval import parse_logit_scale_grid
 from experiments.grug.fast_track.model import (
     AttnResLayerBackward,
     GrugModelConfig,
@@ -392,6 +393,7 @@ def build_h100_ladder_run(
     ema_last_steps: int | None = None,
     ema_blend_sweep: tuple[float, ...] = (),
     ema_group_sweep: bool = False,
+    logit_scale_sweep: tuple[float, ...] = (),
     head_replay: tuple[int, int, float] = (0, 100, 0.1),
     ngram_stat_prefill_batches: int = 0,
     max_retries_failure: int = MAX_RETRIES_FAILURE,
@@ -508,6 +510,7 @@ def build_h100_ladder_run(
         ema_last_steps=ema_last_steps,
         ema_blend_sweep=ema_blend_sweep,
         ema_group_sweep=ema_group_sweep,
+        logit_scale_sweep=logit_scale_sweep,
         head_replay_slots=head_replay[0],
         head_replay_period=head_replay[1],
         head_replay_scale=head_replay[2],
@@ -774,6 +777,13 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 )
 @click.option("--ema-group-sweep", is_flag=True, help="After training, probe each parameter group's EMA blend.")
 @click.option(
+    "--logit-scale-sweep",
+    default=None,
+    help="After training, score the final weights (and the EMA and each --ema-blend) at every logit scale "
+    "START:STOP:COUNT (softmax temperature 1/scale): the best scale is fit on even eval batches and reported on "
+    "odd ones, with scale-invariant top-1 and rank metrics (evalscale_<weights>/).",
+)
+@click.option(
     "--head-replay",
     type=(int, int, float),
     default=(0, 100, 0.1),
@@ -913,6 +923,7 @@ def main(
     ema_last_steps: int | None,
     ema_blend: tuple[float, ...],
     ema_group_sweep: bool,
+    logit_scale_sweep: str | None,
     head_replay: tuple[int, int, float],
     ngram_stat_prefill_batches: int,
     max_retries: int,
@@ -958,6 +969,7 @@ def main(
         ema_last_steps=ema_last_steps,
         ema_blend_sweep=tuple(ema_blend),
         ema_group_sweep=ema_group_sweep,
+        logit_scale_sweep=parse_logit_scale_grid(logit_scale_sweep) if logit_scale_sweep else (),
         head_replay=head_replay,
         ngram_stat_prefill_batches=ngram_stat_prefill_batches,
         max_retries_failure=max_retries,
