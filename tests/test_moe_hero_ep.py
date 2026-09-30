@@ -1226,7 +1226,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
         return (loss, metrics), grads
 
-    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
     monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
     train_step = train._make_train_step(
         optimizer,
@@ -1329,7 +1329,7 @@ def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
         return (loss, metrics), grads
 
-    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
     monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
     train_step = train._make_train_step(
         optimizer,

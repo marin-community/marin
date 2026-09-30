@@ -67,7 +67,13 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
-from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
+from experiments.grug.moe_hero_ep.model import (
+    OFFLOAD_CARRY_REMAT_MODE,
+    GrugModelConfig,
+    RematMode,
+    Transformer,
+    apply_qb_betas,
+)
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -686,13 +692,6 @@ class GrugTrainState:
     pending_qb_betas: jax.Array
 
 
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from QB betas (computed on previous step)."""
-    new_bias = -qb_betas
-    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
-
-
 def _tree_to_memory_kind(tree, memory_kind: str):
     """Move named-sharded arrays to a JAX memory kind."""
 
@@ -832,7 +831,7 @@ def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_c
 
     @jax.jit
     def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
-        params = _apply_qb_betas(params, pending_qb_betas)
+        params = apply_qb_betas(params, pending_qb_betas)
         return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
 
     return diagnostic_watch_step
@@ -862,9 +861,9 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        qb_params = apply_qb_betas(state.params, state.pending_qb_betas)
         if ema_beta is not None:
-            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+            qb_ema_params = apply_qb_betas(state.ema_params, state.pending_qb_betas)
         else:
             qb_ema_params = None
 
@@ -875,7 +874,7 @@ def _make_train_step(
             if state.master_params is None:
                 raise ValueError("master_params must be initialized for an FP32 pinned-host master.")
             master_params_in = _tree_to_memory_kind(state.master_params, "device")
-            master_params_in = _apply_qb_betas(master_params_in, state.pending_qb_betas)
+            master_params_in = apply_qb_betas(master_params_in, state.pending_qb_betas)
             master_grads = _FP32_POLICY.cast_to_param(grads)
             updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
             master_params = optax.apply_updates(master_params_in, updates)
