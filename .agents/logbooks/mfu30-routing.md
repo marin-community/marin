@@ -267,3 +267,24 @@ run, which changes non-hero ragged configurations that inherited the default lim
   keeping only `out_c` from the second barrier so the recompute can still drop the return and down GEMM.
 - Not on the D arm; for C's stack. Gate `m30b-gate-fold-01` (variants control / unfilled / stack = C's port of
   #9481 on A+B+C / sonic = D / candidate = D + fold).
+
+## M30B-015 #9481 fold measured: mirror params kept, pipelining dropped (2026-09-30)
+
+Gate `m30b-gate-fold-01` (fold a1d699e67e = D + mirror params + pipelined chunks): single layer exact for
+out/drops/dx/dW13/dW2 and identical dS to D; QuACK contract passes; pytest 86 passed (the #9481 transpose test
+included), same 3 GPU-only failures. Recompute still drops the down GEMMs and the combine (HLO census).
+
+3-layer rematted scan at hero per-shard shapes (`m30b-gate-fold-01`, `m30b-scan-fold-03`), median step:
+| variant | ms | temp GB |
+|---|---|---|
+| main | 345.4 / 346.3 | 35.30 |
+| A+B+C (unfilled) | 332.1 | 32.08 |
+| A+B+C + #9481 (C's stack port, full remat) | 323.6 | 31.96 |
+| D (sonic, ce112504f1) | 298.4 / 298.6 | 31.92 |
+| D + mirror params | 299.0 | 31.92 |
+| D + mirror + pipelined chunks (a1d699e67e) | 307.7 / 307.4 | 31.21 |
+
+On four GPUs the pipelining costs 8.7 ms per 3-layer step inside D (it helps +2.6% on A+B+C), and the mirror
+parameters are neutral (their saving is per-rank latency of two offset all-to-alls, larger at EP64). Branch head
+6a6bb78853 keeps the mirror parameters and sequential chunks; a1d699e67e is the pipelined variant if the rack
+says otherwise. Gate for 6a6bb78853: `m30b-gate-mirror-01`.
