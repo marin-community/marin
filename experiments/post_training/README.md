@@ -156,7 +156,8 @@ environment exact metric is the fraction of replies that is exact.
 report held-out and extrapolation results alongside the training results. `reward/zero_std_group_fraction` is the
 share of sample groups with identical rewards. The async lane records
 staleness and uses behavior clipping. The sync lane applies TIS; async TIS
-diagnostics describe the sampled probabilities without applying a TIS weight.
+diagnostics report importance ratios against rollout probabilities without
+applying a TIS weight.
 
 From the MarinSkyRL `skyrl-train` directory, set `CAT_COUNT_SPEC` to
 `ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json` for the
