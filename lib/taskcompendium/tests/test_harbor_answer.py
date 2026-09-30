@@ -37,10 +37,10 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
-from taskcompendium.resources import ResourceVisibility, TaskResource
 from taskcompendium.submission import (
     AnswerCall,
     AnswerFormat,
+    GradingAttempt,
     JsonAnswer,
     PlainText,
     SubmissionConvention,
@@ -175,48 +175,6 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     assert result.verifier_result.rewards == {"reward": 1.0}
 
 
-async def test_private_resource_stays_out_of_direct_chat_and_is_rechecked_at_launch(tmp_path, specification):
-    specification = specification.model_copy(
-        update={"resources": (TaskResource(path="reference.txt", visibility=ResourceVisibility.VERIFIER, content="12"),)}
-    )
-    environment_config = HarborEnvironmentConfig()
-    task = lower_to_harbor(
-        specification,
-        PlainText(id="plain"),
-        environment_config,
-        tmp_path / "task",
-    )
-    assert (task / "private_resources/reference.txt").read_text() == "12"
-    assert not (task / "environment/inputs").exists()
-
-    result = await run_replay_trial(task, {"role": "assistant", "content": "12"}, tmp_path / "trials", "run")
-    assert result.verifier_result.rewards == {"reward": 1.0}
-
-    (task / "private_resources/reference.txt").write_text("tampered")
-    with pytest.raises(ValueError, match="digest mismatch"):
-        await run_trial(
-            task,
-            environment_config,
-            ChatLaunch(model="model", api_base="http://127.0.0.1:1"),
-            tmp_path / "trials",
-            "tampered",
-        )
-
-
-def test_direct_chat_rejects_agent_visible_resource_before_export(tmp_path, specification):
-    specification = specification.model_copy(
-        update={"resources": (TaskResource(path="input.txt", visibility=ResourceVisibility.AGENT, content="visible"),)}
-    )
-    with pytest.raises(ValueError, match="cannot expose agent-visible files"):
-        lower_to_harbor(
-            specification,
-            PlainText(id="plain"),
-            HarborEnvironmentConfig(),
-            tmp_path / "task",
-        )
-    assert not (tmp_path / "task").exists()
-
-
 @pytest.mark.parametrize(
     "response,reward",
     [("12.05", 1.0), ("12.2", 0.0)],
@@ -230,8 +188,13 @@ async def test_numeric_answer_uses_explicit_tolerance(specification, response, r
     result = await grade_answer(
         specification,
         convention,
-        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-        object(),
+        GradingAttempt(
+            conversation=ConversationTrace(
+                events=(*specification.context.events, TextMessage(role="assistant", content=response))
+            ),
+            tool_providers={},
+            workspace=object(),
+        ),
     )
 
     assert (result.status, result.reward) == ("graded", reward)
@@ -485,13 +448,14 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
         "import asyncio, json, sys; from pathlib import Path; "
         "from taskcompendium.verifier_registry import grade_answer; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
+        "from taskcompendium.submission import GradingAttempt; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "specification = read_specification(root / 'specification.json'); "
         "result = asyncio.run(grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
-        "ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='12'))), object())); "
+        "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
+        "TextMessage(role='assistant', content='12'))), {}, object()))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

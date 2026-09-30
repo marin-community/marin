@@ -19,7 +19,6 @@ from taskcompendium.lowering import (
     read_specification,
     read_submission_convention,
     validate_environment_config,
-    validate_exported_resources,
     validate_submission_tools,
 )
 from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider, validate_staged_git_provider
@@ -63,7 +62,6 @@ async def run_trial(
     for name, source in provider_sources.items():
         validate_staged_git_provider(environment_config.tool_providers[name].provider, source)
     validate_environment_config(specification, convention, environment_config, provider_sources=provider_sources)
-    validate_exported_resources(specification, task_dir)
     compatibility = submission_compatible(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention differs from task contract: {'; '.join(compatibility.reasons)}")
@@ -83,17 +81,14 @@ async def run_trial(
         "request": request,
         "max_turns": launch.max_turns,
     }
-    if not environment_config.tool_providers:
-        environment = {"import_path": "taskcompendium.harbor.adapter:NoToolEnvironment"}
-    else:
-        environment = {
-            "import_path": "taskcompendium.harbor.adapter:CompositeToolEnvironment",
-            "kwargs": {
-                "tool_providers": {
-                    name: binding.model_dump(mode="json") for name, binding in environment_config.tool_providers.items()
-                }
-            },
-        }
+    environment = {
+        "import_path": "taskcompendium.harbor.adapter:CompositeToolEnvironment",
+        "kwargs": {
+            "tool_providers": {
+                name: binding.model_dump(mode="json") for name, binding in environment_config.tool_providers.items()
+            }
+        },
+    }
     config = TrialConfig.model_validate(
         {
             "task": {"path": str(task_dir.resolve())},

@@ -16,7 +16,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.submission import JsonAnswer, ProviderState, SubmissionConvention
+from taskcompendium.submission import GradingAttempt, JsonAnswer, ProviderState, SubmissionConvention
 from taskcompendium.verifier_registry import grade_answer
 
 
@@ -26,8 +26,7 @@ class MutableState:
         self.second_state = second_state
         self.reads = 0
 
-    async def provider_state(self, provider):
-        assert provider == "workplace"
+    def canonical_state(self):
         self.reads += 1
         return self.state if self.reads == 1 else self.second_state
 
@@ -60,7 +59,7 @@ async def test_provider_state_uses_generic_type_strict_structured_grading(actual
     task = _task(expected)
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done.")))
 
-    result = await grade_answer(task, convention, trace, environment)
+    result = await grade_answer(task, convention, GradingAttempt(trace, {"workplace": environment}, object()))
 
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
     assert environment.reads == 1
@@ -70,17 +69,21 @@ async def test_provider_state_failure_does_not_score_zero():
     task = _task({"files": []})
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done.")))
 
-    with pytest.raises(TypeError, match="provider state"):
-        await grade_answer(task, ProviderState(id="state", provider="workplace"), trace, object())
+    with pytest.raises(KeyError, match="workplace"):
+        await grade_answer(task, ProviderState(id="state", provider="workplace"), GradingAttempt(trace, {}, object()))
 
     with pytest.raises(TypeError, match="not JSON compatible"):
-        await grade_answer(task, ProviderState(id="state", provider="workplace"), trace, MutableState({1: "bad key"}))
+        await grade_answer(
+            task,
+            ProviderState(id="state", provider="workplace"),
+            GradingAttempt(trace, {"workplace": MutableState({1: "bad key"})}, object()),
+        )
 
 
 async def test_invalid_agent_submission_uses_explicit_zero_reward_policy():
     task = _task({}).model_copy(update={"answer_type": AnswerType.TEXT, "verifier": exact_answer("yes")})
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content='{"answer":')))
 
-    result = await grade_answer(task, JsonAnswer(id="json"), trace, object())
+    result = await grade_answer(task, JsonAnswer(id="json"), GradingAttempt(trace, {}, object()))
 
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)

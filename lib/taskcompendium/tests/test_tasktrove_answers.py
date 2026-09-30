@@ -19,7 +19,7 @@ from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read
 from taskcompendium.importers.tasktrove.mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import AnswerType, ConversationTrace, TextMessage, VerifierKind
-from taskcompendium.submission import JsonAnswer, PlainText, render_instruction
+from taskcompendium.submission import GradingAttempt, JsonAnswer, PlainText, render_instruction
 from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
@@ -75,8 +75,13 @@ async def test_imported_mcqa_matches_source_grading(tmp_path):
         result = await grade_answer(
             specification,
             convention,
-            ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-            object(),
+            GradingAttempt(
+                ConversationTrace(
+                    events=(*specification.context.events, TextMessage(role="assistant", content=response))
+                ),
+                {},
+                object(),
+            ),
         )
         assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
@@ -87,16 +92,24 @@ async def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
     json_result = await grade_answer(
         specification,
         JsonAnswer(id="json"),
-        ConversationTrace(
-            events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
+        GradingAttempt(
+            ConversationTrace(
+                events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
+            ),
+            {},
+            object(),
         ),
-        object(),
     )
     malformed = await grade_answer(
         specification,
         convention,
-        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="Answer: C"))),
-        object(),
+        GradingAttempt(
+            ConversationTrace(
+                events=(*specification.context.events, TextMessage(role="assistant", content="Answer: C"))
+            ),
+            {},
+            object(),
+        ),
     )
     assert (json_result.status, json_result.reward) == (Outcome.GRADED, 1.0)
     assert (malformed.status, malformed.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
@@ -177,14 +190,15 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     script = (
         "import asyncio, json, sys; from pathlib import Path; "
         "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.submission import GradingAttempt; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "specification = read_specification(root / 'specification.json'); "
         "result = asyncio.run(grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
-        "ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='C'))), object())); "
+        "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
+        "TextMessage(role='assistant', content='C'))), {}, object()))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

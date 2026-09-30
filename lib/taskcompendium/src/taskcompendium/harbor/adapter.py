@@ -28,7 +28,6 @@ from harbor.verifier.base import BaseVerifier
 from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.harbor.protocol import assistant_message, chat_conversation
 from taskcompendium.lowering import (
-    AGENT_RESOURCES_DIR,
     ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
@@ -42,6 +41,7 @@ from taskcompendium.lowering import (
 )
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, ConversationTrace
 from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider
+from taskcompendium.submission import GradingAttempt
 from taskcompendium.verifier_registry import grade_answer
 
 SUBMISSION_FILE = "submission.json"
@@ -100,63 +100,11 @@ def _chat_completion(api_base: str, api_key: str | None, request_timeout: float,
     return message
 
 
-class HostChatEnvironment(BaseEnvironment):
-    """Handle Harbor's lifecycle and bookkeeping for host-managed chat tasks."""
+class CompositeToolEnvironment(BaseEnvironment):
+    """Run host-managed chat with zero or more trial-scoped tool providers."""
 
-    @staticmethod
-    def type() -> str:
-        return "taskcompendium-host-chat"
-
-    @property
-    def capabilities(self) -> EnvironmentCapabilities:
-        return EnvironmentCapabilities(disable_internet=True)
-
-    def _validate_definition(self) -> None:
-        if (self.environment_dir / AGENT_RESOURCES_DIR).exists():
-            raise ValueError("Host chat cannot expose filesystem inputs")
-
-    async def start(self, force_build: bool) -> None:
-        pass
-
-    async def stop(self, delete: bool) -> None:
-        pass
-
-    async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None) -> ExecResult:
-        if command == "pwd":
-            return ExecResult(stdout="/app\n", stderr="", return_code=0)
-        raise ValueError("No shell provider is bound")
-
-    async def empty_dirs(self, dirs, *, chmod: bool = True) -> None:
-        if not set(map(str, dirs)).issubset(HARBOR_EMPTY_DIRS):
-            raise ValueError("No filesystem provider is bound")
-
-    async def upload_file(self, source_path, target_path) -> None:
-        raise ValueError("No filesystem provider is bound")
-
-    async def upload_dir(self, source_dir, target_dir) -> None:
-        raise ValueError("No filesystem provider is bound")
-
-    async def download_file(self, source_path, target_path) -> None:
-        raise ValueError("No filesystem provider is bound")
-
-    async def download_dir(self, source_dir, target_dir) -> None:
-        if source_dir not in HARBOR_DOWNLOAD_DIRS:
-            raise ValueError("No filesystem provider is bound")
-
-
-class NoToolEnvironment(HostChatEnvironment):
-    """Run standalone direct-chat Harbor trials without agent filesystem or tools."""
-
-    @staticmethod
-    def type() -> str:
-        return "taskcompendium-direct-chat"
-
-
-class CompositeToolEnvironment(HostChatEnvironment):
-    """Own one fresh instance of each selected provider for a Harbor trial."""
-
-    def __init__(self, *args, tool_providers: dict[str, dict[str, Any]], **kwargs):
-        self.bindings = {name: ToolBinding.model_validate(item) for name, item in tool_providers.items()}
+    def __init__(self, *args, tool_providers: dict[str, dict[str, Any]] | None = None, **kwargs):
+        self.bindings = {name: ToolBinding.model_validate(item) for name, item in (tool_providers or {}).items()}
         self.providers: dict[str, ToolProvider] = {}
         self.tool_owners: dict[str, str] = {}
         super().__init__(*args, **kwargs)
@@ -178,6 +126,14 @@ class CompositeToolEnvironment(HostChatEnvironment):
     @staticmethod
     def type() -> str:
         return "taskcompendium-composite-tools"
+
+    @property
+    def capabilities(self) -> EnvironmentCapabilities:
+        return EnvironmentCapabilities(disable_internet=True)
+
+    def _validate_definition(self) -> None:
+        # Harbor requires this hook; provider bindings are validated before the trial starts.
+        pass
 
     def provider_kwargs(self, binding: ToolBinding) -> dict[str, Any]:
         """Supply constructor arguments for a provider bound to this environment."""
@@ -211,6 +167,28 @@ class CompositeToolEnvironment(HostChatEnvironment):
                     errors.append(error)
         if errors:
             raise ExceptionGroup("Provider cleanup failed", errors)
+
+    async def exec(self, command, cwd=None, env=None, timeout_sec=None, user=None) -> ExecResult:
+        if command == "pwd":
+            return ExecResult(stdout="/app\n", stderr="", return_code=0)
+        raise ValueError("No shell provider is bound")
+
+    async def empty_dirs(self, dirs, *, chmod: bool = True) -> None:
+        if not set(map(str, dirs)).issubset(HARBOR_EMPTY_DIRS):
+            raise ValueError("No filesystem provider is bound")
+
+    async def upload_file(self, source_path, target_path) -> None:
+        raise ValueError("No filesystem provider is bound")
+
+    async def upload_dir(self, source_dir, target_dir) -> None:
+        raise ValueError("No filesystem provider is bound")
+
+    async def download_file(self, source_path, target_path) -> None:
+        raise ValueError("No filesystem provider is bound")
+
+    async def download_dir(self, source_dir, target_dir) -> None:
+        if source_dir not in HARBOR_DOWNLOAD_DIRS:
+            raise ValueError("No filesystem provider is bound")
 
     async def native_tool_definitions(self) -> list[dict[str, Any]]:
         definitions: list[dict[str, Any]] = []
@@ -302,13 +280,10 @@ class ChatAgent(BaseAgent):
             messages.append({"role": "tool", "tool_call_id": call.call_id, "content": observation})
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        if not isinstance(environment, CompositeToolEnvironment):
+            raise TypeError("Chat requires a composite Harbor environment")
         bindings = read_environment_config(environment.environment_dir.parent / ENVIRONMENT_CONFIG_FILE).tool_providers
-        if bindings:
-            if not isinstance(environment, CompositeToolEnvironment):
-                raise TypeError("Tool bindings require a composite Harbor environment")
-            provider_tools = await environment.native_tool_definitions()
-        else:
-            provider_tools = []
+        provider_tools = await environment.native_tool_definitions()
         terminal_tools = self.request.get("tools", [])
         terminal_names = {tool["function"]["name"] for tool in terminal_tools}
         provider_names = {tool["function"]["name"] for tool in provider_tools}
@@ -345,6 +320,7 @@ class ChatAgent(BaseAgent):
             if not calls:
                 (self.logs_dir / SUBMISSION_FILE).write_text(chat_conversation(messages).model_dump_json())
                 return
+            # A completion containing only terminal calls is the submission. Do not dispatch it to providers.
             if any(call.name not in provider_names for call in calls):
                 if any(call.name in provider_names for call in calls):
                     raise ValueError("Terminal and provider calls cannot share a completion")
@@ -353,8 +329,7 @@ class ChatAgent(BaseAgent):
                 context.metadata["assistant_final"] = message
                 (self.logs_dir / SUBMISSION_FILE).write_text(chat_conversation(messages).model_dump_json())
                 return
-            if not isinstance(environment, CompositeToolEnvironment):
-                raise TypeError("Provider calls require a composite Harbor environment")
+            # Provider observations become the next model-visible turn; call IDs and action order are retained.
             await self._dispatch_provider_calls(calls, environment, messages, actions, seen_call_ids)
         raise RuntimeError(f"Tool agent exhausted {self.max_turns} turns")
 
@@ -369,7 +344,14 @@ class SemanticVerifier(BaseVerifier):
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             response_path = self.trial_paths.agent_dir / SUBMISSION_FILE
             conversation = ConversationTrace.model_validate_json(response_path.read_text())
-            result = await grade_answer(specification, convention, conversation, self.environment)
+            if not isinstance(self.environment, CompositeToolEnvironment):
+                raise TypeError("Chat verification requires a composite Harbor environment")
+            attempt = GradingAttempt(
+                conversation=conversation,
+                tool_providers=self.environment.providers,
+                workspace=self.environment,
+            )
+            result = await grade_answer(specification, convention, attempt)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)

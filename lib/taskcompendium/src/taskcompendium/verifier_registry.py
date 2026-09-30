@@ -16,7 +16,7 @@ from taskcompendium.grading import (
     StructuredExactVerifier,
     Verifier,
 )
-from taskcompendium.models import ConversationTrace, TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import (
     GradingAttempt,
     SubmissionConvention,
@@ -52,10 +52,9 @@ def validate_verifier(specification: VerifierSpec) -> None:
 
 
 async def grade_answer(
-    specification: TaskSpec, convention: SubmissionConvention, conversation: ConversationTrace, environment: object
+    specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt
 ) -> GradeResult:
     """Extract once, then grade the submitted value against a private verifier."""
-    attempt = GradingAttempt(conversation, environment)
     try:
         submission = await convention.extract(attempt)
     except SubmissionFailure as error:

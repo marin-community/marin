@@ -8,7 +8,7 @@ The current implementation exports Harbor tasks for text, number, native-action,
 
 ## What does it contain?
 
-- **Task specs** describe the source problem, private resources, required capabilities, the kind of result, and how to verify it.
+- **Task specs** describe the source problem, required capabilities, the kind of result, and how to verify it.
 - **Submission conventions** describe how to ask for and extract a result, such as a plain answer, a JSON object, or a final function call.
 - **Harbor environment configurations** select direct chat or one or more importable providers with pinned tool surfaces and seeds.
 - **Lowering tools** find compatible convention and environment configuration pairs, select a pair, and export a runnable Harbor task package.
@@ -40,7 +40,6 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `verifier` | A private verifier kind and serialized JSON configuration. See [What is a verifier?](#what-is-a-verifier). |
-| `resources` | Private files with normalized relative paths, visibility (`agent`, `verifier`, or `oracle`), executable bits, and inline content or SHA256-pinned references. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
 `context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; the adapter sends them as OpenAI-compatible chat messages without executing them again. `answer_type` does not prescribe a wrapper such as JSON.
@@ -73,7 +72,7 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 For a Git provider, the trusted export caller supplies its local checkout through `trusted_provider_sources={"workplace": checkout_path}`. TaskCompendium checks the HTTPS origin, exact commit, clean tree, tracked file paths, size limits, and symlinks, then packages the tracked source under `environment/provider_sources/`. It validates the provider's interface, seed, and selected tool schemas from that packaged source before export completes. A launch rechecks every packaged file before Harbor starts. The provider runs from a process-local copy of the verified snapshot, so trials do not fetch source or write into the exported task. Its ordinary Python dependencies must already be available in the runtime. Git provider packages must use relative imports within their own package so they can load under an isolated namespace even when an installed copy was imported earlier.
 
-Tool providers expose callable actions. `environment_requirements` separately describes workspace capabilities such as filesystem and shell access. The host chat runtime cannot satisfy those requirements or expose agent-visible files. A workspace runtime must supply them; declaring a capability on a tool provider does not create a workspace.
+Tool providers expose callable actions. `environment_requirements` separately describes workspace capabilities such as filesystem and shell access. The host chat runtime cannot satisfy those requirements. A workspace runtime must supply them; declaring a capability on a tool provider does not create a workspace.
 
 ### Files and state
 
@@ -103,7 +102,7 @@ A lowering is one runnable presentation of a spec for a target framework. It com
 
 Each typed convention's `supports(spec.answer_type)` checks the result kind. `submission_compatible` explains policy conflicts, and `compatible_lowerings` keeps only compatible choices. Conventions preserve the task's `final_tools` functions, tool choice, and parallel-call setting. Plain-text and JSON submissions keep those terminal functions; `answer_call` adds `submit_answer` alongside them. A task requiring a terminal call cannot use a text submission, and a task forbidding terminal calls cannot use `answer_call`. An existing terminal function named `submit_answer` conflicts with that convention. With no declared terminal functions or settings, `answer_call` requests one required call. Terminal calls are captured without execution; executable tool providers are bound separately.
 
-The host chat environment accepts only tasks with no required workspace capabilities or tool providers. A task requiring `shell` has no host-chat candidate. Provider-backed chat and workspace runtimes satisfy those requirements through their bindings.
+The host chat environment accepts zero or more tool providers, but no workspace capabilities. A task requiring `shell` has no host-chat candidate; a workspace runtime must supply that capability.
 
 Each binding selects an ordered subset of a provider's tools and pins those function definitions, including argument schemas. Adding an unselected tool to the provider leaves an existing binding valid. Export checks the selected interface, seed, tool surface, and terminal function names before writing a package.
 
@@ -147,7 +146,7 @@ lower_to_harbor(spec, chosen.convention, chosen.environment_config, Path("/tmp/a
 
 ## How does Harbor run it?
 
-`lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `environment_config.json` for the launcher and custom verifier. Host chat keeps verifier and oracle resources under `private_resources/`; a workspace runtime is required for agent-visible resources. A trusted caller resolves reference bytes before export. TaskCompendium checks digests, size limits, path collisions, and symlink paths before launch. A chat launch sends the structured conversation from the spec, then adds the convention's final answer instruction when needed. The verifier reads the private spec and reference answer.
+`lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `environment_config.json` for the launcher and custom verifier. A chat launch sends the structured conversation from the spec, then adds the convention's final answer instruction when needed. The verifier reads the private spec and reference answer.
 
 `run_trial` takes the exported directory, its environment configuration, and a chat launch. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. Provide the endpoint's base URL and, if needed, the name of an environment variable containing the API key. The agent resolves that variable in its process; the trial configuration retains only its name.
 
