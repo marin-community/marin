@@ -169,3 +169,20 @@ B's SonicMoE-style backward (M30B-009, approved, building): dS = rowsum(dh ⊙ h
 the latent MoE output saved on device (18.0 GiB), so remat drops the recomputed down GEMM (0.279 s),
 return all-to-all exposure (0.18 s) and combine gather-sum; priced -0.40 to -0.50 s/step. Forward, dx,
 dW13, dW2 unchanged; dS changes at rounding level. Chunk barrier re-tied from `returned` to h.
+
+## M30-006 Agent C: non-MoE memory passes (2026-09-30)
+
+Single-GPU hero-layer benchmark (real `Block.__call__`, stand-in routed experts, fwd+bwd with remat;
+`m30c-blockbench-02..04`; branch `research/mcwitt/mfu30-gemm` @ 8e5ed5b546, entry M30C-005):
+- Q/K/V and shared gate/up projection fusion: rejected. Forward bitwise-equal, but XLA's backward gradient
+  concatenation costs +1.6-2.5 ms/layer against a 1.0-1.2 ms saving; net +1.5-2.5 ms/layer for both.
+  The dot-merger flag noted in M30-002 is dropped with it.
+- `--xla_gpu_enable_triton_gemm=false`: -0.85 ms/layer (3 pairs, sd ~0.3). The GatedNorm sigmoid pass
+  merges into the following multiply, and gradient sums become cuBLAS in-place epilogues; ~1 ms returns as
+  slower GEMM/FA4 time (power cap). ~0.04 s/step: goes to the final stacked run.
+- Small items priced below a rack slot: RMSNorm weight-grad reduction (<=0.04), RoPE flipped copy
+  (0.02-0.03), XSA reductions (<0.02). Short-conv backward (6.7 passes vs a 3-pass floor) ~0.08 s but needs
+  CUDA/CuTe.
+- Approved: fused RMSNorm+GatedNorm forward Pallas-Triton kernel (the rank-128 GEMMs sit between the norm
+  and the gating multiply, so XLA can't fuse; ~1.5 ms per call vs ~0.4 at roofline; 4 calls per layer),
+  ~0.2 s/step, no extra peak. The backward elementwise fusion (~0.1) is optional after that.
