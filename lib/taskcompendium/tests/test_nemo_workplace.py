@@ -32,8 +32,7 @@ from taskcompendium.importers.nemo_workplace import (
 )
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
-from taskcompendium.resources import ResourceVisibility
-from taskcompendium.submission import PlainText, SubmissionConvention
+from taskcompendium.submission import GradingAttempt, PlainText, SubmissionConvention
 from taskcompendium.verifier_registry import grade_answer
 
 
@@ -88,20 +87,15 @@ def _source(data: bytes) -> tuple[bytes, dict]:
     return data, json.loads(data)
 
 
-class ProviderEnvironment:
-    def __init__(self, provider: NemoWorkplaceProvider):
-        self.provider = provider
-
-    async def provider_state(self, name: str):
-        assert name == "workplace"
-        return self.provider.canonical_state()
-
-
 async def _reward(specification: TaskSpec, convention: SubmissionConvention, provider: NemoWorkplaceProvider) -> float:
     conversation = ConversationTrace(
         events=(*specification.context.events, TextMessage(role="assistant", content="Done."))
     )
-    result = await grade_answer(specification, convention, conversation, ProviderEnvironment(provider))
+    result = await grade_answer(
+        specification,
+        convention,
+        GradingAttempt(conversation=conversation, tool_providers={"workplace": provider}, workspace=None),
+    )
     assert result.reward is not None
     return result.reward
 
@@ -118,25 +112,12 @@ def test_workplace_import_pins_row_tool_surface_and_private_state(source_example
     assert convention.provider == "workplace"
     assert specification.verifier.kind == VerifierKind.STRUCTURED_EXACT
     assert len(provider.tools) == len(row["responses_create_params"]["tools"]) == 27
-    assert {resource.visibility for resource in specification.resources} == {ResourceVisibility.VERIFIER}
     visible = specification.context.model_dump_json()
     assert [(event.role, event.content) for event in specification.context.events] == [
         (message["role"], message["content"]) for message in row["responses_create_params"]["input"]
     ]
-    assert all(resource.path not in visible for resource in specification.resources)
     assert "ground_truth" not in visible
-    assert "source-row.json" in {resource.path for resource in specification.resources}
-    private_provenance = next(
-        resource for resource in specification.resources if resource.path == "source-provenance.json"
-    )
-    source_record = json.loads(private_provenance.content)
-    assert source_record["source_file_sha256"] == SOURCE_EXAMPLE_SHA256
-    assert (source_record["dataset_license"], source_record["dataset_owner"]) == (
-        "CC-BY-4.0",
-        "NVIDIA Corporation",
-    )
-    assert source_record["provider_git_revision"] == PROVIDER_GIT_REVISION
-    assert source_record["provider_repository"] == PROVIDER_REPOSITORY
+    assert provider.provider.endswith(f"@{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider")
 
 
 def test_workplace_import_rejects_unpinned_row_and_changed_tools(monkeypatch, source_example: bytes, source_row: bytes):

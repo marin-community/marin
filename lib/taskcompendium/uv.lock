@@ -1262,7 +1262,7 @@ wheels = [
 [[package]]
 name = "nemo-workplace"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/nemo_workplace?rev=f92a1efb9bcf416b953136463b2022c5525f4b23#f92a1efb9bcf416b953136463b2022c5525f4b23" }
+source = { git = "https://github.com/marin-community/nemo_workplace?rev=27b39001312617403021635f0492e120abc2cd34#27b39001312617403021635f0492e120abc2cd34" }
 dependencies = [
     { name = "pandas" },
 ]
@@ -2255,7 +2255,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
-    { name = "nemo-workplace", marker = "extra == 'workplace'", git = "https://github.com/marin-community/nemo_workplace?rev=f92a1efb9bcf416b953136463b2022c5525f4b23" },
+    { name = "nemo-workplace", marker = "extra == 'workplace'", git = "https://github.com/marin-community/nemo_workplace?rev=27b39001312617403021635f0492e120abc2cd34" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tasktrove-verify", editable = "../tasktrove-verify" },
 ]
