@@ -97,7 +97,6 @@ nav:
       - Releasing to PyPI: dev-guide/releasing.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
-      - Hero Inference Export: references/hero-inference-export.md
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md

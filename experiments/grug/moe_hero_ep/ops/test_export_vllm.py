@@ -16,7 +16,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from rigging.filesystem.storage_path import StoragePath
 from safetensors.numpy import load_file
 
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, GrugMoeHfConfig, Transformer
+from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
 from experiments.grug.moe_hero_ep.weights import metadata_hash
 
@@ -80,33 +80,32 @@ def reload_export(root: Path) -> tuple[dict, dict[str, np.ndarray]]:
     return index, tensors
 
 
-@pytest.mark.parametrize("layout", ["params", "wrapped-master", "manifestless-ocdbt"])
-def test_native_export_preserves_expert_identity_and_effective_bias(tmp_path, layout):
-    request, model = native_fixture(str(tmp_path / "checkpoint"), master=layout == "wrapped-master")
-    if layout == "manifestless-ocdbt":
-        (tmp_path / "checkpoint" / "manifest.json").unlink()
+def test_native_export_preserves_all_weights_and_config(tmp_path):
+    request, model = native_fixture(str(tmp_path / "checkpoint"), master=True)
     export(request)
     root = Path(request.destination)
     _, tensors = reload_export(root)
-    assert all(str(value.dtype) == "bfloat16" for value in tensors.values())
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        # The established HF mapping is the oracle for unchanged ordinary weights.
+        expected = model.to_state_dict()
+        # Known centered negative betas replace the saved bias (9).
+        for layer, bias in enumerate([[-0.5, 2.5, -3.5, 1.5], [5.5, 0.5, -0.5, -5.5]]):
+            expected[f"model.layers.{layer}.mlp.router.bias"] = jnp.asarray(bias)
+        # Check routed experts independently from the exporter and its bank mapping.
         bank = model.stacked_blocks.stacked.mlp.expert_mlp
         for projection, values in [("gate_proj", bank.w_gate), ("up_proj", bank.w_up), ("down_proj", bank.w_down)]:
-            actual = np.stack(
-                [
-                    [tensors[f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"] for expert in range(4)]
-                    for layer in range(2)
-                ]
-            )
-            expected = np.asarray(jax.sharding.reshard(values.swapaxes(-1, -2).astype(jnp.bfloat16), P()))
-            assert actual.shape == expected.shape
-            assert actual.tobytes() == expected.tobytes()
-    # Known centered negative betas. The saved router bias (9) must not survive or be added.
-    for layer, expected in enumerate([[-0.5, 2.5, -3.5, 1.5], [5.5, 0.5, -0.5, -5.5]]):
-        np.testing.assert_array_equal(tensors[f"model.layers.{layer}.mlp.router.bias"], expected)
-    hf_config = json.loads((root / "config.json").read_text())
-    decoded = GrugModelConfig.from_hf_config(GrugMoeHfConfig(**hf_config))
-    assert (decoded.hidden_dim, decoded.intermediate_dim, decoded.latent_dim, decoded.sconv) == (16, 24, 8, True)
+            for layer in range(2):
+                expected.pop(f"model.layers.{layer}.mlp.experts.{projection}.weight")
+                for expert in range(4):
+                    expected[f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"] = values[layer, expert].T
+        assert tensors.keys() == expected.keys()
+        for name, value in expected.items():
+            wanted = np.asarray(jax.sharding.reshard(value.astype(jnp.bfloat16), P()))
+            actual = tensors[name]
+            assert actual.shape == wanted.shape and actual.dtype == wanted.dtype, name
+            assert actual.tobytes() == wanted.tobytes(), name
+    expected_config = request.model.to_hf_config(request.model.vocab_size).to_dict()
+    assert json.loads((root / "config.json").read_text()) == json.loads(json.dumps(expected_config))
 
 
 def test_export_recovery_verifies_shards_and_preserves_completed_output(tmp_path, monkeypatch):
