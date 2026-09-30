@@ -178,3 +178,47 @@ HBM: saved latent output [65536, 3072] bf16 = 402.7 MB/layer, 48 layers = 19.3 G
 The recompute no longer materializes `returned` (3.2 GB) or the two y chunks (1.85 GB each); whether that
 lowers the backward peak depends on where the peak sits. Fallback: offload the saved output to pinned host
 like the carry (0.4 GB per layer each way).
+
+## M30B-010 Expert-side routing-weight gradient: built and gated (2026-09-30)
+
+Commits 992a33a975 (custom_vjp + saved routed output), then the row dot fused into the SwiGLU backward,
+then a barrier ordering the backward transports after the recomputed dispatch.
+
+- `_routed_experts` (custom_vjp) covers dispatch to combine. Its backward is the previous one written out
+  plus s = <h, dh> per expert row (h recomputed in fp32 from gu inside the SwiGLU-backward fusion), one
+  [C, 1] f32 ragged a2a per chunk returning s along the forward return's routes, and dS = s / w on
+  accepted assignments with w != 0 (0 otherwise, by `where`, not by division).
+- `_ExpertMlp` now has `forward`/`backward` (QuACK: `_expert_mlp_quack_wgrad_fwd` +
+  `_expert_mlp_quack_wgrad_backward`; portable: ragged_dot with masks, its backward via `jax.vjp`).
+- Hero model: `MOE_OUTPUT_REMAT_NAME` tags the routed output before W_up; the offload_carry policy saves it.
+- The chunk barrier ties dispatch c+1 to chunk c's expert-MLP residuals, not to its return.
+
+Gate `m30b-gate-sonic-02` (GB200x4, hero XLA flags incl. overlap limit 1):
+- Single layer, 6 routing cases: out, drops, dx, dW13, dW2 equal to main; dS max 0.4-0.6% of the largest
+  gradient, median 0.53% elementwise (about one bf16 ulp). Single-layer fwd+bwd without remat: +4.0% vs
+  main (A+B+C: +3.4%); the remat saving does not show here by construction.
+- 3-layer rematted scan, T/shard 65536, H=I=3072: HLO confirms the recompute lost both down-projection
+  QuACK GEMMs, both return a2as and the combine gather-sum (no copies). dx, dW13, dW2 equal to main, dS
+  max 0.40% (median 0). Step: main 338.8 ms, A+B+C 326.0 (+3.9%), A+B+C+D 290.7 (+16.5%, i.e. -11.8 ms per
+  layer vs A+B+C, ~0.57 s/step at 48 layers). Temp: 35.30 / 32.08 / 31.92 GB: the saved outputs (1.21 GB
+  for 3 layers) are more than offset, peak excluding the stack drops ~1.4 GB.
+- Row dot fused vs separate (reading the saved h): 292.5 vs 291.3 ms (noise), temp 31.92 vs 33.66 GB. Fused kept.
+- pytest: 85 passed, same 3 GPU-only failures as main (f32 into QuACK). New: dS in the EP dense-parity test,
+  QuACK row-dot test.
+- dS is 0 for accepted assignments with an exactly-zero weight (the exact value is <dout, y>). The first
+  gate's one-hot case built weights from logits boosted by 100, so 7 of 8 weights were exactly 0 in bf16 and
+  dS disagreed there. Router sigmoids reach 0 only below ~1e-38, where d w / d logit is as small; the gate now
+  draws weights from separate logits.
+
+Race under collective overlap > 1: without `--xla_gpu_experimental_parallel_collective_overlap_limit=1`
+(first scan run, and `m30b-diag-sonic-02` at hero shapes), the candidate's gradients are not repeatable
+run to run (main is). The backward's first transport no longer depends on the recompute, so a backward
+ragged a2a can be in flight with a recomputed dispatch. With the hero's forced limit of 1 (`m30b-diag-sonic-01`,
+32768/2048, all configurations) everything is repeatable and exact. A barrier restoring main's order is in
+test (`m30b-diag-sonic-03`, no flags).
+
+HBM interaction: XLA's post-schedule HloRematerialization already binds on the hero (A's M30A-002: it counts
+the 36 GiB pinned-host carry stack as device memory and recomputes 10.6 GiB in the backward body). The 18 GiB
+saved-output stack is caller usage at the backward while loop, so without A's H-A4 flag
+(`--xla_gpu_enable_host_memory_offloading=true`) XLA would likely rematerialize ~18 GiB more in the backward.
+The D arm should run with that flag.
