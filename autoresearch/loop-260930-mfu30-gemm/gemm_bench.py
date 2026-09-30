@@ -91,10 +91,12 @@ class Sampler(threading.Thread):
                 self.samples.append((time.perf_counter(), s))
             time.sleep(self.period)
 
-    def window(self, t0, t1):
-        rows = [s for t, s in self.samples if t0 <= t <= t1]
+    def window(self, t0, t1, ndev=None):
+        full = [s for t, s in self.samples if t0 <= t <= t1]
+        rows = [s[:ndev] if ndev else s for s in full]
         if not rows:
             return None
+        per_gpu = np.array([[[g[0], g[1]] for g in s] for s in full], dtype=float).mean(axis=0).round().tolist()
         arr = np.array([[g[0], g[1], g[2]] for s in rows for g in s], dtype=float)
         reasons = 0
         for s in rows:
@@ -108,6 +110,7 @@ class Sampler(threading.Thread):
             temp_c=float(arr[:, 2].max()),
             clock_event_reasons=hex(reasons),
             n=len(rows),
+            per_gpu_clock_power=per_gpu,
         )
 
 
@@ -122,7 +125,23 @@ def gemm_fn(cfg):
     return jax.jit(f)
 
 
-def operands(cfg, dev, key):
+def pattern(x, data):
+    """Shape the operand bit statistics; tensor-core power depends on them."""
+    if data == "normal":
+        return x
+    if data == "zeros":
+        return jnp.zeros_like(x)
+    if data == "mant2":  # keep 2 of bf16's 7 mantissa bits
+        bits = jax.lax.bitcast_convert_type(x, jnp.uint16)
+        return jax.lax.bitcast_convert_type(bits & jnp.uint16(0xFFE0), jnp.bfloat16)
+    if data == "sparse50":
+        return jnp.where(jnp.arange(x.size, dtype=jnp.int32).reshape(x.shape) % 2 == 0, x, jnp.zeros_like(x))
+    if data == "smooth":  # rows vary slowly along the contiguous axis, like correlated activations
+        return (x + jnp.roll(x, 1, axis=-1) + jnp.roll(x, 2, axis=-1) + jnp.roll(x, 3, axis=-1)) * 0.5
+    raise ValueError(data)
+
+
+def operands(cfg, dev, key, data="normal"):
     bt, m, n, k = cfg["batch"], cfg["m"], cfg["n"], cfg["k"]
     ashape = (m, k) if cfg["a"] == "MK" else (k, m)
     bshape = (k, n) if cfg["b"] == "KN" else (n, k)
@@ -130,14 +149,15 @@ def operands(cfg, dev, key):
         ashape, bshape = (bt, *ashape), (bt, *bshape)
     ka, kb = jax.random.split(key)
     with jax.default_device(dev):
-        a = jax.random.normal(ka, ashape, dtype=jnp.bfloat16)
-        b = jax.random.normal(kb, bshape, dtype=jnp.bfloat16) * (1.0 / np.sqrt(k))
+        a = pattern(jax.random.normal(ka, ashape, dtype=jnp.bfloat16), data)
+        b = pattern((jax.random.normal(kb, bshape, dtype=jnp.bfloat16) * (1.0 / float(np.sqrt(k)))).astype(jnp.bfloat16), data)
+    assert a.dtype == jnp.bfloat16 and b.dtype == jnp.bfloat16, (a.dtype, b.dtype)
     return jax.device_put(a, dev), jax.device_put(b, dev)
 
 
-def run_config(cfg, devs, sampler, sustain, idle):
+def run_config(cfg, devs, sampler, sustain, idle, data="normal"):
     fn = gemm_fn(cfg)
-    ops = [operands(cfg, d, jax.random.PRNGKey(i)) for i, d in enumerate(devs)]
+    ops = [operands(cfg, d, jax.random.PRNGKey(i), data) for i, d in enumerate(devs)]
     flops = 2.0 * cfg["batch"] * cfg["m"] * cfg["n"] * cfg["k"]
     t0 = time.perf_counter()
     outs = [fn(a, b) for a, b in ops]
@@ -172,10 +192,11 @@ def run_config(cfg, devs, sampler, sustain, idle):
     ta, ca = half[0] if half else (t0, 0)
     tb, cb = marks[-1]
     sustained = (tb - ta) / max(cb - ca, 1)
-    tele = sampler.window(ta, tb) if sampler else None
+    tele = sampler.window(ta, tb, len(devs)) if sampler else None
     del outs, ops
     return dict(
         cfg,
+        data=data,
         flops=flops,
         compile_s=round(compile_s, 2),
         burst_us=burst * 1e6,
@@ -228,6 +249,7 @@ def main():
     ap.add_argument("--only", default="")
     ap.add_argument("--no-extra", action="store_true")
     ap.add_argument("--profile", action="store_true")
+    ap.add_argument("--data", default="normal", help="comma list of operand patterns: normal,zeros,mant2,sparse50,smooth")
     args = ap.parse_args()
 
     cfgs = json.load(open(args.configs))
@@ -251,17 +273,17 @@ def main():
     if sampler:
         sampler.start()
         time.sleep(0.5)
-        print("idle telemetry", sampler.window(0, time.perf_counter()), flush=True)
+        print("idle telemetry", sampler.window(0, time.perf_counter(), args.devices), flush=True)
     results = []
-    for c in uniq:
+    for c, data in [(c, d) for c in uniq for d in args.data.split(",")]:
         try:
-            r = run_config(c, devs, sampler, args.sustain, args.idle)
+            r = run_config(c, devs, sampler, args.sustain, args.idle, data)
         except Exception as e:  # keep going across configs; record the failure
-            r = dict(c, error=f"{type(e).__name__}: {str(e)[:300]}")
+            r = dict(c, data=data, error=f"{type(e).__name__}: {str(e)[:300]}")
         results.append(r)
         t = r.get("telemetry") or {}
         print(
-            f"{c['name']:36s} burst {r.get('burst_pfs', 0):.3f} PF/s  sustained {r.get('sustained_pfs', 0):.3f} PF/s "
+            f"{c['name']:36s} {data:8s} burst {r.get('burst_pfs', 0):.3f} PF/s  sustained {r.get('sustained_pfs', 0):.3f} PF/s "
             f"({r.get('sustained_us', 0):8.0f} us)  clk {t.get('sm_clock_mhz', 0):6.0f} MHz  "
             f"pwr {t.get('power_w', 0):6.0f} W  reasons {t.get('clock_event_reasons')}  insitu {c.get('insitu_pfs')}"
             + (f"  ERROR {r['error']}" if "error" in r else ""),
