@@ -131,7 +131,7 @@ def _stats_kernel(x_ref, w_ref, w_down_ref, h_ref, rstd_ref, *, d_block: int, ep
         w = w_ref[span].astype(jnp.float32)
         sumsq = sumsq + jnp.sum(x * x, axis=1)
         xw = (x * w[None, :]).astype(dtype)
-        acc = acc + pl.dot(xw, w_down_ref[span, :].astype(dtype))
+        acc = acc + jnp.dot(xw, w_down_ref[span, :].astype(dtype), preferred_element_type=jnp.float32)
         return acc, sumsq
 
     init = (jnp.zeros((t_block, rank), jnp.float32), jnp.zeros((t_block,), jnp.float32))
@@ -144,7 +144,7 @@ def _stats_kernel(x_ref, w_ref, w_down_ref, h_ref, rstd_ref, *, d_block: int, ep
 def _output_kernel(x_ref, w_ref, rstd_ref, h_ref, w_up_ref, out_ref, gate_ref, *, dtype):
     h = h_ref[...].astype(jnp.float32)
     silu = _round(h * _logistic(h, dtype), dtype)
-    logits = _round(pl.dot(silu.astype(dtype), w_up_ref[...].astype(dtype)), dtype)
+    logits = _round(jnp.dot(silu.astype(dtype), w_up_ref[...].astype(dtype), preferred_element_type=jnp.float32), dtype)
     gate = _logistic(logits, dtype)
     x = x_ref[...].astype(jnp.float32)
     y = _round(x * rstd_ref[...][:, None] * w_ref[...].astype(jnp.float32)[None, :], dtype)
