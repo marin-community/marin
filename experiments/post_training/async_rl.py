@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch fully asynchronous RL on the curriculum pool.
+"""Launch Megatron RL on the curriculum pool with a rolling rollout buffer.
 
-The launcher trains the 67B-A2B Snowball policy with MarinSkyRL's fully asynchronous loop, using the
-curriculum-RL pool, policy and evaluation. It writes every setting it decides into the rendered
+The launcher trains the 67B-A2B Snowball policy using the curriculum-RL pool and evaluation.
+It writes every setting it decides into the rendered
 config, including values that MarinSkyRL's base config or the curriculum template already hold.
 Presets bundle the loop settings, and ``--set`` changes one key; a run's address carries a hash of
 its ``--set`` changes.
@@ -14,10 +14,10 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset smoke
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default --run
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
-        --set trainer.fully_async.max_staleness_steps=2 --run
+        --set trainer.rollout_buffer.max_staleness_steps=2 --run
 
-The default preset runs on 40 GPUs: 128 prompts per update with four answers each, 192 generation
-workers, a buffer of 32 finished groups, staleness 4, and an 8192-token request window with a
+The default preset runs on 40 GPUs: 128 prompts per update with four answers each,
+192 concurrent prompt groups, staleness 4, and an 8192-token request window with a
 4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
 each advantage is computed over. The loop settings, telemetry gates and ``marin_tokenizer`` chat
 template need a MarinSkyRL revision that supports them. An older revision rejects the loop and
@@ -39,7 +39,6 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    _STRATEGY_FOR_PROFILE,
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
@@ -48,7 +47,6 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
     SkyRLRun,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     _role_plan_config_values,
@@ -85,9 +83,6 @@ WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
 PROMPTS_PER_UPDATE = 128
 # Answers sampled per prompt, so one update trains on 512 sequences.
 ANSWERS_PER_PROMPT = 4
-# Engines abort requests still generating at each weight sync; the client retries each one,
-# re-rendering its partial answer through the chat template, so it continues under the new weights.
-PAUSE_MODE = "abort"
 # Keep two resumable checkpoints in the temporary bucket, which deletes objects after 14 days. The
 # terminal export does not expire.
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
@@ -118,10 +113,8 @@ class MegatronGeometry:
 
 @dataclass(frozen=True)
 class TrainingRecipe:
-    """How one policy trains: runtime, topology, parallel geometry and optimizer."""
+    """How one policy trains: topology, parallel geometry, and optimizer."""
 
-    # MarinSkyRL runtime profile: the frozen dependency set the run installs.
-    profile: SkyRLRuntimeProfile
     # Nodes the job holds: the policy nodes plus one per engine.
     num_nodes: int
     # Placement and batch shape; Marin writes these into the SkyRL config from the role plan.
@@ -134,22 +127,18 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Host memory per training task. Megatron checkpoint staging needs 1800GB; the policy spec's
-    # 512GB is sized for an FSDP load.
+    # Host memory per training task; Snowball checkpoint staging needs 1800GB.
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: Mapping[str, object]
 
-    @property
-    def strategy(self) -> str:
-        return _STRATEGY_FOR_PROFILE[self.profile]
+    strategy: str = "megatron"
 
 
 # Snowball 67B-A2B on the 40-GPU topology: four policy nodes with the reference colocated,
 # pipeline depth 2 with 16-way data parallelism and experts sharded eight ways, and one engine node
 # sharding experts across its eight ranks (DP8/EP8).
 SNOWBALL_RECIPE = TrainingRecipe(
-    profile=SkyRLRuntimeProfile.MEGATRON,
     num_nodes=5,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
@@ -199,23 +188,14 @@ class AsyncPreset:
     # How many updates old a group may be when the trainer consumes it; 0 admits only groups
     # sampled by the current weights.
     max_staleness_steps: int
-    # Groups generating at once across the engines: at least one update's prompts, or the trainer
-    # refuses to start.
-    generation_workers: int
-    # Finished groups the buffer holds before a worker waits to hand its group over. Always an
-    # integer here; null would mean one slot per worker.
-    max_buffered_groups: int
+    # Maximum prompt groups admitted to the rollout buffer at once.
+    max_in_flight_groups: int
     # Prompt-plus-response budget one request may occupy in the engine, in tokens.
     request_window_tokens: int
     # Longest response the policy may generate, in tokens; it also caps the in-run evaluation.
     max_new_tokens: int
     # Evaluation suites the ``evaluation`` stage scores the terminal export on, comma separated.
     evals: str
-    # Drop the engines' KV cache at the pause so nothing computed by the old weights is reused.
-    clear_kv_cache_on_weight_sync: bool = True
-    # Count a group's staleness from the oldest policy version that sampled it, plus one. When off,
-    # the step is captured when the first model call returns, which under-counts staleness.
-    first_token_admission: bool = True
     # Export the telemetry the async RL dashboard reads.
     telemetry: bool = True
 
@@ -227,8 +207,7 @@ DEFAULT = AsyncPreset(
     max_steps=100,
     eval_interval=10,
     max_staleness_steps=4,
-    generation_workers=192,
-    max_buffered_groups=32,
+    max_in_flight_groups=192,
     request_window_tokens=8192,
     max_new_tokens=4096,
     evals="math500,gsm8k-0shot",
@@ -243,9 +222,8 @@ SMOKE_PRESET = replace(
     max_new_tokens=1024,
     evals="gsm8k-smoke",
 )
-# Every consumed group was sampled by the current weights; workers sit at the trainer's floor of
-# one update's prompts.
-ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
+# Every consumed group was sampled by the current weights.
+ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0)
 PRESETS: Mapping[str, AsyncPreset] = MappingProxyType(
     {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
 )
@@ -299,9 +277,9 @@ def apply_setting(config: dict, setting: Setting) -> None:
     """Set one dotted key in the assembled config; unknown keys require creation permission."""
     key, value, allows_new_key = setting
     if key == "entrypoint":
-        raise click.BadParameter("this launcher is the fully asynchronous loop; entrypoint cannot change")
+        raise click.BadParameter("this launcher uses the standard rollout buffer; entrypoint cannot change")
     if key == "trainer.placement.colocate_policy_ref":
-        raise click.BadParameter("SkyRL artifact runs always place the reference model with the policy")
+        raise click.BadParameter("this Snowball launcher places the reference model with the policy")
     if key in ROLE_PLAN_SETTINGS:
         raise click.BadParameter(f"{key!r} is fixed by the role plan; change SNOWBALL_RECIPE instead")
     if key == "trainer.resume_mode":
@@ -332,31 +310,13 @@ def apply_setting(config: dict, setting: Setting) -> None:
     node[parts[-1]] = value
 
 
-def check_loop_shape(config: dict) -> None:
-    """Refuse a rendered config the trainer would reject or whose groups would exceed the staleness."""
+def check_context_budget(config: dict) -> None:
+    """Require each pool prompt to fit beside the response budget."""
     budget = config["context_budget"]
-    trainer = config["trainer"]
-    loop = trainer["fully_async"]
-    prompts = trainer["train_batch_size"]
-    workers = loop["num_parallel_generation_workers"]
-    staleness = loop["max_staleness_steps"]
     # Every retained prompt must fit the request window beside the response budget, or rows skip
     # generation and their groups fail admission.
     if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
-    if workers < prompts:
-        raise click.BadParameter(f"{workers} generation workers cannot fill an update of {prompts} prompts")
-    # At staleness 0 nothing stale is ever admitted, so the allowance bounds no queue.
-    if staleness == 0:
-        return
-    # A null buffer holds one finished group per generation worker.
-    buffered = loop["max_buffered_groups"]
-    in_flight = workers + (workers if buffered is None else buffered)
-    if in_flight / prompts >= staleness:
-        raise click.BadParameter(
-            f"{in_flight} groups in flight or buffered exceed {staleness} updates of {prompts}, "
-            "so the last of them would exceed the staleness allowance"
-        )
 
 
 def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
@@ -366,7 +326,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     # The curriculum template supplies the data and environment sections; every other section is
     # written below in full.
     config = yaml.safe_load(rl_config_yaml(CURRICULUM_TEMPLATE, ARMS["naive"], SNOWBALL_POLICY))
-    config["entrypoint"] = "fully_async"
+    config["entrypoint"] = "standard"
     # The one public context declaration; MarinSkyRL derives the prompt, generation and engine
     # lengths from it.
     config["context_budget"] = {
@@ -395,7 +355,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "train_batch_size": plan.train_batch_size,
         "policy_mini_batch_size": plan.policy_mini_batch_size,
         "micro_train_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
-        "micro_forward_batch_size_per_gpu": 1,
         # Validation prompts scored per in-run evaluation.
         "eval_batch_size": 256,
         "eval_interval": preset.eval_interval,
@@ -410,16 +369,12 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # Commit each step's metrics as they are logged, so a killed run keeps its curve.
         "tracker_commit_each_step": True,
         "training_metrics": preset.telemetry,
-        "async_spans": preset.telemetry,
+        "rollout_spans": preset.telemetry,
         "policy_train_spans": preset.telemetry,
-        # Per-request generation spans; no async dashboard panel reads them.
-        "generate_spans": False,
         "algorithm": {
             # Group-relative advantages over each prompt's answers.
             "advantage_estimator": "grpo",
-            # The plain clipped loss: every sampled token contributes, with no off-policy mask or
-            # reweighting of the tokens the current weights did not sample.
-            "policy_loss_type": "regular",
+            "policy_loss_type": "behavior_clip",
             # No KL term against the reference, in the loss or in the reward.
             "use_kl_loss": False,
             "use_kl_in_reward": False,
@@ -449,14 +404,10 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             "ref_num_nodes": plan.policy_num_nodes,
             "ref_num_gpus_per_node": plan.policy_num_gpus_per_node,
         },
-        # The fully asynchronous loop; AsyncPreset documents each setting.
-        "fully_async": {
+        "rollout_buffer": {
             "max_staleness_steps": preset.max_staleness_steps,
-            "num_parallel_generation_workers": preset.generation_workers,
-            "max_buffered_groups": preset.max_buffered_groups,
-            "pause_mode": PAUSE_MODE,
-            "clear_kv_cache_on_weight_sync": preset.clear_kv_cache_on_weight_sync,
-            "first_token_admission": preset.first_token_admission,
+            "max_in_flight": preset.max_in_flight_groups,
+            "batch_policy": "rolling",
         },
     }
     config["generator"] = {
@@ -472,10 +423,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # EP=DP=8, and the Triton MoE backend).
         "weight_sync_transport": "expert_block",
         "expert_block_sync": {"timeout_seconds": 600, "verify": False},
-        # The asynchronous engine API, which the abort pause and the HTTP route need.
-        "async_engine": True,
-        # Requests go one prompt at a time, as the chat route submits them.
-        "batched": False,
         "num_inference_engines": plan.num_inference_engines,
         "inference_engine_tensor_parallel_size": plan.inference_engine_tensor_parallel_size,
         "inference_engine_pipeline_parallel_size": plan.inference_engine_pipeline_parallel_size,
@@ -489,13 +436,13 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "max_num_seqs": 1024,
         # Tokens one engine scheduling step may prefill or decode.
         "max_num_batched_tokens": 8192,
-        # Share each prompt's prefill across its four answers; the cache is cleared at each pause.
+        # Share each prompt's prefill across its four answers.
         "enable_prefix_caching": True,
         # Split long prefills across scheduling steps so decodes keep flowing.
         "enable_chunked_prefill": True,
         # Capture CUDA graphs for decode.
         "enforce_eager": False,
-        # The fully asynchronous entrypoint samples through the OpenAI-compatible chat route.
+        # Rollout groups use the OpenAI-compatible chat route.
         "enable_http_endpoint": True,
         # Each turn re-renders the conversation through the chat template; the entrypoint requires it.
         "use_conversation_multi_turn": True,
@@ -517,7 +464,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
-    check_loop_shape(config)
+    check_context_budget(config)
     return config
 
 
@@ -542,7 +489,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=recipe.profile),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,

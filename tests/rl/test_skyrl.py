@@ -25,7 +25,6 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
@@ -115,7 +114,7 @@ def _spec() -> SkyRLSpec:
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+        runtime=SkyRLRuntime(),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -181,7 +180,7 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     spec = dataclasses.replace(
         _spec(),
         config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(),
         topology=SkyRLTopology(
             num_nodes=6,
             gpus_per_node=8,
@@ -211,6 +210,11 @@ def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
     )
 
     SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+
+    separate_reference = dataclasses.replace(plan, reference_num_nodes=2)
+    SkyRLTopology(num_nodes=10, gpus_per_node=8, gpu_variant="H100", role_plan=separate_reference)
+    with pytest.raises(ValueError, match="exceeds the allocated topology"):
+        SkyRLTopology(num_nodes=9, gpus_per_node=8, gpu_variant="H100", role_plan=separate_reference)
 
 
 def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
@@ -245,21 +249,6 @@ def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
         )
 
 
-def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
-    spec = _spec()
-    plan = dataclasses.replace(_role_plan(), train_batch_size=32, policy_mini_batch_size=16)
-
-    with pytest.raises(
-        ValueError,
-        match="fully_async entrypoint requires train_batch_size == policy_mini_batch_size; got 32 and 16",
-    ):
-        dataclasses.replace(
-            spec,
-            config_yaml=f"entrypoint: fully_async\n{_config_yaml()}",
-            topology=dataclasses.replace(spec.topology, role_plan=plan),
-        )
-
-
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
@@ -268,13 +257,9 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
         spec,
         dataclasses.replace(_execution(), cpu=64, memory="400GB", disk="2TB"),
     )
-    changed_profile = skyrl_step(
-        dataclasses.replace(
-            spec,
-            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
-        ),
-        _execution(),
-    )
+    repinned_runtime = dataclasses.replace(spec.runtime)
+    object.__setattr__(repinned_runtime, "commit", "a" * 40)
+    changed_runtime = skyrl_step(dataclasses.replace(spec, runtime=repinned_runtime), _execution())
     changed_plan = dataclasses.replace(spec.topology.role_plan, train_batch_size=32)
     changed_roles = skyrl_step(
         dataclasses.replace(
@@ -287,7 +272,7 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
 
     assert base.fingerprint() == moved.fingerprint()
     assert base.fingerprint() == resized.fingerprint()
-    assert base.fingerprint() != changed_profile.fingerprint()
+    assert base.fingerprint() != changed_runtime.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
 
 
@@ -593,34 +578,3 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     )
 
     assert completed.returncode == 4
-
-
-def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> None:
-    """The mismatch is otherwise silent until the pod has its GPUs: the launcher installs one
-    backend's closure, the trainer asks for the other, and the run dies on an import error naming
-    neither the profile nor the strategy."""
-    spec = _spec()
-
-    with pytest.raises(ValueError, match="megatron"):
-        dataclasses.replace(
-            spec,
-            config_yaml=_config_yaml(strategy="megatron"),
-            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.FSDP),
-        )
-
-
-@pytest.mark.parametrize(
-    "config_yaml",
-    [
-        pytest.param(_config_yaml(strategy="megatron"), id="names the matching strategy"),
-        pytest.param(_config_yaml(), id="names no strategy"),
-    ],
-)
-def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: str) -> None:
-    spec = _spec()
-
-    dataclasses.replace(
-        spec,
-        config_yaml=config_yaml,
-        runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
-    )
