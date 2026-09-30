@@ -19,6 +19,8 @@ def test_known_ratios_raw_and_capped_ess():
     assert result["abs_max"] == pytest.approx(math.log(4))
     assert result["share_beyond_2x"] == pytest.approx(1 / 3)
     assert result["k3"] == pytest.approx(sum(ratio - 1 - math.log(ratio) for ratio in (1, 2, 4)) / 3)
+    # One of the three unmasked tokens (ratio 1) has an identical log-probability.
+    assert result["byte_equal_fraction"] == pytest.approx(1 / 3)
     assert result["token_ess_fraction_raw"] == pytest.approx(49 / (3 * 21))
     assert result["token_ess_fraction_capped"] == pytest.approx(25 / (3 * 9))
     assert result["sequence_ess_fraction_raw"] == pytest.approx(36 / (2 * 20))

@@ -98,6 +98,8 @@ def comparison_metrics(
         "token_ess_fraction_raw": _ess_fraction(delta),
         "sequence_ess_fraction_raw": _ess_fraction(logs),
         "share_beyond_2x": float(np.mean(absolute > LOG_TWO)),
+        # Scores arrive as float32, so a zero difference means bit-identical token log-probabilities.
+        "byte_equal_fraction": float(np.mean(delta == 0.0)),
     }
     if tis_cap is not None:
         if not math.isfinite(tis_cap) or tis_cap <= 0:

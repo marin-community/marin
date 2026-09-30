@@ -45,7 +45,7 @@ TINY_GRUG_POLICY = PolicySpec(
 )
 
 WARMUP_UPDATES = 3
-REPLAY_MODES = ("router_replay", "router_replay_filtered")
+REPLAY_MODES = ("router_replay", "router_replay_response", "router_replay_filtered")
 
 
 @dataclass(frozen=True)
