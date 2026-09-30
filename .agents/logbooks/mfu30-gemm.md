@@ -155,3 +155,31 @@ weight-gradient GEMMs; fusing its elementwise passes adds maybe ~0.1 s. Effort: 
 GPU correctness tests, then a rack screen: ~1-2 days. Numerics change at bf16 rounding points
 (allowed; needs the rack loss check). Short-conv backward with a register/SMEM carry: ~0.08 s/step,
 needs CUDA or CuTe DSL, similar effort.
+
+## M30C-006 Fused RMSNorm + GatedNorm forward kernel (2026-09-30)
+
+Built `levanter.kernels.pallas.gated_rms_norm` (Pallas Triton, two kernels: a statistics kernel
+that streams x once for the row scale and the rank-128 projection, applying rstd after the GEMM;
+an output kernel that recomputes y and writes out and the gate) with a hand-written JAX backward
+(custom_vjp; y is never materialized, the down-projection weight gradient uses x and rstd). Hero
+switch: `GrugModelConfig.gated_norm_implementation` / `launch_diagnostics --gated-norm-implementation
+pallas_gpu`; default None keeps the modules, parameters unchanged.
+
+Correctness on GB200 (`grn_check.py`, job `m30c-grn-01`): at the hero per-GPU shape
+[16,4096,6144] rank 128 and at [3,1000,768] (token padding) and [1,100,6144], the output and all
+four gradients have the same error against an f32 evaluation as the bf16 XLA reference (ratio
+0.99-1.03); max |kernel - reference| = 1 bf16 ulp of the output scale (0.0625 at |out| 5.5).
+Compiled temp memory of fwd+bwd 0.84 vs 1.57 GiB (block benchmark: -1.9 GiB temp).
+CPU tests in `lib/levanter/tests/kernels/test_gated_rms_norm.py` (interpret mode, f32 exact to
+2e-5, bf16 within the reference's rounding, 4-device shard_map without collectives).
+
+Performance (jobs `m30c-grn-02..04`, per-kernel profile at the hero shape): XLA's reference
+forward is 1.21 ms (rms fusion 0.31, GEMMs 0.29, sigmoid pass 0.27, multiply 0.33), and 1.005 ms
+with `--xla_gpu_enable_triton_gemm=false`. Best kernel pair 1.046 ms: statistics 0.29 ms (2.8 TB/s
+for one pass of x), output 0.76 ms (3.2 TB/s for three passes). First version was 2.16 ms; the
+output kernel recomputed the SiLU once per tile (fixed: the statistics kernel writes it), and the
+square sum reduced across lanes every step (fixed: elementwise accumulation). A looping output
+kernel was slower (0.83-1.09 ms). Pallas Triton on SM100 stays at ~3 TB/s on these streaming
+kernels (the short-conv kernel sees the same), so the fused forward does not beat XLA with the
+Triton-GEMM flag. Best case at roofline (3.2 GB/call at 6.5 TB/s, ~0.5 ms) would save ~0.5
+ms/call x 192 calls = ~0.1 s/step over the flag, and needs a TMA-based (CuTe DSL) kernel.
