@@ -270,7 +270,7 @@ The private ledger and full TaskSpecs are not release inputs. A missing
 `PublicTask`; extra fields, including verifier fields, fail validation.
 
 ```bash
-uv run --project lib/taskcompendium --extra workplace \
+uv run --project lib/taskcompendium \
   python -m taskcompendium.mixed_release \
   --cohorts /tmp/accepted-public-cohorts.json \
   --output /tmp/taskcompendium-mixed-candidate \
@@ -291,7 +291,7 @@ The candidate is not publication-ready. The mixed release requires measured Task
 Run the package tests from the repository root:
 
 ```bash
-uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskcompendium/tests -q
+uv run --project lib/taskcompendium --extra harbor --extra math --group test pytest lib/taskcompendium/tests -q
 
 # Type-check the package from its own project directory after installing its dependencies.
 cd lib/taskcompendium

@@ -18,7 +18,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from nemo_workplace.provider import ACTION_INTERFACE, SEED_SHA256, TOOLS_SHA256
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.importers.nemo_workplace import (
     DATASET,
@@ -43,6 +42,7 @@ from taskcompendium.mixed_release import (
     finalize_mixed_candidate,
 )
 from taskcompendium.models import SCHEMA_VERSION
+from taskcompendium.provider_sources import stage_git_provider
 from taskcompendium.public_release import build_workplace_candidate
 from taskcompendium.release_common import sha256_file
 
@@ -85,22 +85,23 @@ def _download_workplace(split: str, destination: Path) -> None:
     destination.write_bytes(data)
 
 
-def _workplace_cohorts(source_dir: Path, builder_revision: str) -> tuple[CohortInput, ...]:
+def _workplace_cohorts(source_dir: Path, builder_revision: str, provider_source: Path) -> tuple[CohortInput, ...]:
     candidate = source_dir / "workplace"
     build_workplace_candidate(
         source_dir / "train.jsonl",
         source_dir / "validation.jsonl",
         candidate,
+        provider_source=provider_source,
         builder_revision=builder_revision,
     )
-    provider = workplace_environment_config().tool_providers["workplace"]
+    provider = workplace_environment_config(provider_source).tool_providers["workplace"]
     provider_pin = ProviderPin(
         name="workplace",
-        locator=PROVIDER,
+        locator=provider.provider,
         provider_revision=PROVIDER_GIT_REVISION,
-        action_interface=ACTION_INTERFACE,
-        seed_sha256=SEED_SHA256,
-        tools_sha256=TOOLS_SHA256,
+        action_interface=provider.action_interface,
+        seed_sha256=provider.seed_sha256,
+        tools_sha256=provider.tools_sha256,
         tools=tuple(provider.tools),
     )
     sample = HarborSample(
@@ -227,14 +228,14 @@ def _upload_regional(source: Path, destination: str) -> dict[str, str]:
     return uploaded
 
 
-def _stage_cohorts(root: Path, builder_revision: str) -> tuple[CohortInput, ...]:
+def _stage_cohorts(root: Path, builder_revision: str, provider_source: Path) -> tuple[CohortInput, ...]:
     projection_bytes = StoragePath(PROJECTION_MANIFEST_URI).read_bytes()
     if hashlib.sha256(projection_bytes).hexdigest() != PROJECTION_MANIFEST_SHA256:
         raise ValueError("Projection manifest digest mismatch")
     projection = json.loads(projection_bytes)
     for split in ("train", "validation"):
         _download_workplace(split, root / f"{split}.jsonl")
-    return _workplace_cohorts(root, builder_revision) + _tasktrove_cohorts(root, projection)
+    return _workplace_cohorts(root, builder_revision, provider_source) + _tasktrove_cohorts(root, projection)
 
 
 def _build_ready_artifact(
@@ -268,6 +269,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Assemble the regional TaskCompendium alpha-1 public artifact")
     parser.add_argument("--output-prefix", required=True, help="New regional S3 prefix for public-only release files")
     parser.add_argument("--builder-revision", required=True, help="Full commit of the executed package bundle")
+    parser.add_argument("--workplace-provider-checkout", type=Path, required=True)
     parser.add_argument("--rights-review-url", required=True)
     args = parser.parse_args()
     if not args.output_prefix.startswith(RELEASE_PREFIX) or args.output_prefix.rstrip("/") == RELEASE_PREFIX.rstrip("/"):
@@ -276,7 +278,9 @@ def main() -> None:
         raise FileExistsError(f"Regional release already exists: {args.output_prefix}")
     with tempfile.TemporaryDirectory(prefix="taskcompendium-alpha-") as directory:
         root = Path(directory)
-        cohorts = _stage_cohorts(root, args.builder_revision)
+        provider_source = root / "provider"
+        stage_git_provider(PROVIDER, args.workplace_provider_checkout, provider_source)
+        cohorts = _stage_cohorts(root, args.builder_revision, provider_source)
         ready, candidate_sha256 = _build_ready_artifact(root, cohorts, args.builder_revision, args.rights_review_url)
         uploaded = _upload_regional(ready, args.output_prefix)
         _write_assembly_report(ready, args.output_prefix, candidate_sha256, uploaded)
