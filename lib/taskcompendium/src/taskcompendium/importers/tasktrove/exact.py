@@ -5,7 +5,7 @@
 
 from tasktrove_verify.spec import ExactSpec, parse_spec
 
-from taskcompendium.grading import exact_list_answer
+from taskcompendium.grading import exact_answer
 from taskcompendium.importers.tasktrove.convert import import_metadata, task_id
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
@@ -36,7 +36,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         instruction = _clean_instruction(archive.files["instruction.md"].decode())
     except (KeyError, UnicodeDecodeError, ValueError) as error:
         raise ValueError(f"Invalid TaskTrove exact-mode archive: {error}") from error
-    verifier = exact_list_answer(
+    verifier = exact_answer(
         contract.expected,
         ignore_case=contract.ignore_case,
         collapse_whitespace=contract.ignore_whitespace,

@@ -96,7 +96,7 @@ def _specification() -> TaskSpec:
             "b": ProviderRequirement(action_interface="b:v1", seed_sha256="b" * 64),
         },
         answer_type=AnswerType.TEXT,
-        verifier=exact_answer("done"),
+        verifier=exact_answer(("done",)),
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
     )
 

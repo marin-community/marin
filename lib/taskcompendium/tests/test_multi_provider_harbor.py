@@ -144,7 +144,7 @@ def _specification(answer_type: AnswerType) -> TaskSpec:
     elif answer_type == AnswerType.NATIVE_ACTION:
         verifier = predicted_action_verifier((FunctionCall(name="finish", arguments={"answer": "done"}),))
     else:
-        verifier = exact_answer("done")
+        verifier = exact_answer(("done",))
     return TaskSpec(
         id="two-providers",
         context=ConversationInput(events=(TextMessage(role="user", content="Use the tools."),)),

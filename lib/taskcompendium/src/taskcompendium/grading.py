@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, JsonValue, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 from tasktrove_verify.grade import InvalidTask, numeric_tolerance
 from tasktrove_verify.modes.extract import extract_boxed
 from tasktrove_verify.modes.grade_exact import grade_exact_candidate
@@ -49,32 +49,7 @@ class Verifier(BaseModel, ABC):
 
 
 class ExactAnswerVerifier(Verifier):
-    """Compare a text answer using pinned normalization rules."""
-
-    expected: str
-    ignore_case: bool = True
-    collapse_whitespace: bool = True
-
-    @field_validator("expected")
-    @classmethod
-    def nonempty_expected(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("An exact answer is required")
-        return value
-
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
-        if not isinstance(submission, TextSubmission):
-            raise TypeError("Exact-answer verifier requires a text submission")
-        contract = ExactSpec(
-            expected=(self.expected,), ignore_case=self.ignore_case, ignore_whitespace=self.collapse_whitespace
-        )
-        return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, submission.value).reward)
-
-
-class ExactListVerifier(Verifier):
-    """Compare an ordered or unordered list of text values using exact-mode normalization."""
+    """Compare one or more text values using exact-mode normalization."""
 
     expected: tuple[str, ...]
     ignore_case: bool = True
@@ -82,16 +57,16 @@ class ExactListVerifier(Verifier):
     ordered: bool = True
 
     @model_validator(mode="after")
-    def validate_expected(self) -> "ExactListVerifier":
+    def validate_expected(self) -> "ExactAnswerVerifier":
         if not self.expected or any(not item.strip() for item in self.expected):
-            raise ValueError("An exact answer list requires nonempty expected values")
+            raise ValueError("An exact answer requires nonempty expected values")
         return self
 
     async def grade(
         self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
     ) -> GradeResult:
         if not isinstance(submission, TextSubmission):
-            raise TypeError("Exact-list verifier requires a text submission")
+            raise TypeError("Exact-answer verifier requires a text submission")
         contract = ExactSpec(
             expected=self.expected,
             ignore_case=self.ignore_case,
@@ -99,8 +74,11 @@ class ExactListVerifier(Verifier):
             ordered=self.ordered,
         )
         boxed = extract_boxed(submission.value)
-        candidate = boxed if boxed is not None else submission.value
-        return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, candidate).reward)
+        if boxed is not None:
+            result = grade_exact_candidate(contract, boxed)
+            if result.reward:
+                return GradeResult(Outcome.GRADED, result.reward)
+        return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, submission.value).reward)
 
 
 class NumericAnswerVerifier(Verifier):
@@ -169,26 +147,20 @@ def structured_exact(expected: JsonValue) -> VerifierSpec:
     return VerifierSpec(kind=VerifierKind.STRUCTURED_EXACT, parameters_json=verifier.model_dump_json())
 
 
-def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
-    """Construct a pinned exact-answer verifier descriptor."""
-    verifier = ExactAnswerVerifier(expected=expected, ignore_case=ignore_case, collapse_whitespace=collapse_whitespace)
-    return VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json=verifier.model_dump_json())
-
-
-def exact_list_answer(
+def exact_answer(
     expected: tuple[str, ...],
     ignore_case: bool = True,
     collapse_whitespace: bool = True,
     ordered: bool = True,
 ) -> VerifierSpec:
-    """Construct a verifier for the values parsed by TaskTrove exact mode."""
-    verifier = ExactListVerifier(
+    """Construct an exact verifier; one expected value matches the whole candidate."""
+    verifier = ExactAnswerVerifier(
         expected=expected,
         ignore_case=ignore_case,
         collapse_whitespace=collapse_whitespace,
         ordered=ordered,
     )
-    return VerifierSpec(kind=VerifierKind.EXACT_LIST_ANSWER, parameters_json=verifier.model_dump_json())
+    return VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json=verifier.model_dump_json())
 
 
 def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:

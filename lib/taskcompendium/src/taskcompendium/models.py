@@ -29,7 +29,6 @@ class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
     EXACT_ANSWER = "exact"
-    EXACT_LIST_ANSWER = "exact_list"
     STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     NUMERIC_ANSWER = "numeric"

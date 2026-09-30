@@ -28,7 +28,14 @@ from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 @pytest.mark.parametrize(
     "verifier,kind,old_kind,correct,wrong",
     [
-        (exact_answer("yes"), "exact", "exact_answer", "YES", "no"),
+        (exact_answer(("yes",)), "exact", "exact_answer", "YES", "no"),
+        (
+            exact_answer(("green", "blue", "green"), ordered=False),
+            "exact",
+            "exact_list",
+            "blue,green,green",
+            "blue,green",
+        ),
         (numeric_answer(0.5, 0.0, 0.0), "numeric", "numeric_answer", "0.5", "2"),
         (multiple_choice_answer("B", 4), "mcq", "mcq_answer", "B", "C"),
         (mathematical_answer(r"\sqrt{2}", MathType.SCALAR), "math", "mathematical_answer", r"2/\sqrt{2}", "2"),
