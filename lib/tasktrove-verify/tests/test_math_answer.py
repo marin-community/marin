@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("math_verify", reason="math mode needs the `answer` extra")
 
-from tasktrove_verify.grade import Status
+from tasktrove_verify.grade import InvalidTask, Status
 from tasktrove_verify.grade import grade as dispatch
 from tasktrove_verify.modes import grade_math
 from tasktrove_verify.spec import MathSpec, MathType
@@ -44,7 +44,10 @@ def _answer(workspace: Path, text: str) -> None:
 )
 def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text, reward):
     _answer(tmp_path, text)
-    assert grade_math.grade(MathSpec(expected=expected), tmp_path, tmp_path).reward == reward
+    spec = MathSpec(expected=expected)
+    candidate_result = grade_math.grade_math_candidate(spec, text)
+    assert candidate_result.reward == reward
+    assert grade_math.grade(spec, tmp_path, tmp_path) == candidate_result
 
 
 @pytest.mark.parametrize(
@@ -78,7 +81,9 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
 def test_math_typed_answers_use_their_comparison(tmp_path, expected, math_type, text, reward):
     _answer(tmp_path, text)
     spec = MathSpec(expected=expected, math_type=math_type)
-    assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
+    candidate_result = grade_math.grade_math_candidate(spec, text)
+    assert candidate_result.reward == reward
+    assert grade_math.grade(spec, tmp_path, tmp_path) == candidate_result
 
 
 def test_math_empty_output_scores_zero_with_no_output(tmp_path):
@@ -109,3 +114,44 @@ def test_math_grades_from_a_worker_thread(tmp_path):
     worker.start()
     worker.join()
     assert results[0].status == Status.SCORED and results[0].reward == 1.0
+
+
+@pytest.mark.parametrize("candidate", [None, "42", "???"])
+def test_invalid_reference_is_not_a_wrong_candidate(candidate):
+    with pytest.raises(InvalidTask):
+        grade_math.grade_math_candidate(MathSpec(expected="???"), candidate)
+
+
+@pytest.mark.parametrize(
+    "expected, math_type, numeric",
+    [
+        ("42", MathType.SCALAR, True),
+        ("-0.5", MathType.SCALAR, True),
+        ("1/2", MathType.SCALAR, True),
+        (r"2\sqrt{3}", MathType.SCALAR, True),
+        (r"\pi", MathType.SCALAR, True),
+        ("(1,2)", MathType.SCALAR, False),
+        ("1,2", MathType.SCALAR, False),
+        ("[1,2]", MathType.SCALAR, False),
+        (r"\{1,2\}", MathType.SCALAR, False),
+        ("1 or 2", MathType.SCALAR, False),
+        ("1 or ???", MathType.SCALAR, False),
+        ("42 ???", MathType.SCALAR, False),
+        ("42,", MathType.SCALAR, False),
+        ("2 +/- 1", MathType.SCALAR, False),
+        ("x+1", MathType.SCALAR, False),
+        ("x=2", MathType.SCALAR, False),
+        (r"\sqrt{-1}", MathType.SCALAR, False),
+        (r"\infty", MathType.SCALAR, False),
+        ("1/0", MathType.SCALAR, False),
+        ("???", MathType.SCALAR, False),
+        ("", MathType.SCALAR, False),
+        ("42", MathType.LIST, False),
+        ("42", MathType.SET, False),
+        ("42", MathType.INTERVAL, False),
+        ("42", MathType.TUPLE, False),
+        ("42", MathType.EQUATION, False),
+    ],
+)
+def test_finite_real_scalar_classification(expected, math_type, numeric):
+    assert grade_math.is_finite_real_scalar(MathSpec(expected=expected, math_type=math_type)) is numeric

@@ -13,6 +13,7 @@ from threading import Thread
 
 import pytest
 from harbor.models.task.task import Task
+from tasktrove_verify.spec import MathType
 
 from taskcompendium.grading import exact_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
@@ -47,6 +48,7 @@ from taskcompendium.submission import (
     submission_compatible,
 )
 from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.verifiers.mathematical import mathematical_answer
 
 from .harbor_replay import run_replay_trial
 
@@ -262,6 +264,7 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
     "answer_type,verifier,response",
     [
         (AnswerType.TEXT, exact_answer("12"), "12"),
+        (AnswerType.NUMBER, mathematical_answer("13/2", MathType.SCALAR), "6.5"),
         (AnswerType.NUMBER, numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0), "12.0"),
     ],
 )
@@ -416,11 +419,11 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
     [
         (
             VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": 12}'),
-            "Invalid 'exact_answer' verifier parameters",
+            "Invalid 'exact' verifier parameters",
         ),
         (
             VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": "12", "extra": true}'),
-            "Invalid 'exact_answer' verifier parameters",
+            "Invalid 'exact' verifier parameters",
         ),
     ],
 )
@@ -464,7 +467,8 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}
 
 
-def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
+@pytest.mark.parametrize("schema_version", ["0.1", "0.11"])
+def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification, schema_version):
     task = lower_to_harbor(
         specification,
         PlainText(id="plain"),
@@ -473,11 +477,10 @@ def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
     )
     path = task / "specification.json"
     payload = json.loads(path.read_text())
-    payload["schema_version"] = "0.1"
-    payload["verifier"] = {"expected": "12", "ignore_case": True, "ignore_whitespace": True}
+    payload["schema_version"] = schema_version
     path.write_text(json.dumps(payload))
 
-    with pytest.raises(ValueError, match=r"Unsupported TaskSpec schema: 0\.1"):
+    with pytest.raises(ValueError, match=f"Unsupported TaskSpec schema: {schema_version}"):
         read_specification(path)
 
 
