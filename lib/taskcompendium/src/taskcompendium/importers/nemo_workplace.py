@@ -82,9 +82,11 @@ def select_rows(source: bytes) -> tuple[bytes, ...]:
     selected: dict[int, bytes] = {}
     for line in lines:
         row = json.loads(line)
-        if not isinstance(row, dict) or type(row.get("id")) is not int:
+        if not isinstance(row, dict):
             raise ValueError("Workplace example source requires rows with integer IDs")
-        row_id = row["id"]
+        row_id = row.get("id")
+        if not isinstance(row_id, int) or isinstance(row_id, bool):
+            raise ValueError("Workplace example source requires rows with integer IDs")
         if row_id not in ROW_SHA256_BY_ID:
             raise ValueError(f"Unsupported Workplace source row {row_id}")
         if row_id in selected:
@@ -115,9 +117,11 @@ def select_dataset_rows(source: bytes, split: WorkplaceSplit) -> tuple[bytes, ..
     seen: set[int] = set()
     for line in lines:
         row = json.loads(line)
-        if not isinstance(row, dict) or type(row.get("id")) is not int:
+        if not isinstance(row, dict):
             raise ValueError(f"Workplace {split} split requires rows with integer IDs")
-        row_id = row["id"]
+        row_id = row.get("id")
+        if not isinstance(row_id, int) or isinstance(row_id, bool):
+            raise ValueError(f"Workplace {split} split requires rows with integer IDs")
         if row_id in seen:
             raise ValueError(f"Workplace {split} split has duplicate row {row_id}")
         seen.add(row_id)
@@ -184,9 +188,11 @@ def _gold(value: Any) -> list[dict[str, str]]:
 def import_row(data: bytes, provider_source: Path) -> WorkplaceImport:
     """Import the raw row after checking its digest, source tools, and seed."""
     row = json.loads(data)
-    if not isinstance(row, dict) or type(row.get("id")) is not int:
+    if not isinstance(row, dict):
         raise ValueError("Workplace source requires an integer row ID")
-    row_id = row["id"]
+    row_id = row.get("id")
+    if not isinstance(row_id, int) or isinstance(row_id, bool):
+        raise ValueError("Workplace source requires an integer row ID")
     expected_digest = ROW_SHA256_BY_ID.get(row_id)
     if expected_digest is None or hashlib.sha256(data).hexdigest() != expected_digest:
         raise ValueError(f"Workplace row {row_id} does not match its pinned raw digest")
