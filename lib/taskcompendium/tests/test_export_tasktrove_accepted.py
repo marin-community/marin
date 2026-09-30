@@ -7,6 +7,7 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from experiments.post_training.taskcompendium.audit_tasktrove_rights_metadata import audit_rights_metadata
 from experiments.post_training.taskcompendium.export_tasktrove_accepted import export_accepted_records
 from experiments.post_training.taskcompendium.ingest_tasktrove import PUBLIC_CANDIDATE_COHORTS
 from rigging.filesystem.storage_path import StoragePath
@@ -161,6 +162,41 @@ def test_export_holds_rows_until_packaging_clearance_and_excludes_sft(tmp_path):
         "source_url": "<absent>",
     }
     assert result["rights_term_examples_by_source_mode_family_converter"]
+
+
+def test_rights_metadata_audit_verifies_proofs_without_clearing_rows(tmp_path, monkeypatch):
+    inputs, manifest = _input_artifacts(tmp_path)
+    ingestion = tmp_path / "ingestion"
+    ingestion.mkdir()
+    for source, name in zip(
+        inputs,
+        ("ingestion-ledger.parquet", "private-catalog.parquet", "public-candidates.jsonl", "candidate-proof.jsonl"),
+        strict=True,
+    ):
+        target = ingestion / name
+        with source.open("rb") as opened:
+            target.write_bytes(opened.read())
+    manifest_path = ingestion / "ingestion-manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    manifest["manifest_uri"] = str(manifest_path)
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(
+        "experiments.post_training.taskcompendium.audit_tasktrove_rights_metadata.configure_coreweave_s3",
+        lambda: None,
+    )
+
+    report = audit_rights_metadata(
+        str(ingestion), str(tmp_path / "rights-audit"), tmp_path / "summary", builder_revision="d" * 40
+    )
+
+    summary = json.loads((tmp_path / "summary/rights-audit-summary.json").read_text())
+    assert report["accepted_rows_by_source"] == {}
+    assert summary["accepted_public_records"] == 0
+    assert summary["candidate_sha256_verified"] is True
+    assert summary["proof_sha256_verified"] is True
+    assert summary["archive_payload_bytes_read"] == 0
+    assert summary["private_task_specifications_loaded"] is False
+    assert (tmp_path / "rights-audit/manifest.json").exists()
 
 
 def test_export_writes_proof_wrapped_record_for_exact_cleared_cohort(tmp_path):

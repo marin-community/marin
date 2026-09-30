@@ -37,6 +37,12 @@ After an ingestion run has status `complete`, run `audit_tasktrove_ingest.py` in
 python -m experiments.post_training.taskcompendium.audit_tasktrove_ingest
 ```
 
+For a fresh candidate source-rights metadata inventory, set `TASKTROVE_OUTPUT_URI` to the completed ingestion prefix, `TASKTROVE_RIGHTS_AUDIT_OUTPUT_URI` to a new private S3 prefix, and `TASKTROVE_AUDIT_REVISION` to the full commit running the audit. Then run `audit_tasktrove_rights_metadata.py`. It validates the candidate/ledger/proof/tag joins, hashes the ledger and catalog, and inventories the recorded license and attribution fields without loading TaskSpecs or source archives. It applies no clearance: every candidate remains held until the exact source cohort is reviewed.
+
+```bash
+python -m experiments.post_training.taskcompendium.audit_tasktrove_rights_metadata
+```
+
 After the audit passes, `export_tasktrove_accepted.py` verifies the exact audit-manifest digest and joins the ledger, candidates, proof rows, and private catalog rights metadata. It recomputes artifact hashes, checks unique row-level joins, preserves ordered tags, and records source terms and disposition counts by source, split, family, converter, template, and tag. It reads no archive payloads or private TaskSpecs. Export clearance is limited to two exact `tasks` tuples: MCQA (`laion__nemotron-gym-knowledge-mcqa-v2`, `qa-short-answer`, `nemotron_mcqa`, template `c814af4f124d`) and Prism math (`laion__nemo-prism-math-v3`, `math-answer`, `nemotron_math`, template `5ee94cf985a9`). Both use their pinned NVIDIA CC-BY-4.0 source-card revisions and require all inspected archive rights fields to remain absent. Other sources, splits, families, converters, or templates stay held. It maps `tasks` to public `train` and excludes `sft/`.
 
 Set `TASKTROVE_OUTPUT_URI` to the completed ingestion prefix, `TASKTROVE_RIGHTS_AUDIT_MANIFEST_URI` to the audited `manifest.json`, `TASKTROVE_ACCEPTED_OUTPUT_URI` to a new private S3 prefix, and `TASKTROVE_PROJECTION_REVISION` to the full exporter commit. The script validates the audit manifest against the exact ingestion artifacts before writing `AcceptedPublicRecord-v1` groups under `tasktrove_clean/train/<source>/<family>.jsonl`:
