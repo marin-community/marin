@@ -19,6 +19,7 @@ from taskcompendium.importers.nemo_workplace import (
     IMPORTER_REVISION,
     PROVIDER,
     PROVIDER_GIT_REVISION,
+    PROVIDER_NAME,
     WorkplaceSplit,
     import_dataset_split,
     select_dataset_rows,
@@ -36,6 +37,7 @@ WORKPLACE_SPLITS: tuple[WorkplaceSplit, ...] = ("train", "validation")
 def _write_workplace_split(
     source_path: Path, destination: Path, split: WorkplaceSplit, provider_source: Path
 ) -> tuple[int, dict[str, int]]:
+    """Write one public split and return its row count and category counts."""
     source = source_path.read_bytes()
     selected = select_dataset_rows(source, split)
     imported = import_dataset_split(source, split, provider_source)
@@ -88,8 +90,8 @@ commit `{PROVIDER_GIT_REVISION}`, derived from NVIDIA NeMo Gym under Apache 2.0.
 The provider implementation and seed are referenced by digest; they are not copied
 into the data files.
 
-This is a local candidate. The broader mixed-source alpha release still needs
-completed TaskTrove conversions and Harbor sample evidence for each included source.
+This is a local candidate. Publishing additional source families requires pinned
+conversions, license review, and Harbor sample evidence for every included family.
 """
 
 
@@ -99,7 +101,7 @@ def _manifest(
     builder_revision: str,
     provider: ToolBinding,
 ) -> dict[str, object]:
-    """Describe pinned source, output, and Harbor evidence for a Workplace candidate."""
+    """Return source, provider, and output provenance for the candidate manifest."""
     return {
         "format_version": 1,
         "visibility": "agent",
@@ -144,7 +146,7 @@ def _manifest(
                     "provider": provider.provider,
                     "tools": list(provider.tools),
                 },
-                "submission_convention": {"id": "state", "answer_format": "state", "provider": "workplace"},
+                "submission_convention": {"id": "state", "answer_format": "state", "provider": PROVIDER_NAME},
                 "split_files": {
                     split: {
                         "path": f"{split}.jsonl",
@@ -173,7 +175,7 @@ def build_workplace_candidate(
     if destination.exists():
         raise FileExistsError(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    provider = workplace_environment_config(provider_source).tool_providers["workplace"]
+    provider = workplace_environment_config(provider_source).tool_providers[PROVIDER_NAME]
     temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
     try:
         data = temporary / "data"

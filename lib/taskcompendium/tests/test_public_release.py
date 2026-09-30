@@ -25,13 +25,14 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    FunctionDefinition,
     ProviderRequirement,
     Source,
     TaskSpec,
     TextMessage,
 )
 from taskcompendium.public_projection import public_task
-from taskcompendium.submission import PlainText, ProviderState
+from taskcompendium.submission import FinalAction, PlainText, ProviderState
 
 
 def test_public_task_retains_agent_input_and_ordered_tags_without_expected_state():
@@ -463,3 +464,40 @@ def test_regional_proof_requires_object_identity():
     unpinned = "2026.09.18.3#manifest-sha256=" + "a" * 64 + "#parquet-size=100#parquet-etag=#parquet-version-id="
     with pytest.raises(ValueError, match="immutable pin"):
         SourceProof(source_row="knowledge:row", input_file="source.parquet", input_object_pin=unpinned)
+
+
+def test_public_action_task_serializes_terminal_functions_without_verifier():
+    specification = TaskSpec(
+        id="terminal-action",
+        context=ConversationInput(events=(TextMessage(role="user", content="Choose a calendar."),)),
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=(
+            FunctionDefinition(
+                name="choose_calendar",
+                description="Select a calendar.",
+                parameters={"type": "object", "properties": {"name": {"type": "string"}}},
+                strict=True,
+            ),
+        ),
+        answer_type=AnswerType.NATIVE_ACTION,
+        verifier=exact_answer("secret-expected-calendar"),
+        source=Source(dataset="source", revision="pinned", row="1", importer_revision="1"),
+    )
+    record = public_task(
+        specification,
+        FinalAction(id="action", require_call=True, max_calls=1),
+        HarborEnvironmentConfig(),
+        tags=(),
+    )
+    payload = json.loads(record.model_dump_json())
+    assert payload["final_tools"] == [
+        {
+            "name": "choose_calendar",
+            "description": "Select a calendar.",
+            "parameters": {"type": "object", "properties": {"name": {"type": "string"}}},
+            "strict": True,
+        }
+    ]
+    assert "verifier" not in payload
+    assert "secret-expected-calendar" not in record.model_dump_json()
+    assert "tool_choice" not in payload and "parallel_tool_calls" not in payload
