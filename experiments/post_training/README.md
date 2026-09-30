@@ -9,7 +9,8 @@ without using them to stop training or gate learning.
 
 The default `async` lane uses two Megatron policy data-parallel ranks
 and two vLLM rollout engines in a two-node Iris task with two H100s per node
-in `cw-rno2a`. Both lane selections use the unified trainer through the
+in `cw-rno2a`. Use `--cluster cw-us-east-02a` to submit the coordinator
+and training job to the other H100 cluster. Both lane selections use the unified trainer through the
 standard runtime entrypoint. The default `async` selection allows
 rollouts to lag by two policy steps and uses behavior clipping without TIS.
 `--lane sync` uses zero staleness with the regular policy objective and TIS.

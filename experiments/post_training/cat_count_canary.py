@@ -343,6 +343,7 @@ def build_run(
     seed: int = SEED,
     job_timeout_seconds: int = JOB_TIMEOUT_SECONDS,
     version: str | None = None,
+    cluster: str = CLUSTER,
     settings: tuple[str, ...] = (),
 ) -> ArtifactStep[SkyRLRun]:
     if job_timeout_seconds <= 0:
@@ -400,14 +401,14 @@ def build_run(
             seed=seed,
         ),
         IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+            cluster=cluster,
+            cluster_config=f"lib/iris/config/{cluster}.yaml",
             cpu=CPUS_PER_NODE,
             memory="512GB",
             disk="1TB",
             priority="interactive",
             max_retries=1,
-            target_cluster=CLUSTER,
+            target_cluster=cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=24,
             wandb_entity=None,
@@ -419,6 +420,7 @@ def build_run(
 
 @click.command(help=__doc__)
 @click.option("--preset", type=click.Choice(tuple(PRESET_STEPS)), default="dry", show_default=True)
+@click.option("--cluster", type=click.Choice(("cw-rno2a", "cw-us-east-02a")), default=CLUSTER, show_default=True)
 @click.option("--lane", type=click.Choice(("sync", "async")), default="async", show_default=True)
 @click.option("--model", type=click.Choice(tuple(MODELS)), default="qwen2.5-0.5b-instruct")
 @click.option("--batch-size", type=int, default=TRAIN_BATCH_SIZE)
@@ -432,6 +434,7 @@ def build_run(
 @rl_build_options
 def main(
     preset: str,
+    cluster: str,
     lane: str,
     model: str,
     batch_size: int,
@@ -444,6 +447,7 @@ def main(
     settings: tuple[str, ...],
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
+        cluster=cluster,
         preset=preset,
         lane=lane,
         model=model,
