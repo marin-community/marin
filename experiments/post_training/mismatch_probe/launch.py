@@ -126,7 +126,7 @@ def tiny_grug_recipe(
             "strategy": "megatron",
             "flash_attn": False,
             "use_sample_packing": arm.use_sample_packing,
-            "epochs": 1,
+            "epochs": WARMUP_UPDATES + max(settings.updates),
             "max_steps": WARMUP_UPDATES if warmup else max(settings.updates),
             "update_epochs_per_batch": 1,
             "micro_forward_batch_size_per_gpu": 2,

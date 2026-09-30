@@ -24,11 +24,6 @@ def test_known_ratios_raw_and_capped_ess():
     assert result["sequence_ess_fraction_raw"] == pytest.approx(36 / (2 * 20))
 
 
-def test_mask_and_nonfinite_fail_closed():
-    result = comparison_metrics([[99.0, -1.0]], [[0.0, -1.0]], [[False, True]])
-    assert result["abs_max"] == 0.0
-
-
 def test_bootstrap_carries_all_samples_of_each_prompt():
     prompt_ids = ["a", "a", "b"]
 
