@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export a TaskSpec submission as a Harbor task package."""
+"""Export a TaskSpec and selected chat binding as a Harbor task package."""
 
 import hashlib
 import importlib
@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec, VerifierKind
+from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
 from taskcompendium.provider_sources import (
     PROVIDER_SOURCES_DIR,
     import_staged_provider,
@@ -225,9 +225,7 @@ def select_lowerings(
 def _required_state_provider(
     specification: TaskSpec, convention: SubmissionConvention, environment_config: HarborEnvironmentConfig
 ) -> str | None:
-    """Validate semantic requirements and return the provider graded for a state task."""
-    if specification.answer_type == AnswerType.STATE and specification.verifier.kind != VerifierKind.STRUCTURED_EXACT:
-        raise ValueError("State result requires a structured exact verifier")
+    """Validate host-chat requirements and locate a provider-state submission."""
     bindings = environment_config.tool_providers
     requirements = specification.environment_requirements
     if specification.resources:
@@ -238,7 +236,7 @@ def _required_state_provider(
         if specification.tool_providers:
             raise ValueError("Chat without tools cannot satisfy provider requirements")
         if specification.answer_type == AnswerType.STATE:
-            raise ValueError("Chat without tools cannot grade environment state")
+            raise ValueError("Host chat without a provider cannot expose state")
         return None
     required = specification.tool_providers
     selected = bindings
