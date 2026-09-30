@@ -62,6 +62,7 @@ from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_lo
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.gated_rms_norm import Implementation as GatedRmsNormImplementation
 from levanter.kernels.pallas.gated_rms_norm import gated_rms_norm
+from levanter.kernels.pallas.short_conv import Implementation as ShortConvImplementation
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
@@ -251,6 +252,9 @@ class GrugModelConfig:
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
+    sconv_implementation: ShortConvImplementation | None = None
+    """Kernel for the SConvs. None picks the fused Pallas kernel on GPU; "triton_gpu" streams the
+    sequence with the taps in registers. Parameters are the same either way."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
@@ -505,20 +509,23 @@ class ShortConv(eqx.Module):
 
     weight: Float[Array, "W C"]
     kernel_size: int = eqx.field(static=True)
+    implementation: ShortConvImplementation | None = eqx.field(static=True, default=None)
 
     @staticmethod
-    def init(channels: int, kernel_size: int) -> "ShortConv":
+    def init(channels: int, kernel_size: int, implementation: ShortConvImplementation | None = None) -> "ShortConv":
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
         # FSDP-shard the channel dim so the grad reduce-scatters instead of all-reducing; the
         # forward gathers the weight back to replicated.
-        return ShortConv(weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size)
+        return ShortConv(
+            weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size, implementation=implementation
+        )
 
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
         # With segment_ids (packed documents), a tap that reaches into a previous document is
         # zeroed so the conv never mixes across a boundary; the lag-0 (current-token) tap is
         # always kept.
         weight = reshard(self.weight, P(None, None))
-        return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
+        return short_conv(weight, x, segment_ids, implementation=self.implementation, batch_axes=_BATCH_AXES)
 
 
 # Tag for attention weights gathered from their FSDP shards; see `_regathered_einsum`.
@@ -562,7 +569,11 @@ class CausalSelfAttention(eqx.Module):
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
-            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            sconv_k=(
+                ShortConv.init(m * h, cfg.sconv_kernel, cfg.sconv_implementation)
+                if cfg.sconv and "k" in cfg.sconv_sites
+                else None
+            ),
             cfg=cfg,
         )
 
@@ -1213,10 +1224,14 @@ class Block(eqx.Module):
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             sconv_attn=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_implementation)
+                if cfg.sconv and "attn" in cfg.sconv_sites
+                else None
             ),
             sconv_mlp=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_implementation)
+                if cfg.sconv and "mlp" in cfg.sconv_sites
+                else None
             ),
             gated_norm_implementation=cfg.gated_norm_implementation,
         )
