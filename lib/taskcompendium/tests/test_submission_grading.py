@@ -65,6 +65,19 @@ async def test_provider_state_uses_generic_type_strict_structured_grading(actual
     assert environment.reads == 1
 
 
+async def test_exact_answer_grades_string_provider_state():
+    task = _task("complete").model_copy(update={"verifier": exact_answer("complete")})
+    trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done.")))
+
+    result = await grade_answer(
+        task,
+        ProviderState(id="state", provider="workplace"),
+        GradingAttempt(trace, {"workplace": MutableState("complete")}, object()),
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
 async def test_provider_state_failure_does_not_score_zero():
     task = _task({"files": []})
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done.")))
@@ -80,7 +93,7 @@ async def test_provider_state_failure_does_not_score_zero():
         )
 
 
-async def test_invalid_agent_submission_uses_explicit_zero_reward_policy():
+async def test_invalid_agent_submission_receives_zero_reward():
     task = _task({}).model_copy(update={"answer_type": AnswerType.TEXT, "verifier": exact_answer("yes")})
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content='{"answer":')))
 
