@@ -62,11 +62,11 @@ Compute `metadata_digest`; replace `<checkpoint>` with the YAML's checkpoint URL
 ```bash
 uv run --package marin-levanter --extra gpu python - <<'PYTHON'
 import json
-from experiments.grug.moe_hero_ep.weights import metadata_hash
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 configure_coreweave_s3()
-print(metadata_hash(json.loads(StoragePath("<checkpoint>/metadata.json").read_text())))
+print(digest(json.loads(StoragePath("<checkpoint>/metadata.json").read_text())))
 PYTHON
 ```
 

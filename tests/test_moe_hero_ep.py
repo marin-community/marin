@@ -41,7 +41,7 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
-from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
@@ -493,7 +493,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     state = _tiny_state(jnp.zeros(4), None)
     master_less = str(tmp_path / "step-1")
     save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
-    assert not train.checkpoint_stores_master(master_less)
+    assert not checkpoint_stores_master(master_less)
     assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DEVICE) is state
     with pytest.raises(ValueError, match="Synthesizing a master"):
         train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
@@ -502,7 +502,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     save_checkpoint(
         {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
     )
-    assert train.checkpoint_stores_master(master_bearing)
+    assert checkpoint_stores_master(master_bearing)
     assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
     migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DEVICE)
     assert migrating.params is None and migrating.master_params is state.params
@@ -518,7 +518,7 @@ def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_p
         checkpoint_path=checkpoint,
     )
 
-    assert train.checkpoint_stores_master(checkpoint)
+    assert checkpoint_stores_master(checkpoint)
 
 
 def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):

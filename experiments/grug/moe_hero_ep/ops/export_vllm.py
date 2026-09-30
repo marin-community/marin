@@ -31,7 +31,8 @@ from rigging.log_setup import configure_logging
 from safetensors.numpy import save_file
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, grugmoe_inference_state_dict
-from experiments.grug.moe_hero_ep.weights import metadata_hash, restore_weights
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+from experiments.grug.moe_hero_ep.weights import restore_weights
 
 logger = logging.getLogger(__name__)
 MANIFEST_FILENAME = "export-manifest.json"
@@ -168,7 +169,7 @@ def export(config: ExportConfig) -> None:
     root = StoragePath(config.destination)
     hf_config = config.model.to_hf_config(config.model.vocab_size).to_dict()
     request = {"export_version": EXPORT_VERSION, "config": draccus.encode(config), "hf_config": hf_config}
-    export_id = metadata_hash(request)
+    export_id = digest(request)
 
     def prepare():
         if (root / MANIFEST_FILENAME).exists():

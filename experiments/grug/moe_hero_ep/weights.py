@@ -3,7 +3,6 @@
 
 """Authoritative Hero weights for inference consumers."""
 
-import hashlib
 import json
 import logging
 from typing import cast
@@ -17,13 +16,10 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug import checkpointing
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer, apply_qb_betas
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 logger = logging.getLogger(__name__)
 PENDING_QB_BETAS_KEY = "pending_qb_betas"
-
-
-def metadata_hash(metadata: dict) -> str:
-    return hashlib.sha256(json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def restore_weights(
@@ -33,7 +29,7 @@ def restore_weights(
     logger.info("Validate checkpoint metadata and weight layout: %s", checkpoint)
     checkpoint_path = StoragePath(checkpoint)
     metadata = json.loads((checkpoint_path / "metadata.json").read_text())
-    if metadata_hash(metadata) != metadata_digest or metadata.get("is_temporary") is not False:
+    if digest(metadata) != metadata_digest or metadata.get("is_temporary") is not False:
         raise ValueError("Checkpoint metadata changed or checkpoint is not permanent")
     template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.PRNGKey(0))
     try:

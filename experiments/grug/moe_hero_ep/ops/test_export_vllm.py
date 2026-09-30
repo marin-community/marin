@@ -18,7 +18,7 @@ from safetensors.numpy import load_file
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.export_vllm import ExportConfig, export
-from experiments.grug.moe_hero_ep.weights import metadata_hash
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 
 def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Transformer]:
@@ -60,9 +60,7 @@ def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Tr
         save_checkpoint(state, step=17, checkpoint_path=root, is_temporary=False)
     metadata = json.loads((StoragePath(root) / "metadata.json").read_text())
     return (
-        ExportConfig(
-            root, metadata_hash(metadata), config, root + "-export", "44a4188c197a4b5a314e40cc653f150fa9687dcf"
-        ),
+        ExportConfig(root, digest(metadata), config, root + "-export", "44a4188c197a4b5a314e40cc653f150fa9687dcf"),
         model,
     )
 
