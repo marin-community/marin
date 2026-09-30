@@ -18,8 +18,8 @@ from taskcompendium.environment import (
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
-    Source,
     EnvironmentRequirements,
+    Source,
     TaskSpec,
     TextMessage,
     VerifierKind,

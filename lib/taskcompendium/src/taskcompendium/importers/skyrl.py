@@ -11,7 +11,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.chat import chat_input
 from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, ExternalVerifierSpec
-from taskcompendium.models import AnswerType, Source, EnvironmentRequirements, TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.parquet import PARQUET_BATCH_SIZE
 
 GYM_INTERACTION = "skyrl_gym"

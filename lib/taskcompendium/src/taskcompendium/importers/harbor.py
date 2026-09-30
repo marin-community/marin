@@ -34,10 +34,10 @@ from taskcompendium.environment import (
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    EnvironmentRequirements,
     Source,
     StageRewardStrategy,
     StageVerifierSpec,
-    EnvironmentRequirements,
     TaskSpec,
     TaskStage,
     TextMessage,

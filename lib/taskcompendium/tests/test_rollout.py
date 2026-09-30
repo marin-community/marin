@@ -29,8 +29,8 @@ from taskcompendium.grading import Outcome, numeric_answer
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
-    Source,
     EnvironmentRequirements,
+    Source,
     TaskSpec,
     TextMessage,
     VerifierKind,
