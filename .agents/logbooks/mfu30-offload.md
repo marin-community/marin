@@ -84,3 +84,14 @@ device I/O to 73.65 GiB, so keeping the LHS/remat limit at the baseline ~95.5 Gi
 `--xla_gpu_memory_limit_slop_factor=129`, and the ~137.7 GiB peak needs
 `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78` (143.8 GiB pool, ~12 GiB outside for NCCL/cuBLAS/context).
 H-A1 and H-A4 compete for the same headroom: stacked, the peak lands near 145-148 GiB.
+
+## M30A-006 Adjusted predictions after agent C's power-cap finding (2026-09-30)
+
+Agent C: tensor-core GEMMs are power-capped (1200 W, clocks 1200-1600 MHz), so removing exposed or
+idle time next to GEMMs may return ~10-15% of it as slower GEMMs. H-A4's removed work is mostly
+memory-bound remat fusions (0.40 s) plus one sync all-gather per layer (0.23 s, rank-skew wait), not
+tensor-core recompute, so the power-cap penalty applies to the step-time gain, not to the removed kernels
+themselves. Revised H-A4 prediction: -0.25 to -0.45 s/step (+0.5 to +0.9 MFU). H-A1 (0.33 s exposed
+copies) scales to ~0.28-0.30 s. Headroom budget: H-A4 (+5-10 GiB arena) and H-A1 (+38.55 GiB
+persistent) compete for the same ~35 GiB below the 0.75 threshold; any remat-reducing lever from other
+agents also draws on it.
