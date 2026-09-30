@@ -311,3 +311,32 @@ magnitude. Single-layer fwd+bwd: main 84.4 / D 81.4 / D+mirror+E 79.3 ms (unifor
 3-layer rematted scan: main 342.2 / D 298.7 / D+mirror+E 290.3 ms: E is -2.8 ms per layer (~-0.13 s/step at 48
 layers on 4 GPUs); temp 35.30 / 31.92 / 31.82 GB; gradients vs main to rounding (dx, dW13 median 0.49%). pytest 88
 passed (two new QuACK dswiglu tests) + the same 3 GPU-only failures.
+
+## M30B-018 Idle and exposed collectives on the Sep 24 baseline (rank 0, 3 steps)
+
+Tool: `b/exposure.py` (per-step head/tail/internal idle, gap context, exposed time per collective
+instruction with per-instance duration spread). Fixed `exposed_detail.py`'s list/tuple sort crash.
+
+Idle (0.346 s/step) is not an MFU lever. 0.323 s is the step tail (last kernel to the next step's launch:
+callbacks, logging, data), which `throughput/duration` excludes (it times dispatch through
+`block_until_ready(loss)`); 0.007 s is the head (dispatch to first kernel); internal gaps total 0.017 s, all
+under 50 us (D2D copies and kernel boundaries).
+
+Exposed collectives (1.681 s/step), by cause:
+| class | s/step | instructions | removable by |
+|---|---|---|---|
+| ragged a2a, chunk 0 | 0.669 | fwd dispatch `.8.1` 0.183, fwd return `.9.1` 0.153, remat dispatch `.13` 0.153, remat return `.1.1` 0.181 | D removes the remat return (0.181). The rest is transfer time (min 2.9 ms ~ median 3.2-4.0 ms per instance), not skew |
+| rank-skew waits | ~0.40 | u32 drop-count all-reduce `all-reduce.254` 0.241 (1/step, min 11 ms, median 97 ms), QB `pmin`/`pmax` in the forward 0.04, group-size all-gather in the remat `all-gather.123` 0.048, norm all-reduce 0.019 | structural: removing one sync moves the wait to the next collective |
+| XLA remat clones | 0.246 | `all-gather.127.remat` 0.227 (96/step, synchronous), `all-gather.127` 0.019 | A's H-A4 flag |
+| FSDP weight gathers / grad reduce-scatter | ~0.27 | fwd `all-gather.101/.108/.109/.104/.110/.107`, bwd `.26/.28/.30/.23`, `reduce-scatter.18` 0.058 | mostly time above the fastest instance, i.e. waits; scheduling/PGLE |
+| offset all-to-alls in the transport backward | 0.010 | `all_to_all.30.1` | mirror parameters (6a6bb78853) |
+
+Why chunk 0's transports are exposed, from one forward layer's kernel order: dispatch c0 (3.8 ms) runs with
+nothing on the compute stream; gated + down GEMMs c0; the QB `pmin` (0.75 ms, a wait); return c0 (3.1 ms) again
+alone; then dispatch c1 overlaps the four shared-expert GEMMs (~6 ms) and return c1 overlaps two more (~3.6 ms).
+The latency-hiding scheduler spends the shared-expert GEMMs (~10 ms per layer) on chunk 1's transports and leaves
+chunk 0's (6.9 ms per layer) bare. With pipelined chunks (dispatch c+1 under MLP c, return c under MLP c+1) the
+shared-expert GEMMs are free to cover dispatch c0 and return c1, so every transport has compute under it. That is
+the case #9481's pipelining targets, and a four-GPU scan without a shared expert cannot show it. Pipelined variant
+for the rack: branch `research/mcwitt/mfu30-routing-pipelined` @ 64909b24d0 (= 12643e682c D+mirror+E with the
+pipelined forward of a1d699e67e; values identical).

@@ -31,7 +31,7 @@ print("exposed memcpy by (stream,name,op):")
 for k, v in mc.most_common(12): print(f"  {v/1e12/3:.4f} {k}")
 print("exposed memcpy by step decile:", {k: round(v/1e12/3, 3) for k, v in sorted(pos.items())})
 # idle gaps distribution by step decile
-allb = merge(cc + [(r[2], r[3]) for r in rows if re.search(r"memcpy|memset", r[1], re.I)])
+allb = merge([tuple(iv) for iv in cc] + [(r[2], r[3]) for r in rows if re.search(r"memcpy|memset", r[1], re.I)])
 gp = collections.Counter()
 for (a, b), (c, _) in zip(allb, allb[1:]):
     g = c - b
