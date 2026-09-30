@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned Workplace row 0 import and mutable provider behavior."""
+"""Pinned Workplace import and mutable provider behavior."""
 
 import asyncio
 import hashlib
@@ -16,13 +16,13 @@ from urllib.request import urlopen
 
 import pytest
 
-from nemo_workplace.provider import SEED_SHA256, NemoWorkplaceProvider, _seed_digest, expected_state_json
 from taskcompendium.grading import exact_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_workplace import (
     DATASET_REVISION,
     DATASET_SPLIT_ROW_COUNTS,
     DATASET_SPLIT_SHA256,
+    PROVIDER,
     PROVIDER_GIT_REVISION,
     PROVIDER_REPOSITORY,
     ROW_SHA256,
@@ -34,9 +34,11 @@ from taskcompendium.importers.nemo_workplace import (
     import_row,
     select_row_zero,
     select_rows,
+    workplace_environment_config,
 )
-from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.lowering import lower_to_harbor, provider_class
 from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
+from taskcompendium.provider_sources import stage_git_provider
 from taskcompendium.submission import GradingAttempt, PlainText, SubmissionConvention
 from taskcompendium.verifier_registry import grade_answer
 
@@ -62,6 +64,19 @@ def trusted_provider_checkout(tmp_path_factory) -> Path:
     return checkout
 
 
+@pytest.fixture(scope="module")
+def provider_source(tmp_path_factory, trusted_provider_checkout) -> Path:
+    source = tmp_path_factory.mktemp("workplace-snapshot") / "provider"
+    stage_git_provider(PROVIDER, trusted_provider_checkout, source)
+    return source
+
+
+@pytest.fixture(scope="module")
+def workplace_provider(provider_source):
+    binding = workplace_environment_config(provider_source).tool_providers["workplace"]
+    return provider_class(binding, provider_source)
+
+
 @contextmanager
 def _serve_endpoint(endpoint: type[BaseHTTPRequestHandler]) -> Iterator[ThreadingHTTPServer]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), endpoint)
@@ -84,15 +99,15 @@ def _send_completion(handler: BaseHTTPRequestHandler, message: dict) -> None:
     handler.wfile.write(body)
 
 
-def _provider() -> NemoWorkplaceProvider:
-    return NemoWorkplaceProvider(seed_sha256=SEED_SHA256)
+def _provider(workplace_provider):
+    return workplace_provider(seed_sha256=workplace_provider.SEED_SHA256)
 
 
 def _source(data: bytes) -> tuple[bytes, dict]:
     return data, json.loads(data)
 
 
-async def _reward(specification: TaskSpec, convention: SubmissionConvention, provider: NemoWorkplaceProvider) -> float:
+async def _reward(specification: TaskSpec, convention: SubmissionConvention, provider) -> float:
     conversation = ConversationTrace(
         events=(*specification.context.events, TextMessage(role="assistant", content="Done."))
     )
@@ -105,13 +120,14 @@ async def _reward(specification: TaskSpec, convention: SubmissionConvention, pro
     return result.reward
 
 
-def test_workplace_import_pins_row_tool_surface_and_private_state(source_example: bytes, source_row: bytes):
+def test_workplace_import_pins_row_tool_surface_and_private_state(
+    source_example: bytes, source_row: bytes, provider_source
+):
     assert hashlib.sha256(source_example).hexdigest() == SOURCE_EXAMPLE_SHA256
     assert hashlib.sha256(source_row).hexdigest() == ROW_SHA256
     data, row = _source(source_row)
-    specification, convention, binding = import_row(data)
+    specification, convention, binding = import_row(data, provider_source)
     provider = binding.tool_providers["workplace"]
-    assert _seed_digest() == provider.seed_sha256
     assert specification.source.revision == DATASET_REVISION
     assert specification.answer_type.value == convention.answer_format.value == "state"
     assert convention.provider == "workplace"
@@ -125,9 +141,9 @@ def test_workplace_import_pins_row_tool_surface_and_private_state(source_example
     assert provider.provider.endswith(f"@{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider")
 
 
-def test_workplace_import_converts_every_pinned_example_row(source_example: bytes):
+def test_workplace_import_converts_every_pinned_example_row(source_example: bytes, provider_source):
     rows = select_rows(source_example)
-    imports = [import_row(row) for row in rows]
+    imports = [import_row(row, provider_source) for row in rows]
     specifications = [item.specification for item in imports]
 
     assert [spec.source.row for spec in specifications] == ["0", "1", "2", "3", "4"]
@@ -137,7 +153,9 @@ def test_workplace_import_converts_every_pinned_example_row(source_example: byte
     assert all("ground_truth" not in spec.model_dump_json() for spec in specifications)
 
 
-async def test_workplace_import_gradeable_empty_ground_truth_split_row(monkeypatch, source_row: bytes):
+async def test_workplace_import_gradeable_empty_ground_truth_split_row(
+    monkeypatch, source_row: bytes, provider_source, workplace_provider
+):
     row = json.loads(source_row)
     row["category"] = "workplace_assistant_analytics"
     row["ground_truth"] = []
@@ -145,36 +163,37 @@ async def test_workplace_import_gradeable_empty_ground_truth_split_row(monkeypat
     monkeypatch.setitem(DATASET_SPLIT_ROW_COUNTS, "train", 1)
     monkeypatch.setitem(DATASET_SPLIT_SHA256, "train", hashlib.sha256(data).hexdigest())
 
-    (workplace_import,) = import_dataset_split(data, "train")
+    (workplace_import,) = import_dataset_split(data, "train", provider_source)
     specification, convention, _ = workplace_import
-    provider = _provider()
+    provider = _provider(workplace_provider)
 
     assert specification.id == "nemo-workplace-train-0"
     assert specification.source.row == f"train:0:{hashlib.sha256(data).hexdigest()}"
     assert await _reward(specification, convention, provider) == 1.0
 
 
-def test_workplace_import_rejects_unpinned_row_and_changed_tools(monkeypatch, source_example: bytes, source_row: bytes):
+def test_workplace_import_rejects_unpinned_row_and_changed_tools(
+    monkeypatch, source_example: bytes, source_row: bytes, provider_source
+):
     data, row = _source(source_row)
     with pytest.raises(ValueError, match="pinned digest"):
         select_row_zero(source_example + b" ")
     with pytest.raises(ValueError, match="size limit"):
         select_row_zero(b" " * (SOURCE_EXAMPLE_MAX_BYTES + 1))
     with pytest.raises(ValueError, match="pinned raw digest"):
-        import_row(data + b" ")
+        import_row(data + b" ", provider_source)
     row["responses_create_params"]["tools"][0]["name"] = "wrong_tool"
     changed = json.dumps(row).encode()
     monkeypatch.setitem(ROW_SHA256_BY_ID, 0, hashlib.sha256(changed).hexdigest())
     with pytest.raises(ValueError, match="pinned provider"):
-        import_row(changed)
+        import_row(changed, provider_source)
 
 
-async def test_workplace_success_wrong_and_noop_state(source_row: bytes):
+async def test_workplace_success_wrong_and_noop_state(source_row: bytes, provider_source, workplace_provider):
     _, row = _source(source_row)
-    specification, convention, _ = import_row(source_row)
+    specification, convention, _ = import_row(source_row, provider_source)
     gold = row["ground_truth"]
-    expected = json.loads(expected_state_json(gold))
-    success, wrong, noop = (_provider() for _ in range(3))
+    success, wrong, noop = (_provider(workplace_provider) for _ in range(3))
     action = gold[0]
     await success.dispatch_action(action["name"], action["arguments"], "call-1")
     await wrong.dispatch_action(
@@ -185,17 +204,18 @@ async def test_workplace_success_wrong_and_noop_state(source_row: bytes):
     await noop.dispatch_action(
         "email_get_email_information_by_id", '{"email_id":"00000057","field":"subject"}', "call-1"
     )
-    assert success.canonical_state() == expected
     assert await _reward(specification, convention, success) == 1.0
     assert await _reward(specification, convention, wrong) == 0.0
     assert await _reward(specification, convention, noop) == 0.0
 
 
-async def test_workplace_tool_error_recovers_and_retains_call_order(source_row: bytes):
+async def test_workplace_tool_error_recovers_and_retains_call_order(
+    source_row: bytes, provider_source, workplace_provider
+):
     _, row = _source(source_row)
-    specification, convention, _ = import_row(source_row)
+    specification, convention, _ = import_row(source_row, provider_source)
     action = row["ground_truth"][0]
-    provider = _provider()
+    provider = _provider(workplace_provider)
     error = await provider.dispatch_action(action["name"], '{"email_id":"00000057","unknown":"x"}', "call-bad")
     success = await provider.dispatch_action(action["name"], action["arguments"], "call-good")
     assert [entry.call_id for entry in provider.trace] == ["call-bad", "call-good"]
@@ -203,11 +223,11 @@ async def test_workplace_tool_error_recovers_and_retains_call_order(source_row: 
     assert await _reward(specification, convention, provider) == 1.0
 
 
-async def test_workplace_concurrent_trials_start_from_fresh_seed(source_row: bytes):
+async def test_workplace_concurrent_trials_start_from_fresh_seed(source_row: bytes, provider_source, workplace_provider):
     _, row = _source(source_row)
-    specification, convention, _ = import_row(source_row)
+    specification, convention, _ = import_row(source_row, provider_source)
     action = row["ground_truth"][0]
-    first, second = _provider(), _provider()
+    first, second = _provider(workplace_provider), _provider(workplace_provider)
     await asyncio.gather(
         first.dispatch_action(action["name"], action["arguments"], "first"),
         second.dispatch_action(
@@ -221,10 +241,10 @@ async def test_workplace_concurrent_trials_start_from_fresh_seed(source_row: byt
 
 
 async def test_workplace_harbor_scripted_endpoint_recovers_after_tool_error(
-    tmp_path, trusted_provider_checkout, source_row: bytes
+    tmp_path, trusted_provider_checkout, source_row: bytes, provider_source
 ):
     data, row = _source(source_row)
-    specification, convention, binding = import_row(data)
+    specification, convention, binding = import_row(data, provider_source)
     task_dir = lower_to_harbor(
         specification,
         convention,
@@ -305,9 +325,9 @@ async def test_workplace_harbor_scripted_endpoint_recovers_after_tool_error(
 
 
 async def test_workplace_chat_tools_can_answer_text_from_observation(
-    tmp_path, trusted_provider_checkout, source_row: bytes
+    tmp_path, trusted_provider_checkout, source_row: bytes, provider_source
 ):
-    imported, _, binding = import_row(source_row)
+    imported, _, binding = import_row(source_row, provider_source)
     subject = "Task Update on Develop prototype for report generation"
     specification = TaskSpec(
         id="workplace-subject-answer",
@@ -379,8 +399,10 @@ async def test_workplace_chat_tools_can_answer_text_from_observation(
     assert result.agent_result.metadata["assistant_final"]["content"] == subject
 
 
-async def test_workplace_harbor_trials_are_fresh_and_concurrent(tmp_path, trusted_provider_checkout, source_row: bytes):
-    specification, convention, binding = import_row(source_row)
+async def test_workplace_harbor_trials_are_fresh_and_concurrent(
+    tmp_path, trusted_provider_checkout, source_row: bytes, provider_source
+):
+    specification, convention, binding = import_row(source_row, provider_source)
     task_dir = lower_to_harbor(
         specification,
         convention,

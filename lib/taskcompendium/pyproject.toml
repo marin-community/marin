@@ -11,15 +11,11 @@ dependencies = ["pydantic>=2.0", "tasktrove-verify"]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
-workplace = ["nemo-workplace @ git+https://github.com/marin-community/nemo_workplace@27b39001312617403021635f0492e120abc2cd34"]
 
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "pandas>=2.2"]
 
 [tool.uv.workspace]
-
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.uv.sources]
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
@@ -46,7 +42,7 @@ markers = [
 extend = "../../pyproject.toml"
 
 [tool.ruff.lint.isort]
-known-first-party = ["taskcompendium", "nemo_workplace"]
+known-first-party = ["taskcompendium"]
 
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
