@@ -10,5 +10,4 @@ prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
-# The isolated lock pins the tested RLVR sweep runtime.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "datakit-resume-step4-20260929-v18" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }

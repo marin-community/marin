@@ -135,7 +135,7 @@ def build_rl_step(tokenizer_revision: str, smoke: bool, sweep_arm: str | None = 
 @click.command(help=__doc__)
 @click.option("--tokenizer-revision", required=True, help="Published SFT model commit SHA on Hugging Face.")
 @click.option("--smoke", is_flag=True, help="Run one optimizer step with the production geometry and a 64-prompt batch.")
-@click.option("--sweep-arm", type=click.Choice(SWEEP_ARMS), help="Run one frozen loop/length penalty sweep arm.")
+@click.option("--sweep-arm", type=click.Choice(SWEEP_ARMS), help="Run one frozen sweep arm.")
 @rl_build_options
 def main(tokenizer_revision: str, smoke: bool, sweep_arm: str | None) -> ArtifactStep[SkyRLRun]:
     return build_rl_step(tokenizer_revision, smoke, sweep_arm)
