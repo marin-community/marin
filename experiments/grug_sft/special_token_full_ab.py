@@ -19,7 +19,7 @@ from rigging.log_setup import configure_logging
 
 from experiments.grug_sft.special_token_lr import train
 
-RUN_ID = "grug-67b-sft-20260929-special-token-lr-full-ab-4729"
+RUN_ID = "grug-67b-sft-20260929-special-token-lr-full-ab-4729-cpfix"
 MIX_PATH = Path(__file__).with_name("special_token_full_ab_mix.json")
 STORE_MANIFEST = "gs://marin-us-central2/grug_sft/stores/full-ab-packed-2026.09.29.json"
 STEPS = 4729
