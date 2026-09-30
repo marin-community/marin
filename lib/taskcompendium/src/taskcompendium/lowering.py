@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
+from taskcompendium.models import SCHEMA_VERSION, SHA256_PATTERN, AnswerType, TaskSpec
 from taskcompendium.path_validation import validate_relative_file_paths
 from taskcompendium.provider_sources import (
     PROVIDER_SOURCES_DIR,
@@ -74,7 +74,7 @@ class ToolBinding(BaseModel):
         if len(set(self.tools)) != len(self.tools) or any(not name for name in self.tools):
             raise ValueError("Tool binding requires unique nonempty tool names")
         for digest in (self.seed_sha256, self.tools_sha256):
-            if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            if not SHA256_PATTERN.fullmatch(digest):
                 raise ValueError("Tool binding requires lowercase SHA256 digests")
         return self
 
