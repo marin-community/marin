@@ -218,7 +218,7 @@ def select_lowerings(
     raise ValueError(f"Unknown selection policy: {policy}")
 
 
-def _required_state_provider(
+def _validate_provider_requirements(
     specification: TaskSpec, convention: SubmissionConvention, environment_config: HarborEnvironmentConfig
 ) -> str | None:
     """Validate host-chat requirements and locate a provider-state submission."""
@@ -256,7 +256,7 @@ def validate_environment_candidate(
     trusted_provider_sources: dict[str, Path] | None,
 ) -> None:
     """Check requirements and pinned provider implementations before selection."""
-    _required_state_provider(specification, convention, environment_config)
+    _validate_provider_requirements(specification, convention, environment_config)
     with tempfile.TemporaryDirectory(prefix="taskcompendium-candidate-") as temporary:
         sources: dict[str, Path] = {}
         for name, binding in environment_config.tool_providers.items():
@@ -278,7 +278,7 @@ def validate_environment_config(
     provider_sources: dict[str, Path] | None = None,
 ) -> None:
     """Check all selected provider implementations against their pinned surfaces."""
-    state_provider = _required_state_provider(specification, convention, environment_config)
+    state_provider = _validate_provider_requirements(specification, convention, environment_config)
     for name, binding in environment_config.tool_providers.items():
         source = provider_sources[name] if provider_sources is not None and name in provider_sources else None
         validate_provider_surface(binding, source)
