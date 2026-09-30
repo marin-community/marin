@@ -110,3 +110,48 @@ For the campaign:
 
 (`m30c-gemmbench-01` was invalid: an np.float64 scale promoted operand B to f32, so it timed TF32-class
 GEMMs at ~0.8 PF/s. Cancelled and fixed in `gemm_bench.py`.)
+
+## M30C-005 Direction (a): non-MoE memory-bound passes (2026-09-30)
+
+Inventory (Sep 24 trace, `fusion_detail.py`, `.remat` = XLA HloRematerialization clones that A's
+host-offload flag may delete): norms bwd 0.346 s, norms remat 0.161 (+0.087 XLA-remat), norms fwd
+0.148, short conv 0.187 (Pallas; bwd 0.119 at ~2.2 TB/s, 6.7 passes vs a 3-pass floor), attention
+elementwise fwd 0.105 / bwd 0.095 / remat 0.075 (+0.148 XLA-remat), shared-MLP elementwise 0.05
+(+0.11 XLA-remat). Total fusion time 1.36 s against 1.05 s at 7 TB/s for the bytes moved: kernel
+inefficiency is worth ~0.3 s; the rest needs fewer passes.
+
+Findings:
+- The GatedNorm sigmoid runs as its own pass (`gemm_fusion_dot.*`, 0.066 s/step fwd+remat): XLA's
+  Triton GemmFusion takes the sigmoid into the rank-128 GEMM's fusion, the autotuner falls back to
+  cuBLAS, and the leftover epilogue stays a separate kernel. Binary epilogues (`x * gate`) are never
+  fused toward users, so XLA cannot reach one pass here.
+- The two RMSNorm backward fusions with the weight-gradient column reduction run at 2.7 TB/s
+  (0.115 s/step; 0.071 s above roofline).
+- The backward sums the input gradients of every projection that reads the same normalized input
+  (4 full-width bf16 addends for attention, 6 for the MLP side) in one elementwise pass.
+
+Component benchmark `block_bench.py` (one GB200, hero per-GPU shape 16x4096xd6144, real
+`Block.__call__` with FA4, short convs, gated norms and shared experts; a stand-in replaces the routed
+experts; checkpointed fwd+bwd), jobs `m30c-blockbench-02..04`:
+- **Projection fusion (H-C2/H-C3 in code) is rejected.** Fused Q/K/V (+gate) and shared-expert gate/up
+  keep the forward bitwise identical and cut the accumulation pass (-1.0 to -1.2 ms/layer), but the
+  backward concatenation of the cotangents costs more (+1.6 ms `wrapped_concatenate`, +1 ms slices and
+  multiplies; with the attention gate included XLA puts the concatenation on the reduction emitter,
+  +6 ms). GEMM time did not drop. Net per layer: all fusions +1.5 to +2.5 ms, Q/K/V only +1.0 to +1.5,
+  shared only +0 to +1. Kept as `model_fused_projections.py` for the record; model.py reverted.
+- **`--xla_gpu_enable_triton_gemm=false`**: -0.85 ms/layer in three paired runs (123.9 -> 123.0 ms,
+  run-to-run sd ~0.3), -0.98 in the earlier job. Memory-bound kernel time drops 1.9 ms/layer (the
+  sigmoid fuses into the multiply; GemmRewriter turns the gradient accumulation into cuBLAS beta=1
+  epilogues), GEMM and FA4 time rise ~1 ms (denser tensor work under the power cap, or the beta reads).
+  At hero scale that is ~0.04 s/step: flag-only, but below the 0.15 MFU acceptance bar on its own.
+
+Custom-kernel candidate (not started; needs orchestrator go-ahead): fused RMSNorm + GatedNorm forward
+(one kernel per token block: pass 1 streams x for the row sum of squares and (x*w) @ W_down on tensor
+cores; pass 2 re-reads x, computes sigmoid(silu(h) @ W_up) and writes the output, plus the gate for the
+backward). Current fwd chain ~1.5 ms per norm call vs ~0.35-0.45 ms at roofline; 4 calls per layer
+(attention and MLP norms, forward and remat) -> ~0.2 s/step. The backward keeps cuBLAS for the
+weight-gradient GEMMs; fusing its elementwise passes adds maybe ~0.1 s. Effort: Pallas-Triton kernel
+(Mosaic GPU fails layout inference on GB200 per the short-conv notes), custom_vjp saving (rstd, h, g),
+GPU correctness tests, then a rack screen: ~1-2 days. Numerics change at bf16 rounding points
+(allowed; needs the rack loss check). Short-conv backward with a register/SMEM carry: ~0.08 s/step,
+needs CUDA or CuTe DSL, similar effort.

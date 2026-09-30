@@ -1,3 +1,4 @@
+# Rejected candidate (M30C-005): fused Q/K/V and shared-expert gate/up projections. Kept for the block benchmark.
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -546,9 +547,14 @@ class CausalSelfAttention(eqx.Module):
         # stay in it, the attention output returns to it, and `w_o` writes it.
         residual_seq_axis = _sequence_axis_of(x)
 
-        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        # Q, K and V share one projection GEMM. Its backward is one input-gradient GEMM that
+        # accumulates all three in fp32, instead of three full-width bf16 outputs that a separate
+        # fusion sums. The checkpoint keeps the three weights. The head gate stays a separate GEMM:
+        # its cotangent comes out of a reduction, and concatenating it with the others puts the
+        # whole cotangent concatenation on XLA's slow reduction emitter.
+        q_width, kv_width = self.w_q.shape[1], self.w_k.shape[1]
+        qkv = jnp.einsum("bsh,hd->bsd", x, jnp.concatenate([self.w_q, self.w_k, self.w_v], axis=1))
+        q_flat, k_flat, v_flat = jnp.split(qkv, [q_width, q_width + kv_width], axis=-1)
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -758,6 +764,35 @@ class DenseMLP(eqx.Module):
         # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
         # for why the unflattened tensor cannot keep the fused token tuple.
         return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
+
+
+@named_call(name="DenseMLP")
+def shared_expert_outputs(experts: tuple[DenseMLP, ...], x: Float[Array, "B S D"]) -> list[Float[Array, "B S D"]]:
+    """Outputs of SiLU-gated shared experts that read the same input, with one input GEMM.
+
+    One GEMM over the concatenated gate and up weights of every expert replaces a gate and an up
+    GEMM per expert. Each output column is the same dot product as before, so the forward values
+    do not change. In the backward, the input gradient becomes one GEMM that accumulates every
+    projection in fp32, instead of one full-width bf16 output per projection summed by a separate
+    fusion. The down projections stay per expert, so the caller adds the outputs in the original
+    order. Parameters stay per expert.
+    """
+    width = experts[0].w_gate.shape[1]
+    b, s, _ = x.shape
+    x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
+    gate_up_weights = jnp.concatenate([w for expert in experts for w in (expert.w_gate, expert.w_up)], axis=1)
+    # `split` rather than slicing: its transpose is one concatenate, where slices transpose to
+    # zero-padded tensors that the backward then adds.
+    gate_up = jnp.split(
+        jnp.einsum("td,dm->tm", x_flat, gate_up_weights), [width * i for i in range(1, 2 * len(experts))], axis=-1
+    )
+    outputs = []
+    for i, expert in enumerate(experts):
+        gate, up = gate_up[2 * i], gate_up[2 * i + 1]
+        out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, expert.w_down, out_sharding=_token_spec())
+        # Same residual-layout restore as `DenseMLP.__call__`.
+        outputs.append(reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x)))
+    return outputs
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -1188,8 +1223,8 @@ class Block(eqx.Module):
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
         mlp_out, router_stats = self.mlp(mlp_in, token_valid)
         if self.shared is not None:
-            for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+            for shared_out in shared_expert_outputs(self.shared, mlp_in):
+                mlp_out = mlp_out + shared_out
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
