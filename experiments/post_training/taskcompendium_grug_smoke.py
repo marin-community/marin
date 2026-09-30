@@ -46,7 +46,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "b8c07f7df1df65525abbfdbcd1572318ba11c42f"
-TASKCOMPENDIUM_COMMIT = "b4eadccbacfa7e3cbb7588e9b891d8763383a329"
+TASKCOMPENDIUM_COMMIT = "fe513c2446bfa9b2ecfe1326aeb2d4924fd852b8"
 TASKCOMPENDIUM_REQUIREMENT = (
     "taskcompendium[harbor,workplace] @ "
     f"git+https://github.com/marin-community/marin.git@{TASKCOMPENDIUM_COMMIT}#subdirectory=lib/taskcompendium"
