@@ -135,3 +135,20 @@ Trace arms (program: stack HEAD + `--xla_gpu_enable_host_memory_offloading=true
   `research/mcwitt/mfu30-stack-pipelined` @ `7393a9ae26`.
 - `m30c-stackseq-trace-01` (`/mwittmann/m30c-stackseq-trace-01-coord`, port 33303) from
   `research/mcwitt/mfu30-stack` @ `4ee7986fb4` (code identical to `8eff7b8ec4`).
+
+### Short conv (B) and the final program (2026-09-30)
+
+B's Triton short conv (`d466f12f3f..5d64137a67`, handoff patch `sconv_on_stack.patch` @ `9303d20b97`) is on
+both branches behind `--sconv-implementation triton_gpu`, default off (the default stays the Pallas
+kernel), so the queued trace arms' commits keep their meaning: `research/mcwitt/mfu30-stack` @ `cc55c78f45`,
+`research/mcwitt/mfu30-stack-pipelined` @ `a7cc657e28`; the two differ only in `ep_ragged_all_to_all.py`.
+CPU: short-conv + gated norm tests 48 passed (12 GPU-only skipped), hero tests 72 passed; lint clean.
+
+Endgame order (orchestrator): (1) `m30c-stackpipe-trace-01` vs `m30c-stackseq-trace-01` pick the D lineage;
+(2) final program = winner + `--sconv-implementation triton_gpu` (+ A's carry-prefetch flag if its paired arm
+wins), with its own trace arm, since PGLE matches instruction names; (3) `pgle_build.sh` from that trace;
+(4) scored PGLE run + a repeat. Final flags: `--xla_gpu_enable_host_memory_offloading=true
+--xla_gpu_enable_triton_gemm=false` [+ A's carry-prefetch flag] [+ the PGLE flag in step 4]; CLI
+`--gated-norm-implementation pallas_gpu --sconv-implementation triton_gpu`. B reports the attention backward
+is run-to-run nondeterministic (~1e-5 rel-rms), so same-code runs are not bitwise; the fidelity reference is
+the rounding-perturbation band from `m30c-grnflag-01`.
