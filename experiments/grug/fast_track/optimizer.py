@@ -213,6 +213,8 @@ _OKLS_FAMILIES: dict[str, re.Pattern] = {
 # Softmax-attention (``stacked_blocks``) query and key projections: GQA ``w_q``/``w_k``, MLA ``w_q``/``w_uk`` (and
 # the DIFF pair). MLA's ``w_dkv`` is left out: it feeds the values as well.
 _SOFTMAX_QK = re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|k|uk|q2|uk2)$")
+# Query/key projections of every attention layer: KDA ``w_q`` / ``w_k`` and MLA ``w_q`` / ``w_uk``.
+_QK_PROJECTIONS = re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(q|k|uk)$")
 
 
 _MEMORY_VALUES = re.compile(r"memory\.\d+\.values")
@@ -438,7 +440,7 @@ LATENT_PROJ_UPDATES = ("muonh", "frozen", "stiefel")
 _LATENT_PROJ = re.compile(r"(?:^|\.)w_latent_(down|up)$")
 _FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask|embed2_sign_table)$")
 # The groups built by ``muonh_transform_at`` (the ones ``muonh_retraction`` applies to).
-_MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk"})
+_MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk", "muonh_qk"})
 _HYPERBALL_GROUPS = _MUONH_GROUPS | {"adamh", "sinkhornh"}
 _ROUTER_GROUPS = ("adam", "muonh")
 
@@ -1084,6 +1086,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """MuonH LR multiplier for the attention-projection family (``_OKLS_FAMILIES['attn']``)."""
     muonh_routed_lr_mult: float = 1.0
     """MuonH LR multiplier for the routed-expert family (``_OKLS_FAMILIES['routed']``)."""
+    muonh_qk_lr_mult: float = 1.0
+    """MuonH LR multiplier for the query/key projections (``_QK_PROJECTIONS``: KDA ``w_q``/``w_k``, MLA
+    ``w_q``/``w_uk``). Tests whether q/k norms make those matrices want a gentler or a bolder step."""
+    muonh_qk_momentum: float | None = None
+    """MuonH momentum for the query/key projections (None: ``momentum``)."""
     muonh_routed_momentum: float | None = None
     """MuonH momentum for the routed-expert family (None: ``momentum``). Each expert sees ~1/64 of the tokens, so its
     per-step gradient is mostly noise; a longer average may suit it better than the dense matrices."""
@@ -1402,6 +1409,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     _match_named_update_sharding(),
                 ),
                 "muonh_attn": muonh_transform_at(learning_rate * self.muonh_attn_lr_mult, 2),
+                "muonh_qk": muonh_transform_at(
+                    learning_rate * self.muonh_qk_lr_mult, 4, momentum=self.muonh_qk_momentum
+                ),
                 "muonh_routed": muonh_transform_at(
                     learning_rate * self.muonh_routed_lr_mult, 3, momentum=self.muonh_routed_momentum
                 ),
@@ -1534,6 +1544,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     return "muon_free"
                 if self.upper_qk_lr_mult != 1.0 and _SOFTMAX_QK.search(path_lower):
                     return "upper_qk"
+                qk_own_group = self.muonh_qk_lr_mult != 1.0 or self.muonh_qk_momentum is not None
+                if qk_own_group and _QK_PROJECTIONS.search(path_lower):
+                    return "muonh_qk"
                 if self.muonh_attn_lr_mult != 1.0 and _OKLS_FAMILIES["attn"].search(path_lower):
                     return "muonh_attn"
                 routed_own_group = self.muonh_routed_lr_mult != 1.0 or self.muonh_routed_momentum is not None

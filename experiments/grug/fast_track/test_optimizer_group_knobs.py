@@ -81,3 +81,22 @@ def test_embed2_update_is_validated():
         GrugMoeMuonHConfig(embed2_update="lion")
     with pytest.raises(ValueError):
         GrugMoeMuonHConfig(embed2_update="sinkhorn", embed2_row_sparse_adam=True)
+
+
+def test_qk_group_takes_its_own_lr_and_leaves_other_matrices_alone():
+    mesh, model = t._model(**_BIGRAM)
+    params = eqx.filter(model, eqx.is_inexact_array)
+    mask = GrugMoeMuonHConfig(muonh_qk_lr_mult=2.0).create_mask(params)
+    attn = mask.kda_blocks.stacked.attn
+    assert attn.w_q == "muonh_qk" and attn.w_k == "muonh_qk"
+    assert attn.w_v == "muonh" and attn.w_o == "muonh"
+    with jax.set_mesh(mesh):
+        base = _two_steps(GrugMoeMuonHConfig(), params)
+        bold = _two_steps(GrugMoeMuonHConfig(muonh_qk_lr_mult=2.0), params)
+    np.testing.assert_allclose(
+        np.asarray(bold.kda_blocks.stacked.attn.w_v), np.asarray(base.kda_blocks.stacked.attn.w_v), rtol=1e-6
+    )
+    ratio = np.linalg.norm(np.asarray(bold.kda_blocks.stacked.attn.w_q)) / np.linalg.norm(
+        np.asarray(base.kda_blocks.stacked.attn.w_q)
+    )
+    assert 1.5 < ratio < 2.5
