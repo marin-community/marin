@@ -95,9 +95,7 @@ class PredictedActionVerifier(Verifier):
         ToolCallComparatorConfig(self.numeric_tolerance)
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, ActionSubmission):
             raise TypeError("Predicted-action verifier requires an action submission")
         reward = compare(self.expected_calls, submission.message, ToolCallComparatorConfig(self.numeric_tolerance))

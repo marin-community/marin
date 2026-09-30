@@ -41,9 +41,7 @@ class Verifier(BaseModel, ABC):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     @abstractmethod
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         """Grade a submission using this verifier's configuration."""
 
 
@@ -61,9 +59,7 @@ class ExactAnswerVerifier(Verifier):
             raise ValueError("An exact answer is required")
         return value
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, (TextSubmission, StateSubmission)) or not isinstance(submission.value, str):
             raise TypeError("Exact-answer verifier requires a string value")
         contract = ExactSpec(
@@ -90,9 +86,7 @@ class NumericAnswerVerifier(Verifier):
             raise ValueError(f"Invalid numeric verifier contract: {error}") from error
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("Numeric verifier requires a text submission")
         try:
@@ -125,9 +119,7 @@ class StructuredExactVerifier(Verifier):
 
     expected: JsonValue
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, StateSubmission):
             raise TypeError("Structured exact verifier requires a state submission")
         return GradeResult(Outcome.GRADED, float(_structured_equal(self.expected, submission.value)))
