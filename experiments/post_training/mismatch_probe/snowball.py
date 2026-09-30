@@ -65,6 +65,7 @@ def snowball_recipe(
     capture: bool = False,
     timing_modes: tuple[str, ...] = (),
     extra_modes: tuple[str, ...] = (),
+    train_numerics: str | None = None,
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
     if campaign is Campaign.MISMATCH:
@@ -79,6 +80,7 @@ def snowball_recipe(
         trainer_modes=modes,
         capture_layers=CAPTURE_LAYERS if capture else (),
         timing_modes=timing_modes,
+        train_numerics=train_numerics,
     )
     probe["generator"]["sampling_params"]["seed"] = settings.seed
     config = {
@@ -166,6 +168,7 @@ def build_spec(
     capture: bool = False,
     timing_modes: tuple[str, ...] = (),
     extra_modes: tuple[str, ...] = (),
+    train_numerics: str | None = None,
 ) -> tuple[SkyRLSpec, IrisSkyRLExecution]:
     if campaign is Campaign.MISMATCH and (settings.updates != (0,) or routing is not Routing.NATIVE):
         raise ValueError("the mismatch campaign scores starting weights in all modes without training updates")
@@ -185,6 +188,7 @@ def build_spec(
                 capture=capture,
                 timing_modes=timing_modes,
                 extra_modes=extra_modes,
+                train_numerics=train_numerics,
             ),
             runtime=SkyRLRuntime(profile=SNOWBALL_RECIPE.profile),
             model=ArtifactHfModel(
@@ -253,6 +257,8 @@ def build_run(**kwargs) -> ArtifactStep[SkyRLRun]:
 @click.option("--capture/--no-capture", default=False, help="Record trainer regions at the capture layers.")
 @click.option("--timing-mode", "timing_modes", multiple=True, help="Time forward + backward for this mode.")
 @click.option("--extra-mode", "extra_modes", multiple=True, help="Score this trainer mode as well (a candidate).")
+@click.option("--train-numerics", help="MarinSkyRL numerics set the policy trains and scores under by default.")
+@click.option("--drift-updates", type=click.IntRange(min=1), default=1, show_default=True, help="Drift updates scored.")
 @rl_build_options
 def main(
     campaign: str,
@@ -275,6 +281,8 @@ def main(
     capture: bool,
     timing_modes: tuple[str, ...],
     extra_modes: tuple[str, ...],
+    train_numerics: str | None,
+    drift_updates: int,
 ) -> ArtifactStep[SkyRLRun]:
     selected = Campaign(campaign)
     return build_run(
@@ -282,7 +290,7 @@ def main(
             seed,
             prompt_count,
             samples_per_prompt,
-            {Campaign.MISMATCH: (0,), Campaign.DRIFT: (0, 1)}.get(selected, (0, steps)),
+            {Campaign.MISMATCH: (0,), Campaign.DRIFT: tuple(range(drift_updates + 1))}.get(selected, (0, steps)),
             keep_fraction,
             cache_mode,
             reuse_probe,
@@ -301,6 +309,7 @@ def main(
         capture=capture,
         timing_modes=timing_modes,
         extra_modes=extra_modes,
+        train_numerics=train_numerics,
     )
 
 

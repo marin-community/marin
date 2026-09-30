@@ -92,10 +92,13 @@ def probe_block(
     trainer_modes: tuple[str, ...] = REPLAY_MODES,
     capture_layers: tuple[int, ...] = (),
     timing_modes: tuple[str, ...] = (),
+    train_numerics: str | None = None,
 ) -> dict:
     """Render fixed-token collection settings for a synchronous Megatron recipe.
 
-    Capture layers add the native_capture mode. Sampling is the full distribution at temperature
+    Capture layers add the native_capture mode. ``train_numerics`` names a MarinSkyRL numerics set that
+    the policy trains and scores under by default; probe modes still score from the trainer's own
+    numerics. Sampling is the full distribution at temperature
     one; MarinSkyRL applies the behavior-logprob sampling program to probe runs, which sets
     ``min_tokens`` to zero, so vLLM reports the probability of the distribution the trainer scores.
     """
@@ -116,6 +119,7 @@ def probe_block(
                 "reread_again": settings.cache_mode != "on",
                 "capture_layers": list(capture_layers),
                 "timing_modes": list(timing_modes),
+                "train_numerics": train_numerics,
             },
         },
         "generator": {

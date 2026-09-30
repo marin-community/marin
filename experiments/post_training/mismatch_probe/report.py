@@ -231,6 +231,8 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
             # Same mode before and after the update: under replay the routes are fixed, so this isolates
             # the weight change from routing flips.
             add(f"{mode}_drift_after_{update}", _trainer_scoring(update, mode), _trainer_scoring(0, mode))
+            if update > 1:
+                add(f"{mode}_step_drift_{update}", _trainer_scoring(update, mode), _trainer_scoring(update - 1, mode))
     return comparisons
 
 
