@@ -133,3 +133,24 @@ XLA remat (0.35 s): orthogonal to H-A4.
 
 Arm `m30a-hmo-01` (flag on, profiled, remat VLOG) queued. Prediction: remat count ~0, -0.25 to -0.45 s/step,
 peak +5-10 GiB, first-step loss identical. Next: + pipelined carry prefetch; then H-A1.
+
+## M30-004 Agent B: three bitwise-exact MoE marshal changes stacked (2026-09-30)
+
+Branch `research/mcwitt/mfu30-routing` (logbook `mfu30-routing.md`). Each change gates bitwise-equal to main
+on GB200x4 (output, drops, grads of x / combine weights / w13 / w2; drops, padding, one-hot, hero shard shapes):
+(A) inverse routing `d1ccdd9959` (port of `c2b3a4e8db`: three argsorts -> index scatter), +0.3% per MoE layer;
+(B) chained ragged-a2a cotangents `c67ee1f965` (disjoint chunk writes were differentiated as an overwrite:
+a [TK,H] select + add + zero fill per layer), A+B +2.4-3.4%, compiler temp -1.37 GB;
+(C) unfilled transport buffers `e612b34244` (a Triton kernel that writes nothing, loop-carried so XLA cannot
+hoist and copy it; dropped slots get weight 0), A+B+C +4.4-4.8% per layer, +6.1% in a 3-layer rematted scan.
+The trace's "mask `or`" ops are the SwiGLU backward packing gate/up pairs (~7 TB/s). Arm `m30b-unfilled-01`
+(A+B+C, profiled) queued; predicted -0.2 to -0.25 s/step, loss equal to seed-0 control if the step is deterministic.
+
+**Fidelity ruling (orchestrator, applies to all agents):** "numerically ~equal" admits rounding, precision
+and reassociation changes (f32 instead of bf16 intermediates, reduction order, algebraically identical
+gradient formulas) provided loss stays in the same-code band against the seed-0 control. It excludes
+training-semantics changes: which tokens drop, capacity or chunking that alters drops, quantization.
+
+**HBM budget order** (headroom ~46 GiB at MEM_FRACTION 0.81, ~35 at 0.75; A's analysis): H-A4 ~10 GiB
+(~50 ms/GiB), then B's saved latent MoE output ~19 GiB for a SonicMoE-style backward (~25-30 ms/GiB,
+unmeasured), then H-A1 on-device optimizer state 34.6 GiB (~8 ms/GiB) only if room remains.
