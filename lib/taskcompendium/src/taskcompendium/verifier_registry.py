@@ -21,7 +21,6 @@ from taskcompendium.submission import (
     GradingAttempt,
     SubmissionConvention,
     SubmissionFailure,
-    SubmissionFailurePolicy,
 )
 from taskcompendium.verifiers.mathematical import MathematicalAnswerVerifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
@@ -56,12 +55,10 @@ def validate_verifier(specification: VerifierSpec) -> None:
 async def grade_answer(
     specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt
 ) -> GradeResult:
-    """Extract once, then grade the submitted value against a private verifier."""
+    """Grade a task attempt, assigning zero reward to invalid agent submissions."""
     try:
         submission = await convention.extract(attempt)
     except SubmissionFailure as error:
-        if convention.submission_failure_policy == SubmissionFailurePolicy.ZERO_REWARD:
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
-        raise ValueError(f"Unsupported submission-failure policy: {convention.submission_failure_policy}") from error
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
     verifier = resolve_verifier(specification.verifier)
     return await verifier.grade(submission, specification=specification.verifier, attempt=attempt)
