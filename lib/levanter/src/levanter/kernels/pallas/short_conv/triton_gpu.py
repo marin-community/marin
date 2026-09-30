@@ -14,10 +14,11 @@ registers as loop-carried values. Each row of every tensor is read once from HBM
 ``W - 1`` rows per chunk, so the traffic sits at the floor: forward reads ``x`` and writes ``y``;
 backward reads ``x`` and ``dy`` and writes ``dx`` and one fp32 ``dw`` partial per chunk.
 
-Numerics match the Pallas kernels. With ``exact`` set, every multiply and add rounds to the
-activation dtype in the reference's order: ascending lags forward, descending lags then tap 0
-for ``dx``. The forward and ``dx`` are then bit-identical to ``short_conv_reference``. ``dw``
-accumulates in fp32 per chunk; the caller sums the partials.
+Numerics match the Pallas kernels. With ``exact`` set (bfloat16 only), every multiply and add
+rounds to bfloat16 in the reference's order: ascending lags forward, descending lags then tap 0
+for ``dx``, with packed bf16 PTX instructions so the compiler cannot fuse them. The forward and
+``dx`` are then bit-identical to ``short_conv_reference``. Without it, taps accumulate in fp32.
+``dw`` accumulates in fp32 per chunk; the caller sums the partials.
 
 The kernels handle ``kernel_size == 4`` only, the hero's width.
 """
@@ -56,8 +57,12 @@ def _channel_block(channels: int) -> int | None:
     return None
 
 
-def triton_short_conv_shapes_supported(weight_shape: tuple[int, ...], x_shape: tuple[int, ...]) -> str | None:
-    """Returns None when the kernels can run these shapes, else a reason."""
+def triton_short_conv_shapes_supported(
+    weight_shape: tuple[int, ...], x_shape: tuple[int, ...], dtype, exact_reference_rounding: bool
+) -> str | None:
+    """Returns None when the kernels can run these shapes and dtype, else a reason."""
+    if exact_reference_rounding and jnp.dtype(dtype) != jnp.dtype(jnp.bfloat16):
+        return f"exact reference rounding is implemented for bfloat16 only, got {jnp.dtype(dtype)}"
     if len(x_shape) != 3 or len(weight_shape) != 2:
         return f"expected weight [W, C] and x [B, S, C], got {weight_shape} and {x_shape}"
     width, weight_channels = weight_shape
@@ -76,10 +81,31 @@ def triton_short_conv_shapes_supported(weight_shape: tuple[int, ...], x_shape: t
 if triton is not None and tl is not None:
 
     @triton.jit
-    def _round(value, dtype: tl.constexpr, exact: tl.constexpr):
+    def _mul(a, b, exact: tl.constexpr):
+        """``a * b``. Exact: one bf16 rounding per multiply, as the reference rounds each op."""
         if exact:
-            return value.to(dtype).to(tl.float32)
-        return value
+            # Inline PTX, because LLVM otherwise folds the f32 round trips of the reference's
+            # per-op rounding into bf16 arithmetic and then contracts a multiply and the
+            # following add into one FMA, which rounds once where the reference rounds twice.
+            product = tl.inline_asm_elementwise(
+                "mul.rn.bf16x2 $0, $1, $2;", "=r,r,r", [a, b], dtype=tl.bfloat16, is_pure=True, pack=2
+            )
+        else:
+            product = a.to(tl.float32) * b.to(tl.float32)
+        return product
+
+    @triton.jit
+    def _add(a, b, exact: tl.constexpr):
+        """``a + b``. Exact: one bf16 rounding per add. For bf16 operands this equals the
+        reference's fp32 add then bf16 rounding: the fp32 sum is exact whenever the rounding
+        to bf16 can depend on it."""
+        if exact:
+            total = tl.inline_asm_elementwise(
+                "add.rn.bf16x2 $0, $1, $2;", "=r,r,r", [a, b], dtype=tl.bfloat16, is_pure=True, pack=2
+            )
+        else:
+            total = a + b
+        return total
 
     @triton.jit
     def _row(base_ptr, row, seq_len: tl.constexpr, channels: tl.constexpr, cols):
@@ -93,18 +119,13 @@ if triton is not None and tl is not None:
         return tl.load(seg_ptr + row, mask=inside, other=-1)
 
     @triton.jit
-    def _tap(x_prev, seg_prev, seg_cur, w_lag, dtype: tl.constexpr, exact: tl.constexpr):
-        """``w_lag * x_prev``, dropped across a document boundary, rounded like the reference."""
-        kept = tl.where(seg_prev == seg_cur, x_prev, 0.0).to(tl.float32)
-        return _round(w_lag * kept, dtype, exact)
-
-    @triton.jit
     def _conv_row(x0, s0, x1, s1, x2, s2, x3, s3, w0, w1, w2, w3, dtype: tl.constexpr, exact: tl.constexpr):
-        # Ascending lags, the reference's order.
-        acc = _round(w0 * x0.to(tl.float32), dtype, exact)
-        acc = _round(acc + _tap(x1, s1, s0, w1, dtype, exact), dtype, exact)
-        acc = _round(acc + _tap(x2, s2, s0, w2, dtype, exact), dtype, exact)
-        acc = _round(acc + _tap(x3, s3, s0, w3, dtype, exact), dtype, exact)
+        # Ascending lags, the reference's order. A tap across a document boundary reads zero
+        # before the multiply, as the reference masks the shifted input.
+        acc = _mul(w0, x0, exact)
+        acc = _add(acc, _mul(w1, tl.where(s1 == s0, x1, 0.0), exact), exact)
+        acc = _add(acc, _mul(w2, tl.where(s2 == s0, x2, 0.0), exact), exact)
+        acc = _add(acc, _mul(w3, tl.where(s3 == s0, x3, 0.0), exact), exact)
         return acc.to(dtype)
 
     @triton.jit
@@ -126,10 +147,10 @@ if triton is not None and tl is not None:
         x_base = x_ptr + batch * seq_len * channels
         out_base = out_ptr + batch * seq_len * channels
         seg_base = seg_ptr + batch * seq_len
-        w0 = tl.load(w_ptr + cols).to(tl.float32)
-        w1 = tl.load(w_ptr + channels + cols).to(tl.float32)
-        w2 = tl.load(w_ptr + 2 * channels + cols).to(tl.float32)
-        w3 = tl.load(w_ptr + 3 * channels + cols).to(tl.float32)
+        w0 = tl.load(w_ptr + cols)
+        w1 = tl.load(w_ptr + channels + cols)
+        w2 = tl.load(w_ptr + 2 * channels + cols)
+        w3 = tl.load(w_ptr + 3 * channels + cols)
         # x at t-1, t-2, t-3 and their segment ids; outside the sequence reads as a zero row
         # whose segment id matches nothing.
         x1 = _row(x_base, start - 1, seq_len, channels, cols)
@@ -163,11 +184,14 @@ if triton is not None and tl is not None:
 
     @triton.jit
     def _dx_row(d0, s0, d1, s1, d2, s2, d3, s3, w0, w1, w2, w3, dtype: tl.constexpr, exact: tl.constexpr):
-        """``dx[u]`` from ``dy[u..u+3]``: descending lags, then tap 0 (the reference transpose's order)."""
-        acc = tl.where(s3 == s0, _round(w3 * d3.to(tl.float32), dtype, exact), 0.0)
-        acc = _round(acc + tl.where(s2 == s0, _round(w2 * d2.to(tl.float32), dtype, exact), 0.0), dtype, exact)
-        acc = _round(acc + tl.where(s1 == s0, _round(w1 * d1.to(tl.float32), dtype, exact), 0.0), dtype, exact)
-        acc = _round(acc + _round(w0 * d0.to(tl.float32), dtype, exact), dtype, exact)
+        """``dx[u]`` from ``dy[u..u+3]``: descending lags, then tap 0 (the reference transpose's order).
+
+        The transpose masks after the multiply, the mirror of the forward.
+        """
+        acc = tl.where(s3 == s0, _mul(w3, d3, exact), 0.0)
+        acc = _add(acc, tl.where(s2 == s0, _mul(w2, d2, exact), 0.0), exact)
+        acc = _add(acc, tl.where(s1 == s0, _mul(w1, d1, exact), 0.0), exact)
+        acc = _add(acc, _mul(w0, d0, exact), exact)
         return acc.to(dtype)
 
     @triton.jit
@@ -197,10 +221,10 @@ if triton is not None and tl is not None:
         dy_base = dy_ptr + batch * seq_len * channels
         dx_base = dx_ptr + batch * seq_len * channels
         seg_base = seg_ptr + batch * seq_len
-        w0 = tl.load(w_ptr + cols).to(tl.float32)
-        w1 = tl.load(w_ptr + channels + cols).to(tl.float32)
-        w2 = tl.load(w_ptr + 2 * channels + cols).to(tl.float32)
-        w3 = tl.load(w_ptr + 3 * channels + cols).to(tl.float32)
+        w0 = tl.load(w_ptr + cols)
+        w1 = tl.load(w_ptr + channels + cols)
+        w2 = tl.load(w_ptr + 2 * channels + cols)
+        w3 = tl.load(w_ptr + 3 * channels + cols)
         # Row r's dx needs dy at r..r+3; its dw terms need x at r..r-3. Carry x behind
         # (xb1..xb3) and dy ahead (d0 = row r, d1, d2), each with its segment ids.
         xb1 = _row(x_base, start - 1, seq_len, channels, cols)

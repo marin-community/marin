@@ -376,7 +376,9 @@ def short_conv(
             if not triton_short_conv_available():
                 reason = "Triton backend unavailable or not running on a GPU"
             else:
-                reason = triton_short_conv_shapes_supported(weight.shape, (x.shape[0], triton_local_seq, x.shape[2]))
+                reason = triton_short_conv_shapes_supported(
+                    weight.shape, (x.shape[0], triton_local_seq, x.shape[2]), x.dtype, exact_reference_rounding
+                )
             if reason is not None:
                 if explicit_single:
                     raise RuntimeError(f"short_conv implementation 'triton_gpu' is unusable: {reason}")
