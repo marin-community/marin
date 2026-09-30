@@ -108,6 +108,7 @@ def build_diagnostic_run(
     restore_from: str | None = None,
     moe_implementation: str | None = None,
     gated_norm_implementation: str | None = None,
+    sconv_implementation: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -172,6 +173,7 @@ def build_diagnostic_run(
             ("qk_mult", qk_mult),
             ("moe_implementation", moe_implementation),
             ("gated_norm_implementation", gated_norm_implementation),
+            ("sconv_implementation", sconv_implementation),
         )
         if value is not None
     }
@@ -433,6 +435,12 @@ def build_diagnostic_run(
     "separate modules.",
 )
 @click.option(
+    "--sconv-implementation",
+    type=click.Choice(["reference", "pallas_gpu", "triton_gpu"]),
+    default=None,
+    help="Override the short-conv kernel. Defaults to the Pallas kernel on GPU.",
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
@@ -567,6 +575,7 @@ def main(
     latent_dim: int | None,
     moe_implementation: str | None,
     gated_norm_implementation: str | None,
+    sconv_implementation: str | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -605,6 +614,7 @@ def main(
         restore_from=restore_from,
         moe_implementation=moe_implementation,
         gated_norm_implementation=gated_norm_implementation,
+        sconv_implementation=sconv_implementation,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
