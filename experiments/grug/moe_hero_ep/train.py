@@ -241,9 +241,12 @@ def _apply_hero_ep_runtime_defaults(
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
-    if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
-        # A wrong overlap limit corrupts training silently, so the offload takes the flag
-        # away from the caller instead of defaulting it.
+    if ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE:
+        # A wrong overlap limit corrupts training silently, so these configurations take the flag
+        # away from the caller instead of defaulting it. With the carry offload, a reloaded
+        # residual races its consumer. On the ragged transport, the backward's transports do not
+        # depend on the recomputed forward's, and with several collectives in flight the two
+        # overlapped and gave run-to-run different gradients, or hung, on GB200.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
         xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT}")
     if ragged:
