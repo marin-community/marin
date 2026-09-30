@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("daytona")
 
-from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec
 
@@ -45,9 +45,11 @@ class LocalDaytona:
         self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
         self.deleted = False
         self.params = None
+        self.timeout = None
 
-    async def create(self, params):
+    async def create(self, params, *, timeout):
         self.params = params
+        self.timeout = timeout
         return self.sandbox
 
     async def delete(self, sandbox):
@@ -55,16 +57,35 @@ class LocalDaytona:
         self.deleted = True
 
 
-def test_daytona_binary_command_and_files(tmp_path: Path) -> None:
+@pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
+def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     async def scenario() -> None:
         client = LocalDaytona()
         workdir = tmp_path / "work"
-        machine = await DaytonaMachineFactory(client).create(
-            MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+        machine = await DaytonaMachineFactory(client, network_policy=policy).create(
+            MachineSpec(
+                source=RegistryImage("ubuntu:24.04"),
+                workdir=str(workdir),
+                cpus=2,
+                memory_mb=1500,
+                storage_mb=1025,
+                env={"TASK_VALUE": "daytona"},
+                startup_timeout=900,
+            )
         )
-        assert client.params.network_block_all is True
+        if policy is None:
+            assert client.params.network_block_all is True
+            assert client.params.domain_allow_list is None
+        else:
+            assert client.params.network_block_all is None
+            assert client.params.domain_allow_list == "example.org"
         assert client.params.ttl_minutes == 360
+        assert (client.params.resources.cpu, client.params.resources.memory, client.params.resources.disk) == (2, 2, 2)
+        assert client.params.os_user == "root"
+        assert client.timeout == 900
         try:
+            environment = await machine.run(Command(("sh", "-c", 'printf "%s" "$TASK_VALUE"'), user="0"))
+            assert environment.stdout == b"daytona"
             result = await machine.run(
                 Command(
                     ("/bin/sh", "-c", "cat; printf '\\000\\377' >&2"),

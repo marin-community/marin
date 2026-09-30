@@ -4,8 +4,9 @@
 """Grade submissions with typed private verifiers."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from tasktrove_verify.grade import InvalidTask, numeric_tolerance
@@ -21,6 +22,16 @@ class Outcome(StrEnum):
     GRADED = "graded"
     EXTRACTION_ERROR = "extraction_error"
     INFRA_ERROR = "infra_error"
+    UNAVAILABLE = "unavailable"
+    SKIPPED = "skipped"
+
+
+class GradingFailure(StrEnum):
+    TIMEOUT = "timeout"
+    MISSING_REWARD = "missing_reward"
+    EMPTY_REWARD = "empty_reward"
+    INVALID_REWARD = "invalid_reward"
+    EXECUTION = "execution"
 
 
 @dataclass(frozen=True)
@@ -28,6 +39,9 @@ class GradeResult:
     status: Outcome
     reward: float | None
     error: str | None = None
+    passed: bool | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    failure: GradingFailure | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +61,20 @@ class Verifier(BaseModel, ABC):
     @abstractmethod
     def grade(self, attempt: GradingAttempt) -> GradeResult:
         """Grade a submission using this verifier's configuration."""
+
+
+class SkippedVerifier(Verifier):
+    """Record an explicit decision to omit grading."""
+
+    reason: str
+
+    def grade(self, attempt: GradingAttempt) -> GradeResult:
+        return GradeResult(Outcome.SKIPPED, None, self.reason)
+
+
+def skipped_verifier(reason: str) -> VerifierSpec:
+    verifier = SkippedVerifier(reason=reason)
+    return VerifierSpec(kind=VerifierKind.SKIPPED, parameters_json=verifier.model_dump_json())
 
 
 class ExactAnswerVerifier(Verifier):

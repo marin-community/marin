@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from taskcompendium.harbor.protocol import assistant_message
+from taskcompendium.chat import assistant_message
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
@@ -77,7 +77,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.verifier_registry import grade_answer; "
-        "from taskcompendium.harbor.protocol import chat_conversation; "
+        "from taskcompendium.chat import chat_conversation; "
         "from taskcompendium.submission import chat_request; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "

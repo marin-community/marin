@@ -10,7 +10,15 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.9"
+from taskcompendium.environment import (
+    EnvironmentCommand,
+    EnvironmentFile,
+    EnvironmentKind,
+    EnvironmentSpec,
+    HealthcheckSpec,
+)
+
+SCHEMA_VERSION = "0.13"
 
 
 class AnswerType(StrEnum):
@@ -30,6 +38,10 @@ class VerifierKind(StrEnum):
     PREDICTED_ACTION = "predicted_action"
     NUMERIC_ANSWER = "numeric_answer"
     MCQ_ANSWER = "mcq_answer"
+    SHELL = "shell"
+    EXTERNAL = "external"
+    STAGED = "staged"
+    SKIPPED = "skipped"
 
 
 class Source(BaseModel):
@@ -257,8 +269,37 @@ class EnvironmentRequirements(BaseModel):
     action_interfaces: tuple[str, ...] = ()
 
 
+class TaskStage(BaseModel):
+    """One stage in a shared task machine. The first stage uses the task context."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    context: ConversationInput | None = None
+    verifier: VerifierSpec
+    workdir_files: tuple[EnvironmentFile, ...] = ()
+    setup: tuple[EnvironmentCommand, ...] = ()
+    healthcheck: HealthcheckSpec | None = None
+    agent_timeout: float | None = Field(default=None, gt=0)
+    agent_user: str | None = None
+    minimum_rewards: dict[str, Annotated[float, Field(allow_inf_nan=False)]] = Field(default_factory=dict)
+
+
+class StageRewardStrategy(StrEnum):
+    MEAN = "mean"
+    FINAL = "final"
+
+
+class StageVerifierSpec(BaseModel):
+    """Reduce the grades from completed task stages."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy: StageRewardStrategy
+
+
 class TaskSpec(BaseModel):
-    """The private definition of one deterministic answer task."""
+    """The private definition of one task."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -268,7 +309,13 @@ class TaskSpec(BaseModel):
     final_tools: FinalTools = Field(default_factory=FinalTools)
     answer_type: AnswerType
     verifier: VerifierSpec
+    environment: EnvironmentSpec = Field(default_factory=lambda: EnvironmentSpec(kind=EnvironmentKind.NULL))
+    attempt_timeout: float | None = Field(default=None, gt=0)
+    agent_timeout: float | None = Field(default=None, gt=0)
+    agent_user: str | None = None
+    stages: tuple[TaskStage, ...] = ()
     source: Source
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
@@ -279,4 +326,15 @@ class TaskSpec(BaseModel):
             raise ValueError("A task id is required")
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools.functions:
             raise ValueError("Native-action tasks require advertised functions")
+        if (self.verifier.kind == VerifierKind.STAGED) != bool(self.stages):
+            raise ValueError("Task stages require a staged verifier")
+        if self.stages:
+            if self.environment.kind == EnvironmentKind.NULL or self.environment.interaction is not None:
+                raise ValueError("Task stages require a shared shell machine")
+            if self.stages[0].context is not None or any(stage.context is None for stage in self.stages[1:]):
+                raise ValueError("Only the first stage uses the task context")
+            if len({stage.name for stage in self.stages}) != len(self.stages):
+                raise ValueError("Task stage names must be unique")
+            if any(stage.verifier.kind in {VerifierKind.STAGED, VerifierKind.EXTERNAL} for stage in self.stages):
+                raise ValueError("Task stages require an executable private verifier")
         return self

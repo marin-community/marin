@@ -48,7 +48,8 @@ def _source_key(source: RegistryImage | DockerfileSource) -> str:
     context = source.context.resolve()
     dockerfile = source.dockerfile.resolve()
     digest = hashlib.sha256()
-    digest.update(f"{context}\0{dockerfile}\0".encode())
+    dockerfile_name = str(dockerfile.relative_to(context)) if dockerfile.is_relative_to(context) else "<external>"
+    digest.update(f"{dockerfile_name}\0".encode())
     for path in sorted(context.rglob("*")):
         relative = path.relative_to(context)
         digest.update(f"{relative}\0".encode())

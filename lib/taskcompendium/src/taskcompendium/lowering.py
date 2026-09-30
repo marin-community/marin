@@ -12,9 +12,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
 from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
-from taskcompendium.verifier_registry import validate_verifier
+from taskcompendium.verifier_registry import validate_task_verifiers
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"
@@ -59,7 +60,12 @@ def compatible_lowerings(
     environment_configs: Sequence[HarborEnvironmentConfig],
 ) -> tuple[LoweringCandidate, ...]:
     """Enumerate conventions and environments that preserve this task's contract."""
-    if specification.environment_requirements.capabilities or specification.environment_requirements.action_interfaces:
+    if (
+        specification.environment.kind != EnvironmentKind.NULL
+        or specification.environment.interaction is not None
+        or specification.environment_requirements.capabilities
+        or specification.environment_requirements.action_interfaces
+    ):
         return ()
     return tuple(
         LoweringCandidate(convention, environment_config)
@@ -103,7 +109,12 @@ def validate_environment_config(specification: TaskSpec, environment_config: Har
     """Require direct chat to satisfy every declared semantic operation."""
     if environment_config != HarborEnvironmentConfig():
         raise ValueError("Only direct-chat environment configuration is supported")
-    if specification.environment_requirements.capabilities or specification.environment_requirements.action_interfaces:
+    if (
+        specification.environment.kind != EnvironmentKind.NULL
+        or specification.environment.interaction is not None
+        or specification.environment_requirements.capabilities
+        or specification.environment_requirements.action_interfaces
+    ):
         raise ValueError("Direct chat cannot satisfy capability or action-interface requirements")
 
 
@@ -112,7 +123,7 @@ def read_specification(path: Path) -> TaskSpec:
     if data["schema_version"] != SCHEMA_VERSION:
         raise ValueError(f"Unsupported TaskSpec schema: {data['schema_version']}")
     specification = TaskSpec.model_validate(data)
-    validate_verifier(specification.verifier)
+    validate_task_verifiers(specification)
     return specification
 
 
@@ -132,7 +143,7 @@ def lower_to_harbor(
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_environment_config(specification, environment_config)
-    validate_verifier(specification.verifier)
+    validate_task_verifiers(specification)
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()

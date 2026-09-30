@@ -9,14 +9,40 @@ import shlex
 import tarfile
 import tempfile
 import uuid
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
-from daytona import AsyncDaytona, AsyncSandbox, CreateSandboxFromImageParams, Resources
+from daytona import AsyncDaytona, AsyncSandbox, CreateSandboxFromImageParams, Image, Resources
 
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+
+
+class DaytonaNetworkMode(StrEnum):
+    BLOCK_ALL = "block_all"
+    UNRESTRICTED = "unrestricted"
+    NETWORK_ALLOW_LIST = "network_allow_list"
+    DOMAIN_ALLOW_LIST = "domain_allow_list"
+
+
+@dataclass(frozen=True)
+class DaytonaNetworkPolicy:
+    mode: DaytonaNetworkMode
+    value: str | None = None
+
+    def parameters(self) -> dict[str, str | bool]:
+        """Return the provider's mutually exclusive network policy fields."""
+        mode = DaytonaNetworkMode(self.mode)
+        if mode in (DaytonaNetworkMode.NETWORK_ALLOW_LIST, DaytonaNetworkMode.DOMAIN_ALLOW_LIST):
+            if not self.value:
+                raise ValueError(f"{self.mode} requires an allow list")
+            return {mode.value: self.value}
+        if self.value is not None:
+            raise ValueError(f"{self.mode} does not accept an allow list")
+        return {"network_block_all": mode == DaytonaNetworkMode.BLOCK_ALL}
 
 
 class DaytonaMachine:
@@ -57,16 +83,26 @@ class DaytonaMachine:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
         stdin_path, stdout_path, stderr_path = (f"{prefix}-{part}" for part in ("in", "out", "err"))
-        if command.stdin:
-            await self.sandbox.fs.upload_file_stream(command.stdin, stdin_path)
+        argv = command.argv
+        if command.user not in (None, "root", "0"):
+            user = command.user
+            # su accepts names. Resolve a numeric UID in the guest's account database.
+            if user.isdecimal():
+                account = await self.sandbox.process.exec(f"getent passwd {shlex.quote(user)}")
+                if account.exit_code or not account.result.strip():
+                    raise ValueError(f"Execution user {user} has no guest account")
+                user = account.result.split(":", 1)[0]
+            argv = ("su", "-s", "/bin/sh", "-m", user, "-c", shlex.join(command.argv))
         script = (
-            f"{shlex.join(command.argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
+            f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
         try:
+            if command.stdin:
+                await self.sandbox.fs.upload_file_stream(command.stdin, stdin_path)
             operation = self.sandbox.process.exec(
                 script,
-                cwd=command.cwd or self.spec.workdir,
+                cwd=command.cwd or self.spec.workdir or None,
                 env={**self.spec.env, **command.env},
                 timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
             )
@@ -150,29 +186,58 @@ class DaytonaMachine:
 
 
 class DaytonaMachineFactory:
-    """Create a Daytona sandbox from a registry image reference."""
+    """Create a Daytona sandbox from a registry image or Docker build context."""
 
-    def __init__(self, client: AsyncDaytona | None = None, *, ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES):
+    def __init__(
+        self,
+        client: AsyncDaytona | None = None,
+        *,
+        ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
+        create_timeout: float = 600,
+        network_policy: DaytonaNetworkPolicy | None = None,
+    ):
         self.client = client or AsyncDaytona()
         self.ttl_minutes = ttl_minutes
+        self.create_timeout = create_timeout
+        self.network_policy = network_policy
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
-        if not isinstance(spec.source, RegistryImage):
-            raise UnsupportedMachineSpec("Daytona requires a registry image reference")
-        memory_gb = math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None
+        if isinstance(spec.source, RegistryImage):
+            source = spec.source.reference
+        elif isinstance(spec.source, DockerfileSource):
+            if spec.source.dockerfile.parent != spec.source.context:
+                raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
+            source = Image.from_dockerfile(spec.source.dockerfile)
+        else:
+            raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
+        resources = Resources(
+            cpu=spec.cpus,
+            memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
+            disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
+            gpu=spec.gpus or None,
+        )
+        network = (
+            {"network_block_all": spec.network is NetworkPolicy.DENY}
+            if self.network_policy is None
+            else self.network_policy.parameters()
+        )
         sandbox = await self.client.create(
             CreateSandboxFromImageParams(
-                image=spec.source.reference,
-                resources=Resources(memory=memory_gb) if memory_gb is not None else None,
-                network_block_all=spec.network is NetworkPolicy.DENY,
+                image=source,
+                os_user="root",
+                env_vars=spec.env,
+                resources=resources,
+                **network,
                 ttl_minutes=self.ttl_minutes,
-            )
+            ),
+            timeout=self.create_timeout if spec.startup_timeout is None else spec.startup_timeout,
         )
         machine = DaytonaMachine(self.client, sandbox, spec)
         try:
-            result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/"))
-            if result.exit_code:
-                raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.stderr!r}")
+            if spec.workdir:
+                result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/"))
+                if result.exit_code:
+                    raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.stderr!r}")
         except BaseException:
             await machine.close()
             raise

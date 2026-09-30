@@ -4,7 +4,7 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through a private verifier registry. The task model also names file and state results, but this slice has no Harbor environment configuration or submission convention for those result types.
+TaskCompendium exports direct-chat Harbor tasks for text, number, and native-action results. It also supplies a Shellbox rollout engine for executable tasks. See the [task rollout reference](../../docs/references/task-rollouts.md) for the Parquet format, engine interfaces, and SkyRL integration.
 
 ## What does it contain?
 
@@ -39,6 +39,8 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
+| `environment` | Executable environment, public files, resource limits, and optional task session. |
+| `metadata` | Application metadata, including an optional teacher route. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
 `context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; the adapter sends them as OpenAI-compatible chat messages without executing them again. `answer_type` does not prescribe a wrapper such as JSON.
@@ -67,7 +69,7 @@ With the `answer_call` convention, the chat agent advertises only `submit_answer
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. The schema includes these result types, but exporting and running them requires environment configurations, submission conventions, and verifiers that are not implemented in this slice. `environment_requirements` declares capabilities and action interfaces; it does not yet describe resource files or tool implementations.
+`answer_type=file` names a file result. `answer_type=state` names the resulting environment state. The Shellbox engine executes these tasks with the environment and private shell verifier in the task spec. Direct-chat Harbor export does not accept executable environments. `environment_requirements` declares capabilities and action interfaces. `environment` supplies the executable resources.
 
 ## What can we import?
 
@@ -85,7 +87,7 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The submission convention extracts a candidate answer, then the verifier grades it. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
-The current kinds are `exact_answer` for normalized text, `numeric_answer` for numbers with explicit absolute and relative tolerances, `mcq_answer` for a single option letter, and `predicted_action` for final function calls. The expected answer and grading settings stay out of the model-visible instruction.
+The answer verifier kinds are `exact_answer`, `numeric_answer`, `mcq_answer`, and `predicted_action`. Executable tasks can use `shell` for a private grading command or `external` for an application-supplied task session. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 

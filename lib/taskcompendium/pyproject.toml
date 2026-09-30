@@ -5,21 +5,23 @@ build-backend = "hatchling.build"
 [project]
 name = "taskcompendium"
 version = "0.1.0"
-description = "Semantic answer tasks and Harbor direct-chat lowerings"
+description = "Task schemas, private grading, and Shellbox rollouts"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.0", "tasktrove-verify"]
+dependencies = ["pydantic>=2.9", "tasktrove-verify", "marin-shellbox", "harbor-config", "pyarrow>=17", "fsspec>=2024.6"]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[shellsim]"]
 
 [tool.uv.workspace]
 
 [tool.uv.sources]
+harbor-config = { url = "https://github.com/marin-community/harbor/releases/download/harbor-config-952a005353273590631b8f970f4664a121710b32/harbor_config-0.1.0-py3-none-any.whl" }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
 tasktrove-verify = { path = "../tasktrove-verify", editable = true }
+marin-shellbox = { path = "../shellbox", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]

@@ -8,8 +8,16 @@ from types import MappingProxyType
 
 from pydantic import ValidationError
 
-from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, NumericAnswerVerifier, Verifier
-from taskcompendium.models import ConversationTrace, TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.environment import ExternalVerifierSpec, ShellVerifierSpec
+from taskcompendium.grading import (
+    ExactAnswerVerifier,
+    GradeResult,
+    GradingAttempt,
+    NumericAnswerVerifier,
+    SkippedVerifier,
+    Verifier,
+)
+from taskcompendium.models import ConversationTrace, StageVerifierSpec, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
@@ -20,6 +28,7 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
         VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
         VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
+        VerifierKind.SKIPPED: SkippedVerifier,
     }
 )
 
@@ -35,7 +44,23 @@ def resolve_verifier(specification: VerifierSpec) -> Verifier:
 
 
 def validate_verifier(specification: VerifierSpec) -> None:
+    if specification.kind == VerifierKind.STAGED:
+        StageVerifierSpec.model_validate_json(specification.parameters_json)
+        return
+    if specification.kind == VerifierKind.EXTERNAL:
+        ExternalVerifierSpec.model_validate_json(specification.parameters_json)
+        return
+    if specification.kind == VerifierKind.SHELL:
+        ShellVerifierSpec.model_validate_json(specification.parameters_json)
+        return
     resolve_verifier(specification)
+
+
+def validate_task_verifiers(task: TaskSpec) -> None:
+    """Validate the final verifier and every private stage verifier."""
+    validate_verifier(task.verifier)
+    for stage in task.stages:
+        validate_verifier(stage.verifier)
 
 
 def grade_answer(
