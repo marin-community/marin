@@ -69,3 +69,41 @@ saves 0.3 ms (0.3%), the chained cotangents a further 1.8-2.2 ms (2.4-3.1% combi
 by 1.37 GB (one [TK, H] buffer). Scaled to 48 layers: ~0.1 s/step, before any remat or contention effect.
 In isolation the inverse sort costs far less than the 0.107 s/step the training trace attributes to it,
 consistent with its kernels being stretched by the concurrent device-initiated a2a in training.
+
+## M30B-005 Unfilled transport buffers: hoisting probe (2026-09-30)
+
+After B, the transport buffers still get a zero fill each: fwd [C, H] x2 0.026 + [TK, H] 0.024, the same
+again in the remat, bwd [TK, H] ~0.025 + [C, H] x2 0.025, ~0.15 s/step in the Sep 24 trace. The
+consumers can be made to read only written rows, so the fills are removable; the question is how to get
+an unfilled buffer that stays inside the layer loop (#8822).
+
+Probe `scan_probe.py` (3-layer rematted scan, T/shard 16384, H=I=1024, 4 GB200; jobs
+`m30b-probe-empty-0{1..5}`, the first with loop-invariant routing, which confounds the forward):
+
+| init | fwd loop | bwd loop (remat + bwd) | step ms |
+|---|---|---|---|
+| loop-local zeros (main) | 3 fills | 6 fills | 18.71 |
+| `jax.lax.empty` (`AllocateBuffer`, no operands) | hoisted to entry by JAX's scan partial eval, 3 copies per layer | 6 allocations, in loop | 18.46 |
+| Triton kernel that writes nothing, operand = loop-carried marker | nothing | 2 copies [C, H] | 18.23 |
+
+The two remaining copies feed a synchronous `ragged-all-to-all.N.2` clone made by XLA's
+HloRematerialization (the `.remat`/`.2` family agent A traced to the missing host-offload flag); a
+custom-call output cannot be cloned, so the clone and the original share it and one gets a copy.
+
+## M30B-006 Candidate C: unfilled transport buffers (commit after c67ee1f965)
+
+- `_transport_buffer` (was `_loop_local_zeros`): on GPU a no-op Triton kernel (`sonic.unwritten_buffer`)
+  whose operand is the same loop-carried `min(tie[0], -site) + site` marker; zeros elsewhere.
+- Expert MLP protocol: rows past the active count in `x_dispatch` and in the output cotangent are
+  unspecified. QuACK bounds every grouped GEMM by `cu`; the portable `ragged_dot` path masks input and
+  output rows with `where`.
+- Accepted-assignment mask (`_accepted_assignments`: rank within the expert group < accepted prefix),
+  computed before the dispatch gather. The combine weights are `where(accepted, w, 0)`, the dispatch
+  gradient sums only accepted slots, and the Sonic gather-sum kernel does not load zero-weight rows.
+  The weight gradient read from a dropped row is discarded by the `where` transpose (a select, so NaN
+  garbage cannot leak).
+- Numerics: identical values; only the sign of an all-zero weight gradient on a dropped slot can differ.
+- CPU tests: new behavior tests with NaN in the unspecified rows (dispatch gradient, combine, portable
+  expert MLP) and an accepted-prefix reference test. Gate adds `quack_contract.py` (each QuACK grouped
+  GEMM with NaN vs zero rows past `cu[-1]`) and `scan_compare.py` (control / chain / candidate in a
+  rematted scan: fills, copies, temp bytes, step time).
