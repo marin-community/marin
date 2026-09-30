@@ -33,6 +33,7 @@ from .verifier_policy import migrate_verifier_policy
 
 logger = logging.getLogger(__name__)
 DIFFICULTY_PROTOCOL = "atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking"
+JUDGE_VERIFIER_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-judge-verifier-nonthinking"
 DIFFICULTY_MODELS = {
     "small": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "large": "Qwen/Qwen3.5-122B-A10B",
@@ -54,8 +55,18 @@ DIFFICULTY_GENERATION = {
 def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
     """Distinguish matched current measurements from retained historical runs."""
     protocol = report.get("protocol") or {}
-    if protocol.get("id") != DIFFICULTY_PROTOCOL:
+    protocol_id = protocol.get("id")
+    if protocol_id not in (DIFFICULTY_PROTOCOL, JUDGE_VERIFIER_DIFFICULTY_PROTOCOL):
         return "historical", "Earlier model identities or generation budgets; retained as historical evidence."
+    if protocol_id == JUDGE_VERIFIER_DIFFICULTY_PROTOCOL:
+        judge = (report.get("verifier_configuration") or {}).get("tasktrove_judge") or {}
+        if (
+            judge.get("model") != "Qwen/Qwen3.5-9B"
+            or judge.get("provider") != "Together"
+            or judge.get("chat_template_kwargs") != {"enable_thinking": False}
+            or not judge.get("relay_script_sha256")
+        ):
+            return "invalid", "The TaskTrove verifier judge lacks the recorded non-thinking Qwen3.5-9B configuration."
     if any(protocol.get(key) != value for key, value in DIFFICULTY_LIMITS.items()):
         return "invalid", "The recorded context or output limits do not match the current protocol."
     models = report["models"]
@@ -77,7 +88,10 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
             return "invalid", "The Large model's recorded configuration does not disable thinking."
         if model["size"] == "hosted" and parameters.get("reasoning_effort") != "low":
             return "invalid", "The Hosted model's recorded configuration does not use Low reasoning effort."
-    return "current", "Matched Small, Large and Hosted models at 65,536 context and 16,384 output tokens."
+    note = "Matched Small, Large and Hosted models at 65,536 context and 16,384 output tokens."
+    if protocol_id == JUDGE_VERIFIER_DIFFICULTY_PROTOCOL:
+        note += " The native TaskTrove verifier used Qwen3.5-9B with thinking disabled."
+    return "current", note
 
 
 def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:

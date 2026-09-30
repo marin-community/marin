@@ -238,6 +238,9 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
         ("large_old_sampling", "invalid"),
         ("hosted_max_effort", "invalid"),
         ("inherited_sampling_defaults", "invalid"),
+        ("judge_verifier_protocol", "current"),
+        ("judge_verifier_missing_settings", "invalid"),
+        ("judge_verifier_thinking_enabled", "invalid"),
         ("old_protocol", "historical"),
     ],
 )
@@ -311,6 +314,17 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
         report["models"][2]["generation_parameters"]["reasoning_effort"] = "max"
     elif change == "inherited_sampling_defaults":
         report["models"][0]["generation_parameters"].pop("repetition_penalty")
+    elif change in ("judge_verifier_protocol", "judge_verifier_missing_settings", "judge_verifier_thinking_enabled"):
+        report["protocol"]["id"] = "atlas-difficulty-v4-judge-verifier-nonthinking"
+        if change != "judge_verifier_missing_settings":
+            report["verifier_configuration"] = {
+                "tasktrove_judge": {
+                    "model": "Qwen/Qwen3.5-9B",
+                    "provider": "Together",
+                    "chat_template_kwargs": {"enable_thinking": change == "judge_verifier_thinking_enabled"},
+                    "relay_script_sha256": "a" * 64,
+                }
+            }
     elif change == "old_protocol":
         report["protocol"]["id"] = "atlas-difficulty-v2-65k16k"
     row = source_with_review(
