@@ -44,7 +44,8 @@
     "nvidia/deeplearningexamples": "General deep-learning training examples; medical segmentation is incidental to a broad computing collection.",
     "kmario23/deep-learning-drizzle": "General machine-learning lecture index; no biology-specific repository scope.",
     "315386775/deeplearing-interview-awesome-2024": "General machine-learning interview and resource collection.",
-    "matklad/once_cell": "General Rust single-assignment cells; cell keyword is unrelated to biology."
+    "matklad/once_cell": "General Rust single-assignment cells; cell keyword is unrelated to biology.",
+    "brucefan1983/gpumd": "General atomistic/materials simulation; README applications emphasize heat transport, lattice dynamics and mechanical properties. No biological source scope established in the 2026-09-30 review."
   },
   "pypi_exclusions": {
     "networkx": "General graph algorithms.",

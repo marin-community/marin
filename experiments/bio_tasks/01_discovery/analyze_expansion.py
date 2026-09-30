@@ -5,13 +5,22 @@
 
 import argparse
 import json
-from collections import Counter
 from itertools import combinations, pairwise
 from pathlib import Path
 
-from analyze_rankings import RANKINGS, SOFTWARE_TYPES, analyze, diversity, effective_categories, read_rows
+from analyze_rankings import (
+    RANKINGS,
+    SOFTWARE_TYPES,
+    analyze,
+    diversity,
+    effective_categories,
+    read_rows,
+    tag_domain_counts,
+)
 
-DEPTHS = (100, 125, 150, 175, 200)
+BASELINE_SIZE = 100
+EXPANDED_SIZE = 200
+DEPTHS = (BASELINE_SIZE, 125, 150, 175, EXPANDED_SIZE)
 LABEL_FIELDS = ("source_type", "primary_domain", "manual_topic")
 
 
@@ -20,30 +29,23 @@ def tag_summary(ids: set[str], sources: dict, mapping: dict[str, str]) -> dict:
     github = [sources[key]["github"] for key in sorted(ids) if sources[key]["github"]]
     tagged = [record for record in github if record["topics"]]
     tags = {tag for record in tagged for tag in record["topics"]}
-    fractional = Counter()
-    mapped = 0
-    for record in tagged:
-        domains = {mapping[tag] for tag in record["topics"] if tag in mapping}
-        if domains:
-            mapped += 1
-            for domain in sorted(domains):
-                fractional[domain] += 1 / len(domains)
+    domains = tag_domain_counts(tagged, mapping)
     return {
         "github_mapped": len(github),
         "tagged_sources": len(tagged),
         "raw_tags": sorted(tags),
         "raw_tag_count": len(tags),
-        "mapped_sources": mapped,
-        "mapped_domains": sorted(fractional),
-        "fractional_domains": dict(sorted(fractional.items())),
-        "effective_domain_bins": effective_categories(fractional),
+        "mapped_sources": domains.mapped_sources,
+        "mapped_domains": sorted(domains.fractional),
+        "fractional_domains": dict(sorted(domains.fractional.items())),
+        "effective_domain_bins": effective_categories(domains.fractional),
     }
 
 
 def compare(baseline_dir: Path, expanded_dir: Path, date: str) -> dict:
     """Validate the unchanged baseline and measure incremental coverage at each depth."""
-    baseline_result = analyze(baseline_dir, date, 100)
-    expanded_result = analyze(expanded_dir, date, 200)
+    baseline_result = analyze(baseline_dir, date, BASELINE_SIZE).summary
+    expanded_result = analyze(expanded_dir, date, EXPANDED_SIZE).summary
     baseline_rows = read_rows(baseline_dir / f"rankings-{date}.csv")
     rows = read_rows(expanded_dir / f"rankings-{date}.csv")
     original_labels = {row["source_id"]: row for row in read_rows(baseline_dir / f"source-annotations-{date}.csv")}
@@ -79,11 +81,11 @@ def compare(baseline_dir: Path, expanded_dir: Path, date: str) -> dict:
     }
     for name, cohort in cohorts.items():
         original = [row for row in baseline_rows if row["ranking"] == name]
-        assert [(row["source_id"], row["score"]) for row in cohort[:100]] == [
+        assert [(row["source_id"], row["score"]) for row in cohort[:BASELINE_SIZE]] == [
             (row["source_id"], row["score"]) for row in original
         ], name
-        first = {row["source_id"] for row in cohort[:100]}
-        second = {row["source_id"] for row in cohort[100:]}
+        first = {row["source_id"] for row in cohort[:BASELINE_SIZE]}
+        second = {row["source_id"] for row in cohort[BASELINE_SIZE:]}
         first_domains = {labels[key]["primary_domain"] for key in first}
         first_topics = {labels[key]["manual_topic"] for key in first}
         second_topics = {labels[key]["manual_topic"] for key in second}
@@ -92,7 +94,7 @@ def compare(baseline_dir: Path, expanded_dir: Path, date: str) -> dict:
         tags_full = tag_summary(first | second, sources, mapping)
         result["rankings"][name] = {
             "first100": baseline_result["rankings"][name],
-            "second100": diversity([labels[row["source_id"]] for row in cohort[100:]]),
+            "second100": diversity([labels[row["source_id"]] for row in cohort[BASELINE_SIZE:]]),
             "full200": expanded_result["rankings"][name],
             "new_to_baseline_union": sorted(second - baseline_union),
             "new_domains_to_own100": sorted({labels[key]["primary_domain"] for key in second} - first_domains),
@@ -105,7 +107,7 @@ def compare(baseline_dir: Path, expanded_dir: Path, date: str) -> dict:
             "second100_software_subset": diversity(
                 [
                     labels[row["source_id"]]
-                    for row in cohort[100:]
+                    for row in cohort[BASELINE_SIZE:]
                     if labels[row["source_id"]]["source_type"] in SOFTWARE_TYPES
                 ]
             ),

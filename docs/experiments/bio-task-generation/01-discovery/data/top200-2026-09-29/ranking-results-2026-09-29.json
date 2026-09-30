@@ -1566,7 +1566,7 @@
       "github:tseemann/prokka",
       "github:yulab-smu/clusterprofiler"
     ],
-    "cutoff_stars": 815,
+    "cutoff_stars": 812,
     "intersection_with_other_rankings": {
       "bioconda": 15,
       "bioconductor": 1,

@@ -754,9 +754,9 @@
     "pypi-count-query-2026-09-29.sql": "8444ebec578d11e5134b50ec4ca81bde6e2cff4e0de356cb29da23988d35daa4",
     "ranking-candidates-bioconda-2026-09-29.csv": "03b6506953a5c3306f64daf4a70134b6787380a59697142ef71bc8dcdb664c00",
     "ranking-candidates-bioconductor-2026-09-29.csv": "db8b6646bf7758dfa03b0f35ac589331599f4e483b38e3e590c16a5ee811932e",
-    "ranking-candidates-github-2026-09-29.csv": "5a4dda618a9051d83ce4a97a400c75937aee1413c764501f418af6f8f2443d2e",
+    "ranking-candidates-github-2026-09-29.csv": "36e0109a301f3a8d95d8217a81ca81f3ec28b10eee97251c7776a30fb55c7b3f",
     "ranking-candidates-pypi-2026-09-29.csv": "9104059ee0c7384a3c98dfe036818cc7f1a4cf45abe7a5cebffa7034c77f8cbe",
-    "ranking-exclusions-2026-09-29.json": "0c80b56f7279d7e61469054d01ce751a0d1f7f9b761aceea6e73b67919c1b9f0",
+    "ranking-exclusions-2026-09-29.json": "483a08e316b4d5ea3ebaecb98f590b7fa53036404fe4bf1cfc3604e79791d2b8",
     "rankings-2026-09-29.csv": "504cec3b7886c36b1e726e03f84faec248951b250521c43ea7b9e9815215e62f",
     "source-annotations-2026-09-29.csv": "0bb803265d0243ad16957071ff03e377e27e0ab88fca3147c70994d48ec75339",
     "source-observations-2026-09-29.json": "8721c51183fd66e18ff32c0d0d8add83e133872200e31a69711d160ea0ea0137",
@@ -6318,8 +6318,8 @@
     "branch": "codex/bio-tasks-discovery",
     "status": "Analysis captured locally before publication.",
     "script_sha256": {
-      "experiments/bio_tasks/01_discovery/analyze_expansion.py": "6f8d4311e018c05ff909cbf212b5ace95ebc98190e67e5b471d92ccb86e2482b",
-      "experiments/bio_tasks/01_discovery/analyze_rankings.py": "01841e7837229a975e142635d83999818d02ef2ce2ad812528b5d7a0c51071c6"
+      "experiments/bio_tasks/01_discovery/analyze_expansion.py": "db7c574b72d3f7a661c6ad618b35a6a68ffd5213cdb5461e6b894a3f08522e66",
+      "experiments/bio_tasks/01_discovery/analyze_rankings.py": "9c2d018322e07adbec54ff9c043684e1204e15d0898969e460c824d21aa7afbf"
     },
     "hardware": "Shared exe.dev VM, 2 vCPU, 8 GiB; one worker; nonblocking shared heavy-work lock; six thread-count environment variables set to 1; nice 10; ionice class 2 priority 7.",
     "analysis_runtime": "Python standard library via uv run --no-project; no external model calls or paid compute.",
@@ -6329,5 +6329,43 @@
       "Strict scoped BioTasks documentation build passed using the current navigation. Full-repository documentation build has a previously reproduced baseline mkdocstrings ignore_init_summary incompatibility."
     ],
     "python_version": "3.12.3"
+  },
+  "review_correction": {
+    "date": "2026-09-30",
+    "reason": "Independent review found that the search-only sensitivity admitted candidates whose eligibility had not been fully screened. Complete the decisions through that alternative cutoff and enforce them in the analyzer.",
+    "screened_additional_sources": [
+      "hsiaoyi0504/awesome-cheminformatics",
+      "etetoolkit/ete",
+      "microsoft/bioemu",
+      "vandijklab/cell2sentence",
+      "CIDARLAB/cello",
+      "freesurfer/freesurfer",
+      "nanoporetech/dorado",
+      "davidemms/OrthoFinder",
+      "perone/medicaltorch",
+      "MolecularAI/REINVENT4",
+      "OmicsML/awesome-deep-learning-single-cell-papers",
+      "bwa-mem2/bwa-mem2",
+      "JCruan519/VM-UNet",
+      "jeya-maria-jose/Medical-Transformer",
+      "NVIDIA-BioNeMo/bionemo-recipes",
+      "CBLUEbenchmark/CBLUE",
+      "openwdl/wdl",
+      "SpikeInterface/spikeinterface",
+      "dipy/dipy",
+      "MITK/MITK",
+      "nipy/nipype",
+      "generatebio/chroma",
+      "danforthcenter/plantcv",
+      "mims-harvard/PrimeKG",
+      "mdozmorov/scRNA-seq_notes",
+      "BioContainers/containers",
+      "chhylp123/hifiasm",
+      "awslabs/dgl-lifesci"
+    ],
+    "excluded": "brucefan1983/GPUMD",
+    "main_rankings_unchanged": true,
+    "numeric_snapshots_unchanged": true,
+    "evidence": "Retained GitHub descriptions and prior top-200 annotations; GPUMD README https://github.com/brucefan1983/GPUMD/blob/master/README.md reviewed 2026-09-30."
   }
 }

@@ -193,6 +193,9 @@ name/description/topic search. Known-source checks explicitly added AlphaFold 2
 and AlphaFold 3. Searches alone retain 86 of the supplemented top 100; their
 overlaps with Bioconda, Bioconductor and PyPI become 11, 0 and 10. The reported
 overlap therefore partly depends on using package discovery to supplement GitHub.
+The September 30 review completed eligibility screening for its 14 members below
+the main ranking's cutoff. Its 1,294-star cutoff and overlap counts are unchanged;
+the candidate table and provenance record these additional decisions.
 
 Eligibility includes biological tools, dedicated biological support packages,
 workflows, tutorials, courses, research code, data resources and biological
@@ -213,7 +216,7 @@ historical biology metadata does not describe the current project.
 
 - [All ranked sources](ranking-lists.md), with scores, source types and finer topics.
 - [400 ranking positions](data/rankings-2026-09-29.csv), [335 source observations](data/source-observations-2026-09-29.json), and [manual annotations](data/source-annotations-2026-09-29.csv).
-- Candidate rows and screening decisions for [Bioconda](data/ranking-candidates-bioconda-2026-09-29.csv), [Bioconductor](data/ranking-candidates-bioconductor-2026-09-29.csv), [PyPI](data/ranking-candidates-pypi-2026-09-29.csv) and [GitHub](data/ranking-candidates-github-2026-09-29.csv). Rows below the cutoff are explicitly not exhaustively reviewed.
+- Candidate rows and screening decisions for [Bioconda](data/ranking-candidates-bioconda-2026-09-29.csv), [Bioconductor](data/ranking-candidates-bioconductor-2026-09-29.csv), [PyPI](data/ranking-candidates-pypi-2026-09-29.csv) and [GitHub](data/ranking-candidates-github-2026-09-29.csv). Below-cutoff rows distinguish reviewed sensitivity members from candidates whose eligibility remains unreviewed.
 - [Provenance](data/ranking-provenance-2026-09-29.json): exact search queries, collection times, revisions, response hashes, identity corrections and input-artifact hashes.
 - [Computed results](data/ranking-results-2026-09-29.json), including sensitivity checks and exact pairwise intersections.
 

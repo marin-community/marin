@@ -11,8 +11,8 @@ Normalized overlap between rankings changes little.
 
 The first 100 source identities, scores and manual labels in every list are
 unchanged. Download snapshots, score windows and the GitHub discovery pool are
-held fixed. The original 95-source inventory and all top-100 data artifacts are
-preserved. This is source discovery: candidate software and source archives were
+held fixed. The original 95-source inventory and the top-100 selections,
+measurements and labels are preserved. This is source discovery: candidate software and source archives were
 not executed, and task usefulness has not been validated.
 
 ## What the extra hundred contributes
@@ -218,9 +218,19 @@ global biology ranking. Newly checked package repositories receive metadata but
 do not enter the star-ranking pool. Otherwise deeper package discovery could
 change the first hundred and confound the depth comparison. The two truncated
 search pages ended at 642 and 523 stars, below the new 889-star cutoff. Restricting
-to search-discovered repositories retains 172 of the supplemented top 200;
+to screened search-discovered repositories retains 172 of the supplemented top 200;
 its overlaps with Bioconda, Bioconductor and PyPI are 15, 1 and 25. Package seeds
 therefore still affect the GitHub overlap analysis.
+
+The September 30 independent review found unscreened candidates in that
+search-only sensitivity. Eligibility decisions now extend through its lower
+cutoff. [GPUMD](https://github.com/brucefan1983/GPUMD) was excluded because its
+documented scope is general atomistic/materials simulation;
+[DGL-LifeSci](https://github.com/awslabs/dgl-lifesci) enters at 812 stars.
+The correction changes the alternative cutoff from 815 to 812 but leaves its
+overlap counts and all four main rankings unchanged. The candidate tables and
+provenance record the added screening decisions; numeric observations remain
+frozen.
 
 Identity review collapses BioPerl metapackage/core distributions to one source,
 verifies redirects for PyRanges/NCLS, and corrects stale PyPI links for

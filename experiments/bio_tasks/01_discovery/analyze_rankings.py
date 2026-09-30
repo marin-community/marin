@@ -10,6 +10,7 @@ import json
 import math
 import statistics
 from collections import Counter
+from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
 
@@ -17,6 +18,35 @@ RANKINGS = ("bioconda", "bioconductor", "pypi", "github")
 SOFTWARE_TYPES = {"Software", "Infrastructure", "Workflow", "Research implementation"}
 BROAD_DOMAINS = {"Computing infrastructure", "General biology & multi-omics"}
 CUTOFFS = (10, 25, 50, 100)
+
+
+@dataclass
+class TagDomainCounts:
+    presence: Counter
+    fractional: Counter
+    mapped_sources: int
+
+
+@dataclass
+class RankingAnalysis:
+    summary: dict
+    tag_frequency_rows: list[list[str | int]]
+
+
+def tag_domain_counts(records: list[dict], mapping: dict[str, str]) -> TagDomainCounts:
+    """Give each source one unit shared equally among its mapped tag domains."""
+    presence = Counter()
+    fractional = Counter()
+    mapped_sources = 0
+    for record in records:
+        domains = {mapping[tag] for tag in record["topics"] if tag in mapping}
+        if domains:
+            mapped_sources += 1
+            presence.update(sorted(domains))
+            for domain in sorted(domains):
+                fractional[domain] += 1 / len(domains)
+    assert math.isclose(fractional.total(), mapped_sources)
+    return TagDomainCounts(presence, fractional, mapped_sources)
 
 
 def read_rows(path: Path) -> list[dict[str, str]]:
@@ -47,8 +77,8 @@ def diversity(rows: list[dict[str, str]]) -> dict:
     }
 
 
-def analyze(data_dir: Path, date: str, size: int = 100) -> dict:
-    """Validate retained measurements and compute overlap and diversity."""
+def analyze(data_dir: Path, date: str, size: int = 100) -> RankingAnalysis:
+    """Validate retained measurements and compute results without writing files."""
     provenance = json.loads((data_dir / f"ranking-provenance-{date}.json").read_text())
     for filename, expected in provenance["retained_artifact_sha256"].items():
         assert hashlib.sha256((data_dir / filename).read_bytes()).hexdigest() == expected, filename
@@ -97,17 +127,7 @@ def analyze(data_dir: Path, date: str, size: int = 100) -> dict:
         tagged = [record for record in github if record["topics"]]
         counts = Counter(tag for record in tagged for tag in sorted(set(record["topics"])))
         tag_counts[ranking] = counts
-        tag_domains = Counter()
-        fractional_domains = Counter()
-        mapped_sources = 0
-        for record in tagged:
-            domains = {tag_mapping[tag] for tag in record["topics"] if tag in tag_mapping}
-            if domains:
-                mapped_sources += 1
-                tag_domains.update(sorted(domains))
-                for domain in sorted(domains):
-                    fractional_domains[domain] += 1 / len(domains)
-        assert math.isclose(fractional_domains.total(), mapped_sources)
+        domains = tag_domain_counts(tagged, tag_mapping)
         others = set().union(*(members[other] for other in RANKINGS if other != ranking))
         result["rankings"][ranking] = {
             **diversity(labels),
@@ -125,10 +145,10 @@ def analyze(data_dir: Path, date: str, size: int = 100) -> dict:
                 "tag_assignments": counts.total(),
                 "effective_raw_tags": effective_categories(counts),
                 "top_tags": sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:12],
-                "mapped_domain_sources": mapped_sources,
-                "domain_presence": dict(sorted(tag_domains.items())),
-                "fractional_domains": dict(sorted(fractional_domains.items())),
-                "effective_domain_bins": effective_categories(fractional_domains),
+                "mapped_domain_sources": domains.mapped_sources,
+                "domain_presence": dict(sorted(domains.presence.items())),
+                "fractional_domains": dict(sorted(domains.fractional.items())),
+                "effective_domain_bins": effective_categories(domains.fractional),
             },
             "diversity_by_cutoff": {str(k): diversity(labels[:k]) for k in cutoffs},
         }
@@ -173,6 +193,9 @@ def analyze(data_dir: Path, date: str, size: int = 100) -> dict:
         row for row in screens["github"] if row["status"] != "excluded" and "github-search:" in row["discovery_routes"]
     ]
     search_only.sort(key=lambda row: (-int(row["score"]), row["source_id"]))
+    assert all(
+        row["status"] in {"selected source", "below cutoff; eligible"} for row in search_only[:size]
+    ), "Search-only sensitivity includes candidates without an eligibility decision"
     search_ids = {row["source_id"] for row in search_only[:size]}
     assert len(search_ids) == size
     result["github_search_only_sensitivity"] = {
@@ -183,19 +206,19 @@ def analyze(data_dir: Path, date: str, size: int = 100) -> dict:
             ranking: len(search_ids & members[ranking]) for ranking in RANKINGS if ranking != "github"
         },
     }
-    # Every truncated query returned below the selected cutoff, so page 2
-    # cannot displace a selected source within these queries.
+    # Check both cohorts: the search-only cutoff can be lower than the main one.
     for query in provenance["github"]["search_queries"]:
         assert not query["incomplete_results"]
         if query["total_matches"] > query["returned"]:
-            assert query["last_returned_stars"] < int(cohorts["github"][-1]["score"])
+            assert query["last_returned_stars"] < min(
+                int(cohorts["github"][-1]["score"]), int(search_only[size - 1]["score"])
+            )
 
-    with (data_dir / f"ranking-topic-frequencies-{date}.csv").open("w", newline="") as handle:
-        writer = csv.writer(handle, lineterminator="\n")
-        writer.writerow(["tag", "mapped_domain", *RANKINGS])
-        for tag in sorted(set().union(*(set(counts) for counts in tag_counts.values()))):
-            writer.writerow([tag, tag_mapping.get(tag, ""), *(tag_counts[ranking][tag] for ranking in RANKINGS)])
-    return result
+    frequency_rows = [
+        [tag, tag_mapping.get(tag, ""), *(tag_counts[ranking][tag] for ranking in RANKINGS)]
+        for tag in sorted(set().union(*(set(counts) for counts in tag_counts.values())))
+    ]
+    return RankingAnalysis(result, frequency_rows)
 
 
 def main() -> None:
@@ -204,7 +227,12 @@ def main() -> None:
     parser.add_argument("--date", required=True)
     parser.add_argument("--size", type=int, default=100)
     args = parser.parse_args()
-    result = analyze(args.data_dir, args.date, args.size)
+    analysis = analyze(args.data_dir, args.date, args.size)
+    result = analysis.summary
+    with (args.data_dir / f"ranking-topic-frequencies-{args.date}.csv").open("w", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(["tag", "mapped_domain", *RANKINGS])
+        writer.writerows(analysis.tag_frequency_rows)
     output = args.data_dir / f"ranking-results-{args.date}.json"
     output.write_text(json.dumps(result, indent=2) + "\n")
     print(f"Validated 4 x {args.size} ranking positions, {result['union_sources']} unique sources; wrote {output}")

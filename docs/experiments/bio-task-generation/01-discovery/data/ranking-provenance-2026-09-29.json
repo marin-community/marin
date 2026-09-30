@@ -700,12 +700,36 @@
     "pypi-count-query-2026-09-29.sql": "8444ebec578d11e5134b50ec4ca81bde6e2cff4e0de356cb29da23988d35daa4",
     "ranking-candidates-bioconda-2026-09-29.csv": "6a22ba5779db67b0dbccba1f8c1008a8efd3ef225c2807c00f122f3326652e1f",
     "ranking-candidates-bioconductor-2026-09-29.csv": "8c4a5e10ce3c18f9e89a47984363e2455dd1ae2bfdcfb1222adc328b031d3d04",
-    "ranking-candidates-github-2026-09-29.csv": "c988070ac8219220d08fd872940288765cd7d3764d6298e8ce1e03be21eac870",
+    "ranking-candidates-github-2026-09-29.csv": "3d6d15fd0d017679ecd98e87d448f548fc9319a0b5d69bb21c7e33be39391160",
     "ranking-candidates-pypi-2026-09-29.csv": "f3f8f8fac500ea63a5f7bc1cfe29597ffcc0fc04cd9fe3c5ec7836538f38964f",
-    "ranking-exclusions-2026-09-29.json": "ac9d44e87be25d48b7fc43340e587e6ef3797e2ea08609d7db726cdfc800c5fd",
+    "ranking-exclusions-2026-09-29.json": "6b205656d810fcfd759e497d91630b7f37dc226d25c29531a79c620c1c15025c",
     "rankings-2026-09-29.csv": "7fe741fb5e42c5aed8d0d76580642eb216a43c75b03f7e66d2eecb50dc2ccbea",
     "source-annotations-2026-09-29.csv": "e7ef450f30fa1913777c3e2ccf16fd116ce5b13ece36ce459a6437652ae58a99",
     "source-observations-2026-09-29.json": "16044569640386b502844ab2c78730b8de85e5f31d9f963f31afd46099210430",
     "tag-domains-2026-09-29.csv": "9790fd6cdf13a26dc0aac7e56e54b72f767c5ac8d741eaa77bef829e1cb8dde6"
+  },
+  "review_correction": {
+    "date": "2026-09-30",
+    "reason": "Independent review found that the search-only sensitivity admitted candidates whose eligibility had not been fully screened. Complete the decisions through that alternative cutoff and enforce them in the analyzer.",
+    "screened_additional_sources": [
+      "BradyAJohnston/MolecularNodes",
+      "NifTK/NiftyNet",
+      "ImprintLab/MedSegDiff",
+      "nroduit/Weasis",
+      "MIC-DKFZ/medicaldetectiontoolkit",
+      "thetahealth/mirobody",
+      "vgteam/vg",
+      "agemagician/ProtTrans",
+      "ImprintLab/Medical-SAM-Adapter",
+      "PatWalters/practical_cheminformatics_tutorials",
+      "braindecode/braindecode",
+      "fahadshamshad/awesome-transformers-in-medical-imaging",
+      "steineggerlab/foldseek",
+      "JunMa11/MICCAI-OpenSourcePapers"
+    ],
+    "excluded": "brucefan1983/GPUMD",
+    "main_rankings_unchanged": true,
+    "numeric_snapshots_unchanged": true,
+    "evidence": "Retained GitHub descriptions and prior top-200 annotations; GPUMD README https://github.com/brucefan1983/GPUMD/blob/master/README.md reviewed 2026-09-30."
   }
 }
