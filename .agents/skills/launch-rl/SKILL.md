@@ -6,7 +6,7 @@ description: Define, validate, submit, or restart a Marin SkyRL experiment throu
 # Launch RL
 
 For Snowball or Hero resource sizing and performance diagnosis, start with the
-[performance task chooser](https://github.com/marin-community/MarinSkyRL/blob/15bba4f6ba6b767a218f837b8cb7040811ed47a5/docs/performance.md).
+[performance task chooser](https://github.com/marin-community/MarinSkyRL/blob/3c9ade6b83b2ac22d7720d8c16b26d265da77a96/docs/performance.md).
 
 Use the experiment's artifact graph as the launch interface. For the configuration model, role
 arithmetic, and ownership boundaries, read [RL launching](../../../docs/references/rl-launching.md).
