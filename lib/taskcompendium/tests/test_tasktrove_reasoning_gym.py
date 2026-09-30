@@ -100,7 +100,6 @@ async def test_imported_entry_matches_source_grader_and_harbor(tmp_path):
 
         attempt = GradingAttempt(
             ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=candidate))),
-            {},
             object(),
         )
         result = await grade_answer(specification, convention, attempt)
@@ -125,7 +124,6 @@ async def test_reasoning_gym_scorer_failure_propagates(monkeypatch):
     convention = PlainText(id="plain")
     attempt = GradingAttempt(
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="answer"))),
-        {},
         object(),
     )
 
@@ -153,7 +151,6 @@ async def test_reasoning_gym_rejects_invalid_scorer_results(monkeypatch, score, 
     convention = PlainText(id="plain")
     attempt = GradingAttempt(
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="answer"))),
-        {},
         object(),
     )
     monkeypatch.setattr(

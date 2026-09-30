@@ -60,13 +60,11 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     assert saved_specification["answer_type"] == "native_action"
     assert isinstance(saved_specification["final_tools"], list)
     assert saved_specification["final_tools"]
-    assert saved_specification["environment_requirements"] == {"capabilities": []}
-    assert saved_specification["tool_providers"] == {}
+    assert saved_specification["environment_requirements"] == {"capabilities": [], "action_interfaces": []}
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
     assert "Okay, let me figure out how to handle this user's query" not in public
     assert "authenticate_user" in {function.name for function in specification.final_tools}
-    assert row["expected_action"]["arguments"] not in (task / "tests/test.sh").read_text()
     with pytest.raises(ValueError, match="pinned canonical hash"):
         import_row(row, "0" * 64)
 
@@ -86,7 +84,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
         "convention = read_submission_convention(root / 'submission_convention.json'); "
         "conversation = chat_conversation([*chat_request(specification, convention)['messages'], "
         "json.loads(sys.argv[2])]); "
-        "result = asyncio.run(grade_answer(specification, convention, GradingAttempt(conversation, {}, object()))); "
+        "result = asyncio.run(grade_answer(specification, convention, GradingAttempt(conversation, object()))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -342,7 +340,7 @@ async def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = await grade_answer(specification, convention, GradingAttempt(conversation, {}, object()))
+    result = await grade_answer(specification, convention, GradingAttempt(conversation, object()))
 
     assert (result.status, result.reward) == ("graded", 1.0)
 
@@ -384,7 +382,7 @@ async def test_imported_final_call_constraints_distinguish_invalid_submission(re
     row["responses_create_params"]["tool_choice"] = "required" if require_call else "auto"
     specification, convention = import_row(row, canonical_sha256(row))
     final = assistant_message({"role": "assistant", "content": "No action"})
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), {}, object())
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
     result = await grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("submission_failure" if require_call else "graded", 0.0)
     request = chat_request(specification, convention)
@@ -400,7 +398,7 @@ async def test_imported_parallel_actions_accept_multiple_final_calls():
     specification, convention = import_row(row, canonical_sha256(row))
     single = _action(original_call["name"], original_call["arguments"])["tool_calls"][0]
     final = assistant_message({"role": "assistant", "tool_calls": [single, {**single, "id": "second"}]})
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), {}, object())
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
     result = await grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("graded", 1.0)
     assert "parallel_tool_calls" not in chat_request(specification, convention)

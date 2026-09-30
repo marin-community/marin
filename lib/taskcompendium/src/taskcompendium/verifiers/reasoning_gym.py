@@ -31,9 +31,7 @@ class ReasoningGymAnswerVerifier(Verifier):
             raise ValueError("Reasoning Gym entry requires a nonempty answer")
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("Reasoning Gym verifier requires a text submission")
         candidate = submission.value.strip()

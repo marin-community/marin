@@ -29,9 +29,7 @@ class MultipleChoiceVerifier(Verifier):
             raise ValueError(f"Invalid MCQ verifier contract: {error}") from error
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("Multiple-choice verifier requires a text submission")
         candidate = submission.value.strip()

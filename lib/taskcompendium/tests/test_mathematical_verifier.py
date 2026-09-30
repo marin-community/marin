@@ -46,7 +46,7 @@ def _attempt(task, convention, candidate):
     else:
         content = json.dumps({"answer": candidate}) if isinstance(convention, JsonAnswer) else candidate
         response = TextMessage(role="assistant", content=content)
-    return GradingAttempt(ConversationTrace(events=(*task.context.events, response)), {}, object())
+    return GradingAttempt(ConversationTrace(events=(*task.context.events, response)), object())
 
 
 @pytest.mark.parametrize("convention", [PlainText(id="plain"), JsonAnswer(id="json"), AnswerCall(id="call")])
