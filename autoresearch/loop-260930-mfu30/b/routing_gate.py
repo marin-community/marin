@@ -1,8 +1,11 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Exactness + component-timing gate for ragged all-to-all MoE routing changes.
 
-Runs the ragged EP `moe_mlp` forward and backward twice per case: once with the branch's
-`ep_ragged_all_to_all` module (candidate) and once with a frozen copy of main's module
-(`control_ep_ragged_all_to_all.py`, control). Reports bitwise equality of the output and of the
+Runs the ragged EP `moe_mlp` forward and backward once per variant: the branch's
+`ep_ragged_all_to_all` module (candidate) and frozen module copies in this directory
+(control = main's module). Reports bitwise equality of the output and of the
 gradients with respect to x, combine weights and both expert weight banks, plus same-code
 repeatability of the control and a component timing of each variant.
 
@@ -19,25 +22,27 @@ import time
 
 import jax
 import jax.numpy as jnp
-import numpy as np
-from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-import levanter.grug.grug_moe as grug_moe
 import levanter.grug._moe.ep_ragged_all_to_all as candidate_module
+import levanter.grug.grug_moe as grug_moe
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 
 HERE = pathlib.Path(__file__).resolve().parent
 
 
-def _load_control():
-    spec = importlib.util.spec_from_file_location("control_ep_ragged_all_to_all", HERE / "control_ep_ragged_all_to_all.py")
+def _load_frozen(name: str):
+    spec = importlib.util.spec_from_file_location(name, HERE / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-CONTROL = _load_control()
+# control: main f38da1173d. inverse: main + unique-index inverse permutation (d1ccdd9959).
+# candidate: the branch's live module.
 VARIANTS = {
-    "control": CONTROL._moe_mlp_ep_ragged_a2a_local,
+    "control": _load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
+    "inverse": _load_frozen("inverse_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
     "candidate": candidate_module._moe_mlp_ep_ragged_a2a_local,
 }
 
@@ -108,7 +113,7 @@ def _build(variant, case, mesh, inp):
             out, dropped = forward(x, weights, w13, w2)
             return jnp.sum(out.astype(jnp.float32) * ct.astype(jnp.float32)), (out, dropped)
 
-        (value, (out, dropped)), grads = jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)(
+        (_value, (out, dropped)), grads = jax.value_and_grad(loss, argnums=(0, 1, 2, 3), has_aux=True)(
             x, weights, w13, w2
         )
         return out, dropped, grads
@@ -183,10 +188,10 @@ def main():
         args_ = (inp["x"], inp["weights"], inp["w13"], inp["w2"], inp["ct"])
         control_a = compiled["control"](*args_)
         control_b = compiled["control"](*args_)
-        candidate = compiled["candidate"](*args_)
-        exact = _compare(control_a, candidate)
+        treated = {v: compiled[v](*args_) for v in VARIANTS if v != "control"}
+        exact = {v: _compare(control_a, out) for v, out in treated.items()}
         repeat = _compare(control_a, control_b)
-        ok = all(r["bitwise_equal"] and r["finite"] for r in exact.values())
+        ok = all(r["bitwise_equal"] and r["finite"] for cmp in exact.values() for r in cmp.values())
         failures += not ok
         record = dict(
             case=case["name"],
@@ -198,13 +203,15 @@ def main():
             temp_bytes={v: _temp_bytes(c) for v, c in compiled.items()},
         )
         if case["tokens_per_shard"] >= 65536:
-            # Alternate order so neither variant always runs warm.
-            times = {"control": [], "candidate": []}
-            for order in (("control", "candidate"), ("candidate", "control"), ("control", "candidate")):
-                for v in order:
+            # Rotate the order so no variant always runs first.
+            names = list(VARIANTS)
+            times = {v: [] for v in names}
+            for rotation in range(len(names)):
+                for v in names[rotation:] + names[:rotation]:
                     times[v].append(_time(compiled[v], inp, args.iters))
-            record["median_step_seconds"] = {v: statistics.median(t) for v, t in times.items()}
-            record["speedup"] = record["median_step_seconds"]["control"] / record["median_step_seconds"]["candidate"]
+            medians = {v: statistics.median(t) for v, t in times.items()}
+            record["median_step_seconds"] = medians
+            record["speedup_vs_control"] = {v: medians["control"] / medians[v] for v in names if v != "control"}
         print(json.dumps(record), flush=True)
         del compiled, inp
     print(json.dumps(dict(failures=failures)), flush=True)
