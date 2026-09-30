@@ -224,6 +224,43 @@ def _upload_regional(source: Path, destination: str) -> dict[str, str]:
     return uploaded
 
 
+def _stage_cohorts(root: Path, builder_revision: str) -> tuple[CohortInput, ...]:
+    projection_bytes = StoragePath(PROJECTION_MANIFEST_URI).read_bytes()
+    if hashlib.sha256(projection_bytes).hexdigest() != PROJECTION_MANIFEST_SHA256:
+        raise ValueError("Projection manifest digest mismatch")
+    projection = json.loads(projection_bytes)
+    for split in ("train", "validation"):
+        _download_workplace(split, root / f"{split}.jsonl")
+    return _workplace_cohorts(root, builder_revision) + _tasktrove_cohorts(root, projection)
+
+
+def _build_ready_artifact(
+    root: Path, cohorts: tuple[CohortInput, ...], builder_revision: str, rights_url: str
+) -> tuple[Path, str]:
+    candidate = assemble_mixed_candidate(cohorts, root / "candidate", builder_revision=builder_revision)
+    review = ReleaseReview(
+        candidate_manifest_sha256=sha256_file(candidate / "manifest.json"),
+        rights_review_url=rights_url,
+        harbor_evidence_urls=(WORKPLACE_HARBOR_EVIDENCE, TASKTROVE_HARBOR_EVIDENCE),
+    )
+    ready = finalize_mixed_candidate(candidate, root / "ready", review)
+    return ready, review.candidate_manifest_sha256
+
+
+def _write_assembly_report(ready: Path, prefix: str, candidate_sha256: str, uploaded: dict[str, str]) -> None:
+    summary = {
+        "output_prefix": prefix,
+        "candidate_manifest_sha256": candidate_sha256,
+        "files": uploaded,
+        "data_files": json.loads((ready / "manifest.json").read_text())["data_files"],
+    }
+    output = Path(os.environ["IRIS_OUTPUT_DIR"])
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "assembly-summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    shutil.copy2(ready / "manifest.json", output / "manifest.json")
+    shutil.copy2(ready / "README.md", output / "README.md")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Assemble the regional TaskCompendium alpha-1 public artifact")
     parser.add_argument("--output-prefix", required=True, help="New regional S3 prefix for public-only release files")
@@ -236,32 +273,10 @@ def main() -> None:
         raise FileExistsError(f"Regional release already exists: {args.output_prefix}")
     with tempfile.TemporaryDirectory(prefix="taskcompendium-alpha-") as directory:
         root = Path(directory)
-        projection_bytes = StoragePath(PROJECTION_MANIFEST_URI).read_bytes()
-        if hashlib.sha256(projection_bytes).hexdigest() != PROJECTION_MANIFEST_SHA256:
-            raise ValueError("Projection manifest digest mismatch")
-        projection = json.loads(projection_bytes)
-        for split in ("train", "validation"):
-            _download_workplace(split, root / f"{split}.jsonl")
-        cohorts = _workplace_cohorts(root, args.builder_revision) + _tasktrove_cohorts(root, projection)
-        candidate = assemble_mixed_candidate(cohorts, root / "candidate", builder_revision=args.builder_revision)
-        review = ReleaseReview(
-            candidate_manifest_sha256=sha256_file(candidate / "manifest.json"),
-            rights_review_url=args.rights_review_url,
-            harbor_evidence_urls=(WORKPLACE_HARBOR_EVIDENCE, TASKTROVE_HARBOR_EVIDENCE),
-        )
-        ready = finalize_mixed_candidate(candidate, root / "ready", review)
+        cohorts = _stage_cohorts(root, args.builder_revision)
+        ready, candidate_sha256 = _build_ready_artifact(root, cohorts, args.builder_revision, args.rights_review_url)
         uploaded = _upload_regional(ready, args.output_prefix)
-        summary = {
-            "output_prefix": args.output_prefix,
-            "candidate_manifest_sha256": review.candidate_manifest_sha256,
-            "files": uploaded,
-            "data_files": json.loads((ready / "manifest.json").read_text())["data_files"],
-        }
-        output = Path(os.environ["IRIS_OUTPUT_DIR"])
-        output.mkdir(parents=True, exist_ok=True)
-        (output / "assembly-summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
-        shutil.copy2(ready / "manifest.json", output / "manifest.json")
-        shutil.copy2(ready / "README.md", output / "README.md")
+        _write_assembly_report(ready, args.output_prefix, candidate_sha256, uploaded)
 
 
 if __name__ == "__main__":
