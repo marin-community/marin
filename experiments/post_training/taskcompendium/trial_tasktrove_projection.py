@@ -28,6 +28,45 @@ SOURCE_NAMES = {
     "laion__nemotron-gym-knowledge-mcqa-v2": "mcqa",
     "laion__nemo-prism-math-v3": "prism",
 }
+LEDGER_JOIN_COLUMNS = (
+    "input_split",
+    "input_file",
+    "input_row",
+    "source",
+    "path",
+    "input_object_pin",
+    "archive_sha256",
+    "disposition",
+    "imported_id",
+)
+
+
+def _source_row_index(ledger_path: StoragePath, candidate: dict, proof: dict) -> int:
+    source_row = candidate["source"]["row"]
+    source_subset, archive_path = source_row.split(":", 1)
+    if proof.get("source_row") != source_row or proof.get("archive_path") != archive_path:
+        raise ValueError("Accepted public source proof has inconsistent source coordinates")
+    matches = []
+    with ledger_path.open("rb") as opened:
+        parquet = pq.ParquetFile(opened)
+        if set(LEDGER_JOIN_COLUMNS) - set(parquet.schema_arrow.names):
+            raise ValueError("Ingestion ledger is missing source-row join fields")
+        for batch in parquet.iter_batches(columns=list(LEDGER_JOIN_COLUMNS), batch_size=65_536):
+            for row in batch.to_pylist():
+                if (
+                    row["input_split"] == "tasks"
+                    and row["input_file"] == proof["input_file"]
+                    and row["source"] == source_subset
+                    and row["path"] == archive_path
+                    and row["input_object_pin"] == proof["input_object_pin"]
+                    and row["archive_sha256"] == proof["archive_sha256"]
+                    and row["disposition"] == "imported"
+                    and row["imported_id"] == candidate["id"]
+                ):
+                    matches.append(row["input_row"])
+    if len(matches) != 1 or type(matches[0]) is not int:
+        raise ValueError(f"Accepted source proof joins to {len(matches)} ingestion rows, expected exactly one")
+    return matches[0]
 
 
 def _archive_at(source_path: str, row_index: int) -> bytes:
@@ -73,7 +112,7 @@ async def _trial(task_dir: Path, reply: dict[str, str], trials_dir: Path, name: 
         )
 
 
-async def _run(group_path: str, ingestion_uri: str, workdir: Path, artifact_dir: Path) -> dict:
+async def _run(group_path: str, ledger_path: StoragePath, ingestion_uri: str, workdir: Path, artifact_dir: Path) -> dict:
     with StoragePath(group_path).open("rb") as opened:
         wrapper = json.loads(opened.readline())
     candidate = wrapper["task"]
@@ -81,7 +120,8 @@ async def _run(group_path: str, ingestion_uri: str, workdir: Path, artifact_dir:
     source_subset, archive_path = candidate["source"]["row"].split(":", 1)
     if source_subset not in SOURCE_NAMES:
         raise ValueError(f"Unreviewed Harbor trial source {source_subset}")
-    archive_bytes = _archive_at(proof["input_file"], proof["input_row"])
+    input_row = _source_row_index(ledger_path, candidate, proof)
+    archive_bytes = _archive_at(proof["input_file"], input_row)
     archive_sha256 = hashlib.sha256(archive_bytes).hexdigest()
     if archive_sha256 != proof["archive_sha256"]:
         raise ValueError("Sampled archive SHA256 differs from exact accepted source proof")
@@ -123,6 +163,7 @@ async def _run(group_path: str, ingestion_uri: str, workdir: Path, artifact_dir:
     return {
         "source": source_subset,
         "source_row": candidate["source"]["row"],
+        "input_row": input_row,
         "archive_sha256": archive_sha256,
         "candidate_id": candidate["id"],
         "harbor_outcomes": outcomes,
@@ -134,6 +175,7 @@ async def main() -> None:
     configure_coreweave_s3()
     ingestion_uri = os.environ["TASKTROVE_OUTPUT_URI"]
     projection_uri = os.environ["TASKTROVE_ACCEPTED_OUTPUT_URI"]
+    ledger_path = StoragePath(ingestion_uri) / "ingestion-ledger.parquet"
     artifact_dir = Path(os.environ["IRIS_OUTPUT_DIR"])
     artifact_dir.mkdir(parents=True, exist_ok=True)
     workdir = artifact_dir / "lowered"
@@ -148,7 +190,7 @@ async def main() -> None:
         ]
         if len(groups) != 1 or groups[0]["rows"] < 1:
             raise ValueError(f"Expected one nonempty accepted projection group for {source_subset}")
-        outcomes.append(await _run(groups[0]["uri"], ingestion_uri, workdir, artifact_dir))
+        outcomes.append(await _run(groups[0]["uri"], ledger_path, ingestion_uri, workdir, artifact_dir))
     (artifact_dir / "harbor-summary.json").write_text(json.dumps(outcomes, indent=2, sort_keys=True) + "\n")
 
 
