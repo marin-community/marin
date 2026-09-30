@@ -11,19 +11,24 @@ import pytest
 from taskcompendium.grading import exact_answer, structured_exact
 from taskcompendium.lowering import HarborEnvironmentConfig, ToolBinding
 from taskcompendium.mixed_release import (
-    AcceptedPublicRecord,
+    AcceptedTaskRecord,
+    CatalogJoinEvidence,
     CohortInput,
     HarborSample,
+    PublishedRow,
     ReleaseReview,
     SourceAsset,
     SourceProof,
     SourceRights,
     assemble_mixed_candidate,
     finalize_mixed_candidate,
+    published_task,
 )
 from taskcompendium.models import (
+    SCHEMA_VERSION,
     AnswerType,
     ConversationInput,
+    ConversationTrace,
     EnvironmentRequirements,
     FunctionDefinition,
     ProviderRequirement,
@@ -32,7 +37,9 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.public_projection import public_task
-from taskcompendium.submission import FinalAction, PlainText, ProviderState
+from taskcompendium.submission import FinalAction, GradingAttempt, PlainText, ProviderState
+from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 
 def test_public_task_retains_agent_input_and_ordered_tags_without_expected_state():
@@ -104,242 +111,153 @@ def test_public_state_task_keeps_requirement_without_runtime_binding_or_expected
         public_task(specification, ProviderState(id="state", provider="workplace"), mismatched)
 
 
-def test_mixed_candidate_exports_flat_tasks_with_provenance_and_rights_separate(tmp_path):
-    source_digest = "a" * 64
-    source_uri = "s3://example-bucket/tasktrove/clean/2026.09.18.3"
+def _cohort(tmp_path, config="workplace"):
+    digest = "a" * 64
     regional_pin = (
         "2026.09.18.3#manifest-sha256=" + "b" * 64 + "#parquet-size=100#parquet-etag=etag#parquet-version-id=id"
     )
-    workplace = public_task(
-        TaskSpec(
-            id="workplace-0",
-            context=ConversationInput(events=(TextMessage(role="user", content="Update the calendar."),)),
-            environment_requirements=EnvironmentRequirements(),
-            answer_type=AnswerType.TEXT,
-            verifier=exact_answer("private-workplace-answer"),
-            source=Source(
-                dataset="nvidia/workplace",
-                revision="source-pin",
-                row=f"train:0:{source_digest}",
-                importer_revision="workplace-v1",
-            ),
-        ),
-        PlainText(id="plain"),
-        HarborEnvironmentConfig(),
-        source_category="calendar",
+    tasktrove = config == "tasktrove_clean"
+    dataset = "s3://example-bucket/tasktrove" if tasktrove else "nvidia/workplace"
+    source_row = "knowledge:knowledge/mcqa.jsonl" if tasktrove else f"train:0:{digest}"
+    source_pin = regional_pin if tasktrove else "source-pin"
+    input_file = f"{dataset}/source.parquet" if tasktrove else "train.jsonl"
+    object_pin = regional_pin if tasktrove else "sha256:" + digest
+    specification = TaskSpec(
+        id=config,
+        context=ConversationInput(events=(TextMessage(role="user", content="Choose an option."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        verifier=multiple_choice_answer("B", 3) if tasktrove else exact_answer("private-workplace-answer"),
+        source=Source(dataset=dataset, revision=source_pin, row=source_row, importer_revision="importer-v1"),
+        tags=("knowledge", "mcqa") if tasktrove else (),
     )
-    tasktrove = public_task(
-        TaskSpec(
-            id="tasktrove-0",
-            context=ConversationInput(events=(TextMessage(role="user", content="Choose one option."),)),
-            environment_requirements=EnvironmentRequirements(),
-            answer_type=AnswerType.TEXT,
-            verifier=exact_answer("private-tasktrove-answer"),
-            source=Source(
-                dataset=source_uri,
-                revision=regional_pin,
-                row="knowledge:knowledge/mcqa.jsonl",
-                importer_revision="mcq-v1",
-            ),
-            tags=("knowledge", "mcqa"),
-        ),
-        PlainText(id="plain"),
-        HarborEnvironmentConfig(),
-        source_category="knowledge",
-    )
-    archive_digest = "b" * 64
-    accepted = AcceptedPublicRecord(
-        task=tasktrove,
+    record = AcceptedTaskRecord(
+        task=specification,
+        source_category="knowledge" if tasktrove else "calendar",
         source_proof=SourceProof(
-            source_row="knowledge:knowledge/mcqa.jsonl",
-            input_file=f"{source_uri}/source.parquet",
-            input_object_pin=regional_pin,
-            archive_path="knowledge/mcqa.jsonl",
-            archive_sha256=archive_digest,
+            source_row=source_row,
+            source_row_sha256=None if tasktrove else digest,
+            input_file=input_file,
+            input_object_pin=object_pin,
+            archive_path="knowledge/mcqa.jsonl" if tasktrove else None,
+            archive_sha256="c" * 64 if tasktrove else None,
         ),
     )
-    workplace_path = tmp_path / "workplace.jsonl"
-    workplace_path.write_text(workplace.model_dump_json() + "\n")
-    tasktrove_path = tmp_path / "tasktrove.jsonl"
-    regional_candidate = accepted.model_dump(mode="json")
-    del regional_candidate["task"]["record_version"]
-    tasktrove_path.write_text(json.dumps(regional_candidate) + "\n")
-    rights = SourceRights(
-        license="cc-by-4.0",
-        license_url="https://creativecommons.org/licenses/by/4.0/",
-        attribution="NVIDIA Corporation",
-        source_card_url="https://example.org/card",
-        source_card_revision="1" * 40,
-        change_notice="Converted source rows to agent-visible tasks.",
-    )
+    path = tmp_path / f"{config}.jsonl"
+    path.write_text(record.model_dump_json() + "\n")
     sample = HarborSample(
         evidence_url="https://example.org/trials",
         taskcompendium_revision="d" * 40,
         harbor_revision="e" * 40,
         trials=1,
-        coverage="one accepted row",
-    )
-    cohorts = (
-        CohortInput(
-            config="workplace",
-            cohort="workplace_train",
-            split="train",
-            record_format="public_task",
-            input_path=workplace_path,
-            input_sha256=sha256(workplace_path.read_bytes()).hexdigest(),
-            accepted_rows=1,
-            source_records=2,
-            parsed_rows=1,
-            source_dataset="nvidia/workplace",
-            source_revision="source-pin",
-            source_assets=(SourceAsset(path="train.jsonl", pin="sha256:" + "f" * 64),),
-            task_spec_schema="0.11",
-            importer_revision="workplace-v1",
-            projection_builder_revision="1" * 40,
-            rights=rights,
-            harbor_samples=(sample,),
-        ),
-        CohortInput(
-            config="tasktrove_clean",
-            cohort="mcqa",
-            split="train",
-            record_format="accepted_public_record",
-            input_path=tasktrove_path,
-            input_sha256=sha256(tasktrove_path.read_bytes()).hexdigest(),
-            accepted_rows=1,
-            source_records=23860,
-            parsed_rows=1,
-            source_dataset=source_uri,
-            source_subset="knowledge",
-            source_category="knowledge",
-            projection_manifest_sha256="c" * 64,
-            source_assets=(SourceAsset(path=f"{source_uri}/source.parquet", pin=regional_pin),),
-            task_spec_schema="0.13",
-            importer_revision="mcq-v1",
-            projection_builder_revision="2" * 40,
-            rights=rights,
-            harbor_samples=(sample,),
-        ),
-    )
-    destination = assemble_mixed_candidate(cohorts, tmp_path / "candidate", builder_revision="3" * 40)
-    reversed_candidate = assemble_mixed_candidate(
-        tuple(reversed(cohorts)), tmp_path / "candidate-reversed", builder_revision="3" * 40
-    )
-    candidate_files = sorted(path.relative_to(destination) for path in destination.rglob("*") if path.is_file())
-    assert candidate_files == sorted(
-        path.relative_to(reversed_candidate) for path in reversed_candidate.rglob("*") if path.is_file()
-    )
-    assert all((destination / path).read_bytes() == (reversed_candidate / path).read_bytes() for path in candidate_files)
-    manifest = json.loads((destination / "manifest.json").read_text())
-    assert [entry["config"] for entry in manifest["data_files"]] == ["workplace", "tasktrove_clean"]
-    assert [entry["source_records"] for entry in manifest["data_files"]] == [2, 23860]
-    assert [entry["parsed_rows"] for entry in manifest["data_files"]] == [1, 1]
-    assert [entry["accepted_rows"] for entry in manifest["data_files"]] == [1, 1]
-    assert [entry["exported_rows"] for entry in manifest["data_files"]] == [1, 1]
-    assert manifest["publication_ready"] is False
-    assert manifest["data_files"][1]["source"]["projection_manifest_sha256"] == "c" * 64
-    tasktrove_output = (destination / "data/tasktrove_clean/mcqa.jsonl").read_text()
-    row = json.loads(tasktrove_output)
-    assert row["record_version"] == 2
-    assert row["tags"] == ["knowledge", "mcqa"]
-    assert row["answer_type"] == "mcq"
-    assert row["source"]["dataset"] == "tasktrove_clean"
-    assert row["provenance"]["archive_sha256"] == archive_digest
-    assert row["provenance"]["input_file"] == "source.parquet"
-    assert "task" not in row and "source_proof" not in row and "submission_instruction" not in row
-    workplace_output = (destination / "data/workplace/workplace_train.jsonl").read_text()
-    assert "submission_instruction" not in workplace_output
-    assert "private-workplace-answer" not in workplace_output
-    assert "private-tasktrove-answer" not in tasktrove_output
-    assert "example-bucket" not in tasktrove_output
-    assert "example-bucket" not in (destination / "manifest.json").read_text()
-    assert "config_name: workplace" in (destination / "README.md").read_text()
-    assert "config_name: tasktrove_clean" in (destination / "README.md").read_text()
-
-
-def test_mixed_candidate_rejects_private_or_unproved_tasktrove_record(tmp_path):
-    regional_pin = (
-        "2026.09.18.3#manifest-sha256=" + "a" * 64 + "#parquet-size=100#parquet-etag=etag#parquet-version-id=id"
-    )
-    task = public_task(
-        TaskSpec(
-            id="tasktrove-0",
-            context=ConversationInput(events=(TextMessage(role="user", content="Choose one option."),)),
-            environment_requirements=EnvironmentRequirements(),
-            answer_type=AnswerType.TEXT,
-            verifier=exact_answer("private-answer"),
-            source=Source(
-                dataset="open-athena/task-trove",
-                revision=regional_pin,
-                row="knowledge:knowledge/mcqa.jsonl",
-                importer_revision="mcq-v1",
-            ),
-        ),
-        PlainText(id="plain"),
-        HarborEnvironmentConfig(),
-        source_category="knowledge",
-    )
-    path = tmp_path / "accepted.jsonl"
-    path.write_text(
-        json.dumps(
-            {
-                "task": task.model_dump(mode="json"),
-                "source_proof": {
-                    "source_row": "knowledge:knowledge/mcqa.jsonl",
-                    "input_file": "source.parquet",
-                    "input_object_pin": regional_pin,
-                    "archive_path": "knowledge/mcqa.jsonl",
-                    "archive_sha256": "b" * 64,
-                },
-            }
-        )
-        + "\n"
+        coverage="one reconstructed task",
     )
     cohort = CohortInput(
-        config="tasktrove_clean",
-        cohort="knowledge_mcqa",
+        config=config,
+        cohort="mcqa" if tasktrove else "workplace_train",
         split="train",
-        record_format="accepted_public_record",
         input_path=path,
         input_sha256=sha256(path.read_bytes()).hexdigest(),
         accepted_rows=1,
-        source_records=1,
-        source_dataset="open-athena/task-trove",
-        source_subset="knowledge",
-        source_category="knowledge",
-        projection_manifest_sha256="f" * 64,
-        source_assets=(SourceAsset(path="source.parquet", pin=regional_pin),),
-        task_spec_schema="0.13",
-        importer_revision="mcq-v1",
+        source_records=2,
+        parsed_rows=1,
+        source_dataset=dataset,
+        source_revision=None if tasktrove else source_pin,
+        source_subset="knowledge" if tasktrove else None,
+        source_category="knowledge" if tasktrove else None,
+        projection_manifest_sha256="f" * 64 if tasktrove else None,
+        source_assets=(SourceAsset(path=input_file, pin=object_pin),),
+        task_spec_schema=SCHEMA_VERSION,
+        importer_revision="importer-v1",
         projection_builder_revision="1" * 40,
         rights=SourceRights(
             license="cc-by-4.0",
             license_url="https://creativecommons.org/licenses/by/4.0/",
             attribution="NVIDIA Corporation",
             source_card_url="https://example.org/card",
-            source_card_revision="1" * 40,
-            change_notice="Converted source row.",
+            source_card_revision="2" * 40,
+            change_notice="Converted accepted source rows to complete tasks.",
         ),
-        harbor_samples=(
-            HarborSample(
-                evidence_url="https://example.org/trials",
-                taskcompendium_revision="c" * 40,
-                harbor_revision="d" * 40,
-                trials=1,
-                coverage="one accepted row",
-            ),
+        harbor_samples=(sample,),
+        catalog_join=(
+            CatalogJoinEvidence(
+                catalog_sha256="3" * 64,
+                ledger_sha256="4" * 64,
+                output_schema_version=SCHEMA_VERSION,
+                joined_rows=1,
+                verifier_matches=1,
+                projected_field_matches=1,
+            )
+            if tasktrove
+            else None
         ),
     )
-    with pytest.raises(ValueError, match="original ordered source tags"):
-        assemble_mixed_candidate((cohort,), tmp_path / "candidate", builder_revision="e" * 40)
-    assert not (tmp_path / "candidate").exists()
-    payload = json.loads(path.read_text())
-    payload["task"]["verifier"] = {"expected": "private-answer"}
-    path.write_text(json.dumps(payload) + "\n")
-    cohort = cohort.model_copy(update={"input_sha256": sha256(path.read_bytes()).hexdigest()})
+    return cohort, record
+
+
+async def test_demo_export_reconstructs_gradeable_tasks_and_retains_provenance(tmp_path):
+    workplace, original_workplace = _cohort(tmp_path)
+    tasktrove, original_tasktrove = _cohort(tmp_path, "tasktrove_clean")
+    destination = assemble_mixed_candidate((workplace, tasktrove), tmp_path / "candidate", builder_revision="5" * 40)
+    reversed_candidate = assemble_mixed_candidate(
+        (tasktrove, workplace), tmp_path / "reversed", builder_revision="5" * 40
+    )
+    for path in destination.rglob("*"):
+        if path.is_file():
+            assert path.read_bytes() == (reversed_candidate / path.relative_to(destination)).read_bytes()
+    mcqa = PublishedRow.model_validate_json((destination / "data/tasktrove_clean/mcqa.jsonl").read_text())
+    reconstructed = published_task(mcqa)
+    assert reconstructed.verifier == original_tasktrove.task.verifier
+    assert reconstructed.answer_type is AnswerType.TEXT
+    assert mcqa.record_version == 3 and mcqa.schema_version == SCHEMA_VERSION
+    assert mcqa.tags == ("knowledge", "mcqa")
+    assert mcqa.source.dataset == "tasktrove_clean"
+    assert mcqa.provenance.input_file == "source.parquet"
+    rewards = []
+    for answer in ("B", "A"):
+        result = await grade_answer(
+            reconstructed,
+            PlainText(id="plain"),
+            GradingAttempt(
+                conversation=ConversationTrace(
+                    events=(*reconstructed.context.events, TextMessage(role="assistant", content=answer))
+                ),
+                tool_providers={},
+                workspace=None,
+            ),
+        )
+        rewards.append(result.reward)
+    assert rewards == [1.0, 0.0]
+    state = PublishedRow.model_validate_json((destination / "data/workplace/workplace_train.jsonl").read_text())
+    assert published_task(state).verifier == original_workplace.task.verifier
+    assert "private-workplace-answer" in state.model_dump_json()
+    assert "verifier" not in public_task(reconstructed, PlainText(id="plain"), HarborEnvironmentConfig()).model_dump()
+    manifest = json.loads((destination / "manifest.json").read_text())
+    assert manifest["public_record_version"] == 3
+    assert manifest["data_files"][1]["source"]["catalog_join"]["input_schema_version"] == "0.13"
+    assert manifest["publication_ready"] is False
+    for path in destination.rglob("*"):
+        if path.is_file():
+            assert "example-bucket" not in path.read_text()
+    payload = mcqa.model_dump()
+    assert not {"task", "source_proof", "submission_instruction", "gold"} & payload.keys()
+
+
+def test_demo_export_rejects_missing_grader_and_wrong_source_proof(tmp_path):
+    cohort, record = _cohort(tmp_path, "tasktrove_clean")
+    payload = record.model_dump(mode="json")
+    del payload["task"]["verifier"]
+    cohort.input_path.write_text(json.dumps(payload) + "\n")
+    cohort = cohort.model_copy(update={"input_sha256": sha256(cohort.input_path.read_bytes()).hexdigest()})
     with pytest.raises(ValueError):
-        assemble_mixed_candidate((cohort,), tmp_path / "candidate", builder_revision="e" * 40)
+        assemble_mixed_candidate((cohort,), tmp_path / "candidate", builder_revision="5" * 40)
     assert not (tmp_path / "candidate").exists()
+    payload = record.model_dump(mode="json")
+    payload["source_proof"]["archive_path"] = "wrong.jsonl"
+    cohort.input_path.write_text(json.dumps(payload) + "\n")
+    cohort = cohort.model_copy(update={"input_sha256": sha256(cohort.input_path.read_bytes()).hexdigest()})
+    with pytest.raises(ValueError, match="archive proof"):
+        assemble_mixed_candidate((cohort,), tmp_path / "candidate", builder_revision="5" * 40)
 
 
 def test_release_finalizer_rejects_review_for_another_candidate(tmp_path):
@@ -360,66 +278,12 @@ def test_release_finalizer_rejects_review_for_another_candidate(tmp_path):
 
 
 def _workplace_candidate(tmp_path):
-    row_digest = "a" * 64
-    record = public_task(
-        TaskSpec(
-            id="workplace-finalize-test",
-            context=ConversationInput(events=(TextMessage(role="user", content="Update the calendar."),)),
-            environment_requirements=EnvironmentRequirements(),
-            answer_type=AnswerType.TEXT,
-            verifier=exact_answer("private answer"),
-            source=Source(
-                dataset="nvidia/workplace",
-                revision="source-pin",
-                row=f"train:0:{row_digest}",
-                importer_revision="workplace-v1",
-            ),
-        ),
-        PlainText(id="plain"),
-        HarborEnvironmentConfig(),
-    )
-    input_path = tmp_path / "workplace.jsonl"
-    input_path.write_text(record.model_dump_json() + "\n")
-    evidence_url = "https://example.org/workplace-trials"
-    cohort = CohortInput(
-        config="workplace",
-        cohort="workplace_train",
-        split="train",
-        record_format="public_task",
-        input_path=input_path,
-        input_sha256=sha256(input_path.read_bytes()).hexdigest(),
-        accepted_rows=1,
-        source_records=1,
-        source_dataset="nvidia/workplace",
-        source_revision="source-pin",
-        source_assets=(SourceAsset(path="train.jsonl", pin="sha256:" + "b" * 64),),
-        task_spec_schema="0.13",
-        importer_revision="workplace-v1",
-        projection_builder_revision="c" * 40,
-        rights=SourceRights(
-            license="cc-by-4.0",
-            license_url="https://creativecommons.org/licenses/by/4.0/",
-            attribution="NVIDIA Corporation",
-            source_card_url="https://example.org/card",
-            source_card_revision="d" * 40,
-            change_notice="Converted source row.",
-        ),
-        harbor_samples=(
-            HarborSample(
-                evidence_url=evidence_url,
-                taskcompendium_revision="e" * 40,
-                harbor_revision="f" * 40,
-                trials=1,
-                coverage="one public task",
-            ),
-        ),
-    )
+    cohort, _ = _cohort(tmp_path)
     candidate = assemble_mixed_candidate((cohort,), tmp_path / "candidate", builder_revision="1" * 40)
-    manifest_sha256 = sha256((candidate / "manifest.json").read_bytes()).hexdigest()
     review = ReleaseReview(
-        candidate_manifest_sha256=manifest_sha256,
+        candidate_manifest_sha256=sha256((candidate / "manifest.json").read_bytes()).hexdigest(),
         rights_review_url="https://example.org/rights-review",
-        harbor_evidence_urls=(evidence_url,),
+        harbor_evidence_urls=("https://example.org/trials",),
     )
     return candidate, review
 
@@ -487,7 +351,6 @@ def test_public_action_task_serializes_terminal_functions_without_verifier():
         specification,
         FinalAction(id="action", require_call=True, max_calls=1),
         HarborEnvironmentConfig(),
-        tags=(),
     )
     payload = json.loads(record.model_dump_json())
     assert payload["final_tools"] == [

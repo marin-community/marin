@@ -70,7 +70,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
         context=ConversationInput(events=(TextMessage(role="user", content=instructions),)),
         environment_requirements=EnvironmentRequirements(),
-        answer_type=AnswerType.MCQ,
+        answer_type=AnswerType.TEXT,
         verifier=multiple_choice_answer(contract.expected, contract.options),
         source=archive.source,
         tags=tuple(tags),

@@ -14,8 +14,9 @@ from typing import Any
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.mixed_release import PublishedRow
+from taskcompendium.models import SCHEMA_VERSION
+from taskcompendium.release_common import REPO_ID
 
-REPO_ID = "open-athena/taskcompendium-alpha-1"
 EXPECTED_ROWS = {
     "data/workplace/train.jsonl": 1255,
     "data/workplace/validation.jsonl": 545,
@@ -55,9 +56,23 @@ def _stage_release(
     if (
         manifest["repo_id"] != REPO_ID
         or manifest["publication_ready"] is not True
-        or manifest["public_record_version"] != 2
+        or manifest["public_record_version"] != 3
+        or manifest["task_spec_schema"] != SCHEMA_VERSION
     ):
         raise ValueError("Reviewed manifest does not authorize the target public dataset")
+    audit = manifest["reconstruction_audit"]
+    if (
+        audit["workplace_expected_state_matches"] != {"train": 1255, "validation": 545}
+        or audit["harbor_trials"] != 8
+        or audit["harbor_rewards"]
+        != {
+            "workplace/train": [1.0, 0.0],
+            "workplace/validation": [1.0, 0.0],
+            "tasktrove_clean/mcqa": [1.0, 0.0],
+            "tasktrove_clean/prism_math": [1.0, 0.0],
+        }
+    ):
+        raise ValueError("Reviewed release lacks successful reconstructed source and Harbor gates")
     data_files = {entry["path"]: entry for entry in manifest["data_files"]}
     if set(data_files) != set(EXPECTED_ROWS):
         raise ValueError("Reviewed release has an unexpected config, cohort, or file")
@@ -96,7 +111,7 @@ def _upload_update(local: Path, base_revision: str) -> tuple[HfApi, str]:
             if path.is_file()
         ],
         parent_commit=base_revision,
-        commit_message="Flatten TaskCompendium alpha 1 public rows",
+        commit_message="Publish complete TaskCompendium alpha 1 demonstration tasks",
     )
     return api, commit.oid
 
@@ -117,7 +132,7 @@ def _verify_public_update(
 
 
 def _write_publication_summary(
-    revision: str, data_files: dict[str, dict[str, Any]], manifest_sha256: str, readme_sha256: str
+    revision: str, data_files: dict[str, dict[str, Any]], manifest_sha256: str, readme_sha256: str, output: Path
 ) -> None:
     summary = {
         "repo_id": REPO_ID,
@@ -128,7 +143,6 @@ def _write_publication_summary(
         "files": {path: data_files[path]["sha256"] for path in sorted(data_files)},
         "rows": EXPECTED_ROWS,
     }
-    output = Path(os.environ["IRIS_OUTPUT_DIR"])
     output.mkdir(parents=True, exist_ok=True)
     (output / "publication-summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
@@ -140,6 +154,7 @@ def main() -> None:
     parser.add_argument("--readme-sha256", required=True)
     parser.add_argument("--base-revision", required=True)
     args = parser.parse_args()
+    output = Path(os.environ["IRIS_OUTPUT_DIR"])
     if not args.source_prefix.startswith("s3://marin-us-east-02a/marin/taskcompendium/releases/"):
         raise ValueError("Source must be the reviewed regional release prefix")
     if len(args.base_revision) != 40 or any(char not in "0123456789abcdef" for char in args.base_revision):
@@ -149,7 +164,7 @@ def main() -> None:
         data_files = _stage_release(args.source_prefix.rstrip("/"), local, args.manifest_sha256, args.readme_sha256)
         _, revision = _upload_update(local, args.base_revision)
         _verify_public_update(revision, data_files, args.manifest_sha256, args.readme_sha256)
-        _write_publication_summary(revision, data_files, args.manifest_sha256, args.readme_sha256)
+        _write_publication_summary(revision, data_files, args.manifest_sha256, args.readme_sha256, output)
 
 
 if __name__ == "__main__":

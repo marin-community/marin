@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assemble a local mixed public candidate from accepted agent-visible records."""
+"""Assemble a local demonstration dataset from complete accepted task records."""
 
 import argparse
 import json
@@ -14,17 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from taskcompendium.models import (
-    SHA256_PATTERN,
-    AnswerType,
-    ConversationInput,
-    EnvironmentRequirements,
-    FinalTools,
-    ProviderRequirement,
-    Source,
-)
+from taskcompendium.models import SCHEMA_VERSION, SHA256_PATTERN, TaskSpec
 from taskcompendium.path_validation import validate_relative_file_path
-from taskcompendium.public_projection import PublicTask
 from taskcompendium.release_common import REPO_ID, sha256_file
 
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
@@ -38,7 +29,6 @@ MANIFEST_FILENAME = "manifest.json"
 CARD_FILENAME = "README.md"
 ConfigName = Literal["workplace", "tasktrove_clean"]
 SplitName = Literal["train", "validation"]
-RecordFormat = Literal["public_task", "accepted_public_record"]
 CONFIG_ORDER = (WORKPLACE_CONFIG, TASKTROVE_CONFIG)
 
 
@@ -76,31 +66,41 @@ class SourceProof(BaseModel):
         return self
 
 
-class AcceptedPublicRecord(BaseModel):
-    """A reviewed regional input with independently pinned source-row proof."""
+class AcceptedTaskRecord(BaseModel):
+    """A complete task with reviewed source category and immutable row proof."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    task: PublicTask
+    task: TaskSpec
+    source_category: str | None = None
     source_proof: SourceProof
 
 
-class PublishedRow(BaseModel):
-    """Agent-visible task fields and source provenance in the Hub row format."""
+class PublishedRow(TaskSpec):
+    """Complete demonstration task fields and source provenance on the Hub."""
+
+    record_version: Literal[3] = 3
+    source_category: str | None = None
+    provenance: SourceProof
+
+
+def published_task(row: PublishedRow) -> TaskSpec:
+    """Reconstruct the task definition carried by one demonstration row."""
+    return TaskSpec.model_validate(row.model_dump(exclude={"record_version", "source_category", "provenance"}))
+
+
+class CatalogJoinEvidence(BaseModel):
+    """Exact private catalog and ledger pins behind a complete-task conversion."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    record_version: Literal[2] = 2
-    id: str
-    context: ConversationInput
-    environment_requirements: EnvironmentRequirements
-    tool_providers: dict[str, ProviderRequirement]
-    final_tools: FinalTools
-    answer_type: AnswerType
-    source: Source
-    tags: tuple[str, ...]
-    source_category: str | None
-    provenance: SourceProof
+    catalog_sha256: str
+    ledger_sha256: str
+    input_schema_version: Literal["0.13"] = "0.13"
+    output_schema_version: str
+    joined_rows: int
+    verifier_matches: int
+    projected_field_matches: int
 
 
 class SourceRights(BaseModel):
@@ -203,7 +203,6 @@ class CohortInput(BaseModel):
     config: ConfigName
     cohort: str
     split: SplitName
-    record_format: RecordFormat
     input_path: Path
     input_sha256: str
     accepted_rows: int = Field(gt=0)
@@ -221,6 +220,7 @@ class CohortInput(BaseModel):
     rights: SourceRights
     harbor_samples: tuple[HarborSample, ...] = Field(min_length=1)
     provider_pins: tuple[ProviderPin, ...] = ()
+    catalog_join: CatalogJoinEvidence | None = None
 
     @model_validator(mode="after")
     def validate_cohort(self) -> "CohortInput":
@@ -236,18 +236,27 @@ class CohortInput(BaseModel):
             raise ValueError("Cohort source and schema pins are required")
         if not self.importer_revision or not GIT_SHA_PATTERN.fullmatch(self.projection_builder_revision):
             raise ValueError("Importer and projection builder pins are required")
-        if self.config == WORKPLACE_CONFIG and self.record_format != "public_task":
-            raise ValueError("Workplace input must use the public task format")
         if self.config == WORKPLACE_CONFIG and (self.source_revision is None or len(self.source_assets) != 1):
             raise ValueError("Workplace needs its pinned source revision and one split file")
-        if self.config == TASKTROVE_CONFIG and self.record_format != "accepted_public_record":
-            raise ValueError("TaskTrove input must carry accepted-row source proof")
         if self.config == TASKTROVE_CONFIG and (not self.source_subset or not self.source_category):
             raise ValueError("TaskTrove cohorts need an exact source subset and category")
         if self.config == TASKTROVE_CONFIG and (
             self.projection_manifest_sha256 is None or not SHA256_PATTERN.fullmatch(self.projection_manifest_sha256)
         ):
             raise ValueError("TaskTrove cohorts need the accepted projection manifest SHA256")
+        if self.config == TASKTROVE_CONFIG:
+            if self.catalog_join is None:
+                raise ValueError("TaskTrove full tasks require private catalog join evidence")
+            evidence = self.catalog_join
+            if (
+                evidence.output_schema_version != SCHEMA_VERSION
+                or evidence.joined_rows != self.accepted_rows
+                or evidence.verifier_matches != self.accepted_rows
+                or evidence.projected_field_matches != self.accepted_rows
+                or not SHA256_PATTERN.fullmatch(evidence.catalog_sha256)
+                or not SHA256_PATTERN.fullmatch(evidence.ledger_sha256)
+            ):
+                raise ValueError("TaskTrove catalog join evidence differs from its accepted cohort")
         if self.config == WORKPLACE_CONFIG and self.projection_manifest_sha256 is not None:
             raise ValueError("Workplace cohorts do not use the regional TaskTrove projection manifest")
         if len({pin.name for pin in self.provider_pins}) != len(self.provider_pins):
@@ -257,32 +266,13 @@ class CohortInput(BaseModel):
         return self
 
 
-def _workplace_record(task: PublicTask, cohort: CohortInput) -> AcceptedPublicRecord:
-    parts = task.source.row.split(":")
-    if len(parts) != 3 or parts[0] != cohort.split or not parts[1].isdigit() or not SHA256_PATTERN.fullmatch(parts[2]):
-        raise ValueError("Workplace row lacks split-local SHA256 provenance")
-    asset = cohort.source_assets[0]
-    return AcceptedPublicRecord(
-        task=task,
-        source_proof=SourceProof(
-            source_row=task.source.row,
-            source_row_sha256=parts[2],
-            input_file=asset.path,
-            input_object_pin=asset.pin,
-        ),
-    )
-
-
 def _validated_record(
     raw: str,
     cohort: CohortInput,
     source_assets: set[tuple[str, str]],
     provider_pins: dict[str, ProviderPin],
-) -> AcceptedPublicRecord:
-    if cohort.record_format == "public_task":
-        record = _workplace_record(PublicTask.model_validate_json(raw), cohort)
-    else:
-        record = AcceptedPublicRecord.model_validate_json(raw)
+) -> AcceptedTaskRecord:
+    record = AcceptedTaskRecord.model_validate_json(raw)
     task, proof = record.task, record.source_proof
     if task.source.dataset != cohort.source_dataset:
         raise ValueError("Public row source does not match cohort pin")
@@ -301,14 +291,24 @@ def _validated_record(
     if cohort.config == TASKTROVE_CONFIG:
         if not task.tags:
             raise ValueError("TaskTrove rows must retain original ordered source tags")
-        if task.source_category != cohort.source_category or not task.source.row.startswith(f"{cohort.source_subset}:"):
+        if record.source_category != cohort.source_category or not task.source.row.startswith(
+            f"{cohort.source_subset}:"
+        ):
             raise ValueError("TaskTrove row does not belong to the licensed source cohort")
         if proof.archive_path is None or proof.archive_sha256 is None:
             raise ValueError("TaskTrove rows need archive path and digest")
         if not task.source.row.endswith(f":{proof.archive_path}") or task.source.revision != proof.input_object_pin:
             raise ValueError("TaskTrove archive proof differs from row provenance")
-    elif proof.archive_path is not None:
-        raise ValueError("Workplace source rows must not claim an archive")
+    else:
+        parts = task.source.row.split(":")
+        if (
+            len(parts) != 3
+            or parts[0] != cohort.split
+            or not parts[1].isdigit()
+            or parts[2] != proof.source_row_sha256
+            or proof.archive_path is not None
+        ):
+            raise ValueError("Workplace row must retain its split-local raw row digest")
     return record
 
 
@@ -322,35 +322,28 @@ def _public_asset_path(path: str, cohort: CohortInput) -> str:
     return path
 
 
-def _published_row(record: AcceptedPublicRecord, cohort: CohortInput) -> PublishedRow:
-    """Convert a reviewed regional input to the public row schema."""
+def _published_row(record: AcceptedTaskRecord, cohort: CohortInput) -> PublishedRow:
+    """Convert a reviewed full task to a demonstration row without changing its grader."""
     task = record.task
     proof = record.source_proof.model_copy(
         update={"input_file": _public_asset_path(record.source_proof.input_file, cohort)}
     )
     if proof.archive_path is not None:
         validate_relative_file_path(proof.archive_path)
-    answer_type = task.answer_type
-    if cohort.config == TASKTROVE_CONFIG:
-        if cohort.cohort == "mcqa":
-            if answer_type not in (AnswerType.TEXT, AnswerType.MCQ):
-                raise ValueError("MCQA source must carry a text option letter")
-            answer_type = AnswerType.MCQ
-        source = task.source.model_copy(update={"dataset": TASKTROVE_CONFIG})
-    else:
-        source = task.source
-    return PublishedRow(
-        id=task.id,
-        context=task.context,
-        environment_requirements=task.environment_requirements,
-        tool_providers=task.tool_providers,
-        final_tools=task.final_tools,
-        answer_type=answer_type,
+    source = (
+        task.source.model_copy(update={"dataset": TASKTROVE_CONFIG})
+        if cohort.config == TASKTROVE_CONFIG
+        else task.source
+    )
+    row = PublishedRow(
+        **task.model_dump(exclude={"source"}),
         source=source,
-        tags=task.tags,
-        source_category=task.source_category,
+        source_category=record.source_category,
         provenance=proof,
     )
+    if row.verifier != task.verifier:
+        raise ValueError("Published row changed the source verifier")
+    return row
 
 
 def _write_cohort(
@@ -404,9 +397,11 @@ def _card(cohorts: tuple[CohortInput, ...], data_files: list[dict[str, object]])
                 lines.extend(f"          - {path}" for path in paths)
     lines.extend(("---", "", "# TaskCompendium Alpha 1 Candidate", ""))
     lines.append(
-        "This local candidate contains accepted, agent-visible tasks. The manifest records exported counts, "
-        "source pins, rights, and Harbor sample evidence. Verifier settings, reference answers, gold actions, "
-        "and private resources are excluded. Rows place source pins in `provenance` and omit submission instructions. "
+        "This local demonstration candidate contains complete accepted TaskSpecs. The manifest records exported counts, "
+        "source pins, rights, and Harbor sample evidence. Each row retains its actual verifier, "
+        "including reference answers "
+        "or expected state. Runtime agent projection keeps grading material out of model input. "
+        "Rows place source pins in `provenance` and omit submission instructions. "
         "The builder does not upload to the Hub."
     )
     lines.extend(
@@ -590,9 +585,9 @@ def _publication_card(manifest: dict[str, Any], review: ReleaseReview) -> str:
                 lines.extend(f"          - {path}" for path in paths)
     lines.extend(("---", "", "# TaskCompendium Alpha 1", ""))
     lines.append(
-        "This release contains accepted, agent-visible tasks. Verifier settings, reference answers, gold actions, "
-        "and private resources are excluded. Rows place source pins in `provenance` and omit submission "
-        "instructions."
+        "This demonstration release contains complete accepted TaskSpecs and their actual verifiers, including "
+        "reference answers or expected state. Runtime agent projection keeps grading material out of model input. "
+        "Rows place source pins in `provenance` and omit submission instructions."
     )
     lines.append("")
     for entry in data_files:
@@ -648,6 +643,7 @@ def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path
                             for asset in cohort.source_assets
                         ],
                         "task_spec_schema": cohort.task_spec_schema,
+                        "catalog_join": cohort.catalog_join.model_dump(mode="json") if cohort.catalog_join else None,
                         "importer_revision": cohort.importer_revision,
                         "projection_builder_revision": cohort.projection_builder_revision,
                         "projection_manifest_sha256": cohort.projection_manifest_sha256,
@@ -659,9 +655,10 @@ def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path
             )
         manifest = {
             "format_version": 1,
-            "public_record_version": 2,
+            "public_record_version": 3,
+            "task_spec_schema": SCHEMA_VERSION,
             "repo_id": REPO_ID,
-            "visibility": "agent",
+            "visibility": "demonstration",
             "builder_revision": builder_revision,
             "publication_ready": False,
             "data_files": data_files,
@@ -676,7 +673,7 @@ def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Assemble a local agent-visible mixed alpha candidate")
+    parser = argparse.ArgumentParser(description="Assemble a local complete-task demonstration candidate")
     parser.add_argument("--cohorts", type=Path, required=True, help="JSON array of accepted cohort inputs")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--builder-revision", required=True)

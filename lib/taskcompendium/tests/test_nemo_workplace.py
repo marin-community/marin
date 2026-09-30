@@ -15,6 +15,7 @@ from threading import Lock, Thread
 from urllib.request import urlopen
 
 import pytest
+from tasktrove_verify.spec import MathType
 
 from taskcompendium.grading import exact_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
@@ -37,11 +38,15 @@ from taskcompendium.importers.nemo_workplace import (
     workplace_environment_config,
 )
 from taskcompendium.lowering import lower_to_harbor, provider_class
+from taskcompendium.mixed_release import PublishedRow, SourceProof
 from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
 from taskcompendium.provider_sources import stage_git_provider
 from taskcompendium.public_release import build_workplace_candidate
+from taskcompendium.release_audit import audit_demonstration
 from taskcompendium.submission import GradingAttempt, PlainText, SubmissionConvention
 from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.verifiers.mathematical import mathematical_answer
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 
 @pytest.fixture(scope="module")
@@ -505,3 +510,53 @@ async def test_workplace_harbor_trials_are_fresh_and_concurrent(
         {"reward": 0.0},
         {"reward": 1.0},
     ]
+
+
+async def test_demonstration_gate_grades_reconstructed_workplace_and_answer_rows(
+    tmp_path, source_row: bytes, provider_source, trusted_provider_checkout
+):
+    imported = import_row(source_row, provider_source)
+    ready = tmp_path / "ready"
+    data = ready / "data"
+    (data / "workplace").mkdir(parents=True)
+    (data / "tasktrove_clean").mkdir()
+    for split in ("train", "validation"):
+        (tmp_path / f"{split}.jsonl").write_bytes(source_row)
+        row = PublishedRow(
+            **imported.specification.model_copy(
+                update={
+                    "source": imported.specification.source.model_copy(
+                        update={"row": f"{split}:0:{hashlib.sha256(source_row).hexdigest()}"}
+                    )
+                }
+            ).model_dump(),
+            source_category=json.loads(source_row)["category"],
+            provenance=SourceProof(
+                source_row=imported.specification.source.row,
+                input_file=f"{split}.jsonl",
+                input_object_pin="sha256:" + hashlib.sha256(source_row).hexdigest(),
+            ),
+        )
+        (data / "workplace" / f"{split}.jsonl").write_text(row.model_dump_json() + "\n")
+    for cohort, verifier in (
+        ("mcqa", multiple_choice_answer("B", 3)),
+        ("prism_math", mathematical_answer("1/2", MathType.SCALAR)),
+    ):
+        task = imported.specification.model_copy(
+            update={"id": cohort, "tool_providers": {}, "answer_type": AnswerType.TEXT, "verifier": verifier}
+        )
+        row = PublishedRow(
+            **task.model_dump(),
+            provenance=SourceProof(
+                source_row=task.source.row, input_file="source.parquet", input_object_pin="sha256:" + "a" * 64
+            ),
+        )
+        (data / "tasktrove_clean" / f"{cohort}.jsonl").write_text(row.model_dump_json() + "\n")
+    report = await audit_demonstration(ready, tmp_path, provider_source, trusted_provider_checkout)
+    assert report["workplace_expected_state_matches"] == {"train": 1, "validation": 1}
+    assert report["harbor_rewards"] == {
+        "workplace/train": [1.0, 0.0],
+        "workplace/validation": [1.0, 0.0],
+        "tasktrove_clean/mcqa": [1.0, 0.0],
+        "tasktrove_clean/prism_math": [1.0, 0.0],
+    }

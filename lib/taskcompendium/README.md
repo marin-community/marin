@@ -85,20 +85,66 @@ Tool providers expose callable actions. `environment_requirements` separately de
 
 The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes require their own runtime contract.
 
-## Build a mixed public candidate
+## Build a demonstration dataset
 
-`taskcompendium.mixed_release` assembles Workplace public rows and reviewed TaskTrove `AcceptedPublicRecord` JSONL cohorts into separate Hugging Face configurations. Each TaskTrove cohort input pins its accepted input file by SHA256 and the accepted regional projection manifest by SHA256. The output manifest retains that regional pin, source archive proof, rights record, Harbor evidence, and source, parsed, accepted, and exported counts. The candidate card and manifest remain marked pending.
+`taskcompendium.mixed_release` assembles complete `TaskSpec` records into separate
+`workplace` and `tasktrove_clean` Hugging Face configurations. Each local input
+line is an `AcceptedTaskRecord`: `task`, `source_category`, and `source_proof`.
+Published version 3 rows contain the complete task fields, including schema version
+and actual verifier, plus `record_version`, `source_category`, and `provenance`.
+There is no redundant gold column or submission instruction. Source file paths
+are relative and regional bucket names are omitted. The demo includes reference
+answers and expected state. `public_task` remains the runtime projection that
+excludes grader data from model input.
 
-The cohort JSON passed to `python -m taskcompendium.mixed_release` is an array of `CohortInput` objects. TaskTrove entries use `record_format: "accepted_public_record"`, `source_assets` for the pinned source Parquet object, and `projection_manifest_sha256` for the regional accepted projection manifest. Each JSONL line contains the public task plus its `source_proof`; private verifier fields are rejected by the public task schema. `--output` must name a new directory. Build it with:
+The cohort JSON is an array of `CohortInput` objects with pinned input hashes,
+accepted counts, source assets, attribution, rights review, and Harbor evidence.
+TaskTrove inputs also require `CatalogJoinEvidence`. The regional alpha builder
+joins accepted projection IDs to unique imported ledger IDs and complete catalog
+IDs. It checks source identity, ordered tags, archive and object pins, and every
+overlapping projection field before exporting. The pinned catalog uses schema
+0.13. Its empty terminal-tool wrapper is explicitly converted to the schema 0.15
+function list; nonempty functions or request policy fail conversion. The original
+verifier object and its `parameters_json` string are preserved exactly.
+
+Workplace imports both pinned splits from the verified provider snapshot. Tasks
+retain their `structured_exact` expected state. The manifest binds provider source,
+action interface, seed digest, tool definitions, and tool schema digest. Source
+gold action lists reconstruct canonical state and are omitted from published rows.
 
 ```bash
-uv run --directory lib/taskcompendium python -m taskcompendium.mixed_release \
+uv run --project lib/taskcompendium python -m taskcompendium.mixed_release \
   --cohorts /path/to/cohorts.json \
   --output /path/to/candidate \
   --builder-revision <full-git-commit>
 ```
 
-After rights review and Harbor trials are complete, hash the candidate `manifest.json` and write a `ReleaseReview` JSON containing that digest, the HTTPS rights review reference, and the exact set of Harbor evidence URLs recorded in the candidate manifest. Run `uv run --directory lib/taskcompendium taskcompendium-finalize-release --candidate <candidate> --review <review.json> --output <ready>` to create a separate artifact with `publication_ready: true`. The finalizer verifies that the review binds to the candidate manifest, covers its Harbor evidence URLs, and that every accepted row was exported. It does not upload the artifact.
+The regional entry point runs beside the pinned source objects on CPU:
+
+```bash
+uv run --project lib/taskcompendium --extra harbor --extra math \
+  --with ./lib/rigging --with pyarrow --with 'pandas>=2.2' \
+  python -m experiments.post_training.taskcompendium_alpha_release \
+  --workplace-provider-checkout /path/to/clean-pinned-provider \
+  --output-prefix <new-regional-release-prefix> \
+  --builder-revision <full-git-commit> \
+  --rights-review-url <review-url>
+```
+
+Before uploading regional release files, this command compares every Workplace
+verifier to source canonical expected state and runs eight Harbor trials using
+reconstructed demo rows: correct and wrong outcomes for Workplace train,
+Workplace validation, MCQA, and Prism math. MCQA uses `answer_type=text` and its
+actual `mcq` verifier. The manifest records these gates and exact source, parsed,
+accepted, and exported counts. Private catalogs, ledger, source files, provider
+snapshots, and trial traces remain outside the release.
+
+After rights review, `taskcompendium-finalize-release` creates a separate artifact
+with `publication_ready=true`. Its `ReleaseReview` binds the candidate manifest
+SHA256 and exact Harbor evidence URLs. The finalizer verifies output hashes and
+counts. The separate Hub publisher requires the source and Harbor gates,
+checks all row schemas, and protects the existing Hub revision with a parent
+commit guard. Local assembly and finalization do not upload to the Hub.
 
 ### NeMo predicted function calls
 
@@ -112,7 +158,7 @@ Each spec selects a private verifier and stores its configuration in `VerifierSp
 
 Install `taskcompendium[math]` for symbolic grading. `mathematical_answer(expected, math_type)` from `taskcompendium.verifiers.mathematical` preserves a string reference and a `tasktrove_verify.spec.MathType`. It uses the shared mathematical scorer: the last boxed expression or last nonempty line is compared symbolically; lists preserve order, and sets and intervals support relation comparison. Invalid references raise configuration errors; malformed candidates score zero. Use `answer_type=number` for a single finite real numeric expression and `answer_type=text` for general symbolic content. Both types support plain, JSON, and answer-call submission. Importers can use `tasktrove_verify.modes.grade_math.is_finite_real_scalar(MathSpec(...))` to establish numeric semantics without converting the reference to a float. Classification disables syntax repair and rejects references whose parsed number, real, or finite properties are unknown; a scalar label alone does not exclude coordinate pairs.
 
-The serialized kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `math` for symbolic expressions, `mcq` for a single option letter, `predicted_action` for final function calls, and `structured_exact` for type-strict JSON values. Structured matching ignores object-key order and preserves array order. Schema 0.14 adds `mcq` as an answer type for one-letter choices; the private `mcq` verifier still determines correctness. The verifier strings match tasktrove_verify/verifyit modes; former answer-suffixed kind strings are rejected. Python enum members and constructor names remain `EXACT_ANSWER`/`exact_answer`, `NUMERIC_ANSWER`/`numeric_answer`, `MCQ_ANSWER`/`multiple_choice_answer`, and `MATHEMATICAL_ANSWER`/`mathematical_answer`. The expected answer and grading settings stay out of the model-visible instruction.
+The serialized kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `math` for symbolic expressions, `mcq` for a single option letter, `predicted_action` for final function calls, and `structured_exact` for type-strict JSON values. Structured matching ignores object-key order and preserves array order. Schema 0.15 stores terminal functions as a list; call requirements live in the submission convention. MCQ answers are text and the `mcq` verifier determines correctness. The verifier strings match tasktrove_verify/verifyit modes; former answer-suffixed kind strings are rejected. Python enum members and constructor names remain `EXACT_ANSWER`/`exact_answer`, `NUMERIC_ANSWER`/`numeric_answer`, `MCQ_ANSWER`/`multiple_choice_answer`, and `MATHEMATICAL_ANSWER`/`mathematical_answer`. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 
@@ -244,50 +290,6 @@ uv run --project lib/taskcompendium --with 'pandas>=2.2' \
   --output /tmp/taskcompendium-alpha-candidate \
   --builder-revision <full-marin-commit-sha>
 ```
-
-### Mixed public candidate
-
-`taskcompendium.mixed_release` assembles accepted public cohorts into separate
-`workplace` and `tasktrove_clean` Hugging Face configurations. Its JSON input is
-an array of `CohortInput` records. Each record pins the input JSONL digest and
-accepted row count, source assets, source-data revision, TaskSpec schema and
-builder revisions, license attribution and source-card revision, change notice,
-and a Harbor sample with a linked trial record. The manifest records source
-row counts separately from accepted and exported rows. Every included cohort
-must have source proof, rights, and Harbor evidence; unsupported or held cohorts
-are excluded from the input array.
-
-Workplace inputs use `record_format="public_task"` and the two JSONL files
-produced above. The builder derives each row's digest from its split-local
-`Source.row` value. TaskTrove Clean inputs use
-`record_format="accepted_public_record"`: each JSONL row wraps a validated
-`PublicTask` in `{"task": ..., "source_proof": ...}`. The proof records the
-source row ID, the input file and immutable object pin, and the task archive's
-path and SHA256. A trusted caller must join the regional acceptance ledger to
-the public candidate rows by unique imported task ID to produce these wrappers.
-The private ledger and full TaskSpecs are not release inputs. A missing
-`record_version` on a regional public candidate is normalized to version 1 by
-`PublicTask`; extra fields, including verifier fields, fail validation.
-
-```bash
-uv run --project lib/taskcompendium \
-  python -m taskcompendium.mixed_release \
-  --cohorts /tmp/accepted-public-cohorts.json \
-  --output /tmp/taskcompendium-mixed-candidate \
-  --builder-revision <full-marin-commit-sha>
-```
-
-The local assembly writes `data/<config>/<cohort>.jsonl`, `manifest.json`, and
-`README.md`. Regional inputs retain the audited `{"task": ..., "source_proof": ...}`
-format. Published version 2 rows place task fields at the top level and put
-relative source paths and immutable pins under `provenance`. The release omits
-submission instructions and regional bucket names. The builder never uploads
-to the Hub and sets `publication_ready=false`.
-The release is held until every selected source has accepted row IDs, pinned
-source and archive proof, verified rights, and a representative Harbor trial.
-
-The candidate is not publication-ready. The mixed release requires measured TaskTrove conversions, per-source license and tag preservation, and a Harbor sample from every included source. Keep source files and output outside the Marin checkout. No Hugging Face repository is created by this command.
-
 
 Run the package tests from the repository root:
 

@@ -19,7 +19,6 @@ class AnswerType(StrEnum):
     """The kind of result the task asks the model to produce."""
 
     TEXT = "text"
-    MCQ = "mcq"
     NUMBER = "number"
     FILE = "file"
     STATE = "state"

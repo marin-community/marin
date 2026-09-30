@@ -9,6 +9,7 @@ manifest and card.
 """
 
 import argparse
+import asyncio
 import hashlib
 import json
 import os
@@ -18,7 +19,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.catalog_release import reconstruct_catalog_records
 from taskcompendium.importers.nemo_workplace import (
     DATASET,
     DATASET_REVISION,
@@ -26,24 +29,29 @@ from taskcompendium.importers.nemo_workplace import (
     DATASET_SPLIT_SHA256,
     PROVIDER,
     PROVIDER_GIT_REVISION,
+    import_dataset_split,
+    select_dataset_rows,
     workplace_environment_config,
 )
 from taskcompendium.importers.nemo_workplace import (
     IMPORTER_REVISION as WORKPLACE_IMPORTER_REVISION,
 )
 from taskcompendium.mixed_release import (
+    AcceptedTaskRecord,
+    CatalogJoinEvidence,
     CohortInput,
     HarborSample,
     ProviderPin,
     ReleaseReview,
     SourceAsset,
+    SourceProof,
     SourceRights,
     assemble_mixed_candidate,
     finalize_mixed_candidate,
 )
 from taskcompendium.models import SCHEMA_VERSION
 from taskcompendium.provider_sources import stage_git_provider
-from taskcompendium.public_release import build_workplace_candidate
+from taskcompendium.release_audit import audit_demonstration
 from taskcompendium.release_common import sha256_file
 
 PROJECTION_MANIFEST_SHA256 = "fd1035c795393bf7b43977eee7bf48bba61bf126791b44fe37303a80b58ba6e8"
@@ -54,7 +62,11 @@ PROJECTION_MANIFEST_URI = (
 RELEASE_PREFIX = "s3://marin-us-east-02a/marin/taskcompendium/releases/"
 TASKTROVE_SOURCE = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3"
 TASKTROVE_IMPORTER_REVISION = "taskcompendium-tasktrove-v0.3"
-TASKTROVE_ACCEPTED_SCHEMA = "0.13"
+CATALOG_PREFIX = (
+    "s3://marin-us-east-02a/marin/taskcompendium/tasktrove/2026.09.18.3/" "tasktrove-mcq-math-alpha1-v2-2026-09-30/"
+)
+CATALOG_SHA256 = "ff51f50b1fcce266cb41bb714bf85e99bd64edbd3586fb0acf0b9207a0356c9b"
+LEDGER_SHA256 = "be9c038bf5d5a64a75e9fddd26152a8ea4c6127f15ff0974f03baeddd6e75130"
 PROJECTION_BUILDER_REVISION = "ee389a0e645fa086cdbd49a5c95e30c1516c014e"
 WORKPLACE_HARBOR_EVIDENCE = "https://github.com/marin-community/marin/pull/9523#issuecomment-5906493281"
 TASKTROVE_HARBOR_EVIDENCE = "https://github.com/marin-community/marin/pull/9593"
@@ -87,13 +99,25 @@ def _download_workplace(split: str, destination: Path) -> None:
 
 def _workplace_cohorts(source_dir: Path, builder_revision: str, provider_source: Path) -> tuple[CohortInput, ...]:
     candidate = source_dir / "workplace"
-    build_workplace_candidate(
-        source_dir / "train.jsonl",
-        source_dir / "validation.jsonl",
-        candidate,
-        provider_source=provider_source,
-        builder_revision=builder_revision,
-    )
+    candidate.mkdir()
+    for split in ("train", "validation"):
+        data = (source_dir / f"{split}.jsonl").read_bytes()
+        selected = select_dataset_rows(data, split)
+        imported = import_dataset_split(data, split, provider_source)
+        with (candidate / f"{split}.jsonl").open("w", encoding="utf-8") as stream:
+            for raw, item in zip(selected, imported, strict=True):
+                row = json.loads(raw)
+                record = AcceptedTaskRecord(
+                    task=item.specification,
+                    source_category=row["category"],
+                    source_proof=SourceProof(
+                        source_row=item.specification.source.row,
+                        source_row_sha256=hashlib.sha256(raw).hexdigest(),
+                        input_file=f"{split}.jsonl",
+                        input_object_pin=f"sha256:{DATASET_SPLIT_SHA256[split]}",
+                    ),
+                )
+                stream.write(record.model_dump_json() + "\n")
     provider = workplace_environment_config(provider_source).tool_providers["workplace"]
     provider_pin = ProviderPin(
         name="workplace",
@@ -117,7 +141,10 @@ def _workplace_cohorts(source_dir: Path, builder_revision: str, provider_source:
         attribution="NVIDIA Corporation, Nemotron-RL-agent-workplace_assistant",
         source_card_url=f"https://huggingface.co/datasets/{DATASET}/blob/{WORKPLACE_CARD_REVISION}/README.md",
         source_card_revision=WORKPLACE_CARD_REVISION,
-        change_notice="Converted source rows to agent-visible tool tasks; private gold actions and state were excluded.",
+        change_notice=(
+            "Converted source rows to complete tool tasks with canonical expected-state verifiers; "
+            "source gold action lists were omitted."
+        ),
     )
     rows = {"train": 1255, "validation": 545}
     return tuple(
@@ -125,9 +152,8 @@ def _workplace_cohorts(source_dir: Path, builder_revision: str, provider_source:
             config="workplace",
             cohort=split,
             split=split,
-            record_format="public_task",
-            input_path=candidate / "data" / f"{split}.jsonl",
-            input_sha256=sha256_file(candidate / "data" / f"{split}.jsonl"),
+            input_path=candidate / f"{split}.jsonl",
+            input_sha256=sha256_file(candidate / f"{split}.jsonl"),
             accepted_rows=rows[split],
             source_records=rows[split],
             parsed_rows=rows[split],
@@ -155,19 +181,51 @@ def _tasktrove_cohorts(source_dir: Path, manifest: dict[str, Any]) -> tuple[Coho
         ),
         ("laion__nemo-prism-math-v3", "math-answer", PRISM_CARD_REVISION, "nvidia/Nemotron-PrismMath"),
     )
+    catalog_path, ledger_path = source_dir / "private-catalog.parquet", source_dir / "ingestion-ledger.parquet"
+    _copy_pinned(f"{CATALOG_PREFIX}private-catalog.parquet", catalog_path, CATALOG_SHA256)
+    _copy_pinned(f"{CATALOG_PREFIX}ingestion-ledger.parquet", ledger_path, LEDGER_SHA256)
+    projections = {}
+    for subset, category, _, _ in cohorts:
+        output = manifest["outputs"][f"{subset}/{category}/tasks"]
+        path = source_dir / f"{subset}-projection.jsonl"
+        _copy_pinned(output["uri"], path, output["sha256"])
+        with path.open(encoding="utf-8") as stream:
+            projections[subset] = [json.loads(line) for line in stream]
+    selected_ids = {row["task"]["id"] for rows in projections.values() for row in rows}
+    catalog_rows = [
+        row
+        for batch in pq.ParquetFile(catalog_path).iter_batches()
+        for row in batch.to_pylist()
+        if row["id"] in selected_ids
+    ]
+    ledger_rows = [
+        row
+        for batch in pq.ParquetFile(ledger_path).iter_batches()
+        for row in batch.to_pylist()
+        if row["imported_id"] in selected_ids
+    ]
+    records = reconstruct_catalog_records(
+        (row for rows in projections.values() for row in rows), catalog_rows, ledger_rows
+    )
+    by_id = {record.task.id: record for record in records}
     result = []
     for subset, category, card_revision, card_dataset in cohorts:
         key = f"{subset}/{category}/tasks"
         output = manifest["outputs"][key]
         details = manifest["cohort_counts"][key]
         local = source_dir / f"{subset}.jsonl"
-        _copy_pinned(output["uri"], local, output["sha256"])
+        with local.open("w", encoding="utf-8") as stream:
+            for projection in projections[subset]:
+                stream.write(by_id[projection["task"]["id"]].model_dump_json() + "\n")
         if output["rows"] != details["accepted_public_records"]:
             raise ValueError(f"Projection row counts disagree for {key}")
         assets = tuple(
             SourceAsset(path=asset["path"], pin=asset["input_object_pin"]) for asset in details["source_assets"]
         )
-        change = "Converted source rows to agent-visible answer tasks; answers and verifier material were excluded."
+        change = (
+            "Converted accepted source rows to complete answer tasks; "
+            "the original verifier and reference answer were retained."
+        )
         if category == "qa-short-answer":
             change += (
                 " The source card describes synthetic questions informed by books, articles, and OpenScienceReasoning-2."
@@ -179,9 +237,8 @@ def _tasktrove_cohorts(source_dir: Path, manifest: dict[str, Any]) -> tuple[Coho
                 config="tasktrove_clean",
                 cohort="mcqa" if category == "qa-short-answer" else "prism_math",
                 split="train",
-                record_format="accepted_public_record",
                 input_path=local,
-                input_sha256=output["sha256"],
+                input_sha256=sha256_file(local),
                 accepted_rows=output["rows"],
                 source_records=details["eligible_mode_rows_in_tasks_split"],
                 parsed_rows=details["converter_completed_rows"],
@@ -190,7 +247,15 @@ def _tasktrove_cohorts(source_dir: Path, manifest: dict[str, Any]) -> tuple[Coho
                 source_category=category,
                 projection_manifest_sha256=PROJECTION_MANIFEST_SHA256,
                 source_assets=assets,
-                task_spec_schema=TASKTROVE_ACCEPTED_SCHEMA,
+                task_spec_schema=SCHEMA_VERSION,
+                catalog_join=CatalogJoinEvidence(
+                    catalog_sha256=CATALOG_SHA256,
+                    ledger_sha256=LEDGER_SHA256,
+                    output_schema_version=SCHEMA_VERSION,
+                    joined_rows=output["rows"],
+                    verifier_matches=output["rows"],
+                    projected_field_matches=output["rows"],
+                ),
                 importer_revision=TASKTROVE_IMPORTER_REVISION,
                 projection_builder_revision=PROJECTION_BUILDER_REVISION,
                 rights=SourceRights(
@@ -239,9 +304,19 @@ def _stage_cohorts(root: Path, builder_revision: str, provider_source: Path) -> 
 
 
 def _build_ready_artifact(
-    root: Path, cohorts: tuple[CohortInput, ...], builder_revision: str, rights_url: str
+    root: Path,
+    cohorts: tuple[CohortInput, ...],
+    builder_revision: str,
+    rights_url: str,
+    provider_source: Path,
+    trusted_checkout: Path,
 ) -> tuple[Path, str]:
     candidate = assemble_mixed_candidate(cohorts, root / "candidate", builder_revision=builder_revision)
+    audit = asyncio.run(audit_demonstration(candidate, root, provider_source, trusted_checkout))
+    manifest_path = candidate / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["reconstruction_audit"] = audit
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     review = ReleaseReview(
         candidate_manifest_sha256=sha256_file(candidate / "manifest.json"),
         rights_review_url=rights_url,
@@ -251,14 +326,15 @@ def _build_ready_artifact(
     return ready, review.candidate_manifest_sha256
 
 
-def _write_assembly_report(ready: Path, prefix: str, candidate_sha256: str, uploaded: dict[str, str]) -> None:
+def _write_assembly_report(
+    ready: Path, prefix: str, candidate_sha256: str, uploaded: dict[str, str], output: Path
+) -> None:
     summary = {
         "output_prefix": prefix,
         "candidate_manifest_sha256": candidate_sha256,
         "files": uploaded,
         "data_files": json.loads((ready / "manifest.json").read_text())["data_files"],
     }
-    output = Path(os.environ["IRIS_OUTPUT_DIR"])
     output.mkdir(parents=True, exist_ok=True)
     (output / "assembly-summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     shutil.copy2(ready / "manifest.json", output / "manifest.json")
@@ -272,6 +348,7 @@ def main() -> None:
     parser.add_argument("--workplace-provider-checkout", type=Path, required=True)
     parser.add_argument("--rights-review-url", required=True)
     args = parser.parse_args()
+    output = Path(os.environ["IRIS_OUTPUT_DIR"])
     if not args.output_prefix.startswith(RELEASE_PREFIX) or args.output_prefix.rstrip("/") == RELEASE_PREFIX.rstrip("/"):
         raise ValueError("Output must be a new regional TaskCompendium release prefix")
     if StoragePath(f"{args.output_prefix.rstrip('/')}/manifest.json").exists():
@@ -281,9 +358,16 @@ def main() -> None:
         provider_source = root / "provider"
         stage_git_provider(PROVIDER, args.workplace_provider_checkout, provider_source)
         cohorts = _stage_cohorts(root, args.builder_revision, provider_source)
-        ready, candidate_sha256 = _build_ready_artifact(root, cohorts, args.builder_revision, args.rights_review_url)
+        ready, candidate_sha256 = _build_ready_artifact(
+            root,
+            cohorts,
+            args.builder_revision,
+            args.rights_review_url,
+            provider_source,
+            args.workplace_provider_checkout,
+        )
         uploaded = _upload_regional(ready, args.output_prefix)
-        _write_assembly_report(ready, args.output_prefix, candidate_sha256, uploaded)
+        _write_assembly_report(ready, args.output_prefix, candidate_sha256, uploaded, output)
 
 
 if __name__ == "__main__":
