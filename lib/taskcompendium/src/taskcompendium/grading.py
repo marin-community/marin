@@ -64,8 +64,8 @@ class ExactAnswerVerifier(Verifier):
     async def grade(
         self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
     ) -> GradeResult:
-        if not isinstance(submission, TextSubmission):
-            raise TypeError("Exact-answer verifier requires a text submission")
+        if not isinstance(submission, (TextSubmission, StateSubmission)) or not isinstance(submission.value, str):
+            raise TypeError("Exact-answer verifier requires a string value")
         contract = ExactSpec(
             expected=(self.expected,), ignore_case=self.ignore_case, ignore_whitespace=self.collapse_whitespace
         )
