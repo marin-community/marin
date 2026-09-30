@@ -22,6 +22,62 @@
       "severity": "error"
     },
     {
+      "column": 44,
+      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 78,
+      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 50,
+      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array` in function `next_logits`",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `positions` with type `Array` in function `next_logits`",
+      "severity": "error"
+    },
+    {
+      "column": 70,
+      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `tokens` with type `Array` in function `expected_logprobs`",
+      "severity": "error"
+    },
+    {
+      "column": 70,
+      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `positions` with type `Array` in function `expected_logprobs`",
+      "severity": "error"
+    },
+    {
+      "column": 70,
+      "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `targets` with type `Array` in function `expected_logprobs`",
+      "severity": "error"
+    },
+    {
       "column": 30,
       "path": "experiments/grug/moe_hero_ep/ops/vibe_check/sample.py",
       "name": "bad-argument-type",
@@ -376,27 +432,6 @@
       "path": "lib/fray/src/fray/types.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `str` is not assignable to parameter `variant` with type `Literal['A10', 'A100-40G', 'A100-80G', 'A10G', 'B100', 'H100', 'H200', 'L4', 'T4', 'V100', 'auto']` in function `GpuConfig.__init__`",
-      "severity": "error"
-    },
-    {
-      "column": 62,
-      "path": "lib/haliax/src/haliax/__init__.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `T` is not assignable to parameter `fill_value` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax.numpy.full`",
-      "severity": "error"
-    },
-    {
-      "column": 59,
-      "path": "lib/haliax/src/haliax/__init__.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `T` is not assignable to parameter `fill_value` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax.numpy.full`",
-      "severity": "error"
-    },
-    {
-      "column": 46,
-      "path": "lib/haliax/src/haliax/__init__.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `T` is not assignable to parameter `fill_value` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax.numpy.full_like`",
       "severity": "error"
     },
     {
@@ -876,13 +911,6 @@
       "severity": "error"
     },
     {
-      "column": 49,
-      "path": "lib/haliax/src/haliax/core.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `tuple[int, ...]` is not assignable to parameter `spec2` with type `Axis | Mapping[str, int | None] | Sequence[AxisSelector] | str` in function `haliax.axis._check_size_consistency`",
-      "severity": "error"
-    },
-    {
       "column": 40,
       "path": "lib/haliax/src/haliax/core.py",
       "name": "bad-argument-type",
@@ -897,45 +925,80 @@
       "severity": "error"
     },
     {
-      "column": 61,
+      "column": 20,
       "path": "lib/haliax/src/haliax/core.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `int | None` is not assignable to parameter `axis` with type `Sequence[int] | int` in function `jax.numpy.expand_dims`",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/haliax/src/haliax/core.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/haliax/src/haliax/core.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 18,
+      "path": "lib/haliax/src/haliax/core.py",
+      "name": "bad-index",
+      "concise_description": "Cannot index into `Array`",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/haliax/src/haliax/core.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
       "column": 24,
-      "path": "lib/haliax/src/haliax/core.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `ndarray` is not assignable to parameter `array` with type `Array` in function `NamedArray.__init__`",
+      "path": "lib/haliax/src/haliax/fft.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: FFT requires at least 1-D array",
       "severity": "error"
     },
     {
-      "column": 52,
-      "path": "lib/haliax/src/haliax/core.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `tuple[int | None, ...]` is not assignable to parameter `axis` with type `Sequence[int] | int | None` in function `jax.numpy.roll`",
+      "column": 25,
+      "path": "lib/haliax/src/haliax/fft.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: FFT requires at least 1-D array",
       "severity": "error"
     },
     {
-      "column": 105,
-      "path": "lib/haliax/src/haliax/core.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `Array | float | int | None` is not assignable to parameter `fill_value` with type `builtins.bool | numpy.bool | complex | float | int | number | None` in function `jax._src.basearray._IndexUpdateRef.get`",
+      "column": 20,
+      "path": "lib/haliax/src/haliax/fft.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: FFT requires at least 1-D array",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "lib/haliax/src/haliax/fft.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: FFT requires at least 1-D array",
       "severity": "error"
     },
     {
       "column": 43,
       "path": "lib/haliax/src/haliax/fft.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `tuple[int | None, ...]` is not assignable to parameter `axes` with type `Sequence[int] | int | None` in function `jax._src.numpy.fft.fftshift`",
+      "concise_description": "Argument `tuple[int | None, ...]` is not assignable to parameter `axes` with type `Sequence[int] | int | None` in function `jax.numpy.fft.fftshift`",
       "severity": "error"
     },
     {
       "column": 44,
       "path": "lib/haliax/src/haliax/fft.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `tuple[int | None, ...]` is not assignable to parameter `axes` with type `Sequence[int] | int | None` in function `jax._src.numpy.fft.ifftshift`",
+      "concise_description": "Argument `tuple[int | None, ...]` is not assignable to parameter `axes` with type `Sequence[int] | int | None` in function `jax.numpy.fft.ifftshift`",
       "severity": "error"
     },
     {
@@ -943,13 +1006,6 @@
       "path": "lib/haliax/src/haliax/jax_utils.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `int | signedinteger[_64Bit]` is not assignable to parameter `num` with type `int` in function `maybe_rng_split`",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/haliax/src/haliax/jax_utils.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `Array | list[None]` is not assignable to parameter `a` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax.numpy.reshape`",
       "severity": "error"
     },
     {
@@ -1136,13 +1192,6 @@
     },
     {
       "column": 16,
-      "path": "lib/haliax/src/haliax/nn/normalization.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `tuple[int | None, ...]` is not assignable to parameter `axis` with type `Sequence[int] | int | None` in function `jax.nn.standardize`",
-      "severity": "error"
-    },
-    {
-      "column": 16,
       "path": "lib/haliax/src/haliax/nn/pool.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `Literal['SAME', 'VALID'] | int | tuple[tuple[int, int], ...]` is not assignable to parameter `obj` with type `Sized` in function `len`",
@@ -1187,182 +1236,98 @@
       "column": 76,
       "path": "lib/haliax/src/haliax/nn/pool.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Literal['SAME', 'SAME', 'VALID', 'VALID'] | int | tuple[tuple[int, int], ...]` is not assignable to parameter `padding` with type `Sequence[tuple[int, int]] | str` in function `jax._src.lax.windowed_reductions.reduce_window`",
+      "concise_description": "Argument `Literal['SAME', 'SAME', 'VALID', 'VALID'] | int | tuple[tuple[int, int], ...]` is not assignable to parameter `padding` with type `Sequence[tuple[int, int]] | str` in function `jax.lax.reduce_window`",
       "severity": "error"
     },
     {
-      "column": 72,
-      "path": "lib/haliax/src/haliax/nn/scan.py",
+      "column": 48,
+      "path": "lib/haliax/src/haliax/nn/pool.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `list[Any | None]` is not assignable to parameter `arrays` with type `Array | Sequence[ArrayLike] | ndarray` in function `jax.numpy.stack`",
+      "concise_description": "Argument `[Shape1: IntTuple = IntTuple[()], Shape2: IntTuple = IntTuple[()]](x: ArrayLike, y: ArrayLike, /) -> Array[lax_broadcast(Shape1, Shape2)]` is not assignable to parameter `reduce_fn` with type `(Scalar, Scalar) -> Scalar` in function `pool`",
       "severity": "error"
     },
     {
-      "column": 51,
+      "column": 47,
+      "path": "lib/haliax/src/haliax/nn/pool.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `[Shape1: IntTuple = IntTuple[()], Shape2: IntTuple = IntTuple[()]](x: ArrayLike, y: ArrayLike, /) -> Array[lax_broadcast(Shape1, Shape2)]` is not assignable to parameter `reduce_fn` with type `(Scalar, Scalar) -> Scalar` in function `pool`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "lib/haliax/src/haliax/nn/pool.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `[Shape1: IntTuple = IntTuple[()], Shape2: IntTuple = IntTuple[()]](x: ArrayLike, y: ArrayLike, /) -> Array[lax_broadcast(Shape1, Shape2)]` is not assignable to parameter `reduce_fn` with type `(Scalar, Scalar) -> Scalar` in function `pool`",
+      "severity": "error"
+    },
+    {
+      "column": 47,
+      "path": "lib/haliax/src/haliax/nn/pool.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `[Shape1: IntTuple = IntTuple[()], Shape2: IntTuple = IntTuple[()]](x: ArrayLike, y: ArrayLike, /) -> Array[lax_broadcast(Shape1, Shape2)]` is not assignable to parameter `reduce_fn` with type `(Scalar, Scalar) -> Scalar` in function `pool`",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/haliax/src/haliax/nn/ragged_dot.py",
+      "name": "unsupported-operation",
+      "concise_description": "`+` is not supported between `jax._src.basearray.Array` and `jax._array.Array[[int]]`",
+      "severity": "error"
+    },
+    {
+      "column": 58,
+      "path": "lib/haliax/src/haliax/nn/ragged_dot.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._src.basearray.Array | Unknown | None` is not assignable to parameter `mask` with type `jax._array.Array | None` in function `jax._src.pallas.triton.primitives.store`",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/haliax/src/haliax/ops.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: trace requires at least 2-D array",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/haliax/src/haliax/ops.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._src.basearray.Array | jax._array.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number | Unknown` is not assignable to parameter `pred` with type `jax._array.Array[[]] | builtins.bool | complex | float | int | ndarray[IntTuple[()]] | number` in function `jax.lax.cond`",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "lib/haliax/src/haliax/ops.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: zero-dimensional array cannot be packed along an axis",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/haliax/src/haliax/ops.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: zero-dimensional array cannot be unpacked along an axis",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/partitioning.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `(dynamic_donated: Unknown, dynamic_reserved: Unknown, static: Unknown) -> tuple[Unknown, Static]` is not assignable to declared return type `WrappedCallable[..., Unknown]`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
       "path": "lib/haliax/src/haliax/poly.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `Array | Unknown | None` is not assignable to parameter `rcond` with type `float | None` in function `jax.numpy.polyfit`",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: x must be a one-dimensional array",
       "severity": "error"
     },
     {
-      "column": 48,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.uniform`",
-      "severity": "error"
-    },
-    {
-      "column": 47,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.normal`",
-      "severity": "error"
-    },
-    {
-      "column": 55,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.bernoulli`",
-      "severity": "error"
-    },
-    {
-      "column": 48,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.randint`",
-      "severity": "error"
-    },
-    {
-      "column": 57,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.poisson`",
-      "severity": "error"
-    },
-    {
-      "column": 52,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.exponential`",
-      "severity": "error"
-    },
-    {
-      "column": 51,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.gamma`",
-      "severity": "error"
-    },
-    {
-      "column": 55,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.beta`",
-      "severity": "error"
-    },
-    {
-      "column": 48,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.laplace`",
-      "severity": "error"
-    },
-    {
-      "column": 47,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.cauchy`",
-      "severity": "error"
-    },
-    {
-      "column": 49,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.logistic`",
-      "severity": "error"
-    },
-    {
-      "column": 83,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.truncated_normal`",
-      "severity": "error"
-    },
-    {
-      "column": 45,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.ball`",
-      "severity": "error"
-    },
-    {
-      "column": 43,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `((*args: Unknown, **kwargs: Unknown) -> Unknown) | Unknown` is not assignable to parameter `array` with type `Array` in function `haliax.core.NamedArray.__init__`",
-      "severity": "error"
-    },
-    {
-      "column": 46,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.choice`",
-      "severity": "error"
-    },
-    {
-      "column": 74,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.categorical`",
-      "severity": "error"
-    },
-    {
-      "column": 37,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.gumbel`",
-      "severity": "error"
-    },
-    {
-      "column": 51,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | None` is not assignable to parameter `axis` with type `int` in function `jax._src.random.core.permutation`",
-      "severity": "error"
-    },
-    {
-      "column": 41,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.rademacher`",
-      "severity": "error"
-    },
-    {
-      "column": 42,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.t`",
-      "severity": "error"
-    },
-    {
-      "column": 76,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int]` in function `jax._src.random.core.weibull_min`",
-      "severity": "error"
-    },
-    {
-      "column": 46,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.pareto`",
-      "severity": "error"
-    },
-    {
-      "column": 48,
-      "path": "lib/haliax/src/haliax/random.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `int | tuple[int, ...]` is not assignable to parameter `shape` with type `Sequence[int] | None` in function `jax._src.random.core.loggamma`",
+      "column": 36,
+      "path": "lib/haliax/src/haliax/specialized_fns.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -2388,10 +2353,31 @@
       "severity": "error"
     },
     {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/callbacks/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `tuple[complex | float, Any]` is not assignable to declared return type `tuple[float, dict[str, float]]`",
+      "severity": "error"
+    },
+    {
       "column": 45,
       "path": "lib/levanter/src/levanter/callbacks/_metrics.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `float` is not assignable to parameter `a` with type `Array` in function `levanter.utils.jax_utils.jnp_to_python`",
+      "severity": "error"
+    },
+    {
+      "column": 48,
+      "path": "lib/levanter/src/levanter/callbacks/watch.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | int` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/compat/fsspec_safetensor.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `ArrayImpl` is not assignable to declared return type `Array`",
       "severity": "error"
     },
     {
@@ -2402,10 +2388,24 @@
       "severity": "error"
     },
     {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/compat/hf_checkpoints.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `ArrayImpl` is not assignable to declared return type `Array`",
+      "severity": "error"
+    },
+    {
       "column": 77,
       "path": "lib/levanter/src/levanter/config.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `list[str] | None` is not assignable to parameter `args` with type `list[str]` in function `_maybe_get_config_path_and_cmdline_args`",
+      "severity": "error"
+    },
+    {
+      "column": 52,
+      "path": "lib/levanter/src/levanter/data/_prp.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `builtins.bool | complex | float | int` is not assignable to parameter `seed` with type `SeedSequence | _NestedSequence[_SupportsArray[dtype[numpy.bool | integer]]] | _NestedSequence[int] | _SupportsArray[dtype[numpy.bool | integer]] | int | None` in function `numpy.random._pcg64.PCG64.__init__`",
       "severity": "error"
     },
     {
@@ -2420,6 +2420,20 @@
       "path": "lib/levanter/src/levanter/data/loader.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `tuple[int, ...] | None` is not assignable to parameter `shape` with type `tuple[int, ...]` in function `jax._src.array.make_array_from_callback`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "lib/levanter/src/levanter/data/loader.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `(indices: Unknown) -> jax._array.Array | ndarray` is not assignable to parameter `data_callback` with type `(tuple[slice[Any, Any, Any], ...] | None) -> ArrayLike` in function `jax._src.array.make_array_from_callback`",
+      "severity": "error"
+    },
+    {
+      "column": 39,
+      "path": "lib/levanter/src/levanter/data/loader.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `ArrayImpl` is not assignable to parameter `array` with type `Array` in function `haliax.core.NamedArray.__init__`",
       "severity": "error"
     },
     {
@@ -2552,7 +2566,14 @@
       "column": 56,
       "path": "lib/levanter/src/levanter/data/text/examples.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | NamedArray` is not assignable to parameter `y` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax.numpy.BinaryUfunc.__call__`",
+      "concise_description": "Argument `Array[[int]] | NamedArray` is not assignable to parameter `x2` with type `Array[[int]] | bool | complex | float | int | ndarray[IntTuple[int]] | number` in function `jax.numpy.logical_and`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "lib/levanter/src/levanter/data/text/examples.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
@@ -2591,6 +2612,20 @@
       "severity": "error"
     },
     {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 64,
       "path": "lib/levanter/src/levanter/eval.py",
       "name": "bad-argument-type",
@@ -2601,14 +2636,42 @@
       "column": 35,
       "path": "lib/levanter/src/levanter/eval.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | NamedArray | ndarray` is not assignable to parameter `a` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax.numpy.mean`",
+      "concise_description": "Argument `Array | NamedArray | ndarray` is not assignable to parameter `a` with type `Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.mean`",
       "severity": "error"
     },
     {
       "column": 38,
       "path": "lib/levanter/src/levanter/eval.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | NamedArray | ndarray` is not assignable to parameter `a` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax.numpy.mean`",
+      "concise_description": "Argument `Array | NamedArray | ndarray` is not assignable to parameter `a` with type `Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.mean`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `bool | complex | float | int | Unknown` is not assignable to parameter `micro_avg_loss` with type `float` in function `EvalResult.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `bool | complex | float | int` is not assignable to parameter `macro_avg_loss` with type `float` in function `EvalResult.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `bool | complex | float | int | Unknown | None` is not assignable to parameter `micro_bpb` with type `float | None` in function `EvalResult.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `bool | complex | float | int | None` is not assignable to parameter `macro_bpb` with type `float | None` in function `EvalResult.__init__`",
       "severity": "error"
     },
     {
@@ -2616,6 +2679,27 @@
       "path": "lib/levanter/src/levanter/eval.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `MarinTokenizer | None` is not assignable to parameter `tokenizer` with type `MarinTokenizer` in function `_calculate_bytes_per_token_type`",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/eval.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -2633,10 +2717,241 @@
       "severity": "error"
     },
     {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/grug/_moe/common.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/grug/_moe/common.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_common.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_common.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_common.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_common.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `data` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_sum`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `segment_ids` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_sum`",
+      "severity": "error"
+    },
+    {
+      "column": 47,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._src.basearray.Array` is not assignable to parameter `x` with type `jax._array.Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_fixed_all_to_all.py",
+      "name": "unsupported-operation",
+      "concise_description": "`@` is not supported between `Array` and `Array`",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_fixed_all_to_all.py",
+      "name": "unsupported-operation",
+      "concise_description": "`@` is not supported between `Array` and `Array`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 33,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ring.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 14,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ring.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 1, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ring.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "lib/levanter/src/levanter/grug/_moe/ep_ring.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 56,
+      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
+      "name": "bad-index",
+      "concise_description": "Cannot index scalar tensor (rank 0)",
+      "severity": "error"
+    },
+    {
       "column": 51,
       "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `list[Array]` is not assignable to parameter `caps` with type `Sequence[int]` in function `levanter.grug._moe.common._chunk_capacity_drops`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: split requires at least 1-D array",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: transpose axes must cover every dimension",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: transpose axes must cover every dimension",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: transpose axes must cover every dimension",
       "severity": "error"
     },
     {
@@ -2661,10 +2976,206 @@
       "severity": "error"
     },
     {
+      "column": 56,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 54,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 20,
       "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `P | None` is not assignable to parameter `iterable` with type `Iterable[Any]` in function `tuple.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 46,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 75,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 39,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 48,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 67,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 1, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 33,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 58,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 50,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 66,
+      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -2696,6 +3207,13 @@
       "severity": "error"
     },
     {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/inference/engine.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `(i: int, state: GenState) -> GenState` is not assignable to parameter `body_fun` with type `(Array[[]] | int, @_) -> @_` in function `jax.lax.fori_loop`",
+      "severity": "error"
+    },
+    {
       "column": 36,
       "path": "lib/levanter/src/levanter/inference/engine.py",
       "name": "bad-argument-type",
@@ -2721,6 +3239,20 @@
       "path": "lib/levanter/src/levanter/inference/engine.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `Array` is not assignable to parameter `num_new_tokens` with type `int` in function `levanter.inference.jit_scheduler._DecodeOutputs.append`",
+      "severity": "error"
+    },
+    {
+      "column": 56,
+      "path": "lib/levanter/src/levanter/inference/engine.py",
+      "name": "bad-index",
+      "concise_description": "Index -1 out of range for tuple with 0 elements",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/inference/engine.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -2752,6 +3284,55 @@
       "severity": "error"
     },
     {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "bad-argument-type",
+      "concise_description": "Unpacked argument `tuple[Array | int]` is not assignable to parameter `*operands` with type `tuple[Array]` in function `jax.lax.cond`",
+      "severity": "error"
+    },
+    {
+      "column": 16,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `tuple[Self@SequenceTable, NamedArray]` is not assignable to declared return type `tuple[SequenceTable, int]`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `segment_ids` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_sum`",
+      "severity": "error"
+    },
+    {
+      "column": 18,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `data` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_max`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `segment_ids` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_max`",
+      "severity": "error"
+    },
+    {
+      "column": 18,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `data` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_max`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `segment_ids` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_max`",
+      "severity": "error"
+    },
+    {
       "column": 21,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "name": "bad-argument-type",
@@ -2759,10 +3340,24 @@
       "severity": "error"
     },
     {
+      "column": 49,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
       "column": 86,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `Array` is not assignable to parameter `num_new_tokens` with type `int` in function `TokenQueue.enqueue_tokens`",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -2794,6 +3389,27 @@
       "severity": "error"
     },
     {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/inference/utils.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/inference/utils.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/kernels/deepep/layout_ffi.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `tuple[jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array]` is not assignable to declared return type `tuple[jax._array.Array, jax._array.Array, jax._array.Array]`",
+      "severity": "error"
+    },
+    {
       "column": 24,
       "path": "lib/levanter/src/levanter/kernels/deepep/transport_ffi.py",
       "name": "bad-argument-type",
@@ -2812,6 +3428,27 @@
       "path": "lib/levanter/src/levanter/kernels/deepep/transport_ffi.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `str | Any | None` is not assignable to parameter `*args` with type `PathLike[str] | str` in function `pathlib.Path.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/kernels/deepep/transport_ffi.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `tuple[jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array, jax._src.basearray.Array]` is not assignable to declared return type `tuple[jax._array.Array, jax._array.Array, jax._array.Array, jax._array.Array, jax._array.Array, jax._array.Array, jax._array.Array, jax._array.Array, jax._array.Array, jax._array.Array]`",
+      "severity": "error"
+    },
+    {
+      "column": 43,
+      "path": "lib/levanter/src/levanter/kernels/deepep/transport_ffi.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._src.basearray.Array` is not assignable to parameter `x` with type `jax._array.Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/kernels/deepep/transport_ffi.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `tuple[jax._src.basearray.Array, jax._src.basearray.Array]` is not assignable to declared return type `tuple[jax._array.Array, jax._array.Array]`",
       "severity": "error"
     },
     {
@@ -2850,10 +3487,87 @@
       "severity": "error"
     },
     {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
       "column": 9,
       "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
       "name": "bad-unpacking",
       "concise_description": "Cannot unpack tuple[Array, Array] | tuple[Array, Array, Array] (of size 2) into 3 values",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "bad-unpacking",
+      "concise_description": "Cannot unpack tuple[Array, Array] | tuple[Array, Array, Array] (of size 3) into 2 values",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `tuple[Array, Array] | tuple[Array, Array, Array]` is not assignable to declared return type `tuple[Array, Array]`",
       "severity": "error"
     },
     {
@@ -2864,10 +3578,619 @@
       "severity": "error"
     },
     {
-      "column": 16,
+      "column": 21,
       "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 1, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 53,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py",
+      "name": "bad-unpacking",
+      "concise_description": "Cannot unpack tuple[Array, Array] | tuple[Array, Array, Array] (of size 3) into 2 values",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `Array | Array[Shape]` is not assignable to declared return type `Array`",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "bad-unpacking",
+      "concise_description": "Cannot unpack tuple[Array, Array] | tuple[Array, Array, Array, Array] | tuple[Unknown, Unknown, Array, Array] (of size 2) into 4 values",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/reference.py",
+      "name": "bad-unpacking",
+      "concise_description": "Cannot unpack tuple[Array, Array] | tuple[Array, Array, Array, Array] | tuple[Unknown, Unknown] (of size 4) into 2 values",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 49,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 46,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 52,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 51,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `(x: Array, labels: Array, w: Array) -> tuple[tuple[Never, Never], tuple[Array, Array, Array, Never]]` is not assignable to parameter `fwd` with type `(...) -> tuple[Never, Any]` in function `jax._src.custom_derivatives.custom_vjp.defvjp`",
+      "concise_description": "Argument `tuple[Literal[1, 1] | Int[int], *tuple[Int[int], ...]]` is not assignable to parameter `new_sizes` with type `@_` in function `jax.lax.reshape`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `tuple[int | Int[int], ...]` is not assignable to parameter `new_sizes` with type `@_` in function `jax.lax.reshape`",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 69,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis is out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 19,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 19,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 3, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 2, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 3, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 3, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 4, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 43,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 3, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "lib/levanter/src/levanter/kernels/pallas/short_conv/api.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "lib/levanter/src/levanter/kernels/pallas/short_conv/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 34,
+      "path": "lib/levanter/src/levanter/kernels/pallas/short_conv/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
       "severity": "error"
     },
     {
@@ -2896,6 +4219,209 @@
       "path": "lib/levanter/src/levanter/kernels/pallas/splash_attention.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `int | None` is not assignable to parameter `kv` with type `Array` in function `jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_kernel.SegmentIds.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 1 expected rank 2, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 2, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 34,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unexpected-keyword",
+      "concise_description": "Unexpected keyword argument `preferred_element_type` in function `jax.numpy.matmul`",
+      "severity": "error"
+    },
+    {
+      "column": 54,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unexpected-keyword",
+      "concise_description": "Unexpected keyword argument `preferred_element_type` in function `jax.numpy.matmul`",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "bad-index",
+      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unexpected-keyword",
+      "concise_description": "Unexpected keyword argument `preferred_element_type` in function `jax.numpy.matmul`",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 4, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: matmul expects at least 1-D arrays",
+      "severity": "error"
+    },
+    {
+      "column": 53,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unexpected-keyword",
+      "concise_description": "Unexpected keyword argument `preferred_element_type` in function `jax.numpy.matmul`",
+      "severity": "error"
+    },
+    {
+      "column": 26,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 1 expected rank 3, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 43,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 41,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 43,
+      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 3, got 0",
       "severity": "error"
     },
     {
@@ -2976,6 +4502,83 @@
       "severity": "error"
     },
     {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/layers/gated_deltanet.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/layers/gated_deltanet.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: squeeze axis out of range",
+      "severity": "error"
+    },
+    {
+      "column": 34,
+      "path": "lib/levanter/src/levanter/layers/gated_deltanet.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/levanter/src/levanter/layers/gated_deltanet.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 4, got 2",
+      "severity": "error"
+    },
+    {
+      "column": 45,
+      "path": "lib/levanter/src/levanter/layers/gated_deltanet.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
+      "severity": "error"
+    },
+    {
+      "column": 46,
+      "path": "lib/levanter/src/levanter/layers/sampler.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 37,
+      "path": "lib/levanter/src/levanter/layers/sampler.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/layers/sampler.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/layers/sampler.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 46,
+      "path": "lib/levanter/src/levanter/layers/sampler.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/main/eval_lm.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 21,
       "path": "lib/levanter/src/levanter/main/eval_lm.py",
       "name": "bad-argument-type",
@@ -3050,6 +4653,13 @@
       "path": "lib/levanter/src/levanter/main/train_asr.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `list[Unknown]` is not assignable to parameter `AudioPos` with type `Axis | str` in function `levanter.data.audio.AudioTextDataset.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 16,
+      "path": "lib/levanter/src/levanter/main/train_asr.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | int` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
@@ -3137,10 +4747,24 @@
       "severity": "error"
     },
     {
+      "column": 16,
+      "path": "lib/levanter/src/levanter/main/train_dpo.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | int` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
       "column": 54,
       "path": "lib/levanter/src/levanter/main/train_dpo.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `LmHeadModel[Unknown]` is not assignable to parameter `model` with type `DpoModel` in function `levanter.trainer_state.TrainerState.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 48,
+      "path": "lib/levanter/src/levanter/main/train_dpo.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -3221,6 +4845,13 @@
       "severity": "error"
     },
     {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/metrics.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | float | Unknown` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
       "column": 55,
       "path": "lib/levanter/src/levanter/models/apertus.py",
       "name": "bad-argument-type",
@@ -3294,28 +4925,28 @@
       "column": 39,
       "path": "lib/levanter/src/levanter/models/flash_attention.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `int | object` is not assignable to parameter `x` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax.numpy.sqrt`",
+      "concise_description": "Argument `int | object` is not assignable to parameter `x` with type `Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.sqrt`",
       "severity": "error"
     },
     {
       "column": 44,
       "path": "lib/levanter/src/levanter/models/flash_attention.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | None` is not assignable to parameter `key` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.random.core.fold_in`",
+      "concise_description": "Argument `Array | None` is not assignable to parameter `key` with type `Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.random.fold_in`",
       "severity": "error"
     },
     {
       "column": 44,
       "path": "lib/levanter/src/levanter/models/flash_attention.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | None` is not assignable to parameter `key` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.random.core.fold_in`",
+      "concise_description": "Argument `Array | None` is not assignable to parameter `key` with type `Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.random.fold_in`",
       "severity": "error"
     },
     {
       "column": 44,
       "path": "lib/levanter/src/levanter/models/flash_attention.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | None` is not assignable to parameter `key` with type `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.random.core.fold_in`",
+      "concise_description": "Argument `Array | None` is not assignable to parameter `key` with type `Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.random.fold_in`",
       "severity": "error"
     },
     {
@@ -3379,6 +5010,13 @@
       "path": "lib/levanter/src/levanter/models/gemma.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `Gemma3Config` is not assignable to parameter `config` with type `LlamaConfig` in function `levanter.models.llama.LlamaEmbedding.init`",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/models/hyena.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: FFT requires at least 1-D array",
       "severity": "error"
     },
     {
@@ -3487,10 +5125,73 @@
       "severity": "error"
     },
     {
+      "column": 33,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 33,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 66,
       "path": "lib/levanter/src/levanter/models/mixtral.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/levanter/src/levanter/models/mixtral.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -3599,6 +5300,20 @@
       "severity": "error"
     },
     {
+      "column": 76,
+      "path": "lib/levanter/src/levanter/models/qwen3_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 65,
+      "path": "lib/levanter/src/levanter/models/qwen3_moe.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 56,
       "path": "lib/levanter/src/levanter/models/qwen3_moe.py",
       "name": "bad-argument-type",
@@ -3624,6 +5339,13 @@
       "path": "lib/levanter/src/levanter/models/qwen3_moe.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `LayerNormBase` is not assignable to parameter `norm` with type `RmsNorm` in function `Qwen3MoeTransformer.__init__`",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/models/snowball.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -3697,10 +5419,59 @@
       "severity": "error"
     },
     {
-      "column": 36,
+      "column": 28,
       "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `Array | tuple[Array, MoeDispatchCounts]` is not assignable to parameter `x` with type `Array` in function `_activation_reshard`",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/models/snowball.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/models/snowball.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "lib/levanter/src/levanter/models/snowball.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 2, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "lib/levanter/src/levanter/models/snowball.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/models/snowball.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/models/snowball.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/models/snowball.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -3714,56 +5485,63 @@
       "column": 54,
       "path": "lib/levanter/src/levanter/models/whisper.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
       "severity": "error"
     },
     {
       "column": 54,
       "path": "lib/levanter/src/levanter/models/whisper.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
       "severity": "error"
     },
     {
       "column": 71,
       "path": "lib/levanter/src/levanter/models/whisper.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
       "severity": "error"
     },
     {
       "column": 71,
       "path": "lib/levanter/src/levanter/models/whisper.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
       "severity": "error"
     },
     {
       "column": 71,
       "path": "lib/levanter/src/levanter/models/whisper.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
       "severity": "error"
     },
     {
       "column": 73,
       "path": "lib/levanter/src/levanter/models/whisper.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.linear.Linear.init`",
       "severity": "error"
     },
     {
       "column": 84,
       "path": "lib/levanter/src/levanter/models/whisper.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.conv.Conv.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.conv.Conv.init`",
       "severity": "error"
     },
     {
       "column": 95,
       "path": "lib/levanter/src/levanter/models/whisper.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Any | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.conv.Conv.init`",
+      "concise_description": "Argument `Array[[]] | None` is not assignable to parameter `key` with type `Array` in function `haliax.nn.conv.Conv.init`",
+      "severity": "error"
+    },
+    {
+      "column": 19,
+      "path": "lib/levanter/src/levanter/optim/_block_partition.py",
+      "name": "bad-index",
+      "concise_description": "Cannot index scalar tensor (rank 0)",
       "severity": "error"
     },
     {
@@ -3813,6 +5591,27 @@
       "path": "lib/levanter/src/levanter/optim/cautious.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter `count` with type `Array | numpy.bool | ndarray | number` in function `ScaleByCautiousState.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "lib/levanter/src/levanter/optim/clip_update_norm.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | ndarray[tuple[Any, ...], dtype[numpy.bool]]` is not assignable to parameter `condition` with type `Array[@_] | builtins.bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
+      "severity": "error"
+    },
+    {
+      "column": 68,
+      "path": "lib/levanter/src/levanter/optim/clip_update_norm.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | ndarray | number` is not assignable to parameter `x1` with type `Array[@_] | builtins.bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.maximum`",
+      "severity": "error"
+    },
+    {
+      "column": 75,
+      "path": "lib/levanter/src/levanter/optim/clip_update_norm.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | ndarray | number` is not assignable to parameter `x2` with type `Array[@_] | builtins.bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.minimum`",
       "severity": "error"
     },
     {
@@ -3879,6 +5678,27 @@
       "severity": "error"
     },
     {
+      "column": 29,
+      "path": "lib/levanter/src/levanter/optim/grugmuon.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/optim/grugmuon.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/levanter/src/levanter/optim/grugmuon.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 45,
       "path": "lib/levanter/src/levanter/optim/kron.py",
       "name": "bad-argument-type",
@@ -3886,10 +5706,66 @@
       "severity": "error"
     },
     {
+      "column": 58,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis is out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 58,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis is out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 94,
       "path": "lib/levanter/src/levanter/optim/kron.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter with type `int`",
+      "severity": "error"
+    },
+    {
+      "column": 49,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | builtins.bool | numpy.bool | ndarray[tuple[Any, ...], dtype[numpy.bool]]` is not assignable to parameter `condition` with type `Array[@_] | builtins.bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
+      "severity": "error"
+    },
+    {
+      "column": 65,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter `y` with type `Array[@_] | builtins.bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | builtins.bool | numpy.bool | ndarray[tuple[Any, ...], dtype[numpy.bool]]` is not assignable to parameter `pred` with type `Array[[]] | builtins.bool | complex | float | int | ndarray[IntTuple[()]] | number` in function `jax.lax.cond`",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | builtins.bool | numpy.bool | ndarray[tuple[Any, ...], dtype[numpy.bool]]` is not assignable to parameter `condition` with type `Array[@_] | builtins.bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
+      "severity": "error"
+    },
+    {
+      "column": 54,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter `y` with type `Array[@_] | builtins.bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
+      "severity": "error"
+    },
+    {
+      "column": 13,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | builtins.bool | numpy.bool | ndarray[tuple[Any, ...], dtype[numpy.bool]]` is not assignable to parameter `pred` with type `Array[[]] | builtins.bool | complex | float | int | ndarray[IntTuple[()]] | number` in function `jax.lax.cond`",
       "severity": "error"
     },
     {
@@ -3914,6 +5790,13 @@
       "severity": "error"
     },
     {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/optim/kron.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 95,
       "path": "lib/levanter/src/levanter/optim/mars.py",
       "name": "bad-argument-type",
@@ -3925,6 +5808,13 @@
       "path": "lib/levanter/src/levanter/optim/mars.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `Array | numpy.bool | float | int | ndarray | number` is not assignable to parameter `count` with type `Array | numpy.bool | ndarray | number` in function `ScaleByMarsState.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/levanter/src/levanter/optim/model_averaging.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
       "severity": "error"
     },
     {
@@ -4019,6 +5909,20 @@
       "severity": "error"
     },
     {
+      "column": 23,
+      "path": "lib/levanter/src/levanter/optim/namo.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 44,
+      "path": "lib/levanter/src/levanter/optim/namo.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 59,
       "path": "lib/levanter/src/levanter/optim/namo.py",
       "name": "bad-argument-type",
@@ -4030,6 +5934,27 @@
       "path": "lib/levanter/src/levanter/optim/namo.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `(updates: Updates, state: ScaleByNamoState, params: Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None = None) -> tuple[Updates, ScaleByNamoState]` is not assignable to parameter `update` with type `TransformUpdateFn` in function `optax._src.base.GradientTransformation.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 41,
+      "path": "lib/levanter/src/levanter/optim/namo.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 49,
+      "path": "lib/levanter/src/levanter/optim/namo.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 101,
+      "path": "lib/levanter/src/levanter/optim/namo.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -4068,6 +5993,13 @@
       "severity": "error"
     },
     {
+      "column": 68,
+      "path": "lib/levanter/src/levanter/optim/skipstep.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | numpy.bool | ndarray[tuple[Any, ...], dtype[numpy.bool]]` is not assignable to parameter `x2` with type `Array[@_] | builtins.bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.logical_and`",
+      "severity": "error"
+    },
+    {
       "column": 54,
       "path": "lib/levanter/src/levanter/optim/skipstep.py",
       "name": "bad-argument-type",
@@ -4082,10 +6014,94 @@
       "severity": "error"
     },
     {
+      "column": 54,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis is out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 54,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis is out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 38,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "bad-specialization",
+      "concise_description": "`list[list[int]]` is not a valid `Flag[int | tuple[int, ...] | None]` value for type variable `Axes`",
+      "severity": "error"
+    },
+    {
+      "column": 33,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "bad-specialization",
+      "concise_description": "`tuple[tuple[Literal[0]], tuple[Literal[0]]]` is not a valid `Flag[int | tuple[int, ...] | None]` value for type variable `Axes`",
+      "severity": "error"
+    },
+    {
+      "column": 33,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "bad-specialization",
+      "concise_description": "`tuple[tuple[Literal[0]], tuple[Literal[1]]]` is not a valid `Flag[int | tuple[int, ...] | None]` value for type variable `Axes`",
+      "severity": "error"
+    },
+    {
+      "column": 27,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: diag input must be 1-D or 2-D",
+      "severity": "error"
+    },
+    {
+      "column": 36,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unexpected-keyword",
+      "concise_description": "Unexpected keyword argument `precision` in function `jax.numpy.matmul`",
+      "severity": "error"
+    },
+    {
+      "column": 17,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unexpected-keyword",
+      "concise_description": "Unexpected keyword argument `precision` in function `jax.numpy.matmul`",
+      "severity": "error"
+    },
+    {
+      "column": 31,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 39,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unexpected-keyword",
+      "concise_description": "Unexpected keyword argument `precision` in function `jax.numpy.matmul`",
+      "severity": "error"
+    },
+    {
       "column": 60,
       "path": "lib/levanter/src/levanter/optim/soap.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `list[Array | None]` is not assignable to parameter `tree` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax.tree_utils._casting.tree_cast`",
+      "severity": "error"
+    },
+    {
+      "column": 20,
+      "path": "lib/levanter/src/levanter/optim/soap.py",
+      "name": "unsupported-operation",
+      "concise_description": "`*` is not supported between `numpy.bool` and `Array`",
       "severity": "error"
     },
     {
@@ -4110,6 +6126,27 @@
       "severity": "error"
     },
     {
+      "column": 9,
+      "path": "lib/levanter/src/levanter/pipeline.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | Tracer[Unknown]` is not assignable to parameter `operand` with type `Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.lax.reshape`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "lib/levanter/src/levanter/pipeline.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `tuple[int, int | Any, *tuple[Int[int], ...]]` is not assignable to parameter `new_sizes` with type `@_` in function `jax.lax.reshape`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/levanter/src/levanter/recovery/faults.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `(_: object) -> object` is not assignable to parameter `cond_fun` with type `(object) -> ArrayLike` in function `jax.lax.while_loop`",
+      "severity": "error"
+    },
+    {
       "column": 83,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "name": "bad-argument-type",
@@ -4544,6 +6581,20 @@
       "severity": "error"
     },
     {
+      "column": 12,
+      "path": "lib/levanter/src/levanter/tensorstore_serialization.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `tuple[ArrayImpl, int]` is not assignable to declared return type `tuple[Array, int]`",
+      "severity": "error"
+    },
+    {
+      "column": 19,
+      "path": "lib/levanter/src/levanter/tensorstore_serialization.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
       "column": 40,
       "path": "lib/levanter/src/levanter/tokenizers.py",
       "name": "bad-argument-type",
@@ -4555,20 +6606,55 @@
       "path": "lib/levanter/src/levanter/tokenizers.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `list[str]` is not assignable to parameter `end_tokens` with type `tuple[str, ...]` in function `jinja2.parser.Parser.parse_statements`",
+      "severity": "error"
+    },
+    {
+      "column": 53,
+      "path": "lib/levanter/src/levanter/tracker/histogram.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `bin_edges` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `sharded_histogram_array`",
       "severity": "error"
     },
     {
       "column": 49,
       "path": "lib/levanter/src/levanter/tracker/histogram.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` is not assignable to parameter `bin_edges` with type `Array` in function `_single_shard_histogram_array`",
+      "concise_description": "Argument `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` is not assignable to parameter `bin_edges` with type `jax._array.Array` in function `_single_shard_histogram_array`",
       "severity": "error"
     },
     {
       "column": 10,
       "path": "lib/levanter/src/levanter/tracker/histogram.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` is not assignable to parameter `edges` with type `Array` in function `_wrapped_hist`",
+      "concise_description": "Argument `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` is not assignable to parameter `edges` with type `jax._array.Array` in function `_wrapped_hist`",
+      "severity": "error"
+    },
+    {
+      "column": 60,
+      "path": "lib/levanter/src/levanter/tracker/histogram.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `(tile_index: int, running_counts: Array) -> Array` is not assignable to parameter `body_fun` with type `(Array[[]] | int, @_) -> @_` in function `jax.lax.fori_loop`",
+      "severity": "error"
+    },
+    {
+      "column": 41,
+      "path": "lib/levanter/src/levanter/tracker/tensorboard.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 51,
+      "path": "lib/levanter/src/levanter/tracker/tensorboard.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 21,
+      "path": "lib/levanter/src/levanter/tracker/tensorboard.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
@@ -4576,6 +6662,27 @@
       "path": "lib/levanter/src/levanter/tracker/wandb.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `str | None` is not assignable to parameter `mode` with type `Literal['disabled', 'offline', 'online', 'shared'] | None` in function `wandb.init`",
+      "severity": "error"
+    },
+    {
+      "column": 73,
+      "path": "lib/levanter/src/levanter/trainer.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | int` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 19,
+      "path": "lib/levanter/src/levanter/trainer.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | int` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 16,
+      "path": "lib/levanter/src/levanter/trainer.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array | int` is not assignable to parameter `x` with type `Buffer | SupportsIndex | SupportsInt | SupportsTrunc | str` in function `int.__new__`",
       "severity": "error"
     },
     {
@@ -5440,10 +7547,115 @@
       "severity": "error"
     },
     {
+      "column": 70,
+      "path": "lib/marin/src/marin/scaling_laws/isoflop_analysis.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 97,
+      "path": "lib/marin/src/marin/scaling_laws/isoflop_analysis.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 19,
+      "path": "lib/marin/src/marin/scaling_laws/isoflop_analysis.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 23,
+      "path": "lib/marin/src/marin/scaling_laws/isoflop_analysis.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array[[]]` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/marin/src/marin/scaling_laws/scaling_plots.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `iterable` with type `Iterable[ConvertibleToFloat]` in function `map.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/marin/src/marin/scaling_laws/scaling_plots.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `iterable` with type `Iterable[ConvertibleToFloat]` in function `map.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/marin/src/marin/scaling_laws/scaling_plots.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 49,
+      "path": "lib/marin/src/marin/scaling_laws/scaling_plots.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array` is not assignable to parameter `x` with type `Buffer | SupportsFloat | SupportsIndex | str` in function `float.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 39,
+      "path": "lib/marin/src/marin/scaling_laws/scaling_plots.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array[[400]]` is not assignable to parameter `iterable` with type `Iterable[ConvertibleToFloat]` in function `map.__new__`",
+      "severity": "error"
+    },
+    {
+      "column": 39,
+      "path": "lib/marin/src/marin/scaling_laws/scaling_plots.py",
+      "name": "bad-argument-type",
+      "concise_description": "Argument `Array[[400]]` is not assignable to parameter `iterable` with type `Iterable[ConvertibleToFloat]` in function `map.__new__`",
+      "severity": "error"
+    },
+    {
       "column": 73,
       "path": "lib/marin/src/marin/testing/inference/snowball_backend_parity_jobs.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `str` is not assignable to parameter `attention_implementation` with type `Literal['gpu_fa4_cute', 'gpu_fa4_cute_sm100', 'reference', 'tpu_splash'] | None` in function `levanter.models.snowball.SnowballConfig.__replace__`",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/marin/src/marin/testing/inference/snowball_checkpoint.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 29,
+      "path": "lib/marin/src/marin/testing/moe/ragged_ep.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/marin/src/marin/testing/moe/ragged_ep.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 3, got 0",
+      "severity": "error"
+    },
+    {
+      "column": 40,
+      "path": "lib/marin/src/marin/testing/moe/ragged_ep.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
+      "severity": "error"
+    },
+    {
+      "column": 22,
+      "path": "lib/marin/src/marin/testing/moe/ragged_ep.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {

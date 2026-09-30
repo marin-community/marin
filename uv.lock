@@ -6449,6 +6449,8 @@ dependencies = [
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-gpu' or extra == 'extra-10-marin-core-tpu' or extra != 'extra-10-marin-root-pipeline' or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-iris-dev') or (extra == 'extra-10-marin-root-pipeline' and extra == 'group-10-marin-iris-test')" },
     { name = "jaxtyping" },
     { name = "jmp" },
+    { name = "pyrefly-jax-stubs" },
+    { name = "pyrefly-shape-extensions" },
     { name = "safetensors" },
 ]
 
@@ -6483,6 +6485,8 @@ requires-dist = [
     { name = "jax", specifier = ">=0.9.2" },
     { name = "jaxtyping", specifier = ">=0.2.20" },
     { name = "jmp", specifier = ">=0.0.4" },
+    { name = "pyrefly-jax-stubs", git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-jax-stubs&rev=ef08065bc7d691fd2c24884f813d42770c785c7b" },
+    { name = "pyrefly-shape-extensions", git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-shape-extensions&rev=ef08065bc7d691fd2c24884f813d42770c785c7b" },
     { name = "safetensors", specifier = ">=0.4.3" },
 ]
 
@@ -6765,6 +6769,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "pyarrow" },
     { name = "pydantic" },
+    { name = "pyrefly-einops-stubs" },
+    { name = "pyrefly-shape-extensions" },
+    { name = "pyrefly-torch-stubs" },
     { name = "pytimeparse" },
     { name = "safetensors", extra = ["numpy"] },
     { name = "tblib" },
@@ -6906,6 +6913,9 @@ requires-dist = [
     { name = "protobuf", specifier = ">=6" },
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pydantic", specifier = "<3" },
+    { name = "pyrefly-einops-stubs", git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-einops-stubs&rev=ef08065bc7d691fd2c24884f813d42770c785c7b" },
+    { name = "pyrefly-shape-extensions", git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-shape-extensions&rev=ef08065bc7d691fd2c24884f813d42770c785c7b" },
+    { name = "pyrefly-torch-stubs", git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-torch-stubs&rev=ef08065bc7d691fd2c24884f813d42770c785c7b" },
     { name = "pytimeparse", specifier = ">=1.1.8" },
     { name = "quack-kernels", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.6.4" },
     { name = "safetensors", extras = ["numpy"], specifier = ">=0.4.2,<0.7.0" },
@@ -10277,6 +10287,36 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/29/58/a402b310a0c989b92b78cc77c33ceced0437131d981b00731f9c6f043360/pyrefly-1.4.0.dev2-py3-none-win32.whl", hash = "sha256:f2edd764a204ec58ff23687857577560ed28a7079a32cf297f703a660bea1464", size = 14443257, upload-time = "2026-09-28T22:17:31.754Z" },
     { url = "https://files.pythonhosted.org/packages/70/02/160aec956d7a007df4870899bb619d4abc511dde67e81c996a4f9a7b9248/pyrefly-1.4.0.dev2-py3-none-win_amd64.whl", hash = "sha256:ac6fee59f8af9420aa21f9b345d61b69e582b39c1be8255527265f7125e89060", size = 15286593, upload-time = "2026-09-28T22:17:34.863Z" },
     { url = "https://files.pythonhosted.org/packages/2f/ea/bc0b74665037564dbf82eb3dc407506dafc648634d6a3eae333cc37f78d9/pyrefly-1.4.0.dev2-py3-none-win_arm64.whl", hash = "sha256:3d8b7a5fad810efbce973ac5cdaba41dd0a6358f154187bcc25b9c7a3349d58e", size = 14576223, upload-time = "2026-09-28T22:17:37.77Z" },
+]
+
+[[package]]
+name = "pyrefly-einops-stubs"
+version = "0.0.0"
+source = { git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-einops-stubs&rev=ef08065bc7d691fd2c24884f813d42770c785c7b#ef08065bc7d691fd2c24884f813d42770c785c7b" }
+dependencies = [
+    { name = "pyrefly-shape-extensions" },
+    { name = "pyrefly-torch-stubs" },
+]
+
+[[package]]
+name = "pyrefly-jax-stubs"
+version = "0.0.0"
+source = { git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-jax-stubs&rev=ef08065bc7d691fd2c24884f813d42770c785c7b#ef08065bc7d691fd2c24884f813d42770c785c7b" }
+dependencies = [
+    { name = "pyrefly-shape-extensions" },
+]
+
+[[package]]
+name = "pyrefly-shape-extensions"
+version = "0.0.0"
+source = { git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-shape-extensions&rev=ef08065bc7d691fd2c24884f813d42770c785c7b#ef08065bc7d691fd2c24884f813d42770c785c7b" }
+
+[[package]]
+name = "pyrefly-torch-stubs"
+version = "0.0.0"
+source = { git = "https://github.com/facebook/pyrefly.git?subdirectory=tensor-shapes%2Fpyrefly-torch-stubs&rev=ef08065bc7d691fd2c24884f813d42770c785c7b#ef08065bc7d691fd2c24884f813d42770c785c7b" }
+dependencies = [
+    { name = "pyrefly-shape-extensions" },
 ]
 
 [[package]]

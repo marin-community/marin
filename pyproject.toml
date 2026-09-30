@@ -231,6 +231,12 @@ tasktrove-verify = { workspace = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
+# Pyrefly shape types: stubs are versioned in lockstep with pyrefly (pinned to
+# 1.4.0.dev2 in lib/marin and infra/pre-commit.py); this rev is the 1.4.0-dev.2 tag.
+pyrefly-shape-extensions = { git = "https://github.com/facebook/pyrefly.git", rev = "ef08065bc7d691fd2c24884f813d42770c785c7b", subdirectory = "tensor-shapes/pyrefly-shape-extensions" }
+pyrefly-jax-stubs = { git = "https://github.com/facebook/pyrefly.git", rev = "ef08065bc7d691fd2c24884f813d42770c785c7b", subdirectory = "tensor-shapes/pyrefly-jax-stubs" }
+pyrefly-einops-stubs = { git = "https://github.com/facebook/pyrefly.git", rev = "ef08065bc7d691fd2c24884f813d42770c785c7b", subdirectory = "tensor-shapes/pyrefly-einops-stubs" }
+pyrefly-torch-stubs = { git = "https://github.com/facebook/pyrefly.git", rev = "ef08065bc7d691fd2c24884f813d42770c785c7b", subdirectory = "tensor-shapes/pyrefly-torch-stubs" }
 torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 'linux'" }]
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }

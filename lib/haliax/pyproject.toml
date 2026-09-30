@@ -27,6 +27,8 @@ dependencies = [
     "jmp>=0.0.4",
     "safetensors>=0.4.3",
     "aqtp>=0.8.2",
+    "pyrefly-shape-extensions",
+    "pyrefly-jax-stubs",
 ]
 dynamic =[ "version" ]
 

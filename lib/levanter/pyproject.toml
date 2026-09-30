@@ -75,6 +75,11 @@ dependencies = [
     "jinja2",  # needed for apply_chat_template
     "protobuf>=6",
     "immutabledict",
+    "pyrefly-shape-extensions",
+    # einops shape stubs; without them einops ops are typed (x: T) -> T and keep the input shape.
+    "pyrefly-einops-stubs",
+    # Required by pyrefly-einops-stubs; declared so its git source in the root pyproject applies.
+    "pyrefly-torch-stubs",
 ]
 
 [project.urls]
