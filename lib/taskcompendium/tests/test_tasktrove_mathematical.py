@@ -111,6 +111,88 @@ def test_import_math_removes_only_file_submission_scaffolding():
     assert prompt == "Compute $\\sqrt{2}$ subject to x > 0.\nReturn the exact radical."
 
 
+def test_import_openmath_instruction_preserves_boxed_format_without_file_protocol():
+    archive = _archive()
+    archive.files["task.toml"] = archive.files["task.toml"].replace(b"math-template-1", b"5ee94cf985a9")
+    archive.files["instruction.md"] = (
+        b"You are a careful mathematical reasoner. Read the problem below and show your work, "
+        b"then write your final answer at the path `/app/answer.txt`.\n"
+        b"Format requirement: the answer file should contain `\\boxed{<answer>}` on its\n"
+        b"last meaningful line. The verifier extracts the last `\\boxed{...}` it finds.\n"
+        b"Evaluate one third. Put the answer (and only the answer) inside \\boxed{}.\n"
+        b"Write the final answer to `/app/answer.txt`. Put the final expression in `\\boxed{...}` when practical."
+    )
+
+    result = import_task(archive)
+    prompt = result.specification.context.events[0].content
+
+    assert prompt.startswith("You are a careful mathematical reasoner. Read the problem below and show your work.")
+    assert "Evaluate one third." in prompt
+    assert "answer file" not in prompt
+    assert "/app/" not in prompt and "answer.txt" not in prompt
+    assert "Format requirement: put your final answer in `\\boxed{...}`." in prompt
+    assert result.specification.verifier.kind is VerifierKind.MATHEMATICAL_ANSWER
+
+
+def test_import_sankalp_file_named_instruction_preserves_the_math_question():
+    archive = _archive()
+    archive.files["task.toml"] = archive.files["task.toml"].replace(b"math-template-1", b"5ee94cf985a9")
+    archive.files["instruction.md"] = (
+        b"Please place your final answer in a file named `/app/answer.txt`.\n"
+        b"Evaluate the exact value of one third.\n"
+        b"Write the final answer to `/app/answer.txt`. Put the final expression in `\\boxed{...}` when practical."
+    )
+
+    result = import_task(archive)
+    prompt = result.specification.context.events[0].content
+
+    assert prompt.startswith("Evaluate the exact value of one third.")
+    assert "/app/" not in prompt and "answer.txt" not in prompt
+    assert "\\boxed{...}" in prompt
+    assert result.tags == ("math", "nemotron", "source tag")
+    assert result.specification.verifier.kind is VerifierKind.MATHEMATICAL_ANSWER
+
+
+def test_import_nemotron_v5_removes_terminal_submission_block():
+    archive = _archive()
+    archive.files["task.toml"] = archive.files["task.toml"].replace(b"math-template-1", b"334fa3ab07c7")
+    archive.files["instruction.md"] = "\n".join(
+        (
+            "You are a careful mathematical reasoner. Read the problem below and show your work, "
+            "then write your final answer at the path `/app/answer.txt`.",
+            "",
+            "Format requirement: the answer file should contain `\\boxed{<answer>}` on its",
+            "last meaningful line. The verifier extracts the last `\\boxed{...}` it finds.",
+            "",
+            "Solve the stated problem. Remember to put your final answer inside \\boxed{}.",
+            "",
+            "## Submitting your answer (IMPORTANT)",
+            "You are a terminal agent. Your chat reply is NOT graded — the grader only reads the file "
+            "`/app/answer.txt` inside the sandbox. You MUST write your solution, ending with the final answer "
+            "in \\boxed{...} to `/app/answer.txt` by RUNNING A SHELL COMMAND, e.g. a heredoc:",
+            "",
+            "    cat > /app/answer.txt <<'EOF'",
+            "    <your solution, ending with the final answer in \\boxed{...} here>",
+            "    EOF",
+            "",
+            "Then confirm it with `cat /app/answer.txt`. An empty or missing `/app/answer.txt` scores 0 "
+            "regardless of what you wrote in your reply.",
+            "",
+            "Reliability note: write a provisional `/app/answer.txt` as soon as you have a",
+            "candidate answer, then refine it if needed. This preserves a scoreable answer if",
+            "later computation consumes the remaining agent time.",
+        )
+    ).encode()
+
+    result = import_task(archive)
+    prompt = result.specification.context.events[0].content
+
+    assert "Solve the stated problem." in prompt
+    assert "Present the final answer in `\\boxed{...}`." in prompt
+    assert "/app/" not in prompt and "answer.txt" not in prompt
+    assert "RUNNING A SHELL COMMAND" not in prompt
+
+
 def test_import_all_puzzles_preserves_answer_constraints_and_removes_file_protocol():
     archive = _archive(expected="(-5.167, 4.693)")
     archive.files["task.toml"] = archive.files["task.toml"].replace(b"nemotron_math", b"all_puzzles")
