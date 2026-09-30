@@ -241,3 +241,17 @@ timeout as `m30b-unfilled-02` (`/mwittmann/m30b-unfilled-02-coord`, port 33202, 
 `~/projects/marin.mfu30-routing-arm` pinned at fcec70f93d = e612b34244 lib, profiled 180021-180023).
 Scoring (orchestrator): median over 180011-180059 against `mhep-ctx4k-s0-20260930` (28.255%, 13.892 s,
 peak 103.09 GiB; loss 180000 1.261413, 180001 1.234596, 180002 1.200221, 180003 1.256785).
+
+## M30B-013 D rack arm submitted (2026-09-30 20:12 UTC)
+
+`m30b-sonic-01` (`/mwittmann/m30b-sonic-01-coord`, port 33203), code dd45f27c17 (= ce112504f1 + TF_CPP_
+forwarding), queued alongside `m30b-unfilled-02` by exception (FIFO queue ~5 h). Env:
+`XLA_FLAGS=--xla_gpu_enable_host_memory_offloading=true`, `TF_CPP_MIN_LOG_LEVEL=0`,
+`TF_CPP_VMODULE=hlo_rematerialization=1`; profile 180021-180023. It doubles as the restore smoke. Valid only
+if loss at 180000 == 1.261413 exactly, 180001-180003 within ~1e-4 of `mhep-ctx4k-s0-20260930`, and drops and
+router balancing/QB statistics stay in family through 180059. Attribution: D+flag vs `m30b-unfilled-02`
+(A+B+C) and A's `m30a-hmo-02` (flag alone).
+
+Correctness constraint of D (record in any landing PR): the backward's all-to-alls no longer depend on the
+recomputed forward's, so D requires a collective overlap limit of 1. ce112504f1 forces it for every ragged
+run, which changes non-hero ragged configurations that inherited the default limit (4).
