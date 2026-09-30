@@ -271,6 +271,7 @@ class TaskSpec(BaseModel):
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
+    tags: tuple[str, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
