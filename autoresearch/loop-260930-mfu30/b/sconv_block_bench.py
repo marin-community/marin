@@ -223,7 +223,9 @@ def main():
         results[impl]["step_ms_median"] = float(np.median(results[impl]["step_ms"]))
     (la, ga), (lb, gb) = grads["pallas_gpu"], grads["triton_gpu"]
     diffs = {}
-    for (path, a), (_, b) in zip(jax.tree_util.tree_leaves_with_path(ga), jax.tree_util.tree_leaves_with_path(gb)):
+    for (path, a), (_, b) in zip(
+        jax.tree_util.tree_leaves_with_path(ga), jax.tree_util.tree_leaves_with_path(gb), strict=True
+    ):
         a32, b32 = a.astype(np.float32), b.astype(np.float32)
         if np.array_equal(a32, b32):
             continue
