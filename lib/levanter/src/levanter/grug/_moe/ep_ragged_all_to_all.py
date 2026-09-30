@@ -425,22 +425,20 @@ def _routed_experts_forward(
     returned = _transport_buffer(
         assignments, hidden_dim, sorted_x.dtype, routing.group_sizes, site=_TransportBufferSite.RETURN_OUTPUT
     )  # [TK, H]
-    # The chunks run as a two-stage pipeline: chunk c+1's dispatch is in flight during chunk c's
-    # expert MLP, and chunk c's return during chunk c+1's MLP. Two barriers bound it. The next
-    # dispatch starts only once this chunk's dispatch has landed, so at most two receiver buffers
-    # are live. This chunk's return starts only once the next dispatch has landed, so one
-    # transport is in flight at a time. The second barrier holds only the return's input: the
-    # next chunk's received rows flow on unbarriered, so a recompute for the backward, which needs
-    # no return, can drop the return and the down projection feeding it.
-    with jax.named_scope("moe_chunk_0"):
-        x_dispatch = _dispatch_chunk(sorted_x, plans[0], layout)  # [C, H]
     chunk_residuals = []
     for chunk_index, plan in enumerate(plans):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            next_x_dispatch = None
-            if chunk_index + 1 < len(plans):
-                next_source, _ = jax.lax.optimization_barrier((sorted_x, x_dispatch))
-                next_x_dispatch = _dispatch_chunk(next_source, plans[chunk_index + 1], layout)  # [C, H]
+            source = sorted_x
+            if chunk_residuals:
+                # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
+                # of every chunk at the same time, and the chunk buffers are all live at once,
+                # which is the memory the chunks exist to save. The barrier waits for the previous
+                # chunk's backward inputs rather than its return transport: the backward does not
+                # need the return, so a recompute for the backward drops it and must not be held
+                # to it. (Dispatching chunk c+1 during chunk c's MLP, as PR #9481 does, measured
+                # 3 ms per layer slower in a rematted four-GPU layer scan.)
+                source, _ = jax.lax.optimization_barrier((sorted_x, chunk_residuals[-1].expert_mlp))
+            x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
                 x_dispatch,
@@ -449,14 +447,11 @@ def _routed_experts_forward(
                 plan.physical_group_sizes,
                 plan.active_group_sizes,
             )
-            if next_x_dispatch is not None:
-                out_dispatch, _ = jax.lax.optimization_barrier((out_dispatch, next_x_dispatch))
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
             # no expansion step.
             returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
             chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
-            x_dispatch = next_x_dispatch
 
     with jax.named_scope("combine"):
         out = _unpermute_from_global_expert(
