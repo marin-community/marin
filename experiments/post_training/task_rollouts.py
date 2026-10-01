@@ -184,7 +184,7 @@ generator:
   run_engines_locally: true
   weight_sync_backend: nccl
   sampling_params:
-    temperature: 1.0
+    temperature: 0.1
     top_p: 1.0
 data:
   kind: tasks
