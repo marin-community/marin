@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from taskcompendium.container_service import ContainerService, validate_container_image
-from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
+from taskcompendium.models import SCHEMA_VERSION, SHA256_PATTERN, AnswerType, TaskSpec
 from taskcompendium.path_validation import validate_relative_file_paths
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
@@ -29,7 +29,6 @@ from taskcompendium.tool_provider import ProviderIdentity, tool_schema_sha256
 from taskcompendium.verifier_registry import validate_verifier
 
 ENVIRONMENT_DIR = "environment"
-SHA256_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
@@ -41,11 +40,11 @@ class ToolBinding(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_interface: str = Field(min_length=1)
-    seed_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
+    seed_sha256: str = Field(pattern=SHA256_PATTERN)
     provider_revision: str = Field(min_length=1)
     runtime: ContainerService
     tools: tuple[Annotated[str, Field(min_length=1)], ...] = Field(min_length=1)
-    tools_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
+    tools_sha256: str = Field(pattern=SHA256_PATTERN)
     tool_definitions: tuple[dict[str, Any], ...]
     state_available: bool
 

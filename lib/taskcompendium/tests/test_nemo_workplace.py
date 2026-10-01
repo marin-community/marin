@@ -4,8 +4,10 @@
 """A pinned Workplace row imported into a real container-backed Harbor trial."""
 
 import asyncio
+import hashlib
 import json
 import subprocess
+import sys
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +17,7 @@ import pytest
 
 from taskcompendium.container_service import ContainerService, ContainerToolProvider
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.importers import nemo_workplace
 from taskcompendium.importers.nemo_workplace import (
     PROVIDER,
     PROVIDER_GIT_REVISION,
@@ -24,6 +27,7 @@ from taskcompendium.importers.nemo_workplace import (
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import ConversationTrace, ToolResult
 from taskcompendium.provider_sources import stage_git_provider
+from taskcompendium.tool_provider import tool_schema_sha256
 
 ROW = Path(__file__).parent / "fixtures/nemo/workplace-row0.jsonl"
 
@@ -159,3 +163,72 @@ async def test_workplace_service_has_no_workspace_access_or_network(tmp_path, pr
         assert all(mount["Type"] != "bind" for mount in inspection["Mounts"])
     finally:
         await provider.stop()
+
+
+def test_import_retains_provider_source_until_expected_state_is_built(tmp_path, monkeypatch, runtime_factory):
+    checkout = tmp_path / "checkout"
+    package = checkout / "src" / "synthetic_workplace"
+    package.mkdir(parents=True)
+    schema = {"name": "finish", "parameters": {"type": "object"}}
+    definitions = [{"type": "function", "function": schema}]
+    (package / "__init__.py").write_text(
+        "import importlib\nimport json\nfrom pathlib import Path\n"
+        "ACTION_INTERFACE = 'synthetic:v1'\nSEED_SHA256 = 'a' * 64\n"
+        "PROVIDER_REVISION = 'synthetic-v1'\n"
+        f"TOOLS_SHA256 = {tool_schema_sha256(definitions)!r}\n"
+        f"TOOL_DEFINITIONS = {definitions!r}\n"
+        "REQUEST_PARALLEL_TOOL_CALLS = False\nREQUEST_TEMPERATURE = 0\n"
+        "class ToolProvider: pass\n"
+        "def _seed_digest(): return SEED_SHA256\n"
+        f"def get_tools(): return {{'schemas': [{schema!r}]}}\n"
+        "def expected_state_json(actions):\n"
+        "    assert importlib.import_module(__name__) is not None\n"
+        "    return json.dumps({'snapshot_present': Path(__file__).is_file()})\n"
+    )
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    subprocess.run(
+        ["git", "-C", str(checkout), "remote", "add", "origin", "https://github.com/example/synthetic"], check=True
+    )
+    subprocess.run(["git", "-C", str(checkout), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "Synthetic provider",
+        ],
+        check=True,
+    )
+    revision = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
+    locator = f"python+git+https://github.com/example/synthetic@{revision}:synthetic_workplace:ToolProvider"
+    monkeypatch.setattr(nemo_workplace, "PROVIDER", locator)
+    source = tmp_path / "source"
+    stage_git_provider(locator, checkout, source)
+    row = json.dumps(
+        {
+            "id": 0,
+            "environment_name": "workplace_assistant",
+            "category": "workplace_assistant_calendar",
+            "responses_create_params": {
+                "input": [{"role": "user", "content": "Finish the task."}],
+                "tools": [schema],
+                "parallel_tool_calls": False,
+                "temperature": 0,
+            },
+            "ground_truth": [],
+        }
+    ).encode()
+    monkeypatch.setattr(nemo_workplace, "ROW_SHA256_BY_ID", {0: hashlib.sha256(row).hexdigest()})
+    before = set(sys.modules)
+
+    runtime = runtime_factory("synthetic:v1", "a" * 64, "synthetic-v1", definitions)
+    imported = import_row(row, source, runtime)
+
+    assert json.loads(imported.specification.verifier.parameters_json)["expected"] == {"snapshot_present": True}
+    assert not any(name.startswith("_taskcompendium_providers_") for name in set(sys.modules) - before)

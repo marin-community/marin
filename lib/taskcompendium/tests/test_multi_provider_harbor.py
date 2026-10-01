@@ -376,6 +376,7 @@ async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_p
         await composite.upload_dir(tmp_path / "source", "/workspace")
 
     assert result.stdout == "/app\n"
+    await composite.stop(False)
 
 
 async def test_malformed_provider_response_remains_ungraded_with_raw_trace(

@@ -8,7 +8,6 @@ Installed providers use ``python:module:Class``. Git providers use
 tasks supplies a local checkout of that exact commit; trials use only staged files.
 """
 
-import ast
 import base64
 import hashlib
 import importlib
@@ -19,24 +18,22 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Self, cast
 from urllib.parse import urlsplit
 
 from taskcompendium.path_validation import validate_relative_file_path, validate_relative_file_paths
-from taskcompendium.tool_provider import ToolProviderFactory
+from taskcompendium.tool_provider import ToolProvider, ToolProviderFactory
 
+GIT_FILE_MODE = "100644"
+GIT_EXECUTABLE_MODE = "100755"
 PROVIDER_SOURCES_DIR = "provider_sources"
 SOURCE_MANIFEST = ".taskcompendium-provider-manifest.json"
 MAX_PROVIDER_FILE_BYTES = 64 * 1024 * 1024
 MAX_PROVIDER_SOURCE_BYTES = 256 * 1024 * 1024
 MAX_PROVIDER_FILES = 4096
 MAX_PROVIDER_MANIFEST_BYTES = 2 * 1024 * 1024
-_source_cache: dict[str, Path] = {}
-_source_cache_dir: tempfile.TemporaryDirectory[str] | None = None
-_source_cache_lock = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -165,7 +162,7 @@ def _source_files(checkout: Path, commit: str) -> list[GitSourceFile]:
         path = path_bytes.decode("utf-8")
         if "__pycache__" in Path(path).parts or path.endswith((".pyc", ".pyo")):
             raise ValueError(f"Git provider contains generated Python cache: {path}")
-        if mode not in {"100644", "100755"} or kind != "blob":
+        if mode not in {GIT_FILE_MODE, GIT_EXECUTABLE_MODE} or kind != "blob":
             raise ValueError(f"Git provider contains a symlink, submodule, or special file: {path}")
         files.append(GitSourceFile(path=path, mode=mode, blob=blob))
     if len(files) > MAX_PROVIDER_FILES:
@@ -175,14 +172,17 @@ def _source_files(checkout: Path, commit: str) -> list[GitSourceFile]:
 
 
 def stage_git_provider(provider: str, checkout: Path, destination: Path) -> None:
-    """Copy pinned Git blobs into a private task package with a digest manifest."""
+    """Copy pinned Git blobs into a private task package with a commit proof."""
     locator = validate_git_provider_checkout(provider, checkout)
     files = _source_files(checkout, locator.commit)
-    validate_relative_file_paths([*(file.path for file in files), SOURCE_MANIFEST])
+    if any(
+        file.path.casefold() == SOURCE_MANIFEST or file.path.casefold().startswith(SOURCE_MANIFEST + "/")
+        for file in files
+    ):
+        raise ValueError("Git provider source collides with reserved manifest")
     destination.mkdir(parents=True, exist_ok=False)
     total_bytes = 0
     manifest_files: list[dict[str, object]] = []
-    package_name = locator.module.split(".")[0]
     for file in files:
         path, mode, blob = file.path, file.mode, file.blob
         size = int(_git(checkout, "cat-file", "-s", blob).decode())
@@ -192,31 +192,13 @@ def stage_git_provider(provider: str, checkout: Path, destination: Path) -> None
         payload = _git(checkout, "cat-file", "blob", blob)
         if len(payload) != size:
             raise ValueError(f"Git provider blob length differs: {path}")
-        if path.endswith(".py") and path.startswith((f"src/{package_name}/", f"{package_name}/")):
-            for node in ast.walk(ast.parse(payload, filename=path)):
-                if isinstance(node, ast.Import) and any(
-                    imported.name == package_name or imported.name.startswith(f"{package_name}.")
-                    for imported in node.names
-                ):
-                    raise ValueError(f"Git provider must use relative imports within its package: {path}")
-                if (
-                    isinstance(node, ast.ImportFrom)
-                    and node.level == 0
-                    and node.module is not None
-                    and (node.module == package_name or node.module.startswith(f"{package_name}."))
-                ):
-                    raise ValueError(f"Git provider must use relative imports within its package: {path}")
         target = destination.joinpath(*path.split("/"))
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
-        executable = mode == "100755"
+        executable = mode == GIT_EXECUTABLE_MODE
         target.chmod(0o755 if executable else 0o644)
-        manifest_files.append(
-            {"path": path, "sha256": hashlib.sha256(payload).hexdigest(), "git_blob": blob, "executable": executable}
-        )
+        manifest_files.append({"path": path, "executable": executable})
     manifest = {
-        "url": locator.url,
-        "commit": locator.commit,
         "commit_object": base64.b64encode(_git(checkout, "cat-file", "commit", locator.commit)).decode(),
         "files": manifest_files,
     }
@@ -239,8 +221,6 @@ def validate_staged_git_provider(provider: str, source: Path) -> None:
     if manifest_path.stat().st_size > MAX_PROVIDER_MANIFEST_BYTES:
         raise ValueError("Git provider source manifest exceeds size limit")
     manifest = json.loads(manifest_path.read_text())
-    if manifest["url"] != locator.url or manifest["commit"] != locator.commit:
-        raise ValueError("Git provider source manifest differs from binding")
     commit_object = base64.b64decode(manifest["commit_object"], validate=True)
     if _git_object_digest("commit", commit_object).hex() != locator.commit:
         raise ValueError("Git provider commit object differs from binding")
@@ -267,14 +247,10 @@ def validate_staged_git_provider(provider: str, source: Path) -> None:
         total_bytes += len(payload)
         if len(payload) > MAX_PROVIDER_FILE_BYTES or total_bytes > MAX_PROVIDER_SOURCE_BYTES:
             raise ValueError("Git provider source exceeds size limits")
-        if hashlib.sha256(payload).hexdigest() != item["sha256"]:
-            raise ValueError(f"Git provider source digest mismatch: {path}")
         blob = _git_object_digest("blob", payload)
-        if blob.hex() != item["git_blob"]:
-            raise ValueError(f"Git provider source blob differs from commit: {path}")
         if bool(target.stat().st_mode & 0o100) != item["executable"]:
             raise ValueError(f"Git provider source executable bit differs: {path}")
-        tree_files.append((path, "100755" if item["executable"] else "100644", blob))
+        tree_files.append((path, GIT_EXECUTABLE_MODE if item["executable"] else GIT_FILE_MODE, blob))
     if any(path.is_symlink() for path in source.rglob("*")):
         raise ValueError("Git provider source contains unexpected files or symlinks")
     observed = {str(path.relative_to(source)) for path in source.rglob("*") if not path.is_dir()}
@@ -284,52 +260,93 @@ def validate_staged_git_provider(provider: str, source: Path) -> None:
         raise ValueError("Git provider source tree differs from pinned commit")
 
 
-def import_staged_provider(provider: str, source: Path) -> ToolProviderFactory:
-    """Import an isolated copy of a verified package without modifying its snapshot."""
-    locator = parse_git_provider(provider)
-    if locator is None:
-        raise ValueError("Provider is not Git-pinned")
-    validate_staged_git_provider(provider, source)
-    cache_key = hashlib.sha256((provider + "\n").encode() + (source / SOURCE_MANIFEST).read_bytes()).hexdigest()
-    global _source_cache_dir
-    with _source_cache_lock:
-        cached_source = _source_cache.get(cache_key)
-        if cached_source is None:
-            if _source_cache_dir is None:
-                _source_cache_dir = tempfile.TemporaryDirectory(prefix="taskcompendium-providers-")
-            cached_source = Path(_source_cache_dir.name) / cache_key
+@dataclass(frozen=True)
+class StagedToolProvider:
+    """A resolved implementation retained for the lifetime of its owning cache."""
+
+    factory: ToolProviderFactory
+
+
+class ToolProviderCache:
+    """Own copied source and Python imports for one export or trial.
+
+    Git packages use relative internal imports under a cache-specific namespace.
+    This isolates revisions from installed packages and other concurrent trials;
+    it does not sandbox executable Python code.
+    """
+
+    def __init__(self) -> None:
+        self._directory = tempfile.TemporaryDirectory(prefix="taskcompendium-providers-")
+        self._staged: dict[str, StagedToolProvider] = {}
+        self._aliases: set[str] = set()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release owned imports and files after all tool providers have stopped."""
+        for module in tuple(sys.modules):
+            if any(module == alias or module.startswith(alias + ".") for alias in self._aliases):
+                del sys.modules[module]
+        self._aliases.clear()
+        self._staged.clear()
+        self._directory.cleanup()
+
+    def stage(self, provider: str, source: Path | None = None) -> StagedToolProvider:
+        """Resolve caller-selected code using a verified snapshot for Git locators."""
+        if provider in self._staged:
+            return self._staged[provider]
+        locator = parse_git_provider(provider)
+        if locator is not None:
+            if source is None:
+                raise ValueError("Git provider requires a verified source snapshot")
+            validate_staged_git_provider(provider, source)
+        if locator is None:
+            _, module_name, class_name = provider.split(":", maxsplit=2)
+            factory = getattr(importlib.import_module(module_name), class_name)
+            if not inspect.isclass(factory):
+                raise ValueError("Tool provider import path must name a class")
+        else:
+            key = hashlib.sha256(provider.encode()).hexdigest()
+            cached_source = Path(self._directory.name) / key
+            assert source is not None
             shutil.copytree(source, cached_source)
             validate_staged_git_provider(provider, cached_source)
-            _source_cache[cache_key] = cached_source
-        package_root = cached_source / "src" if (cached_source / "src").is_dir() else cached_source
+            factory = self._import(locator, cached_source, key)
+        staged = StagedToolProvider(cast(ToolProviderFactory, factory))
+        self._staged[provider] = staged
+        return staged
+
+    def load(self, staged: StagedToolProvider, *, seed_sha256: str, action_interface: str) -> ToolProvider:
+        """Construct a fresh tool provider against its trial's seed and interface."""
+        return staged.factory(seed_sha256=seed_sha256, action_interface=action_interface)
+
+    def _import(self, locator: GitProviderLocator, source: Path, key: str) -> ToolProviderFactory:
+        package_root = source / "src" if (source / "src").is_dir() else source
         top_level = locator.module.split(".")[0]
         package_dir = package_root / top_level
         init_file = package_dir / "__init__.py"
         if not init_file.is_file():
             raise ValueError("Git provider must be an importable Python package")
-        alias = f"_taskcompendium_git_{cache_key[:24]}"
-        # Relative imports stay in this alias, even if another copy of the package is installed.
-        if alias not in sys.modules:
-            package_spec = importlib.util.spec_from_file_location(
-                alias, init_file, submodule_search_locations=[str(package_dir)]
-            )
-            if package_spec is None or package_spec.loader is None:
-                raise ValueError("Git provider package cannot be imported")
-            package = importlib.util.module_from_spec(package_spec)
-            sys.modules[alias] = package
-            try:
-                package_spec.loader.exec_module(package)
-            except Exception:
-                del sys.modules[alias]
-                raise
-        module_name = alias + locator.module.removeprefix(top_level)
-        module = importlib.import_module(module_name)
-        module_file = Path(inspect.getfile(module)).resolve()
-        if not module_file.is_relative_to(package_root.resolve()):
-            raise ValueError(f"Git provider module was already imported from another source: {locator.module}")
-        provider_class = getattr(module, locator.class_name)
-        if not inspect.isclass(provider_class) or not Path(inspect.getfile(provider_class)).resolve().is_relative_to(
+        namespace = Path(self._directory.name).name.replace("-", "_")
+        alias = f"_{namespace}_{key}"
+        self._aliases.add(alias)
+        # Python resolves relative imports inside this owner's package namespace.
+        package_spec = importlib.util.spec_from_file_location(
+            alias, init_file, submodule_search_locations=[str(package_dir)]
+        )
+        if package_spec is None or package_spec.loader is None:
+            raise ValueError("Git provider package cannot be imported")
+        package = importlib.util.module_from_spec(package_spec)
+        sys.modules[alias] = package
+        package_spec.loader.exec_module(package)
+        module = importlib.import_module(alias + locator.module.removeprefix(top_level))
+        factory = getattr(module, locator.class_name)
+        if not inspect.isclass(factory) or not Path(inspect.getfile(factory)).resolve().is_relative_to(
             package_root.resolve()
         ):
             raise ValueError("Git provider path must name a class in the pinned source")
-        return cast(ToolProviderFactory, provider_class)
+        return cast(ToolProviderFactory, factory)
