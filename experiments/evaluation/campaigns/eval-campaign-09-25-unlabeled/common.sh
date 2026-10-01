@@ -26,6 +26,7 @@ JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://api.together.xyz/v1}"
 TAU2_JUDGE_MODEL="${TAU2_JUDGE_MODEL:-openai/openai/gpt-oss-120b}"
 
 CAMPAIGN_SHA_MARIN=$(git -C "$MARIN_DIR" rev-parse HEAD)
+HARBOR_RUNTIME_PROJECT="config/external/harbor"
 eval "$(python3 - "$MARIN_DIR/lib/marin/src/marin/external_dependencies.py" <<'PY'
 import re
 import shlex
@@ -62,23 +63,22 @@ validate_marin_checkout() {
 
   local pins
   pins=$(python3 - \
-    "$MARIN_DIR/config/external/harbor/uv.lock" <<'PY'
+    "$MARIN_DIR/$HARBOR_RUNTIME_PROJECT/uv.lock" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 lock = Path(sys.argv[1]).read_text()
-for name in ("harbor", "harbor-tau3-bench-adapter"):
-    block = re.search(rf'\[\[package\]\]\nname = "{re.escape(name)}"\n(.*?)(?=\n\[\[package\]\]|\Z)', lock, re.DOTALL)
-    if block is None:
-        raise SystemExit(f"missing Harbor runtime package in lock: {name}")
-    match = re.search(r'source = \{ git = "[^"]*#([0-9a-f]{40})" \}', block.group(1))
-    if match is None:
-        raise SystemExit(f"missing immutable Harbor runtime commit for {name}")
-    print(f"HARBOR_LOCK={match.group(1)}")
+block = re.search(r'\[\[package\]\]\nname = "harbor"\n(.*?)(?=\n\[\[package\]\]|\Z)', lock, re.DOTALL)
+if block is None:
+    raise SystemExit("missing Harbor runtime package in lock")
+match = re.search(r'source = \{ git = "[^"]*#([0-9a-f]{40})" \}', block.group(1))
+if match is None:
+    raise SystemExit("missing immutable Harbor runtime commit")
+print(f"HARBOR_LOCK={match.group(1)}")
 PY
   )
-  [ "$(grep -cx "HARBOR_LOCK=$CAMPAIGN_SHA_HARBOR" <<<"$pins")" = 2 ] \
+  [ "$pins" = "HARBOR_LOCK=$CAMPAIGN_SHA_HARBOR" ] \
     || die "locked Harbor runtimes differ from $CAMPAIGN_SHA_HARBOR"
 
   local unexpected
@@ -267,6 +267,9 @@ import yaml
 from experiments.evaluation.evals import EvalchemyDefinition
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.model_config import load_model_config
+from marin.external_dependencies import EVALCHEMY
+
+REGISTRY_COMMIT = "2666d6526477ae3e46030a8dc4f3f2c68fd7a84f"
 
 models = Path(os.environ["MODEL_CONFIG_DIR"])
 chat_templates = Path(os.environ["CHAT_TEMPLATE_DIR"])
@@ -365,7 +368,7 @@ for model_path in models.glob("*.yaml"):
     for name in thinking_on | thinking_off:
         config_path = evalchemy / f"{name}.yaml"
         source = load_evalchemy_config(config_path)
-        resolved = EvalchemyDefinition(name=name, config_path=config_path).config_for(source, model, None)
+        resolved = EvalchemyDefinition(name=name, config_path=config_path).config_for(source, model, None, EVALCHEMY)
         expected = {"enable_thinking": name in thinking_on}
         if name in thinking_off and model.generation.thinking_off_template_kwargs:
             expected = dict(model.generation.thinking_off_template_kwargs)
@@ -376,7 +379,7 @@ for model_path in models.glob("*.yaml"):
         )
     nupa_path = evalchemy / "nupa.yaml"
     nupa_source = load_evalchemy_config(nupa_path)
-    nupa = EvalchemyDefinition(name="nupa", config_path=nupa_path).config_for(nupa_source, model, None)
+    nupa = EvalchemyDefinition(name="nupa", config_path=nupa_path).config_for(nupa_source, model, None, EVALCHEMY)
     assert "enable_thinking" not in nupa.chat_template_kwargs, (model.location, nupa.chat_template_kwargs)
 fallbacks = {
     "openai/gpt-oss-20b": {"reasoning_effort": "low"},
@@ -441,7 +444,7 @@ assert swebench["datasets"] == [
     {
         "name": "swebench-verified",
         "version": "1.0",
-        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/registry.json",
+        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{REGISTRY_COMMIT}/registry.json",
     }
 ]
 for name in (
@@ -455,7 +458,7 @@ for name in (
     document = yaml.safe_load((harbor / f"{name}.yaml").read_text())
     assert document["agents"][0]["kwargs"]["model_info"]["max_input_tokens"] == 32768
 
-registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
+registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{REGISTRY_COMMIT}/"
 for path in harbor.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
     for agent in document.get("agents") or []:

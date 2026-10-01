@@ -115,6 +115,17 @@ def _harbor_env_dir(runtime_project: str) -> Path:
     return workspace_root / runtime_project
 
 
+def harbor_runtime_project(commit: str) -> str:
+    """Select the current or archived lock project for an explicit evaluator revision."""
+    lock_path = _harbor_env_dir(HARBOR_RUNTIME_PROJECT) / "uv.lock"
+    with lock_path.open("rb") as lock_file:
+        packages = tomllib.load(lock_file)["package"]
+    package = next(package for package in packages if package["name"] == "harbor")
+    if package["source"]["git"].rsplit("#", 1)[-1] == commit:
+        return HARBOR_RUNTIME_PROJECT
+    return f"{HARBOR_RUNTIME_PROJECT}/pins/{commit}"
+
+
 class HarborDatasetKind(StrEnum):
     """How Marin obtains the dataset before the isolated driver runs."""
 

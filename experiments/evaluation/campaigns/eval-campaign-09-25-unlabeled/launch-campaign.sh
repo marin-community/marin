@@ -77,6 +77,17 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "$version" = eval-policy-2026-09-29-verified ]; then
+  read -r CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY HARBOR_RUNTIME_PROJECT < <(
+    uv run --project "$MARIN_DIR" python -c '
+from marin.evaluation.campaign_policy import CAMPAIGN
+from marin.evaluation.harbor.driver_config import harbor_runtime_project
+print(CAMPAIGN.runtimes["harbor"], CAMPAIGN.runtimes["evalchemy"], harbor_runtime_project(CAMPAIGN.runtimes["harbor"]))
+'
+  )
+  export CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY HARBOR_RUNTIME_PROJECT
+fi
+
 case "$suite" in
   all|nonagentic|agentic|terminal-bench) ;;
   *) die "--suite must be all, nonagentic, agentic, or terminal-bench" ;;

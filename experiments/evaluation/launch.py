@@ -24,6 +24,7 @@ from marin.evaluation.harbor.driver_config import (
     HARBOR_RUNTIME_PROJECT,
     ValidatedHarborConfig,
     harbor_runtime_descriptor,
+    harbor_runtime_project,
     preflight_harbor_configs,
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name
@@ -47,7 +48,7 @@ from marin.evaluation.runner import (
     submit_evaluation_batch,
 )
 from marin.evaluation.serving_config import resolved_serve_config
-from marin.external_dependencies import EVALCHEMY, HARBOR
+from marin.external_dependencies import EVALCHEMY
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
@@ -171,13 +172,7 @@ def _resolve_definitions(
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
     runtime_commits = RUNTIME_COMMITS.get(version or "", {})
     harbor_commit = runtime_commits.get("harbor")
-    # Archive the current runtime project under pins/<commit> before advancing its shared pin.
-    # Missing historical projects fail closed instead of running a newer evaluator.
-    harbor_project = (
-        f"{HARBOR_RUNTIME_PROJECT}/pins/{harbor_commit}"
-        if harbor_commit is not None and harbor_commit != HARBOR.commit
-        else HARBOR_RUNTIME_PROJECT
-    )
+    harbor_project = HARBOR_RUNTIME_PROJECT if harbor_commit is None else harbor_runtime_project(harbor_commit)
     validated_configs = iter(preflight_harbor_configs(requests, runtime_project=harbor_project))
     evalchemy_commit = runtime_commits.get("evalchemy", EVALCHEMY.commit)
     evalchemy_dependency = replace(EVALCHEMY, commit=evalchemy_commit)

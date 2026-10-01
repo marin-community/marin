@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "runtimes": {
-    "evalchemy": "af61e0baaa291071f815f14f567852adece6e14c",
-    "harbor": "2666d6526477ae3e46030a8dc4f3f2c68fd7a84f"
+    "evalchemy": "ae362881cf53f869a6ad52c8a59fa17343c0b5f8",
+    "harbor": "0985d012bcf4cc9d1acb1a831a86350cd31ac72a"
   },
   "native32k_locations": [
     "inclusionAI/Ling-lite-1.5",
@@ -367,6 +367,68 @@
         "max_eval_instances": null
       }
     },
+    "mrcr-32k": {
+      "name": "mrcr-32k",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:030920e73df54959293dcdda870c1599c37348c74e1a53b115c404121967d9ff",
+      "tasks": [
+        {
+          "name": "MRCR",
+          "num_fewshot": 0,
+          "task_alias": "mrcr",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "huggingface",
+        "debug": false,
+        "max_gen_toks": 4096,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_length": 32704
+      }
+    },
+    "mrcr-65k": {
+      "name": "mrcr-65k",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:982d932ed056e7090e720d187dd1c4ba51cc9717fc4be67fdbc847ef9f408cd5",
+      "tasks": [
+        {
+          "name": "MRCR",
+          "num_fewshot": 0,
+          "task_alias": "mrcr",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "huggingface",
+        "debug": false,
+        "max_gen_toks": 4096,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_length": 65472
+      }
+    },
     "nupa": {
       "name": "nupa",
       "mechanism": "evalchemy",
@@ -541,8 +603,8 @@
   "harbor": {
     "bfclparity-pi": {
       "sources": {
-        "standard": "sha256:8dbde2b2392750e4a30bc02d192f987f4a30cbcc8678e6f9c1acc02e172033ff",
-        "native32k": "sha256:8dbde2b2392750e4a30bc02d192f987f4a30cbcc8678e6f9c1acc02e172033ff"
+        "standard": "sha256:9ac8e6153d9660a50de77e100669bae723728a22cbcbc804a40265c3323932c6",
+        "native32k": "sha256:9ac8e6153d9660a50de77e100669bae723728a22cbcbc804a40265c3323932c6"
       },
       "model_info": {
         "max_input_tokens": 32768
