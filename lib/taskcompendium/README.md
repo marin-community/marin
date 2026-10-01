@@ -38,7 +38,7 @@ flowchart LR
 | `final_tools` | An ordered list of functions advertised at the decision point. These definitions do not bind functions to an implementation. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
-| `tags` | Ordered source tags retained as task metadata; they are not model instructions. |
+| `tags` | Ordered tags retained as task metadata; they are not model instructions. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
@@ -52,15 +52,56 @@ For example, a task asking “What is 7 + 5?” can have `answer_type=number` an
 
 ### Text answers
 
-A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` string, and `submit_answer(answer: string)` can carry its answer. `exact_answer` compares normalized text; `mcq_answer` grades a single option letter. The same verifier grades the extracted answer across these conventions.
+A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` string, and `submit_answer(answer: string)` can carry its answer. The `exact` verifier compares normalized text; `mcq` grades a single option letter. The same verifier grades the extracted answer across these conventions.
 
 ### Numeric answers
 
-A numeric task uses `answer_type=number` and can use the same submission conventions as text. `numeric_answer` parses the extracted string as a number and applies the explicitly configured absolute and relative tolerances. For example, both `12` and `12.0` can satisfy an expected value of `12.0`.
+A numeric task uses `answer_type=number` and can use the same submission conventions as text. The `numeric` verifier parses the extracted string as a number and applies the explicitly configured absolute and relative tolerances. For example, both `12` and `12.0` can satisfy an expected value of `12.0`.
 
 ### Mathematical answers
 
-A symbolic task uses `mathematical_answer(expected, math_type)` from `taskcompendium.verifiers.mathematical`. It preserves the reference expression and its `tasktrove_verify.spec.MathType`, then uses the shared symbolic scorer. Numeric scalar tasks can use `answer_type=number`; general symbolic answers use `answer_type=text`. Both support plain, JSON, and answer-call submissions. Malformed candidates receive zero; invalid reference configurations are rejected.
+A symbolic task keeps its reference expression private and records its shape with `MathType`. This example grades a synthetic scalar expression:
+
+```python
+import asyncio
+
+from tasktrove_verify.spec import MathType
+
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    ConversationTrace,
+    EnvironmentRequirements,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
+from taskcompendium.submission import GradingAttempt, PlainText
+from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.verifiers.mathematical import mathematical_answer
+
+task = TaskSpec(
+    id="synthetic-square-root",
+    context=ConversationInput(events=(TextMessage(role="user", content="Simplify the expression."),)),
+    environment_requirements=EnvironmentRequirements(),
+    answer_type=AnswerType.TEXT,
+    verifier=mathematical_answer(r"\sqrt{2}", MathType.SCALAR),
+    source=Source(dataset="synthetic", revision="1", row="sqrt", importer_revision="example"),
+)
+attempt = GradingAttempt(
+    ConversationTrace(
+        events=(
+            *task.context.events,
+            TextMessage(role="assistant", content=r"2/\sqrt{2}"),
+        )
+    ),
+    workspace=object(),
+)
+result = asyncio.run(grade_answer(task, PlainText(id="plain"), attempt))
+assert result.reward == 1.0
+```
+
+`mathematical_answer(expected, math_type)` preserves the reference expression and its `tasktrove_verify.spec.MathType`, then uses the shared symbolic scorer. Numeric scalar tasks can use `answer_type=number`; general symbolic answers use `answer_type=text`. Plain, JSON, and answer-call submissions extract a string for the same scorer. Malformed candidates receive zero; invalid reference configurations are rejected.
 
 ### Final function calls
 

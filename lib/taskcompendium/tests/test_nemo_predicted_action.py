@@ -18,14 +18,20 @@ from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowering
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
+    ConversationInput,
     ConversationToolCall,
     ConversationTrace,
+    EnvironmentRequirements,
     FunctionCall,
+    FunctionDefinition,
+    Source,
+    TaskSpec,
+    TextMessage,
     ToolCallComparatorConfig,
 )
-from taskcompendium.submission import GradingAttempt, chat_request
+from taskcompendium.submission import FinalAction, GradingAttempt, chat_request
 from taskcompendium.verifier_registry import grade_answer
-from taskcompendium.verifiers.predicted_action import compare
+from taskcompendium.verifiers.predicted_action import compare, predicted_action_verifier
 
 from .harbor_replay import run_replay_trial
 
@@ -313,6 +319,56 @@ def test_predicted_action_requires_exact_call_count_and_argument_types():
     assert compare(expected, assistant_message(extra), config) == 0.0
     assert compare(expected, assistant_message(_action("lookup", '{"id":true}')), config) == 0.0
     assert compare(expected, assistant_message({"role": "assistant", "content": "different"}), config) == 0.0
+
+
+@pytest.mark.parametrize(
+    "call_count,parallel_tool_calls,rejected",
+    [(2, False, True), (1, False, False), (2, True, False)],
+    ids=["batch-disabled", "single-call-with-unbounded-convention", "batch-enabled"],
+)
+async def test_launch_parallel_policy_preserves_expected_action(
+    tmp_path, monkeypatch, call_count, parallel_tool_calls, rejected
+):
+    expected = tuple(FunctionCall(name="lookup", arguments={"id": index}) for index in range(call_count))
+    specification = TaskSpec(
+        id="synthetic-final-action",
+        context=ConversationInput(events=(TextMessage(role="user", content="Look up the requested records."),)),
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+        answer_type=AnswerType.NATIVE_ACTION,
+        verifier=predicted_action_verifier(expected),
+        source=Source(dataset="synthetic", revision="1", row="parallel-policy", importer_revision="1"),
+    )
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(specification, FinalAction(id="unbounded"), environment_config, tmp_path / "task")
+    requests = []
+
+    def respond(request, **_kwargs):
+        requests.append(json.loads(request.data))
+        calls = [
+            {
+                "id": f"call-{index}",
+                "type": "function",
+                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+            }
+            for index, call in enumerate(expected)
+        ]
+        response = {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": calls}}]}
+        return BytesIO(json.dumps(response).encode())
+
+    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
+    launch = ChatLaunch(model="model", api_base="https://example.invalid", parallel_tool_calls=parallel_tool_calls)
+    if rejected:
+        with pytest.raises(ValueError, match="disables parallel calls required by the task"):
+            await run_trial(task, environment_config, launch, tmp_path / "trials", "run")
+        assert requests == []
+        assert not (tmp_path / "trials").exists()
+        return
+
+    result = await run_trial(task, environment_config, launch, tmp_path / "trials", "run")
+    assert result.exception_info is None, result.exception_info
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert requests[0]["parallel_tool_calls"] is parallel_tool_calls
 
 
 def test_predicted_action_requires_exact_strings_and_explicit_numeric_tolerance():
