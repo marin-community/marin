@@ -8,6 +8,7 @@ import json
 import subprocess
 import uuid
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -17,6 +18,7 @@ from taskcompendium.tool_provider import ProviderIdentity, tool_schema_sha256
 MAX_PROTOCOL_BYTES = 16 * 1024 * 1024
 MAX_DIAGNOSTIC_BYTES = 64 * 1024
 PROTOCOL_TIMEOUT = 30
+DOCKER_EXECUTABLE = "docker"
 
 
 class ContainerService(BaseModel):
@@ -28,12 +30,14 @@ class ContainerService(BaseModel):
     command: tuple[str, ...] = Field(min_length=1)
 
 
-IMAGE_LABELS = {
-    "action_interface": "org.marin.taskcompendium.action-interface",
-    "seed_sha256": "org.marin.taskcompendium.seed-sha256",
-    "provider_revision": "org.marin.taskcompendium.provider-revision",
-    "tools_sha256": "org.marin.taskcompendium.tools-sha256",
-}
+IMAGE_LABELS = MappingProxyType(
+    {
+        "action_interface": "org.marin.taskcompendium.action-interface",
+        "seed_sha256": "org.marin.taskcompendium.seed-sha256",
+        "provider_revision": "org.marin.taskcompendium.provider-revision",
+        "tools_sha256": "org.marin.taskcompendium.tools-sha256",
+    }
+)
 
 
 def validate_container_image(
@@ -41,7 +45,7 @@ def validate_container_image(
 ) -> None:
     """Check a previously staged image's immutable metadata without pulling it."""
     inspection = subprocess.run(
-        ("docker", "image", "inspect", runtime.image),
+        (DOCKER_EXECUTABLE, "image", "inspect", runtime.image),
         capture_output=True,
         text=True,
         check=True,
@@ -99,7 +103,7 @@ class ContainerToolProvider:
     async def start(self) -> None:
         """Start with no network, workspace mounts, capabilities, or writable root."""
         self.process = await asyncio.create_subprocess_exec(
-            "docker",
+            DOCKER_EXECUTABLE,
             "run",
             "--name",
             self.container_name,
@@ -196,7 +200,7 @@ class ContainerToolProvider:
         if self.process is None:
             return
         process = await asyncio.create_subprocess_exec(
-            "docker",
+            DOCKER_EXECUTABLE,
             "rm",
             "--force",
             self.container_name,

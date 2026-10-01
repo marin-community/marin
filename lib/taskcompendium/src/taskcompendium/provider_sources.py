@@ -24,7 +24,7 @@ from typing import Self, cast
 from urllib.parse import urlsplit
 
 from taskcompendium.path_validation import validate_relative_file_path, validate_relative_file_paths
-from taskcompendium.tool_provider import ToolProvider, ToolProviderFactory
+from taskcompendium.tool_provider import ToolProviderFactory
 
 GIT_FILE_MODE = "100644"
 GIT_EXECUTABLE_MODE = "100755"
@@ -319,10 +319,6 @@ class ToolProviderCache:
         staged = StagedToolProvider(cast(ToolProviderFactory, factory))
         self._staged[provider] = staged
         return staged
-
-    def load(self, staged: StagedToolProvider, *, seed_sha256: str, action_interface: str) -> ToolProvider:
-        """Construct a fresh tool provider against its trial's seed and interface."""
-        return staged.factory(seed_sha256=seed_sha256, action_interface=action_interface)
 
     def _import(self, locator: GitProviderLocator, source: Path, key: str) -> ToolProviderFactory:
         package_root = source / "src" if (source / "src").is_dir() else source

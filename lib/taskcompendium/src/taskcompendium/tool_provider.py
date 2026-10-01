@@ -10,6 +10,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from taskcompendium.models import SHA256_PATTERN
+
 
 class ProviderIdentity(BaseModel):
     """Immutable action interface, initial state, and implementation identity."""
@@ -17,7 +19,7 @@ class ProviderIdentity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_interface: str = Field(min_length=1)
-    seed_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    seed_sha256: str = Field(pattern=SHA256_PATTERN)
     provider_revision: str = Field(min_length=1)
 
 

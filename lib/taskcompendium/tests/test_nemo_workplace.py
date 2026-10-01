@@ -169,12 +169,13 @@ def test_import_retains_provider_source_until_expected_state_is_built(tmp_path, 
     checkout = tmp_path / "checkout"
     package = checkout / "src" / "synthetic_workplace"
     package.mkdir(parents=True)
+    interface, seed, revision_name = "synthetic:v1", "a" * 64, "synthetic-v1"
     schema = {"name": "finish", "parameters": {"type": "object"}}
     definitions = [{"type": "function", "function": schema}]
     (package / "__init__.py").write_text(
         "import importlib\nimport json\nfrom pathlib import Path\n"
-        "ACTION_INTERFACE = 'synthetic:v1'\nSEED_SHA256 = 'a' * 64\n"
-        "PROVIDER_REVISION = 'synthetic-v1'\n"
+        f"ACTION_INTERFACE = {interface!r}\nSEED_SHA256 = {seed!r}\n"
+        f"PROVIDER_REVISION = {revision_name!r}\n"
         f"TOOLS_SHA256 = {tool_schema_sha256(definitions)!r}\n"
         f"TOOL_DEFINITIONS = {definitions!r}\n"
         "REQUEST_PARALLEL_TOOL_CALLS = False\nREQUEST_TEMPERATURE = 0\n"
@@ -227,7 +228,7 @@ def test_import_retains_provider_source_until_expected_state_is_built(tmp_path, 
     monkeypatch.setattr(nemo_workplace, "ROW_SHA256_BY_ID", {0: hashlib.sha256(row).hexdigest()})
     before = set(sys.modules)
 
-    runtime = runtime_factory("synthetic:v1", "a" * 64, "synthetic-v1", definitions)
+    runtime = runtime_factory(interface, seed, revision_name, definitions)
     imported = import_row(row, source, runtime)
 
     assert json.loads(imported.specification.verifier.parameters_json)["expected"] == {"snapshot_present": True}
