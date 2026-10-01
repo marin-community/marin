@@ -1,6 +1,6 @@
 # TaskTrove judge support
 
-TaskCompendium now has a source-independent `judge` verifier kind that reuses the TaskTrove rubric scorer. It imports two bounded source examples from distinct TaskTrove judge converters and runs both through Harbor with a scripted endpoint. The source tests establish these two conversion paths only; source-batch coverage and the release's public projection remain unverified.
+TaskCompendium has a source-independent `judge` verifier kind that reuses the TaskTrove rubric scorer.
 
 ## Current contracts
 
@@ -16,7 +16,7 @@ The shared judge mode now raises an infrastructure error after bounded retries w
 
 `VerifierKind.JUDGE` selects `JudgeVerifier` from the explicit verifier registry. The private JSON parameters contain the existing `JudgeSpec` rendered as TOML plus an optional inline context string. This reuses TaskTrove's parser for rubric fields and constraints. Inline context is limited to 60,000 characters.
 
-The verifier passes `TextSubmission.value` and inline private context directly to `tasktrove_verify.modes.grade_judge.grade_candidate`. The shared file-based `grade` entry point reads answer and context files and delegates to the same scorer. Score parsing retains the existing permissive numeric syntax and accepts values in [0, 1]; checklist criteria pass only at score 1. Normalization, IFEval checks, exact gating, prompt construction, score parsing, and checklist aggregation remain shared. A valid score maps to `GradeResult(GRADED, reward)` with judge evidence. Provider and parser failures map to `GradeResult(INFRA_ERROR, None, diagnostic)`, which Harbor records without a reward.
+The verifier passes `TextSubmission.value` and inline private context directly to `tasktrove_verify.modes.grade_judge.grade_candidate`. The shared file-based `grade` entry point reads answer and context files and delegates to the same scorer. TaskCompendium passes through the shared reward without validating or clamping its range. The shared parser retains its existing numeric syntax and [0, 1] range; checklist criteria pass only at score 1. Normalization, IFEval checks, exact gating, prompt construction, score parsing, and checklist aggregation remain shared. A valid score maps to `GradeResult(GRADED, reward)` with judge evidence. Provider and parser failures map to `GradeResult(INFRA_ERROR, None, diagnostic)`, which Harbor records without a reward.
 
 `run_trial` accepts a separate `JudgeRuntimeConfig` with `model`, `base_url`, `api_key_env`, `request_timeout`, and `max_requests`. It passes this config to the verifier in memory; it is absent from `TaskSpec` and exported task files. The API key is resolved from the named environment variable inside the grader and is never stored in task metadata or result evidence. The grader clamps the source timeout to the runtime limit and counts every call, including malformed-response retries, against the request budget. The exact gate runs before a remote request.
 
@@ -57,7 +57,7 @@ Two immutable-parquet rows were matched to extracted archive identity and import
 
 The actual-import Harbor evidence was kept in private local temporary storage and is not committed because it contains verifier parameters and gold rubric data. The scripted trials imported those archives through `read_archive` and `import_task`, exported Harbor tasks, and ran `run_trial`: OpenQA exact gate scored 1 without a judge call; semantic reference grading scored 1; an incorrect answer scored 0; and the three-criterion checklist scored 2/3. All four trials completed with `status=graded`. The script used a local scripted endpoint and made no paid calls. Archive identity and SHA256 records are listed above.
 
-Before claiming source coverage, inspect only S3 archive keys referenced by `tasks/` and `sft/`. Inspect at most one archive for each distinct judge converter/template and materially different rubric, context, or constraint shape. Record release revision and manifest digest, upstream dataset/revision, source row and converter per sample, license metadata, judge-row counts per converter, eligible/rejected/converted counts, and rejection reasons. Do not download whole partitions or copy them across regions.
+See [importing tasks](../../../IMPORTING.md) for prompt cleanup, submission conventions, provenance, and source coverage evidence.
 
 ## Harbor acceptance
 

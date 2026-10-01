@@ -123,6 +123,8 @@ The TaskTrove MCQA importer reads archives from a cleaned release. See the [publ
 
 See [judge support](src/taskcompendium/verifiers/judge.md) for the grading contract and validation boundary. The judge importer maps supported TaskTrove rubrics into the shared `judge` verifier. A `JudgeRuntimeConfig` is supplied by the runner; its endpoint and credentials stay outside the task specification. Provider, timeout, quota, transport, and malformed-score failures produce an infrastructure error without reward. The complete rubric and gold remain in the grading specification, while Harbor keeps them out of the model-visible prompt.
 
+See [importing tasks](IMPORTING.md) for guidance on preserving source problems, removing harness instructions, and validating conversions.
+
 ### NeMo predicted function calls
 
 `taskcompendium.importers.nemo_predicted_action.import_row` accepts a NeMo predicted-function-call row and a caller-pinned digest of that row. `canonical_sha256(row)` hashes its UTF-8 JSON with sorted keys and compact separators; record the digest with the source revision before importing. The importer returns `(specification, convention)`, with `answer_type=native_action` and `AnswerFormat.FINAL_ACTION`. A hand-authored task can select the same convention with `FinalAction(id="final-call")`. The context carries the source conversation; `final_tools` carries advertised functions. `FinalAction.require_call` and `FinalAction.max_calls` carry the source call constraints. The convention describes how Harbor captures the final action and can be reused across tasks. The expected function calls remain in the private `predicted_action` verifier. There is one stored conversation, with no second flattened prompt to keep in sync.
