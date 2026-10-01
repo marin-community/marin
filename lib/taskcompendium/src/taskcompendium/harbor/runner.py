@@ -22,6 +22,7 @@ from taskcompendium.lowering import (
     validate_submission_tools,
 )
 from taskcompendium.submission import chat_request, submission_compatibility
+from taskcompendium.verifier_registry import validate_launch_parallel_tool_calls
 
 DEFAULT_CHAT_TIMEOUT = 120
 
@@ -66,6 +67,7 @@ async def run_trial(
         if "parallel_tool_calls" in request and request["parallel_tool_calls"] != launch.parallel_tool_calls:
             raise ValueError("Launch parallel-tool policy conflicts with the submission convention")
         request["parallel_tool_calls"] = launch.parallel_tool_calls
+    validate_launch_parallel_tool_calls(specification.verifier, request.get("parallel_tool_calls"))
     agent_kwargs = {
         "api_base": launch.api_base,
         "api_key_env": launch.api_key_env,
