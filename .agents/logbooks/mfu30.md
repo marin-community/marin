@@ -644,3 +644,11 @@ costly instructions covered (all 12 ragged all-to-alls, 110 copy-starts). The D2
 end-of-step copy-starts to 277.4 ms each. Queued after the confirmations (custom wheel, streams on, traced,
 seed 0, 60 steps): `m30-pgle-d2h-01` and `m30-pgle-plain-01`. Watch: carry stall, copy-start.44 hoisting
 (+10 GiB), the PGLE accuracy-checker WARN lines (to confirm the profile applied), and the loss band.
+B built the shared-expert holdback: `research/mcwitt/mfu30-final-seq-holdback` @ 95fa4631dc (= d4234c88e7 + one
+commit; `--held-back-shared-experts N`, default 0, static field). The held shared expert's input passes through
+`optimization_barrier((holdback, chunk_residuals[-1].expert_mlp))` after the chunk loop. It is tied to the last
+chunk's gate/up residuals, not its down projection, so the recompute does not rerun the GEMM D removed. CPU:
+the backward body keeps 8 all-to-alls and 16 ragged dots; one extra barrier; no collectives added. GPU gate
+`m30b-holdback-gate-01` is pending. **Landing debt:** on final-seq (d4234c88e7) `tests/test_moe_hero_ep.py` +
+`tests/test_moe_context_sharding.py` have 9 CPU failures from the `pip_packages` field added by cf5bc74409; fix
+before any PR.
