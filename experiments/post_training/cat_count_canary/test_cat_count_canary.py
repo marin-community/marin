@@ -10,6 +10,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 from marin.execution.lazy import StepContext
+from marin.rl.skyrl import SkyRLRun
 
 from experiments.post_training.cat_count_canary.data import (
     DEFAULT_TRAIN_NS,
@@ -21,7 +22,13 @@ from experiments.post_training.cat_count_canary.data import (
     cat_count_rows,
     write_cat_count_parquet,
 )
-from experiments.post_training.cat_count_canary.launcher import MODELS, QWEN_SOURCE, build_run, main, training_config
+from experiments.post_training.cat_count_canary.launcher import (
+    MODELS,
+    QWEN_SOURCE,
+    build_run,
+    main,
+    training_config,
+)
 
 
 def test_procedural_rows_balance_and_holdout_exclusion():
@@ -99,7 +106,7 @@ def test_owned_settings_reject_parent_and_canonical_overrides(setting):
         training_config(settings=(setting,))
 
 
-def test_model_pins_and_distinct_artifact_identities():
+def test_model_pins_and_distinct_artifact_identities(monkeypatch):
     for model, choice in MODELS.items():
         download = choice.step.build_config(StepContext.for_fingerprint(choice.step.runtime_args, choice.step.deps))
         run = build_run(version="2026.09.26", preset="dry", model=model)
@@ -109,6 +116,9 @@ def test_model_pins_and_distinct_artifact_identities():
     sync_run = build_run(version="2026.09.26", preset="dry", lane="sync")
     changed_run = build_run(version="2026.09.26", preset="dry", settings=("trainer.policy.optimizer_config.lr=5e-6",))
     assert len({async_run.name, sync_run.name, changed_run.name}) == 3
+    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "another-user")
+    other_user = build_run(version="2026.09.26", preset="dry", lane="async")
+    assert other_user.path() != async_run.path()
     assert any(dep.name == MODELS["qwen2.5-0.5b-instruct"].step.name for dep in async_run.deps)
 
 
@@ -126,3 +136,29 @@ def test_upstream_model_uri_resolves_as_the_hf_snapshot(tmp_path: Path, monkeypa
     )
 
     assert config.model.uri.rstrip("/") == QWEN_SOURCE.rstrip("/")
+
+
+def test_remote_result_round_trips_at_the_run_output_prefix(tmp_path, monkeypatch):
+    output = tmp_path / "canary-run"
+    result = SkyRLRun(
+        path=str(output / "terminal.json"),
+        hf_model_uri=None,
+        global_step=None,
+        tokenizer_uri="Qwen/Qwen2.5-0.5B-Instruct",
+        tokenizer_revision="7ae557604adf67be50417f59c2c2f167def9a775",
+        checkpoint_root=str(tmp_path / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(output / "terminal.json"),
+        iris_job_id="/atqamar/canary-test",
+    )
+    monkeypatch.setattr("experiments.post_training.cat_count_canary.launcher.run_skyrl", lambda _config: result)
+    run = build_run(version="2026.10.01", export=True)
+    config = run.build_config(
+        StepContext.for_run(output_path=str(output), prefix=str(tmp_path), runtime_args=run.runtime_args, deps=run.deps)
+    )
+    recipe = yaml.safe_load(config.launch_config_yaml)["skyrl"]
+    assert recipe["trainer"]["ckpt_interval"] > 0
+    assert {callback["type"] for callback in recipe["trainer"]["callbacks"]} >= {"checkpoint", "hf_model_save"}
+    run.run(config)
+    loaded = SkyRLRun.raw_load(str(output))
+    assert loaded.result_payload() == result.result_payload()

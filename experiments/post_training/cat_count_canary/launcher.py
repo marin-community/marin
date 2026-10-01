@@ -12,6 +12,7 @@ from types import MappingProxyType
 
 import click
 import yaml
+from marin.execution.artifact import write_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -25,14 +26,17 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
+    SkyRLRunConfig,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
     _role_plan_config_values,
+    run_skyrl,
     skyrl_step,
 )
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.models import qwen2_5_0_5b, qwen2_5_0_5b_instruct, qwen3_0_6b
 from experiments.post_training.cat_count_canary.data import (
@@ -221,6 +225,7 @@ def training_config(
         raise ValueError(f"unknown lane {lane!r}")
     if batch_size <= 0 or group_size <= 0 or micro_train_batch_size <= 0:
         raise ValueError("batch, group and micro-batch sizes must be positive")
+    checkpoint = checkpoint or export
     choice = MODELS[model]
     plan = role_plan(batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size)
     preset_config = PRESETS[preset]
@@ -361,6 +366,12 @@ def training_config(
     return config
 
 
+def run_canary(config: SkyRLRunConfig) -> SkyRLRun:
+    result = run_skyrl(config)
+    write_artifact(result.result_payload(), str(StoragePath(config.output.terminal_manifest_uri).parent))
+    return result
+
+
 def build_run(
     *,
     preset: str = "gate",
@@ -457,7 +468,7 @@ def build_run(
         ),
         export_hf=export,
     )
-    return replace(run, override_path=f"{CANARY_ROOT}/runs/{identity}/{run.version}")
+    return replace(run, run=run_canary, override_path=f"{CANARY_ROOT}/runs/{user_owned_name(identity)}/{run.version}")
 
 
 @click.command(help=__doc__)

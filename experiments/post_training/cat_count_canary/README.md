@@ -14,7 +14,8 @@ endpoint serves Harbor and is off in this recipe. Training metrics and
 policy-training and rollout spans are enabled explicitly.
 
 `--lane async` uses behavior clipping, permits two steps of rollout staleness
-and applies two update epochs per batch. `--lane sync` is a manual experiment outside the canary and CI. It uses zero staleness,
+and applies two update epochs per batch. `--lane sync` is a manual experiment
+outside the canary and CI. It uses zero staleness,
 the regular policy objective and TIS with a cap of 2. Both use the same
 trainer loop, 64 prompts with eight samples each, a full-batch mini-batch,
 matching training and forward micro-batches of 16 per GPU, and learning
@@ -76,10 +77,12 @@ submit_canary atqamar-cat-count-sync-20260930 \
 
 The coordinator resolves the pinned model and data dependencies and submits
 the training child. Checkpoints and HF export are enabled only with
-`--checkpoint` and `--export`, respectively; both are off by default and in CI.
+`--checkpoint` and `--export`; export also enables its prerequisite checkpoint.
+Both are off by default and in CI.
 The default model reads the immutable rl-canaries Qwen snapshot, and outputs
 resolve below `s3://marin-us-east-02a/marin/rl-canaries/cat-count/gpu/runs/`.
-The coordinator timeout covers the whole run; `--job-timeout-seconds` bounds only the training child. Monitor queue
+The coordinator timeout covers the whole run; `--job-timeout-seconds` bounds
+only the training child. Monitor queue
 time as part of a separate submission-to-completion deadline. Verify the
 job is yours before cancelling it:
 
@@ -106,10 +109,10 @@ baseline is the resumed evaluation, rather than the original step-0 policy.
 
 Evaluation runs at step 0 and every five completed steps; `dry` evaluates
 every step. It records greedy responses and eight sampled responses per
-count at temperature1. The async gate requires step0 sampled reward in
-[0.10,0.45] and `eval/sampled/train/avg_score` ≥0.65 by step30.
+count at temperature 1. The async gate requires step 0 sampled reward in
+[0.10, 0.45] and `eval/sampled/train/avg_score` ≥0.65 by step 30.
 `--eval-minimum-score` selects an exploratory sampled-score stopping threshold.
-The checked-in gate preset and async spec use0.65. A stopping step ends
+The checked-in gate preset and async spec use 0.65. A stopping step ends
 training; checkpoints and HF export require their explicit flags.
 Megatron logs `policy/dp_weight_checksum_mismatch` after every optimizer step;
 any mismatch fails the spec. The grouped step metric keeps the maximum across
@@ -190,12 +193,12 @@ and learning rates 5e-6/1e-5 fail; the closest control margin is −0.1153.
 Historical replay checks existing metric rows; the post-step checksum and
 artifact-free 20-minute deadline require current GPU validation.
 
-Model staging, Ray and vLLM startup happen once per invocation. The dry
-step's measured 72 seconds included 5.7 seconds of policy training and
-49 seconds of checkpoint work. Checkpoint work recurs at save intervals;
+Model staging, Ray and vLLM startup happen once per invocation. With checkpoints enabled, the measured dry step took 72 seconds, including
+5.7 seconds of policy training and 49 seconds of checkpoint work. Checkpoint work recurs at save intervals;
 it is not an ordinary-step cost. Evaluation also recurs every five steps.
 HF export runs after training when `--export` is set.
 
 Sampled policy-GPU memory maxima in seven completed runs ranged from 17.1
 to 30.5 GiB per device. These are node telemetry samples, not CUDA allocation
 peaks; sync seed 31 has no joined memory receipt.
+
