@@ -101,6 +101,8 @@ class IrisMachine:
     async def run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
+        if command.user is not None:
+            raise UnsupportedMachineSpec("Iris does not provide execution user overrides")
         if not command.argv:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
@@ -205,6 +207,8 @@ class IrisMachineFactory:
         self.disk_mb = disk_mb
 
     async def create(self, spec: MachineSpec) -> IrisMachine:
+        if spec.gpus:
+            raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Iris requires a registry image reference")
         if spec.network is NetworkPolicy.DENY:
@@ -230,7 +234,9 @@ class IrisMachineFactory:
                 name=f"shellbox-{uuid.uuid4().hex}",
                 environment=EnvironmentSpec(setup_scripts=[]),
                 resources=ResourceSpec(
-                    cpu=1, memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024, disk=self.disk_mb * 1024 * 1024
+                    cpu=spec.cpus or 1,
+                    memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
+                    disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024,
                 ),
                 task_image=spec.source.reference,
                 container_profile=job_pb2.CONTAINER_PROFILE_GVISOR,

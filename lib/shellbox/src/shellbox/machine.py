@@ -88,6 +88,10 @@ class MachineSpec:
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY
     memory_mb: int | None = None
+    cpus: int | None = None
+    storage_mb: int | None = None
+    gpus: int = 0
+    startup_timeout: float | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,7 @@ class Command:
     stdin: bytes = b""
     timeout: float | None = None
     output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    user: str | None = None
 
 
 @dataclass(frozen=True)

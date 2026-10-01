@@ -20,14 +20,14 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 ## Machine API
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Daytona and Iris accept registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris}`. QEMU and ShellSim have Harbor environment adapters. The three new backends expose the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
 | Local gVisor | Docker image, registry image, Dockerfile, prepared OCI image | allow or deny | Docker daemon with `runsc` registered; Skopeo for image preparation |
-| Daytona | Registry image reference | allow or deny | Daytona credentials and service access |
+| Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
 | Iris | Registry image reference | allow only | Iris controller and workers with gVisor profile support |
 
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead. Iris uses its existing `CONTAINER_PROFILE_GVISOR` job profile and `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor. The Iris job network is not configurable per job, so `NetworkPolicy.DENY` fails at creation. Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer. Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them.
@@ -46,6 +46,19 @@ finally:
 
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="marin")` with `MachineSpec(..., network=NetworkPolicy.ALLOW)` for an Iris job. These backends provide one-shot commands and shared files. The current Harbor `BashAgent` needs a persistent `ShellSession`; it cannot use these backends directly until a session adapter is implemented.
 
+For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
+Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
+Each machine owns and closes its client. The factory creates sandboxes from shared
+snapshots. Snapshot names derive from the registry reference or build-context contents
+and the requested resources. Use immutable image references. A mutable tag can
+select a snapshot built from an earlier image. Snapshot creation requires available organization quota.
+Machine cleanup deletes the sandbox and retains the snapshot for reuse.
+The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
+`network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
+`value`. Without a policy override, the factory uses `MachineSpec.network`.
+`MachineSpec.startup_timeout` bounds snapshot preparation and sandbox creation. Without
+this value, the factory uses its `create_timeout` setting.
+
 ```python
 from shellbox.machine import Command, MachineSpec, QemuBundle
 from shellbox.backends.qemu.machine import QemuMachineFactory
@@ -58,6 +71,20 @@ finally:
 ```
 
 For Docker, use `DockerMachineFactory()` and `DockerImage("image:tag")` in the same `MachineSpec`. This form requires a locally available image. Backends reject unsupported source types; QEMU also rejects guest networking.
+
+`MachineSpec` accepts `cpus`, `memory_mb`, `storage_mb`, and `gpus`. Docker passes
+these settings to its resource flags. Storage limits require a Docker storage
+driver that supports `--storage-opt size`, and GPU allocation requires a GPU
+runtime. Daytona applies CPU, memory, storage, and GPU settings through its SDK.
+It rounds memory and storage up to whole GiB. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
+memory settings. Backends reject resource overrides that they cannot apply.
+
+`Command.user` selects the execution user for one command. Docker accepts a
+username or UID string. An omitted user retains the image's user. ShellSim and
+QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
+control process as root and uses `su` for other execution users. Numeric UIDs
+require `getent` and a matching guest account.
+An empty Docker `MachineSpec.workdir` retains the image's working directory.
 
 To prepare a registry image, use a standard image reference without `https://`:
 
