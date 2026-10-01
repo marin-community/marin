@@ -155,6 +155,7 @@ class _ChecklistResult:
 
 def grade(spec: Spec, tests_dir: Path, workspace: Path, runtime: JudgeRuntimeConfig | None = None) -> Reward:
     assert isinstance(spec, JudgeSpec)
+    _validate_spec(spec)
     return grade_candidate(spec, read_output(spec, workspace) or "", context=_context(spec, tests_dir), runtime=runtime)
 
 
@@ -166,14 +167,9 @@ def grade_candidate(
     The caller supplies the contents of any context file named by the spec.
     Empty candidate text scores zero, as it does through the file-based API.
     """
-    if spec.rubric not in RUBRICS:
-        raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
+    _validate_spec(spec)
     references = tuple(reference for reference in spec.references if reference.strip())
     criteria = tuple(criterion for criterion in spec.criteria if criterion.strip())
-    if spec.rubric == RUBRIC_REFERENCE and not references:
-        raise InvalidTask("judge rubric 'reference' needs non-empty reference answers")
-    if spec.rubric == RUBRIC_CHECKLIST and not criteria:
-        raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
     checks = resolve_checks(spec.constraints) if spec.constraints else []
     context = context[:JUDGE_CONTEXT_LIMIT]
 
@@ -188,6 +184,19 @@ def grade_candidate(
             return scored(1.0, gate="exact")
         return _judge_reference(spec, references, context, candidate, runtime)
     return _judge_checklist(spec, criteria, context, candidate, runtime)
+
+
+def _validate_spec(spec: JudgeSpec) -> None:
+    if spec.rubric not in RUBRICS:
+        raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
+    references = tuple(reference for reference in spec.references if reference.strip())
+    criteria = tuple(criterion for criterion in spec.criteria if criterion.strip())
+    if spec.rubric == RUBRIC_REFERENCE and not references:
+        raise InvalidTask("judge rubric 'reference' needs non-empty reference answers")
+    if spec.rubric == RUBRIC_CHECKLIST and not criteria:
+        raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
+    if spec.constraints:
+        resolve_checks(spec.constraints)
 
 
 def _context(spec: JudgeSpec, tests_dir: Path) -> str:

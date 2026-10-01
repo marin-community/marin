@@ -294,3 +294,9 @@ def test_in_memory_and_file_grading_match(tmp_path, fake_judge, spec, candidate,
     assert memory_reward == file_reward
     assert (memory_reward.reward, memory_reward.status) == (expected, Status.SCORED)
     assert all("Private setting" in prompt for prompt in fake_judge.prompts)
+
+
+def test_invalid_rubric_precedes_candidate_file_failure(tmp_path):
+    spec = JudgeSpec(rubric="unsupported", output="x" * 5000)
+    with pytest.raises(grade_judge.InvalidTask):
+        grade_judge.grade(spec, tmp_path, tmp_path)
