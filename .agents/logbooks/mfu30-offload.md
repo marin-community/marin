@@ -346,3 +346,14 @@ host, `TF_CPP_VMODULE=execution_stream_assignment=3`):
 Rack pairing (next): the final program on the new wheel via `--pip-package <url>`, with and without
 `--env XLA_GPU_HOST_TRANSFER_STREAMS=1`, gated on `carry_stall.py` < 10 ms/step. The stack needs this
 branch's `--pip-package` plumbing (commit `cf5bc74409`: dispatch, train, launch_diagnostics).
+
+## M30A-018 Ownership and loss calibration (2026-10-01)
+
+C owns the final-program arms: C cherry-picks `cf5bc74409` (`--pip-package`) onto the stack and runs the
+F1 (`XLA_GPU_HOST_TRANSFER_STREAMS=1`) / F0 pair on the 283d5b6d98cd wheel. Carry prefetch (arm2) stays a
+candidate add-on, as its own paired comparison against the final program. `arm2_on_stack.sh` now takes
+`EXTRA_ENV` and passes `--pip-package` through the stack switches.
+
+Same-code repeat `m30-ctl-s0-r2` vs `mhep-ctx4k-s0`: MFU 28.235 vs 28.261; |dloss| max 3.3e-4, late mean
+-3.9e-5, 35/89 positive. hmo-02's drift (max 4.4e-4, late mean +1.58e-4, 48/49 positive) is near that max
+but more one-signed. The final program gets replicated loss pairs to settle it.
