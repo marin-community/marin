@@ -454,6 +454,14 @@ def moe_mlp(
     `token_valid` excludes invalid positions from dispatch, capacity accounting,
     and expert gradients. Omitted validity treats every token as valid.
 
+    With `implementation="ragged_all_to_all"` on an expert axis of size two or
+    more, an accepted assignment whose combine weight is zero, or so small that
+    `w * dout` underflows the cotangent dtype, gets a zero or inexact
+    combine-weight gradient rather than `<dout, y>`: the backward forms that
+    gradient on the expert side from the cotangent `w * dout`. Sigmoid and
+    softmax router weights get that small only by underflow, where the gradient
+    they pass to the router logits is as small either way.
+
     Set `report_capacity_overflow=True` to also return sender and receiver
     capacity drops plus padding-skipped assignment counts.
 

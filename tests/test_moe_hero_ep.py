@@ -587,6 +587,34 @@ def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monke
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
 
 
+def test_a_ragged_run_without_the_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
+    inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" in flags
+
+
+def test_the_carry_offload_widens_the_memory_budget_for_the_saved_moe_output(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] == train.OFFLOAD_CARRY_MEM_FRACTION
+    slop = f"--xla_gpu_memory_limit_slop_factor={train.OFFLOAD_CARRY_SLOP_FACTOR}"
+    assert slop in os.environ["XLA_FLAGS"].split()
+
+
 def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
     # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
     # skips the offload has to keep the posture it was measured under.
