@@ -623,3 +623,46 @@ Ragged all-to-alls (s/step exposed; instructions identified from the HLO):
   attention and small items -0.15).
 - Re-gather: forward attention gathers +0.096 under the new scope against -0.043 on the old ones, backward
   `remat_carry` gathers +0.046; net about +0.1 (dropped in F1).
+
+## M30B-027 `m30-f1-seq-02` attribution; QB-after-MLP isolation attempts
+
+F1-seq-02 (final-seq d4234c88e7, stream fix on, re-gather off): 30.219% / 12.990 s vs stackseq-03 29.928% / 13.115 s
+(orchestrator). Profiled steps 1 and 3 (12.985, 12.969 s without the tail):
+
+| s/step | stackseq-03 | F1-seq-02 | delta |
+|---|---|---|---|
+| span | 13.087 | 12.977 | -0.110 |
+| compute | 10.803 | 10.854 | +0.051 (expert GEMMs +0.037, attention projections +0.014) |
+| exposed collectives | 1.491 | 1.473 | -0.018 |
+| exposed copies | 0.769 | 0.625 | -0.144 (carry stall gone: `carry_stall.py` 3.7 ms/step) |
+
+- Re-gather off: forward attention gathers return to the FSDP scope; net forward all-gather exposure -0.025, backward
+  `remat_carry` gathers unchanged (0.161 -> 0.168).
+- Forward order, at the MoE backward entry: recomputed dispatch c1 moved under chunk 0's backward GEMMs (0.167 ->
+  0.010), but the scheduler now puts dy c0's reverse return directly behind recomputed dispatch c0 with nothing
+  under it (0.149) and dy c1's under the c0 recompute GEMMs. Net ragged exposure unchanged (0.838 -> 0.843).
+
+Remaining exposure in F1-seq-02 (s/step), the baseline for the noqb comparison:
+
+| transport | exposed |
+|---|---|
+| fwd dispatch c0 | 0.192 |
+| fwd dispatch c1 / return c0 | 0.006 / 0 |
+| fwd return c1 | 0.186 |
+| bwd recomputed dispatch c0 | 0.300 (fastest instance ~3 ms; the rest is skew) |
+| bwd dy c0 reverse return | 0.149 |
+| bwd dy c1 reverse return | 0 |
+| bwd recomputed dispatch c1 | 0.010 |
+| row-dot and dx returns | ~0.002 |
+
+Other: latent-projection reduce-scatters 0.284 (skew), backward `remat_carry` gathers 0.168, forward FSDP gathers
+0.149, exposed copies 0.625 (optimizer-state copies at the step end, carry reloads).
+
+QB-after-MLP isolation: a GB200x4 compile-only schedule (`stack/forward_schedule.py`, model smoke and a hero-shaped
+EP4 model) places the shared-expert GEMMs under both returns with and without the QB barrier, unlike EP64, so it
+cannot attribute the rack placement. Variant branch `research/mcwitt/mfu30-final-seq-noqb` @ 3b88a218cc (clean revert
+of 0b6113396b). Value check (`stack/qb_values.py`, model smoke, reference attention, 3 runs per job): within a job
+the runs are identical (loss, all metrics, 35/36 gradient leaves); across the two branches the loss differs at 1e-7
+relative, layer-0 margin_max at 6e-5, and qb_beta by 2.6% (0.2837 vs 0.2762, several histogram bins). Pending: the
+same comparison with autotuning off, and a same-code repeat across jobs, to separate the barrier's numerics from
+cross-job GEMM autotuning.
