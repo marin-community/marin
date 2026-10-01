@@ -25,7 +25,7 @@ async def _harbor_reward(
     row: PublishedRow,
     convention: SubmissionConvention,
     environment: HarborEnvironmentConfig,
-    actions: list[dict[str, Any]],
+    actions: list[dict[str, str]],
     answer: str,
     directory: Path,
     trusted_checkout: Path,
@@ -105,7 +105,7 @@ async def _harbor_reward(
 
 
 async def audit_demonstration(
-    ready: Path, source_dir: Path, provider_source: Path, trusted_checkout: Path
+    candidate: Path, source_dir: Path, provider_source: Path, trusted_checkout: Path
 ) -> dict[str, Any]:
     """Check every Workplace expected state and sampled correct/wrong reconstructed trials."""
     with ToolProviderCache() as cache:
@@ -119,7 +119,7 @@ async def audit_demonstration(
             sample = None
             matches = 0
             with (
-                (ready / f"data/workplace/{split}.jsonl").open(encoding="utf-8") as published,
+                (candidate / f"data/workplace/{split}.jsonl").open(encoding="utf-8") as published,
                 (source_dir / f"{split}.jsonl").open(encoding="utf-8") as source,
             ):
                 for exported, original in zip(published, source, strict=True):
@@ -157,7 +157,7 @@ async def audit_demonstration(
             state_matches[split] = matches
             outcomes[f"workplace/{split}"] = rewards
         for cohort, kind in (("mcqa", VerifierKind.MCQ_ANSWER), ("prism_math", VerifierKind.MATHEMATICAL_ANSWER)):
-            with (ready / f"data/tasktrove_clean/{cohort}.jsonl").open(encoding="utf-8") as stream:
+            with (candidate / f"data/tasktrove_clean/{cohort}.jsonl").open(encoding="utf-8") as stream:
                 row = PublishedRow.model_validate_json(next(stream))
             if row.verifier.kind is not kind:
                 raise ValueError("TaskTrove demonstration has an unexpected verifier")
