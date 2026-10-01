@@ -42,7 +42,7 @@ def main():
     rows = sorted((r for r in data["rows"] if r[6] == "jit_train_step"), key=lambda r: r[2])
     launches = data["launches"]
     end = max(r[3] for r in rows)
-    steps = list(zip(launches, [*launches[1:], end]))
+    steps = list(zip(launches, [*launches[1:], end], strict=True))
     nstep = len(steps)
     compute = [r for r in rows if not COLLECTIVE.search(r[1]) and not COPY.search(r[1])]
     comp_iv = merge([(r[2], r[3]) for r in compute])
