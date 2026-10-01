@@ -90,17 +90,17 @@ FIRST_TIMED_STEP = 2
 
 
 def snowball_flops_per_token(cfg: SnowballConfig, vocab_size: int, seq_len: int) -> float:
-    """Forward FLOPs per token, charging full-context attention only on Snowball's long layers."""
-    num_long_layers = sum(
-        1 for i in range(cfg.num_layers) if i % LONG_LAYER_STRIDE == LONG_LAYER_STRIDE - 1 or i == cfg.num_layers - 1
-    )
+    """Forward FLOPs per token, charging full-context attention only on every ``LONG_LAYER_STRIDE``-th layer.
+
+    Snowball also runs full attention on its last layer, which this stride does not count: an undercount of about
+    0.4% at a 4096-token context for the 26-layer model, growing with context length.
+    """
     return lm_flops_per_token(
         hidden_dim=cfg.hidden_dim,
         intermediate_dim=cfg.intermediate_dim,
         num_layers=cfg.num_layers,
         num_kv_heads=cfg.num_kv_heads,
         num_heads=cfg.num_heads,
-        head_dim=cfg.inferred_head_dim,
         seq_len=seq_len,
         vocab_size=vocab_size,
         glu=True,
@@ -109,7 +109,7 @@ def snowball_flops_per_token(cfg: SnowballConfig, vocab_size: int, seq_len: int)
         num_shared_experts=1,
         shared_intermediate_dim=cfg.shared_expert_intermediate_dim,
         sliding_window=cfg.sliding_window,
-        num_global_layers=num_long_layers,
+        global_every=LONG_LAYER_STRIDE,
     )
 
 
