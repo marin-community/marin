@@ -134,8 +134,8 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 
 
 _GATED_NORM_RANK = 128
-# June recipe: every LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
-LONG_ATTENTION_INTERVAL = 4
+# June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
+_LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
 _EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
@@ -650,7 +650,7 @@ class SnowballBlock(eqx.Module):
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
     """Bool[num_layers], True where a layer runs full-causal attention instead of the sliding window."""
     idx = jnp.arange(num_layers)
-    return ((idx % LONG_ATTENTION_INTERVAL) == LONG_ATTENTION_INTERVAL - 1) | (idx == num_layers - 1)
+    return ((idx % _LONG_ATTENTION_INTERVAL) == _LONG_ATTENTION_INTERVAL - 1) | (idx == num_layers - 1)
 
 
 def num_long_attention_layers(num_layers: int) -> int:
@@ -658,7 +658,7 @@ def num_long_attention_layers(num_layers: int) -> int:
     return sum(
         1
         for i in range(num_layers)
-        if i % LONG_ATTENTION_INTERVAL == LONG_ATTENTION_INTERVAL - 1 or i == num_layers - 1
+        if i % _LONG_ATTENTION_INTERVAL == _LONG_ATTENTION_INTERVAL - 1 or i == num_layers - 1
     )
 
 
