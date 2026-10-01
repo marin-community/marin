@@ -268,3 +268,27 @@ then `carry_stall.py` is the gate.
 Open point: the -03 arms also carry `--sconv-implementation triton_gpu` and `--regather-attention-weights`.
 So the -03 trace is the final program's trace only if both flags stay in the final program. Otherwise the
 PGLE build needs a new trace arm of the final program.
+
+### B's forward-order backward; final-program pair and ownership (2026-09-30 20:40 PT)
+
+B's forward-order backward (D's backward chunks run c0 then c1, three lines in `_routed_experts_bwd`, gated
+bitwise by B in `m30b-reorder-gate-01`) is applied, lib change only, to `research/mcwitt/mfu30-stack` @
+`d10320ca2c` (from B's `547bf2ad20`) and to `research/mcwitt/mfu30-stack-pipelined` @ `0c30e9dd9a` (from
+`2cc470d88f`). GB200x4 model smoke passes on both (`m30c-reorder-smoke-seq-01`, `-pipe-01`: finite loss and
+gradients, MODEL_SMOKE_OK). The queued -03 arms predate it.
+
+The permission system blocked my cherry-pick of A's custom-wheel plumbing (`cf5bc74409`). The user then
+approved the wheel directly with the orchestrator, who owns every arm that installs it:
+`research/mcwitt/mfu30-final-seq` @ `d4234c88e7` and `research/mcwitt/mfu30-final-pipe` @ `743b5826d2` (my
+branch tips + `cf5bc74409`). F1 arms `m30-f1-pipe-01` (port 33010) and `m30-f1-seq-01` (port 33011) are
+queued behind the -03 arms. Each runs the full stack + forward order + custom wheel
+`jax_cuda13_pjrt-0.11.1+marin.283d5b6d98cd` with `XLA_GPU_HOST_TRANSFER_STREAMS=1`, the short-conv and
+re-gather switches, H-A4 at 0.78/105, remat VLOG, traced 180021-180023.
+
+My part:
+- Score and check the -03 arms, then pick the lineage. The orchestrator then cancels the losing F1 and
+  submits the F0 pair (same wheel, env off).
+- Run `trace_checks.sh` on the F1 traces.
+- Build the plain and D2H-patched PGLE profiles from the winning F1 trace and hand over the profile commit.
+
+Note that F1 against -03 measures the wheel, the transfer streams and the forward order together.
