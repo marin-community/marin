@@ -54,6 +54,24 @@ def test_main_wrapper_joins_configs_without_trailing_newline(tmp_path):
     assert main() == Config(project="test", x=2)
 
 
+def test_main_wrapper_preserves_keep_chomped_scalar(tmp_path):
+    first = tmp_path / "first.yaml"
+    second = tmp_path / "second.yaml"
+    first.write_text("value: |+\n  line\n")
+    second.write_text("other: true\n")
+
+    @dataclasses.dataclass
+    class Config:
+        value: str
+        other: bool
+
+    @levanter.config.main(args=["--configs", str(first), str(second)])
+    def main(config: Config):
+        return config
+
+    assert main() == Config(value="line\n", other=True)
+
+
 def test_remote_config_temp_file_handle_is_closed():
     fd_dir = "/proc/self/fd"
     if not os.path.isdir(fd_dir):

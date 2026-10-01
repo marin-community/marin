@@ -194,10 +194,16 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
             temp_merged_config_path.close()
             atexit.register(lambda path=merged_config_path: os.unlink(path))  # pyrefly: ignore[missing-argument]
             with open(merged_config_path, "w") as f:
+                needs_separator = False
                 for config_path in config_paths:
                     with open(config_path) as config_file:
-                        f.write(config_file.read())
+                        content = config_file.read()
+                    if not content:
+                        continue
+                    if needs_separator:
                         f.write("\n")
+                    f.write(content)
+                    needs_separator = not content.endswith("\n")
         else:
             raise ValueError("No config path found in args")
 
