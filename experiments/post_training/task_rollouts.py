@@ -102,8 +102,8 @@ def write_smoke_tasks(output_path: str) -> None:
                         ),
                         TextMessage(
                             role="user",
-                            content="What number is in /workspace/source? Use the shell tool to copy that file "
-                            "to /workspace/value and read the copied file. Reply with the number.",
+                            content="Use the shell tool to run `cp /workspace/source /workspace/value && "
+                            "cat /workspace/value`. Reply with only the number from the command output.",
                         ),
                     )
                 ),
@@ -128,7 +128,8 @@ def write_smoke_tasks(output_path: str) -> None:
                             events=(
                                 TextMessage(
                                     role="user",
-                                    content="Use the shell tool to read /workspace/value. Reply with only the number.",
+                                    content="Use the shell tool to run `cat /workspace/value`. "
+                                    "Reply with only the number from the command output.",
                                 ),
                             )
                         ),
