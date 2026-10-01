@@ -614,8 +614,9 @@ class WandbConfig(TrackerConfig):
         # wandb doesn't populate it on its own.
         try:
             sha = self._get_git_sha(code_dir)
-        except:  # noqa: E722
-            logger.warning(f"Could not get git sha for {code_dir}. Will not log git commit.")
+        except Exception as exc:
+            # The commit is optional metadata; a broken checkout must not stop training.
+            logger.warning("Could not get git sha for %s (%s). Will not log git commit.", code_dir, exc)
             sha = None
         if sha is not None:
             other_settings["git_commit"] = sha
