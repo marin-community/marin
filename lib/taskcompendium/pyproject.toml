@@ -13,7 +13,7 @@ dependencies = [
     "marin-shellbox",
     "harbor-config",
     "pyarrow>=17",
-    "marin-rigging",
+    "marin-rigging>=0.2.123.dev35633925924",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +39,7 @@ packages = ["src/taskcompendium"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 timeout = 60
+pythonpath = ["../.."]
 addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
 markers = [
     "slow: long-running test",

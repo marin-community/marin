@@ -2788,7 +2788,7 @@ test = [
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
     { name = "harbor-config", url = "https://github.com/marin-community/harbor/releases/download/harbor-config-952a005353273590631b8f970f4664a121710b32/harbor_config-0.1.0-py3-none-any.whl" },
-    { name = "marin-rigging" },
+    { name = "marin-rigging", specifier = ">=0.2.123.dev35633925924" },
     { name = "marin-shellbox", editable = "../shellbox" },
     { name = "pyarrow", specifier = ">=17" },
     { name = "pydantic", specifier = ">=2.9" },

@@ -24,8 +24,12 @@ evaluation then passes both held-out tasks.
 Print the one-round artifact plan:
 
 ```bash
-uv run python -m experiments.post_training.baby_rsi.pipeline --rounds 1 --version dev
+uv run --project lib/taskcompendium --frozen --with-editable lib/marin \
+  python -m experiments.post_training.baby_rsi.pipeline --rounds 1 --version dev
 ```
+
+This command keeps TaskCompendium in its isolated project and lock file. The `lib/marin` overlay
+supplies the artifact graph without adding TaskCompendium to the root Marin environment.
 
 The dummy report is an interface and dependency test. It is not a model-training result. Replace
 each dummy implementation independently while its typed input and output stay unchanged.
