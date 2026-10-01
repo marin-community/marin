@@ -742,3 +742,14 @@ calibrate. Speed criterion met on all seeds; fidelity verdict pending those repe
 resubmitted its train job (Iris resurrection, #8276 family). The orchestrator's hang poller flagged it at 87 min;
 cancelled at 12:55Z. W&B history intact (101 rows over the original 21.9-minute span). No other campaign
 coordinators were resurrected.
+
+## M30-045 Seed-1 same-code repeat (2026-10-01)
+
+`m30-ctl-s1-r2` (main, seed 1) vs mhep-ctx4k-s1: MFU 28.218; loss at 180000 equal; dloss max 5.2e-4, late mean
++6.7e-5, 49/89 positive; mean |d| by thirds 5.9e-5 / 2.04e-4 / 1.69e-4 (mid-third mean d +1.9e-4). Final vs main
+on seed 1: max 7.7e-4; thirds 1.27e-4 / 2.75e-4 / 3.28e-4; late mean +2.65e-4. So the final program diverges
+~1.5-2x as far as same-code on seed 1, as expected from extra per-step rounding perturbations (E, D's dS,
+sconv dw order) on top of FA4-backward nondeterminism. Against the pre-registered numbers, seed 1's late mean
+(+2.65e-4) exceeds the ~2e-4 bound by 0.65e-4; max |d| and the absence of a consistent sign across seeds
+(-9.2e-5 / +2.65e-4 / -1.81e-4) and B's null 8-seed bias test support "numerically ~equal". Reported as such,
+not as bitwise-equivalent. Seed-2 repeat pending.
