@@ -70,6 +70,14 @@ config:
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-github-alerts-slack-webhook/versions/1
       disposition: keep
       note: Routes GitHub Actions alerts to #marin-alerts.
+    - name: BELAY_INTAKE_TOKEN
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:belay-intake-token
+      disposition: keep
+      note: marin-belay-bot token used by the Belay intake workflow to comment on the locked issue.
     - name: CW_KUBECONFIG
       scope: repository
       repository: marin-community/marin

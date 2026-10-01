@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.8"
+SCHEMA_VERSION = "0.9"
 
 
 class AnswerType(StrEnum):
@@ -225,7 +225,7 @@ class ConversationTrace(BaseModel):
         return self
 
 
-class TaskTools(BaseModel):
+class FinalTools(BaseModel):
     """Functions and call policy advertised at the task's decision point."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -235,7 +235,7 @@ class TaskTools(BaseModel):
     parallel_tool_calls: bool | None = None
 
     @model_validator(mode="after")
-    def validate_tools(self) -> "TaskTools":
+    def validate_tools(self) -> "FinalTools":
         if len({function.name for function in self.functions}) != len(self.functions):
             raise ValueError("Advertised function names must be unique")
         if self.tool_choice is not None and self.tool_choice not in {"auto", "none", "required"}:
@@ -243,7 +243,7 @@ class TaskTools(BaseModel):
         return self
 
 
-class TaskRequirements(BaseModel):
+class EnvironmentRequirements(BaseModel):
     """Environment functionality required to run the task.
 
     ``capabilities`` contains generic operations such as ``filesystem`` or
@@ -264,8 +264,8 @@ class TaskSpec(BaseModel):
 
     id: str
     context: ConversationInput
-    requirements: TaskRequirements
-    tools: TaskTools = Field(default_factory=TaskTools)
+    environment_requirements: EnvironmentRequirements
+    final_tools: FinalTools = Field(default_factory=FinalTools)
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
@@ -277,6 +277,6 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
-        if self.answer_type == AnswerType.NATIVE_ACTION and not self.tools.functions:
+        if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools.functions:
             raise ValueError("Native-action tasks require advertised functions")
         return self
