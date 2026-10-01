@@ -652,3 +652,14 @@ the backward body keeps 8 all-to-alls and 16 ragged dots; one extra barrier; no 
 `m30b-holdback-gate-01` is pending. **Landing debt:** on final-seq (d4234c88e7) `tests/test_moe_hero_ep.py` +
 `tests/test_moe_context_sharding.py` have 9 CPU failures from the `pip_packages` field added by cf5bc74409; fix
 before any PR.
+
+## M30-038 F0: wheel build is neutral; one-signed drift is noise (2026-10-01)
+
+`m30-f0-seq-02` (final-seq, custom wheel, streams OFF, traced): **30.214 / 12.991 s** vs f1-seq-02 (streams ON)
+30.219 / 12.990; peak 123.50. F0 drew a good stream assignment, so the wheel's build environment is neutral.
+The stream fix is insurance against the draw lost by both -03 arms (~141-147 ms/step). Loss vs control:
+F0 max 3.3e-4, late mean -7.4e-5, 10/49 positive; F1 max 3.8e-4, late mean +9.0e-5, 44/49 positive. Same
+program, opposite-signed drift, so the one-signed drifts seen in single pairs are chaotic divergence, not bias.
+Holdback (B): gate-02 at ab78bbe3ad has a bitwise forward but 4/36 gradient leaves differ (likely GEMM merging
+of the two shared experts' gate/up changing wgrad accumulation order; reassociation-level, within the ruling).
+A diff job is pending.
