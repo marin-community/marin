@@ -510,3 +510,35 @@ async def test_changed_tool_schema_fails_before_trial_or_endpoint(git_provider_t
             task, changed, ChatLaunch(model="model", api_base="https://example.invalid"), tmp_path / "trials", "invalid"
         )
     assert not (tmp_path / "trials").exists()
+
+
+@pytest.mark.parametrize("reserved", (SOURCE_MANIFEST.upper(), SOURCE_MANIFEST + "/nested"))
+def test_reserved_manifest_collision_prevents_source_overwrite(tmp_path, reserved):
+    binding, checkout = _git_provider(tmp_path)
+    collision = checkout / reserved
+    collision.parent.mkdir(parents=True, exist_ok=True)
+    collision.write_text("committed source\n")
+    subprocess.run(("git", "-C", str(checkout), "add", "."), check=True)
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "collision",
+        ),
+        check=True,
+    )
+    commit = subprocess.check_output(("git", "-C", str(checkout), "rev-parse", "HEAD"), text=True).strip()
+    previous = binding.provider.split("@", maxsplit=1)[1].split(":", maxsplit=1)[0]
+    provider = binding.provider.replace(previous, commit)
+    destination = tmp_path / "snapshot"
+    with pytest.raises(ValueError, match="collides with reserved manifest"):
+        stage_git_provider(provider, checkout, destination)
+    assert not destination.exists()
+    assert collision.read_text() == "committed source\n"
