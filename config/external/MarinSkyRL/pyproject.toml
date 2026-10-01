@@ -11,4 +11,4 @@ required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
 # The isolated lock keeps the selected main-branch revision immutable.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "47c887519672f59bde38e30afdcada962980c94b" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "df9123652f280ca92417c9f9a0ca712c4f9b9507" }
