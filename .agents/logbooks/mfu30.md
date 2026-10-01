@@ -510,3 +510,14 @@ Accounting answer to the user: #9481's three model commits, its transport ideas 
 both lineages, pipelined chunks in one) and a regenerated PGLE profile are in the final program; none
 of the scored arms so far contain #9481 code. #9374 is excluded (user-parked; measured +0.09% mean).
 B's forward-order backward (547bf2ad20 sequential / 2cc470d88f pipelined) gates bitwise and is a paired add-on.
+
+## M30-028 F1 arms on the custom wheel queued (2026-10-01)
+
+C's sandbox denied the wheel plumbing cherry-pick (approval relayed through the orchestrator does not count as
+the user's own), so the orchestrator owns all custom-wheel arms. Branches: `research/mcwitt/mfu30-final-seq`
+(d4234c88e7 = stack d10320ca2c incl. B's forward-order backward + A's `--pip-package` plumbing cf5bc74409)
+and `research/mcwitt/mfu30-final-pipe` (743b5826d2 = 0c30e9dd9a + cf5bc74409). Queued (traced 180021-180023,
+H-A4 + slop 105, MEM_FRACTION 0.78, `XLA_GPU_HOST_TRANSFER_STREAMS=1`, `--sconv-implementation triton_gpu
+--regather-attention-weights`, wheel via `--pip-package`): `m30-f1-pipe-01` (33010), `m30-f1-seq-01` (33011).
+The -03 lineage pick decides which F1 runs (the other is cancelled if it has not started); then F0 (same
+wheel, env off) on the winner, the PGLE build from the winning F1 trace (C), and PGLE-scored runs (orchestrator).
