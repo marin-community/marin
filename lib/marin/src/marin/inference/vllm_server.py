@@ -110,8 +110,12 @@ entrypoint = sys.argv.pop(1)
 runpy.run_path(entrypoint, run_name="__main__")
 """
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
-# libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
-_RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
+# The AWS error is terminal in RunAI Streamer 0.16.1: a failed ranged GET fails the whole read.
+# Detect it directly instead of waiting for the Python worker to emit the later libstreamer wrapper error.
+_RUNAI_STREAMER_READ_MARKERS = (
+    "could not receive runai_response",
+    "aws_error_http_channel_throughput_failure",
+)
 _LINUX_PROC_ROOT = "/proc"
 # Captured at import so tests can drive the /proc parser on non-Linux hosts, as they already do for
 # _LINUX_PROC_ROOT.
@@ -1054,7 +1058,8 @@ def _wait_for_vllm_server(
         # A distributed loader worker can report this fault while the API parent stays alive and
         # waits forever for the other ranks. Fail the task from the complete local logs so Iris
         # can retry it without waiting for the parent to exit or the readiness timeout to expire.
-        has_streamer_fault = _RUNAI_STREAMER_READ_MARKER in _native_logs(handle.log_dir).lower()
+        logs = _native_logs(handle.log_dir).lower()
+        has_streamer_fault = any(marker in logs for marker in _RUNAI_STREAMER_READ_MARKERS)
         if process.poll() is None:
             if not has_streamer_fault:
                 return

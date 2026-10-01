@@ -1,0 +1,47 @@
+n_concurrent_trials: 16
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - AgentKilledBySignalError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+  override_storage_mb: 10240
+agents:
+- name: pi
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    # Pi derives its shared compaction reserve from max_output_tokens.
+    model_info:
+      max_input_tokens: 65536
+      max_output_tokens: 16384
+datasets:
+- name: bixbench-cli-marin-corrections
+  version: '3'
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/2666d6526477ae3e46030a8dc4f3f2c68fd7a84f/registry.json
+verifier:
+  override_timeout_sec: 300

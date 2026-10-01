@@ -10,3 +10,5 @@ seed: 42
 max_tokens: 4096
 max_length: 73728
 runtime_extras: [mrcr]
+chat_template_kwargs:
+  enable_thinking: false

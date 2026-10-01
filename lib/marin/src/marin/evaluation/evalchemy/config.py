@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -16,6 +17,13 @@ from rigging.secrets import is_secret_reference
 RESERVED_ENDPOINT_MODEL_ARGS = frozenset(
     {"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests", "chat_template_kwargs"}
 )
+
+
+class ChatTokenizerBackend(StrEnum):
+    """How Evalchemy counts prompts sent through the chat endpoint."""
+
+    SERVER = "none"
+    HUGGING_FACE = "huggingface"
 
 
 class EvalchemyJudgeConfig(BaseModel):
@@ -75,6 +83,7 @@ class EvalchemyConfig(BaseModel):
     task_options: Mapping[str, EvalchemyTaskOptions] = Field(default_factory=dict)
     apply_chat_template: bool | None = None
     debug: bool = False
+    chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: str | None = None

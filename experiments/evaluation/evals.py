@@ -88,6 +88,7 @@ class EvalchemyDefinition:
             evalchemy=EvalchemyRef(
                 apply_chat_template=config.apply_chat_template,
                 debug=config.debug,
+                chat_tokenizer_backend=config.chat_tokenizer_backend,
                 max_gen_toks=config.max_gen_toks,
                 max_eval_instances=config.max_eval_instances,
                 num_concurrent=config.num_concurrent,
@@ -123,6 +124,13 @@ class EvalchemyDefinition:
                     self.name,
                     max_gen_toks,
                 )
+        chat_template_kwargs = {
+            **model.generation.chat_template_kwargs,
+            **config.chat_template_kwargs,
+        }
+        if config.chat_template_kwargs.get("enable_thinking") is False and model.generation.thinking_off_template_kwargs:
+            chat_template_kwargs.pop("enable_thinking")
+            chat_template_kwargs.update(model.generation.thinking_off_template_kwargs)
         return replace(
             config,
             apply_chat_template=(
@@ -134,10 +142,7 @@ class EvalchemyDefinition:
                 **config.extra_gen_kwargs,
                 **model.generation.extra_gen_kwargs,
             },
-            chat_template_kwargs={
-                **model.generation.chat_template_kwargs,
-                **config.chat_template_kwargs,
-            },
+            chat_template_kwargs=chat_template_kwargs,
         )
 
 
@@ -188,6 +193,7 @@ class HarborDefinition:
         config: ValidatedHarborConfig,
         model: ModelConfig,
         runtime_task_limit: int | None,
+        retry_unscored_trials: bool,
     ) -> EvalExecutor:
         secret_env = self.secret_env_for(config)
         return HarborExecutor(
@@ -195,6 +201,7 @@ class HarborDefinition:
             task_limit=runtime_task_limit,
             model_agent_kwargs=harbor_model_agent_kwargs(model),
             secret_env_keys=tuple(secret_env),
+            retry_unscored_trials=retry_unscored_trials,
         )
 
 
@@ -257,6 +264,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: Externa
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
         debug=config.debug,
+        chat_tokenizer_backend=config.chat_tokenizer_backend,
         max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,

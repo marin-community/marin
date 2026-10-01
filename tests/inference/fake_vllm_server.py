@@ -8,7 +8,7 @@
 Modes:
   serve                          Answer /v1/models with 200.
   hang <counter>                 Record the start, then sleep without becoming ready.
-  stuck-fault <counter>          Log a streamer fault while the parent stays alive.
+  stuck-fault <counter> [error]  Log a streamer fault while the parent stays alive.
   exit                           Exit successfully without becoming ready.
   record-args <path>             Record argv, then answer /v1/models.
 """
@@ -56,7 +56,8 @@ def main() -> None:
         time.sleep(30)
     elif mode == "stuck-fault":
         _record_start(sys.argv[2])
-        print(STREAMER_FAULT, file=sys.stderr, flush=True)
+        error = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != "serve" else STREAMER_FAULT
+        print(error, file=sys.stderr, flush=True)
         time.sleep(30)
     elif mode == "exit":
         return

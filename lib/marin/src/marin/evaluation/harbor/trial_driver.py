@@ -48,6 +48,8 @@ _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
 _PI_ACP_REGISTRY_ID = "pi-acp"
+_ACP_AGENT_PREFIX = "acp:"
+_OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
@@ -265,11 +267,15 @@ def _agent_config(
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
     if agent.name == _OPENCODE_AGENT:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
+    runtime_env = agent.env
+    if agent.name is not None and agent.name.startswith(_ACP_AGENT_PREFIX):
+        runtime_env = {**agent.env, _OPENAI_BASE_URL_ENV: endpoint_url}
     return AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
             "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
             "kwargs": runtime_kwargs,
+            "env": runtime_env,
         },
         extra="forbid",
     )

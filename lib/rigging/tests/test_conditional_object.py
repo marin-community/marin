@@ -70,6 +70,36 @@ def test_s3_conditional_object_sends_the_etag_precondition(monkeypatch):
     client.put_object.assert_called_once_with(Bucket="bucket", Key="HEAD", Body=b"two", IfMatch='"v1"')
 
 
+def test_s3_conditional_object_uses_virtual_host_addressing_without_endpoint(monkeypatch):
+    session = MagicMock()
+    monkeypatch.setattr("rigging.filesystem.conditional_object.botocore.session.get_session", lambda: session)
+    S3ConditionalObject._client.cache_clear()
+
+    S3ConditionalObject._client(None)
+
+    config = session.create_client.call_args.kwargs["config"]
+    assert config.s3 == {"addressing_style": "virtual"}
+    S3ConditionalObject._client.cache_clear()
+
+
+def test_s3_conditional_object_passes_ambient_credentials_to_botocore(monkeypatch):
+    session = MagicMock()
+    monkeypatch.setattr("rigging.filesystem.conditional_object.botocore.session.get_session", lambda: session)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "session-token")
+    S3ConditionalObject._client.cache_clear()
+
+    S3ConditionalObject._client("https://s3.example.com")
+
+    kwargs = session.create_client.call_args.kwargs
+    assert kwargs["endpoint_url"] == "https://s3.example.com"
+    assert kwargs["aws_access_key_id"] == "access-key"
+    assert kwargs["aws_secret_access_key"] == "secret-key"
+    assert kwargs["aws_session_token"] == "session-token"
+    S3ConditionalObject._client.cache_clear()
+
+
 def test_s3_conditional_object_requires_absence_for_creation(monkeypatch):
     client = MagicMock()
     client.put_object.return_value = {"ETag": '"v1"'}
@@ -86,6 +116,29 @@ def test_s3_conditional_object_maps_missing_head_to_no_version(monkeypatch):
     monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
 
     assert S3ConditionalObject("s3://bucket/HEAD").version() is None
+
+
+@pytest.mark.parametrize("operation", ["read", "version"])
+def test_s3_conditional_object_retries_spurious_path_style_response(monkeypatch, operation):
+    client = MagicMock()
+    error = ClientError(
+        {"Error": {"Code": "PathStyleRequestNotAllowed", "Message": "use virtual-host addressing"}},
+        "GetObject" if operation == "read" else "HeadObject",
+    )
+    if operation == "read":
+        client.get_object.side_effect = [error, {"Body": BytesIO(b"one"), "ETag": '"v1"'}]
+    else:
+        client.head_object.side_effect = [error, {"ETag": '"v1"'}]
+    monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+
+    result = getattr(S3ConditionalObject("s3://bucket/HEAD"), operation)()
+
+    if operation == "read":
+        assert result is not None
+        assert result.data == b"one"
+    else:
+        assert result == '"v1"'
 
 
 def test_s3_conditional_object_maps_precondition_failure(monkeypatch):

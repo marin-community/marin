@@ -382,6 +382,46 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
     assert by_filter["strict-match"].grading.filter == "strict-match"
 
 
+def test_ungraded_extraction_filters_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = [
+        {
+            key: value
+            for key, value in _lm_eval_row(0, name, 0.0, response).items()
+            if key not in {"metrics", "exact_match"}
+        }
+        for name, response in (("strict-match", "[invalid]"), ("flexible-extract", "4"))
+    ]
+    _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).output for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
+def test_ungraded_filter_variants_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    raw = _lm_eval_row(0, "none", 0.0, "4")
+    del raw["filter"], raw["metrics"], raw["exact_match"]
+    raw["filter_variants"] = [
+        {"filter": "strict-match", "filtered_resps": ["[invalid]"], "metrics": {}},
+        {"filter": "flexible-extract", "filtered_resps": ["4"], "metrics": {}},
+    ]
+    _write_jsonl(results, [raw])
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).extracted for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
 def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
     results = tmp_path / "run" / "results"
     rows = []
@@ -462,6 +502,22 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 2
     assert ReadView(str(results)).scan("samples").num_rows == 2
+
+
+def test_rebuild_preserves_repeated_sample_trial_ids(tmp_path):
+    results = tmp_path / "run" / "results"
+    first = _lm_eval_row(0, "none", 0.0, "first") | {"sample_repeat": 0}
+    second = _lm_eval_row(0, "none", 1.0, "second") | {"sample_repeat": 1}
+    source = _write_jsonl(results, [first, second])
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    source.unlink()
+    assert rebuild_lm_eval_samples(str(results)) == 2
+    rows = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {(row["trial_id"], sample_from_archive_row(row).output) for row in rows} == {
+        ("0", "first"),
+        ("1", "second"),
+    }
 
 
 def test_export_preserves_every_artifact_the_harness_left(tmp_path):

@@ -3,10 +3,10 @@
 
 """Serve one model and run a batch of endpoint-oriented evaluations."""
 
+import contextlib
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, field, replace
-from enum import StrEnum
 from typing import Protocol
 
 from fray.client import JobHandle
@@ -15,6 +15,7 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import SecretSpec, resolve_secret_spec
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
@@ -42,6 +43,7 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.backend import OPENAI_API_SUFFIX
+from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
@@ -55,6 +57,8 @@ _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
+_HOSTED_JUDGE_STARTUP_ATTEMPTS = 3
+_HOSTED_JUDGE_STARTUP_BACKOFF = ExponentialBackoff(initial=20.0, maximum=120.0, factor=2.0, jitter=0.9)
 
 
 @dataclass(frozen=True)
@@ -99,11 +103,6 @@ class EvalExecutor(Protocol):
     ) -> EvaluationOutcome: ...
 
 
-class EndpointRoute(StrEnum):
-    DIRECT = "direct"
-    CAPABILITY = "capability"
-
-
 @dataclass(frozen=True)
 class EvaluationIdentity:
     run_id: str
@@ -123,7 +122,6 @@ class LaunchProvenance:
 class Evaluation:
     identity: EvaluationIdentity
     executor: EvalExecutor
-    endpoint_route: EndpointRoute
     secret_env_keys: tuple[str, ...] = ()
 
 
@@ -352,17 +350,10 @@ def _run_one_evaluation(
         session.check_alive()
         if judge is not None:
             judge.check_alive()
-        if evaluation.endpoint_route is EndpointRoute.DIRECT:
-            execution_session = _local_endpoint_session(session)
-        else:
-            execution_session = session
         if session.metrics_url is not None:
             try:
-                metric_session = execution_session
-                if evaluation.endpoint_route is EndpointRoute.CAPABILITY:
-                    metric_session = _local_endpoint_session(session)
                 metric_window = InferenceMetricWindow.start(
-                    metric_session,
+                    _local_endpoint_session(session),
                     speculative=batch.model.serve.speculative is not None,
                 )
             except Exception:
@@ -374,7 +365,7 @@ def _run_one_evaluation(
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
         outcome = evaluation.executor(
-            execution_session,
+            session,
             evaluation.identity.output_dir,
             evaluation_env,
             judge=judge,
@@ -524,6 +515,40 @@ def _record_startup_failure(
     _record_unstarted(batch, batch.evaluations, exc, jobs, tails, paths)
 
 
+def _is_submitted_inference_startup_failure(exc: Exception) -> bool:
+    """Return whether Iris accepted an endpoint job before startup failed."""
+    if not isinstance(exc, RemoteInferenceStartupError):
+        return False
+    # Job handles are stable at terminal transition; federated log contents may still be propagating.
+    return bool(exc.jobs)
+
+
+@contextlib.contextmanager
+def _remote_inference_with_startup_retry(
+    config: RemoteInferenceConfig,
+) -> Iterator[RemoteInferenceSession]:
+    """Start hosted-judge inference with bounded replacement of failed endpoints."""
+
+    def start() -> tuple[contextlib.ExitStack, RemoteInferenceSession]:
+        stack = contextlib.ExitStack()
+        try:
+            session = stack.enter_context(remote_inference(config))
+        except Exception:
+            stack.close()
+            raise
+        return stack, session
+
+    stack, session = retry_with_backoff(
+        start,
+        retryable=_is_submitted_inference_startup_failure,
+        max_attempts=_HOSTED_JUDGE_STARTUP_ATTEMPTS,
+        backoff=_HOSTED_JUDGE_STARTUP_BACKOFF,
+        operation="hosted_judge_startup",
+    )
+    with stack:
+        yield session
+
+
 def _evaluate_with_hosted_judge(
     batch: EvaluationBatch,
     session: RemoteInferenceSession,
@@ -547,7 +572,7 @@ def _evaluate_with_hosted_judge(
         priority=batch.priority_band,
     )
     try:
-        with remote_inference(judge_inference) as judge:
+        with _remote_inference_with_startup_retry(judge_inference) as judge:
             return evaluate_batch(
                 batch,
                 session,

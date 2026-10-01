@@ -1,0 +1,44 @@
+name: IFM-K2-Horizon-MoVA-36B-A4B
+location: IFM/K2-Horizon-MoVA-36B-A4B
+revision: 7730b92d1b574e04663b04023d5d6fa83475432f
+tokenizer: IFM/K2-Horizon-MoVA-36B-A4B
+apply_chat_template: true
+generation:
+  thinking_off_template_kwargs:
+    reasoning_effort: low
+resource_hint:
+  gpu:
+    H100: 8
+  # DP4 loads four model replicas concurrently. The automatic checkpoint-plus-rank
+  # estimate covered a single mapped checkpoint but not the model streamer's
+  # per-replica staging buffers, and the first DP4 canary was cgroup-killed (137)
+  # at 29% of weight loading. The 8xH100 nodes have room for this explicit ceiling.
+  memory: 512g
+serve:
+  tensor_parallel_size: 2
+  # Four replicas keep the policy's 16 concurrent Evalchemy requests to roughly four
+  # requests per replica.  At TP2-only, long K2 reasoning generations exceeded the
+  # client's 30-minute transport timeout, while the abandoned server requests kept
+  # running and amplified retries.  Data parallelism changes serving throughput only;
+  # context, prompts, sampling, and generation budgets remain unchanged.
+  data_parallel_size: 4
+  max_model_len: 73728
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --enable-prefix-caching
+  # K2's template expects message.content to be a string. vLLM's auto-detection
+  # mistakes the template's tool-message branches for OpenAI content parts and
+  # otherwise renders ordinary user questions as empty strings.
+  - --chat-template-content-format
+  - string
+  - --default-chat-template-kwargs
+  - '{"reasoning_effort":"high"}'
+  reasoning_parser: k2_horizon
+  tool_call_parser: k2_horizon
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    extra_body: '{"chat_template_kwargs":{"reasoning_effort":"high"}}'
+    # K2 requires every assistant history item to carry its reasoning field. Preserve the
+    # parsed reasoning across Harbor turns so the official template can render follow-ups.
+    interleaved_thinking: true

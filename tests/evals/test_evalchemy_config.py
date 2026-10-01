@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
-from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -48,6 +48,41 @@ def _config(**overrides) -> EvalchemyRunConfig:
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
     return json.loads(_run_config_json(_MODEL, config or _config(), "gs://bucket/evals/qwen3/core"))
+
+
+def test_chat_route_carries_chat_template_kwargs_in_model_args():
+    config = _payload(_config(chat_template_kwargs={"enable_thinking": False}))
+
+    model_args = build_model_args(config, use_chat=True, max_length=None)
+
+    assert 'chat_template_kwargs={"enable_thinking":false}' in model_args.split(",")
+
+
+def test_chat_route_can_load_the_served_tokenizer_for_context_preflight():
+    config = _payload(_config(chat_tokenizer_backend=ChatTokenizerBackend.HUGGING_FACE))
+
+    model_args = dict(
+        pair.split("=", 1) for pair in build_model_args(config, use_chat=True, max_length=73728).split(",")
+    )
+
+    assert model_args["tokenizer_backend"] == "huggingface"
+    assert model_args["tokenizer"] == _MODEL.tokenizer
+    assert model_args["trust_remote_code"] == "True"
+
+
+def test_completion_route_omits_chat_template_kwargs():
+    config = _payload(_config(chat_template_kwargs={"enable_thinking": False}))
+
+    model_args = build_model_args(config, use_chat=False, max_length=None)
+
+    assert "chat_template_kwargs=" not in model_args
+
+
+def test_chat_route_rejects_multiple_chat_template_kwargs():
+    config = _payload(_config(chat_template_kwargs={"enable_thinking": False, "strict_format": False}))
+
+    with pytest.raises(ValueError, match="must hold one key"):
+        build_model_args(config, use_chat=True, max_length=None)
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():
@@ -96,6 +131,8 @@ def test_file_config_fields_reach_the_evalchemy_command():
     assert command[command.index("--seed") + 1] == "1234"
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
+    assert model_args["transport_retry_budget"] == "1800"
+    assert model_args["transport_attempt_timeout"] == "300"
     assert model_args["max_length"] == "32768"
 
 

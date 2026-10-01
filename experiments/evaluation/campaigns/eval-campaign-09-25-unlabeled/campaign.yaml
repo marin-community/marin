@@ -1,0 +1,23 @@
+# Harbor adopts a model's native context window when it is below the campaign's
+# 65,536-token agent limit. These values are policy inputs, not launcher defaults.
+harbor_model_info:
+  inclusionAI-Ling-lite-1.5:
+    max_input_tokens: 32768
+  open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
+    max_input_tokens: 32768
+
+# Reusable harness behavior. Benchmarks select a profile below; model-specific
+# adjustments remain properties of the model within that harness.
+harbor_harness_profiles:
+  pi-65k-16k:
+    agent: pi
+    kwargs:
+      compaction_reserve_tokens: 32768
+    model_kwargs:
+      inclusionAI-Ling-lite-1.5:
+        compaction_reserve_tokens: 16384
+      open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
+        compaction_reserve_tokens: 16384
+
+harbor_eval_harness_profiles:
+  bixbench-pi: pi-65k-16k
