@@ -25,7 +25,7 @@ MEMCPY = re.compile(r"memcpy|memset", re.I)
 
 
 def main(path: str) -> None:
-    data = pickle.load(open(path, "rb"))
+    data = pickle.loads(Path(path).read_bytes())
     rows = sorted((r for r in data["rows"] if r[6] == "jit_train_step"), key=lambda r: r[2])
     launches = data["launches"]
     busy = merge(

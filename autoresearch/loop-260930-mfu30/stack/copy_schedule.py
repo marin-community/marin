@@ -11,6 +11,7 @@ Usage: copy_schedule.py <train_step.hloproto.pb> [min_gib]
 """
 
 import sys
+from pathlib import Path
 
 from google.protobuf.internal import decoder
 
@@ -65,7 +66,7 @@ def first_array_bytes(shape):
 
 
 def main(path: str, min_gib: float) -> None:
-    module = next(v for f, v in fields(open(path, "rb").read()) if f == 1)
+    module = next(v for f, v in fields(Path(path).read_bytes()) if f == 1)
     instructions, main_id, schedules = {}, None, {}
     for num, value in fields(module):
         if num == 3:
