@@ -376,6 +376,9 @@ class GrugRunConfig:
     # restores checkpoints benefits from a deep budget.
     max_retries_failure: int = 0
     max_task_failures: int = 10
+    # Extra distributions installed into the train tasks after the workspace sync (a URL or a
+    # requirement). Runtime overrides only: the lock stays the source of truth for everything else.
+    pip_packages: tuple[str, ...] = ()
 
 
 def build_train_dataset(
@@ -1346,6 +1349,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
         max_task_failures=config.max_task_failures,
+        pip_packages=config.pip_packages,
     )
 
 
