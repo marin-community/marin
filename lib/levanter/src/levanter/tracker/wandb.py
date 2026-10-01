@@ -13,6 +13,7 @@ import threading
 import typing
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, List, Optional, TypedDict, Union
 
 import fsspec
@@ -450,7 +451,7 @@ class WandbConfig(TrackerConfig):
             mode = "disabled"
 
         git_settings = self._git_settings()
-        git_config = _git_run_config(git_settings.get("git_commit"))
+        git_config = _git_run_config(git_settings.get("git_commit"), self._code_dir() or ".")
         hparams_to_save.update(git_config)
         if "git_commit" in git_config:
             git_settings["git_commit"] = git_config["git_commit"]
@@ -590,14 +591,17 @@ class WandbConfig(TrackerConfig):
 
         return self.fork_from
 
+    def _code_dir(self) -> Optional[str]:
+        """The source directory to capture, or ``None`` when source capture is off."""
+        if isinstance(self.save_code, str):
+            return self.save_code
+        if self.save_code:
+            return infer_experiment_git_root() or "."  # type: ignore
+        return None
+
     def _git_settings(self):
         other_settings = dict()
-        if isinstance(self.save_code, str):
-            code_dir = self.save_code
-        elif self.save_code:
-            code_dir = infer_experiment_git_root() or "."  # type: ignore
-        else:
-            code_dir = None
+        code_dir = self._code_dir()
         if code_dir is not None:
             try:
                 _validate_wandb_artifact_size(code_dir, artifact_name="source code")
@@ -652,7 +656,7 @@ class WandbConfig(TrackerConfig):
         return git_sha
 
 
-def _git_run_config(commit: Optional[str]) -> dict[str, Any]:
+def _git_run_config(commit: Optional[str], source_dir: str) -> dict[str, Any]:
     """Run-config entries for the commit and working-tree state of the launch.
 
     A job submitted through Iris runs from a bundle without ``.git``, but inherits the
@@ -662,8 +666,10 @@ def _git_run_config(commit: Optional[str]) -> dict[str, Any]:
 
     Args:
         commit: The commit from ``GIT_COMMIT`` or a local checkout, if one was found.
+        source_dir: The checkout the commit was read from. Without ``MARIN_PROVENANCE``, the
+            dirty flag is read from this checkout, which can differ from the working directory.
     """
-    provenance = Provenance.capture()
+    provenance = Provenance.capture(Path(source_dir))
     if not provenance.base_commit:
         return {"git_commit": commit} if commit else {}
     if commit is not None and not commit.startswith(provenance.base_commit):

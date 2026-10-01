@@ -5,6 +5,7 @@
 import dataclasses
 import logging
 import re
+import subprocess
 import warnings
 from typing import Tuple
 
@@ -218,6 +219,32 @@ def test_wandb_run_ignores_provenance_from_a_different_commit(tmp_path, monkeypa
     initialized = _init_with_fake_wandb(monkeypatch, WandbConfig(save_code=False, background=False))
 
     assert initialized["config"] == {"git_commit": COMMIT}
+
+
+def _git(args: list[str], cwd) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_wandb_run_records_dirty_state_of_the_source_checkout_outside_the_working_directory(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    _git(["init", "-b", "main"], source)
+    _git(["config", "user.email", "t@example.com"], source)
+    _git(["config", "user.name", "tester"], source)
+    (source / "train.py").write_text("print('train')\n")
+    _git(["add", "train.py"], source)
+    _git(["commit", "-m", "init"], source)
+    (source / "train.py").write_text("print('edited')\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+
+    initialized = _init_with_fake_wandb(monkeypatch, WandbConfig(save_code=str(source), background=False))
+
+    assert initialized["config"]["git_commit"] == _git(["rev-parse", "HEAD"], source)
+    assert initialized["config"]["git_dirty"] is True
 
 
 def test_wandb_config_fork_initializes_child_without_resume(monkeypatch):
