@@ -49,8 +49,12 @@ _NEMOTRON_BOXED_FILE_FORMAT = re.compile(
 )
 _NEMOTRON_BOXED_ANSWER_INSTRUCTION = re.compile(
     r"(?i)(?:put the answer \(and only the answer\) inside \\boxed\{\}|"
-    r"put the final expression in `?\\boxed\{\.\.\.\}`? when practical|"
+    r"put the final expression in\s+`?\\boxed\{\.\.\.\}`? when practical|"
     r"remember to put your final answer inside \\boxed\{\})\.?"
+)
+_NEMOTRON_FINAL_LINE_INSTRUCTION = re.compile(
+    r"Reasoning may precede the final answer, but the\s*" r"last meaningful line must state the answer unambiguously\.",
+    re.IGNORECASE,
 )
 _NEMOTRON_V5_TEMPLATE = "334fa3ab07c7"
 _NEMOTRON_V5_SUBMISSION_HEADING = re.compile(r"(?im)^## Submitting your answer \(IMPORTANT\)\s*\n")
@@ -80,7 +84,12 @@ _ALL_PUZZLES_DELIVERABLE = re.compile(
     r"using the format described in the problem statement:\s*\n",
     re.IGNORECASE,
 )
-_ALL_PUZZLES_ONLY_COORDINATES = re.compile(r"(?i)\s*Return only (?:the )?coordinates\.")
+_ALL_PUZZLES_ONLY_COORDINATES = re.compile(r"(?i)Return only (?:the )?coordinates\.")
+_ALL_PUZZLES_DELIVERY_NOTE = re.compile(
+    r"Do not include units labels the problem did not ask for; do not wrap the answer\s*"
+    r"in prose\. The score is 1 for a correct answer, 0 otherwise\.",
+    re.IGNORECASE,
+)
 
 
 def _metadata(archive: TaskArchive) -> tuple[tuple[str, ...], TaskTroveSourceEvidence]:
@@ -127,10 +136,14 @@ def _instructions(archive: TaskArchive, converter: str, template_id: str) -> str
         instruction, count = _ALL_PUZZLES_DELIVERABLE.subn("", instruction)
         if count != 1:
             raise ValueError("Unsupported all-puzzles answer-delivery template")
-        instruction = _ALL_PUZZLES_ONLY_COORDINATES.sub("", instruction)
+        instruction = _ALL_PUZZLES_ONLY_COORDINATES.sub("Return the coordinates.", instruction)
+        instruction = _ALL_PUZZLES_DELIVERY_NOTE.sub(
+            "Do not include units labels the problem did not ask for.", instruction
+        )
     else:
         raise ValueError(f"Unsupported TaskTrove mathematical converter {converter!r}")
     instruction = _NEMOTRON_BOXED_ANSWER_INSTRUCTION.sub("", instruction)
+    instruction = _NEMOTRON_FINAL_LINE_INSTRUCTION.sub("", instruction)
     if _TOOL_REQUIREMENT.search(instruction):
         raise ValueError("Mathematical task requires tool execution or an external resource")
     retained_lines = [line for line in instruction.splitlines() if not _FILE_SUBMISSION.fullmatch(line)]
