@@ -38,7 +38,7 @@ flowchart LR
 | `final_tools` | An ordered list of functions advertised at the decision point. These definitions do not bind functions to an implementation. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
-| `tags` | Ordered tags retained as task metadata; they are not model instructions. |
+| `tags` | Ordered metadata tags retained with each task; they are not model instructions. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
@@ -129,7 +129,7 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The submission convention extracts a candidate answer, then the verifier grades it. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
-The serialized kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `math` for symbolic expressions, `mcq` for a single option letter, `structured_exact` for JSON values with strict type and array-order comparison, and `predicted_action` for final function calls. The Python enum and constructors keep their descriptive names. Schema 0.16 stores ordered source tags. The expected answer and grading settings stay out of the model-visible instruction.
+The serialized kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `math` for symbolic expressions, `mcq` for a single option letter, `structured_exact` for JSON values with strict type and array-order comparison, and `predicted_action` for final function calls. The Python enum and constructors keep their descriptive names. Schema 0.16 stores ordered metadata tags. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 
