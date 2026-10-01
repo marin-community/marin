@@ -190,8 +190,8 @@ The canary uses seed 17 and learning rate 2e-6. Native historical replay at the
 0.65 sampled-score threshold passes six healthy async runs. Their smallest
 peak margin by step 30 is +0.0953. Sign reversal, rollout-probability corruption
 and learning rates 5e-6/1e-5 fail; the closest control margin is −0.1153.
-Historical replay checks existing metric rows; the post-step checksum and
-artifact-free 20-minute deadline require current GPU validation.
+Historical replay checks existing metric rows. Current GPU validation covers
+the post-step checksum and the 20-minute deadline with checkpoints/export off.
 
 Model staging, Ray and vLLM startup happen once per invocation. With checkpoints enabled, the measured dry step took 72 seconds, including
 5.7 seconds of policy training and 49 seconds of checkpoint work. Checkpoint work recurs at save intervals;
@@ -202,3 +202,22 @@ Sampled policy-GPU memory maxima in seven completed runs ranged from 17.1
 to 30.5 GiB per device. These are node telemetry samples, not CUDA allocation
 peaks; sync seed 31 has no joined memory receipt.
 
+The final async run on Marin `d368eb93aceef2194cdf60b234620e5d4aa4162e`
+used MarinSkyRL main `2859b70463fe3e581917094c6672b85427e4b2c8`, seed 17,
+and the gate preset without checkpoint or export flags.
+[Its sampled evaluation reward on training prompts](https://wandb.ai/dogml/marin-cat-count-canary/runs/1jr0tjpg)
+was 0.2454 at step 0, 0.6202 at step 5 and 0.6845 at step 10, where it
+stopped. The complete async spec passed. The grouped checksum mismatch
+was zero at every training step. The coordinator took 10 minutes 35.58
+seconds; both GPU tasks took 8 minutes 31.12 seconds. The run had zero
+preemptions, and all tasks received interactive priority. Training
+steps had a median of 5.59 seconds; the sum of step times was 82.77 seconds.
+Invocation time also includes data preparation, model/runtime startup,
+scheduling and teardown.
+
+The completed-step divergence control reached sampled reward 0.7218 at
+step 10 but failed only on checksum observations at steps 1–10. Both ranks
+completed optimizer updates. Its GPU tasks took 8 minutes 39.53 seconds
+and 8 minutes 17.22 seconds. This control applies each rank's local gradients
+with replicated optimizer state, while the healthy recipe uses the default
+distributed optimizer.
