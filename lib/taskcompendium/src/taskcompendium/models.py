@@ -28,11 +28,11 @@ class AnswerType(StrEnum):
 class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
-    EXACT_ANSWER = "exact_answer"
+    EXACT_ANSWER = "exact"
     STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
-    NUMERIC_ANSWER = "numeric_answer"
-    MCQ_ANSWER = "mcq_answer"
+    NUMERIC_ANSWER = "numeric"
+    MCQ_ANSWER = "mcq"
 
 
 class Source(BaseModel):
