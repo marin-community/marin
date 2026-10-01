@@ -21,6 +21,7 @@ import numpy as np
 import wandb
 from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
+from rigging.provenance import Provenance
 
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
@@ -449,9 +450,10 @@ class WandbConfig(TrackerConfig):
             mode = "disabled"
 
         git_settings = self._git_settings()
-
-        if "git_commit" in git_settings:
-            hparams_to_save["git_commit"] = git_settings["git_commit"]
+        git_config = _git_run_config(git_settings.get("git_commit"))
+        hparams_to_save.update(git_config)
+        if "git_commit" in git_config:
+            git_settings["git_commit"] = git_config["git_commit"]
 
         process_count = jax.process_count()
         initialization_error = None
@@ -648,6 +650,30 @@ class WandbConfig(TrackerConfig):
                 raise e
 
         return git_sha
+
+
+def _git_run_config(commit: Optional[str]) -> dict[str, Any]:
+    """Run-config entries for the commit and working-tree state of the launch.
+
+    A job submitted through Iris runs from a bundle without ``.git``, but inherits the
+    submitter's git provenance in ``MARIN_PROVENANCE``. Only the commit, the dirty flag,
+    and the tree hash are recorded: the full provenance also holds the submitter's
+    username, command line, and remote URL, which do not belong in a W&B config.
+
+    Args:
+        commit: The commit from ``GIT_COMMIT`` or a local checkout, if one was found.
+    """
+    provenance = Provenance.capture()
+    if not provenance.base_commit:
+        return {"git_commit": commit} if commit else {}
+    if commit is not None and not commit.startswith(provenance.base_commit):
+        # The provenance describes a different checkout, so its dirty flag does not apply.
+        return {"git_commit": commit}
+    return {
+        "git_commit": commit or provenance.base_commit,
+        "git_dirty": provenance.dirty,
+        "git_tree_hash": provenance.tree_hash,
+    }
 
 
 def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:

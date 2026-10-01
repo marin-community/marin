@@ -146,7 +146,6 @@ jobs:
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX "$MARIN_PREFIX" \
             -e RUN_ID "$RUN_ID" \
-            -e GIT_COMMIT "$GITHUB_SHA" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
             -e CANARY_ATTENTION_IMPLEMENTATION "$CANARY_ATTENTION_IMPLEMENTATION" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
