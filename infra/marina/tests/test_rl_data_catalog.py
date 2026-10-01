@@ -7,6 +7,7 @@ import json
 import logging
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -26,9 +27,12 @@ from infra.marina.applets.rl_data_catalog.server.app import (
     source_with_review,
 )
 from infra.marina.applets.rl_data_catalog.server.catalog import (
+    HARBOR_ORIGIN,
     Snapshot,
+    annotate_source,
     count_metadata,
     dataset_metadata,
+    harbor_snapshot,
     registry_sources,
     skyrl_snapshot,
     source_row,
@@ -36,6 +40,7 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
     tasktrove_snapshot,
 )
 from infra.marina.applets.rl_data_catalog.server.composition import canonical_rows, component_rows
+from infra.marina.applets.rl_data_catalog.server.harbor_sources import HarborSource
 from infra.marina.applets.rl_data_catalog.server.hf_auth import HuggingFaceAuth
 
 
@@ -113,6 +118,82 @@ def test_tasktrove_counts_only_released_tasks_and_retains_exclusion_reason() -> 
     assert kept["turns"] == "Multi-turn"
     assert [(row["environment"], row["type"]) for row in snapshot.rows] == [("Harbor", "Agentic"), ("Harbor", "Agentic")]
     assert "/blob/release1/manifest.json" in kept["provenance_url"]
+
+
+def test_harbor_registration_keeps_native_release_identity_through_annotation() -> None:
+    digest = "sha256:" + "a" * 64
+    source = HarborSource(
+        package="example/tasks",
+        digest=digest,
+        published_at="2026-09-18T10:42:07Z",
+        task_count=17,
+        count_basis="Release membership count",
+        metadata_checked_at="2026-10-01",
+        repository_url="https://github.com/example/tasks",
+        paper_url="https://example.org/paper",
+        license="Task assets retain their own terms",
+        license_url="https://example.org/licenses",
+        family="terminal-agent",
+        benchmark_basis="Training corpus",
+        verification="Native tests/test.sh",
+        notes="Native task verifiers",
+    )
+    first = harbor_snapshot((source,))
+    row = first.rows[0]
+    annotate_source(row)
+    assert row["id"] == "Harbor Hub:example/tasks"
+    assert row["url"] == row["canonical_url"] == "https://hub.harborframework.com/datasets/example/tasks"
+    assert row["package_ref"] == f"example/tasks@{digest}"
+    assert row["quality"] is None and row["difficulty"] is None
+
+    review = {
+        "quality": "good",
+        "difficulty": "3/3",
+        "traces": 3,
+        "review_id": "review1",
+        "review_date": "2026-10-01",
+        "review_source_revision": digest,
+        "review_verifier_revision": digest,
+        "verifier_issues": [],
+    }
+    assert source_with_review({"payload": row, **review})["review_applicability"] == "current"
+
+    # Updating the release retains the review but removes its current ratings.
+    second = harbor_snapshot((replace(source, digest="sha256:" + "b" * 64),))
+    assert second.revision != first.revision
+    assert second.rows[0]["id"] == row["id"]
+    updated = source_with_review({"payload": second.rows[0], **review})
+    assert updated["review_id"] == "review1"
+    assert updated["review_applicability"] == "stale"
+    assert updated["quality"] is None and updated["difficulty"] is None
+
+
+def test_harbor_refresh_preserves_review_and_survives_other_catalog_failures(catalog_connection: Connection) -> None:
+    snapshot = harbor_snapshot()
+    source_id = snapshot.rows[0]["id"]
+    connection = catalog_connection
+    save_snapshot(connection, snapshot)
+    connection.execute(
+        text("UPDATE catalog_sources SET quality = 'some_issues', review_id = 'review1' WHERE id = :id"),
+        {"id": source_id},
+    )
+
+    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(503))) as client:
+        result = refresh_catalog(connection, client, True)
+    record = connection.execute(text("SELECT * FROM catalog_sources WHERE id = :id"), {"id": source_id}).mappings().one()
+    assert record["active"]
+    assert (record["quality"], record["review_id"]) == ("some_issues", "review1")
+    assert record["payload"]["dataset_revision"] == snapshot.rows[0]["dataset_revision"]
+    assert next(item for item in result["results"] if item["origin"] == HARBOR_ORIGIN)["changed"]
+
+    migrate(connection)
+    payload = connection.execute(
+        text("SELECT payload FROM catalog_sources WHERE id = :id"), {"id": source_id}
+    ).scalar_one()
+    assert payload["url"] == snapshot.rows[0]["url"]
+    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(503))) as client:
+        unchanged = refresh_catalog(connection, client, False)
+    assert not next(item for item in unchanged["results"] if item["origin"] == HARBOR_ORIGIN)["changed"]
 
 
 def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(catalog_connection: Connection) -> None:

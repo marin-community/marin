@@ -1,9 +1,9 @@
 # RL Data Atlas
 
 [Open RL Data Atlas](https://public.applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
-to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
+to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources, pinned Harbor Hub releases, and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
 Task Trove packages converted datasets as tasks for the Harbor execution
-environment. The two catalogs are independent and can share original datasets.
+environment. The catalogs are independent and can share original datasets.
 Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link always opens the current release.
 
 Search and filter the table, including its Environment column, click column
@@ -91,8 +91,8 @@ uv run python -m infra.marina.applets.rl_data_catalog.audit_nemotron \
   --output infra/marina/applets/rl_data_catalog/server/nemotron_counts.py
 ```
 
-The top line shows one data-source count, the filtered task tally, and upstream
-status. The source count counts displayed source/component rows across both
+The top line shows one data-source count, the filtered task tally, and catalog
+status. The source count counts displayed source/component rows across all
 catalogs, excluding deprecated/excluded rows; an expanded parent contributes
 one count for each component and has no separate aggregate entry. It stays global when search
 filters change. Gym aliases such as `gym/aime` remain searchable, and source details
@@ -216,14 +216,15 @@ use the same task sample for three fixed models:
 | Role | Model | Reasoning setting |
 | --- | --- | --- |
 | Small | Qwen/Qwen3-Coder-30B-A3B-Instruct | Non-thinking checkpoint |
-| Large | Qwen/Qwen3.5-122B-A10B | Thinking enabled |
+| Large | Qwen/Qwen3.5-122B-A10B | Thinking disabled |
 | Hosted | zai-org/GLM-5.3 on Together | Low reasoning effort |
 
-The `atlas-difficulty-v2-65k16k` protocol gives each model 65,536 total context
+The `atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking` protocol gives each model 65,536 total context
 tokens, at most 49,152 input tokens, and at most 16,384 output tokens including
-reasoning. All three use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
-repetition penalty 1, and presence and frequency penalties 0. These explicit
-settings prevent checkpoint generation defaults from changing the comparison.
+reasoning. All three use temperature 0.7, top-k 20, min-p 0, repetition penalty 1,
+and frequency penalty 0. Small and Hosted use top-p 0.95 and presence penalty 0;
+Large uses top-p 0.8 and presence penalty 1.5, with `enable_thinking: false`.
+These explicit settings prevent checkpoint generation defaults from changing the comparison.
 Models retain their native reasoning controls; the shared token budget does not
 make those controls equivalent. Nemotron's learned verifiers use Hosted GLM-5.3
 with Low reasoning effort across all three arms. Their native output budgets
@@ -274,8 +275,8 @@ uv run experiments/rl_data_reviews/publish_review.py \
 ```
 
 Set `source.source_id` to the Atlas population named by `--atlas-id` and
-`source.revision` to that dataset's HF commit. `source.tasks_path` points to the
-local inputs. Use `source.format: skyrl_prepared` for Parquet or JSON rows with
+`source.revision` to that dataset's immutable revision (an HF commit or Harbor
+digest). `source.tasks_path` points to the local inputs. Use `source.format: skyrl_prepared` for Parquet or JSON rows with
 MarinSkyRL's `prompt`, `env_class`, and verifier arguments; use `harbor_directory`
 for native Harbor task directories. `task_manifest` accepts JSON or JSONL records
 matching the `Task` dataclass in `make_review.py`, including the source ID and
@@ -332,3 +333,99 @@ POST to `api/refresh?force=true`. To verify runtime access, send a Marina-authen
 POST to `api/refresh?force=true&hf_auth=runtime` without a caller-supplied HF token;
 the response reports `hf_authentication: runtime_secret`. The token is used only for HF requests and is
 never stored in the applet tables or sent to the frontend. Normal page loads reuse Task Trove snapshots when its release head is unchanged.
+
+## Register a native Harbor release
+
+Add external Harbor datasets to
+`infra/marina/applets/rl_data_catalog/server/harbor_sources.py`. This is the
+Atlas intake for sources that are independent of MarinSkyRL and Task Trove.
+It requires no training registry entry. The applet bundles this metadata and
+shows it under **Harbor Hub** after a source refresh. Refresh reads the bundled
+pins; it does not follow upstream `latest` tags or download task archives.
+
+Each registration records the package name, immutable SHA-256 digest,
+publication date, exact release task count and its evidence, metadata check
+date, source/paper links, license information, and classification. Verify the
+count against the pinned release's complete task membership, including API
+pagination. Keep the project's code license distinct from third-party task
+asset terms. Additions and pin updates go through a Marin PR. Changing the pin
+invalidates reviews of both the old data and its bundled native verifiers;
+previous review artifacts remain available.
+
+Skill2Env is registered as `Harbor Hub:skill2env/skill2env`. Its official 1.0.1
+release (Harbor revision 2) has 7,496 tasks at
+`sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c`.
+The task count was checked against Harbor's release membership on October 1,
+2026. The paper's private S2EBench is a separate evaluation set. Registration
+starts with no quality rating or difficulty measurement.
+
+Prepare a review sample in a Harbor environment that supports Hub package
+references. From the Marin repository root, this example fetches only metadata
+and writes a reproducible three-task selection:
+
+```python
+import asyncio
+import json
+import random
+from pathlib import Path
+
+from harbor.registry.client.package import PackageDatasetClient
+
+from infra.marina.applets.rl_data_catalog.server.harbor_sources import HARBOR_SOURCES
+
+
+async def main():
+    source = next(row for row in HARBOR_SOURCES if row.package == "skill2env/skill2env")
+    reference = f"{source.package}@{source.digest}"
+    metadata = await PackageDatasetClient().get_dataset_metadata(reference)
+    assert metadata.version == source.digest
+    references = sorted(f"{task.org}/{task.name}@{task.ref}" for task in metadata.task_ids)
+    assert len(references) == len(set(references)) == source.task_count
+    sample = {
+        "package_ref": reference,
+        "population_count": len(references),
+        "seed": 42,
+        "selection": "Python random.sample over sorted immutable task references",
+        "tasks": random.Random(42).sample(references, 3),
+    }
+    Path("/tmp/skill2env-review-sample.json").write_text(json.dumps(sample, indent=2) + "\n")
+
+
+asyncio.run(main())
+```
+
+Download each selected task by its recorded digest with
+`harbor download '<org/task>@sha256:<digest>' --export --output-dir /absolute/path/skill2env-review-tasks`.
+This creates one task directory per selected reference. Download sequentially
+and inspect task resource requirements before building or running environments.
+Keep the sample manifest with the review evidence. Downloading the entire
+dataset is unnecessary for a sampled review.
+
+Copy `experiments/rl_data_reviews/review-config.example.json`, configure the
+model endpoint and native runtime paths, and replace its `source` with:
+
+```json
+{
+  "repository": "skill2env/skill2env",
+  "revision": "sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c",
+  "source_id": "Harbor Hub:skill2env/skill2env",
+  "format": "harbor_directory",
+  "tasks_path": "/absolute/path/skill2env-review-tasks"
+}
+```
+
+Run `make_review.py` with that config, `--n 3`, and a fixed seed, using the
+commands above. The review runtime uses a MarinSkyRL checkout for its existing
+Harbor result adapter; this does not require registering a training source.
+The review's local population is the staged sample, so retain the full-release
+population and selection method from the sample manifest. A three-task review
+does not establish corpus-wide quality. Native `tests/test.sh` supplies the
+outcome score; the presence of `tests/rubric.md` does not automatically add a
+behavioral reward to that score.
+
+Publish completed evidence with `publish_review.py --run-dir <review-directory>
+--atlas-id 'Harbor Hub:skill2env/skill2env'` after the source entry is deployed.
+Only sources rated Good qualify for a current difficulty comparison. Use the
+same recorded task sample across Small, Large, and Hosted, retaining their
+individual attempts, verifier results, and infrastructure failures. The model
+settings and quality gate above also apply to native Harbor releases.
