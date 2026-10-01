@@ -1,6 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: F821
+# ruff: noqa: F821, RUF046
 
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
