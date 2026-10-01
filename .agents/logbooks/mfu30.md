@@ -698,3 +698,15 @@ over 180011-180099 (n=89), 12.990 s/step**; control mhep-ctx4k-s0 28.260 / 13.89
 Loss at 180000 exact; dloss max 3.75e-4, late mean -9.2e-5, 16/89 positive. Divergence growth over thirds of the
 window, mean |d| (final vs main | main repeat vs main): 6.6e-5 | 5.0e-5; 1.05e-4 | 1.01e-4; 1.57e-4 | 1.52e-4.
 The final program's loss divergence is indistinguishable from same-code divergence. Seeds 1 and 2 pending.
+
+## M30-042 Confirmation seed 1: MFU pass, loss drift above the pre-registered number (2026-10-01)
+
+`m30-conf-seq-s1` vs mhep-ctx4k-s1 (same seed and data): **MFU 30.206 vs 28.235** (12.995 vs 13.902 s), peak 123.50.
+Loss at 180000 exact (1.2063123). dloss max 7.7e-4 (within 1e-3) but **late mean +2.65e-4, above the
+pre-registered ~2e-4**, 87/89 positive; mean |d| over thirds 1.27e-4 / 2.75e-4 / 3.28e-4, about 2x seed 0's
+same-code growth (5.0e-5 / 1.0e-4 / 1.5e-4). The pre-registered bound was calibrated on seed 0 only, so the
+honest test is a seed-1 same-code repeat. Queued `m30-ctl-s1-r2` and `m30-ctl-s2-r2` (main code, same flags as
+the ctx4k controls) ahead of the margin arms. PGLE and holdback arms were cancelled and resubmitted behind them as
+`m30-pgle-{d2h,plain}-02` and `m30-holdback-02`. Verdict: if seed 1's final-vs-main divergence falls within the
+seed-1 same-code repeat's divergence, the fidelity criterion holds; otherwise report it as a fidelity
+difference and investigate the value-changing components (E's fp32 SwiGLU backward; D's dS).
