@@ -399,3 +399,21 @@ starts and dones, as in sonic-02. It buys little:
 
 The step difference is inside one-draw noise (seed spread ~0.12 s). No evidence for the revert, so f1-seq-02's
 program (QB-after-MLP kept) stays the final program.
+
+### PGLE profiles from m30-f1-seq-02 (2026-10-01 01:55 PT)
+
+Branch `research/mcwitt/mfu30-final-pgle` @ `883faa103f` is `d4234c88e7` plus the two profile files and
+nothing else, so the program is unchanged. Files:
+- `experiments/grug/moe_hero_ep/pgle/m30-f1-seq-02.pbtxt`: plain, 3,674 instruction costs from the rank-0 host's
+  trace of steps 180021-180023.
+- `experiments/grug/moe_hero_ep/pgle/m30-f1-seq-02-d2h.pbtxt`: A's patch, which sets copy-start.97/98/99/60/72/66/78
+  to 277.4 ms each, from 70/70/71/18/18/2.5/2.5 ms.
+
+Match against f1-seq-02's HLO:
+- 3,672 of 3,674 entries match instruction names. The two misses (`wrapped_is-finite`, `copy.1`) come from other
+  jit modules.
+- 3,586 of 3,756 costly instructions are covered. The 170 uncovered are 161 async-start wrappers (their wrapped
+  ops are covered), 8 fusions and 1 custom call.
+
+Flags: `--xla_gpu_pgle_profile_file_or_directory_path=/app/experiments/grug/moe_hero_ep/pgle/<file>`. The bundle
+unpacks into `/app`, Iris's task working directory, so the repo-relative form resolves there too.
