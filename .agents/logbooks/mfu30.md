@@ -498,3 +498,15 @@ with nothing on the compute stream). Row-dot all-to-alls and dy c0's reverse ret
 0.62 (carry reloads 0.219, optimizer D2H 0.211, H2D 44 0.064). Levers: pipelining (forward c0 + recompute
 c1, <= ~0.31), backward reorder of dy-c1's reverse return (~0.15), PGLE for FSDP gathers (~0.27) and the
 optimizer D2H (A's patch, ~0.2). Skew waits (~0.41) are not schedulable.
+
+## M30-027 User approves the custom wheel (2026-10-01)
+
+The user approved using `jax_cuda13_pjrt-0.11.1+marin.283d5b6d98cd` (A's stream patch) in campaign rack jobs
+and keeping branch `mcwitt/adhoc-host-transfer-streams` on marin-community/xla. Plan: after the -03
+lineage pick, F1 = winner + wheel + `XLA_GPU_HOST_TRANSFER_STREAMS=1` (traced; carry_stall gate; source for
+the PGLE build) and F0 = the same wheel without the env var (isolates the build environment from the
+production wheel). Wheel use goes through `--pip-package` (A's cf5bc74409 cherry-picked onto the stack).
+Accounting answer to the user: #9481's three model commits, its transport ideas (via B's D: mirror params in
+both lineages, pipelined chunks in one) and a regenerated PGLE profile are in the final program; none
+of the scored arms so far contain #9481 code. #9374 is excluded (user-parked; measured +0.09% mean).
+B's forward-order backward (547bf2ad20 sequential / 2cc470d88f pipelined) gates bitwise and is a paired add-on.
