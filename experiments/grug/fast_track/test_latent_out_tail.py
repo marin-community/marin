@@ -65,3 +65,24 @@ def test_tail_settings_are_validated():
         t._config(latent_out_full_layers=(5, 5))
     with pytest.raises(ValueError):
         t._config(latent_out_full_layers=(5,), attn_res=False)
+
+
+def test_latent_free_layer_matches_the_latent_layers_expert_parameters():
+    mesh, model = t._model(latent_free_layers=(5,))
+    layers = model.layers()
+    free, latent = layers[5].mlp, layers[3].mlp
+    assert free.w_latent_down is None and free.w_latent_up is None
+    assert free.expert_mlp.w_up.shape[-2:] == (_HIDDEN, 8) and free.expert_mlp.w_down.shape[-2:] == (8, _HIDDEN)
+    # Half the width over twice the in/out dims: the same expert parameters (and FLOPs) as a latent layer.
+    assert free.expert_mlp.w_up.size + free.expert_mlp.w_down.size == (
+        latent.expert_mlp.w_up.size + latent.expert_mlp.w_down.size
+    )
+    tokens = _tokens()
+    with jax.set_mesh(mesh):
+        loss = eqx.filter_jit(lambda m, x: m.next_token_loss(x, jnp.ones(x.shape, jnp.float32)))(model, tokens)
+    assert np.isfinite(float(loss))
+
+
+def test_tail_modes_cannot_be_combined():
+    with pytest.raises(ValueError):
+        t._config(latent_out_full_layers=(5,), latent_free_layers=(4,))

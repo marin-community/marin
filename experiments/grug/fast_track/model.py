@@ -503,6 +503,10 @@ class GrugModelConfig:
     """Layers whose routed experts write the full residual stream (``latent_out_dim = hidden_dim``, no
     ``w_latent_up``) while the others keep the latent write. These layers live in their own stacks
     (``Transformer.stacked_blocks_tail`` / ``kda_blocks_tail``); needs Block AttnRes, whose loop runs layer by layer."""
+    latent_free_layers: tuple[int, ...] = ()
+    """Layers with no MoE latent at all: the routed experts read and write the full stream (no ``w_latent_down`` or
+    ``w_latent_up``) at half the expert width, so the expert parameters and FLOPs match the latent layers'. Like
+    ``latent_out_full_layers`` these layers live in the tail stacks; the two cannot be combined."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -1285,14 +1289,19 @@ class GrugModelConfig:
             raise ValueError(f"latent_select_layers must be all, kda or global, got {self.latent_select_layers!r}")
         if self.latent_select_layers != "all" and self.local_mixer != LocalMixer.KDA:
             raise ValueError("latent_select_layers kda/global needs local_mixer=KDA")
-        if self.latent_out_full_layers:
+        if self.latent_out_full_layers and self.latent_free_layers:
+            raise ValueError("latent_out_full_layers and latent_free_layers share the tail stacks; pick one")
+        tail = _tail_layers(self)
+        if tail:
             if not self.attn_res or self.latent_dim is None or self.latent_out_dim is not None or self.dense_mlp:
                 raise ValueError(
-                    "latent_out_full_layers needs attn_res, a MoE latent (latent_dim) and no global latent_out_dim"
+                    "latent_out_full_layers / latent_free_layers need attn_res, a MoE latent (latent_dim) and no "
+                    "global latent_out_dim"
                 )
-            tail = self.latent_out_full_layers
             if len(set(tail)) != len(tail) or not all(0 <= i < self.num_layers for i in tail):
-                raise ValueError(f"latent_out_full_layers must be distinct layer indices, got {tail}")
+                raise ValueError(f"tail layers must be distinct layer indices, got {tail}")
+            if self.latent_free_layers and self.intermediate_dim % 2:
+                raise ValueError("latent_free_layers halves intermediate_dim, which must be even")
         if self.latent_write_select and (self.latent_dim is None or self.latent_dim > self.hidden_dim):
             raise ValueError("latent_write_select needs latent_dim <= hidden_dim")
         if self.latent_select and (
@@ -5180,8 +5189,8 @@ class Transformer(eqx.Module):
 
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
         softmax_tail, kda_tail = _tail_stack_layer_indices(cfg)
-        # The tail layers' experts write the stream directly; the override is static per layer (MoEMLP.cfg).
-        tail_cfg = dataclasses.replace(cfg, latent_out_dim=cfg.hidden_dim, latent_out_full_layers=())
+        # The tail layers' config override is static per layer (MoEMLP.cfg).
+        tail_cfg = _tail_layer_config(cfg)
         model = Transformer(
             token_embed=token_embed,
             embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps),
@@ -6170,7 +6179,12 @@ class Transformer(eqx.Module):
             if self.loop_inject_scale is not None
             else {}
         )
-        return hidden, jax.tree.map(lambda *xs: jnp.stack(xs), *layer_stats), final_stats
+        # The routed input's width can differ by layer (``latent_free_layers``), so it stays a per-layer tuple.
+        widths = {k: [stats[k] for stats in layer_stats] for k in (_ROUTED_INPUT,) if k in layer_stats[0]}
+        stacked = jax.tree.map(
+            lambda *xs: jnp.stack(xs), *[{k: v for k, v in stats.items() if k not in widths} for stats in layer_stats]
+        )
+        return hidden, {**stacked, **{k: tuple(v) for k, v in widths.items()}}, final_stats
 
     def routing_assignments(
         self,
@@ -6650,15 +6664,29 @@ def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[i
     """``(softmax_layers, kda_layers)``: the layer indices of ``Transformer.stacked_blocks`` and ``kda_blocks``
     (``latent_out_full_layers`` excluded: they live in the tail stacks)."""
     kda_layers = _kda_layer_indices(cfg)
-    tail = set(cfg.latent_out_full_layers)
+    tail = set(_tail_layers(cfg))
     softmax = tuple(i for i in range(cfg.num_layers) if i not in kda_layers and i not in tail)
     return softmax, tuple(i for i in kda_layers if i not in tail)
+
+
+def _tail_layers(cfg: GrugModelConfig) -> tuple[int, ...]:
+    """The layers held by the tail stacks (``latent_out_full_layers`` or ``latent_free_layers``)."""
+    return cfg.latent_out_full_layers or cfg.latent_free_layers
+
+
+def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
+    """The tail stacks' layer config: a full-width expert write, or no latent at half the expert width."""
+    if cfg.latent_free_layers:
+        return dataclasses.replace(
+            cfg, latent_dim=None, intermediate_dim=cfg.intermediate_dim // 2, latent_free_layers=()
+        )
+    return dataclasses.replace(cfg, latent_out_dim=cfg.hidden_dim, latent_out_full_layers=())
 
 
 def _tail_stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """``(softmax_layers, kda_layers)`` of ``latent_out_full_layers``: the ``*_blocks_tail`` stacks' layers."""
     kda_layers = set(_kda_layer_indices(cfg))
-    tail = sorted(cfg.latent_out_full_layers)
+    tail = sorted(_tail_layers(cfg))
     return tuple(i for i in tail if i not in kda_layers), tuple(i for i in tail if i in kda_layers)
 
 
