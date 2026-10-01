@@ -388,3 +388,14 @@ per-instance median 0.18 -> 1.58 ms): ~0.3 s of cross-rank skew. Exposed copies 
 (carry reload H2D 0.218; end-of-step optimizer-state D2H ~0.21; ~0.37 in the last tenth of the step).
 `m30b-sonic-02` (D + H-A4 at 0.78/105) is queued; A is pricing an ordering/split of the optimizer update
 that would hide the end-of-step D2H without holding state on device.
+
+## M30-020 m30c-grnflag-01 regresses at EP64 (2026-10-01)
+
+Fused RMSNorm+GatedNorm kernel + `--xla_gpu_enable_triton_gemm=false` (C's arm): steady state ~28.03 vs control
+~28.27 on every post-warmup step, i.e. **-0.24 MFU (~+0.12 s/step)**. Interim median 28.021 / 14.008 s (n=40).
+memory/peak_gib 117.4-117.7 vs 102.7-103.1 (+14.6 GiB) from step 180000. The single-GPU block benchmark's
+-1.77 ms/layer did not transfer: at slop 85 remat binds, so extra memory pressure plausibly turns into
+recompute. Rounding band from this arm: loss at 180000 1.2614125 vs 1.2614135; dloss max 3.0e-4, late mean
+-3.4e-5, 15/43 positive (balanced). Both bitwise-forward arms instead drifted one-signed (~+1.7e-4 late
+mean), which the same-code repeat `m30-ctl-s0-r2` will explain. Stack arms `-02` (which carried both
+components) were cancelled before they started; C resubmits `-03` without them and diagnoses the regression.
