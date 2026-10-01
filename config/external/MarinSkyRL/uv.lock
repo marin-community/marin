@@ -1325,7 +1325,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=637900c1c19766a51f480c8fdb7623eaeada2edd" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=1acdcebfdd6681701226b2f4fe280f049f1ee09f" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1473,7 +1473,7 @@ secrets = [
 [[package]]
 name = "marin-shellbox"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=b8d007fc5fb8c4ffce6f2aebf908e2996580bae5#b8d007fc5fb8c4ffce6f2aebf908e2996580bae5" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=e59d501072ff348315bf3328636b253da9b96459#e59d501072ff348315bf3328636b253da9b96459" }
 dependencies = [
     { name = "httpx" },
 ]
@@ -1489,7 +1489,7 @@ shellsim = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=637900c1c19766a51f480c8fdb7623eaeada2edd#637900c1c19766a51f480c8fdb7623eaeada2edd" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=1acdcebfdd6681701226b2f4fe280f049f1ee09f#1acdcebfdd6681701226b2f4fe280f049f1ee09f" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -2742,7 +2742,7 @@ wheels = [
 [[package]]
 name = "taskcompendium"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=b8d007fc5fb8c4ffce6f2aebf908e2996580bae5#b8d007fc5fb8c4ffce6f2aebf908e2996580bae5" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=e59d501072ff348315bf3328636b253da9b96459#e59d501072ff348315bf3328636b253da9b96459" }
 dependencies = [
     { name = "harbor-config" },
     { name = "marin-rigging" },
@@ -2755,7 +2755,7 @@ dependencies = [
 [[package]]
 name = "tasktrove-verify"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftasktrove-verify&rev=b8d007fc5fb8c4ffce6f2aebf908e2996580bae5#b8d007fc5fb8c4ffce6f2aebf908e2996580bae5" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftasktrove-verify&rev=e59d501072ff348315bf3328636b253da9b96459#e59d501072ff348315bf3328636b253da9b96459" }
 dependencies = [
     { name = "tomlkit" },
 ]
