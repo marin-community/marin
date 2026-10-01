@@ -613,3 +613,9 @@ latent reduce-scatters 0.284 (skew), backward remat_carry all-gathers 0.168, for
 exposed copies 0.625. QB value check: within a job the model smoke is deterministic. Across final-seq and noqb
 the QB stats differ at fp32-reassociation level (qb_beta 0.2837 vs 0.2762, loss 1e-7 relative); autotune-off
 and same-code repeats are running to tell fusion from autotune. noqb restores main's QB placement.
+A (M30A-022) on f1-seq-02: all 16 tasks replaced jax-cuda13-pjrt 0.11.1+marin.708c3a4ec79c with
+0.11.1+marin.283d5b6d98cd; job succeeded (verify_ragged_pjrt accepted it). Per step, one stream holds only
+carry H2D (48) + optimizer-state H2D (54), another only carry D2H (48) + optimizer-state D2H (56), and the D2D
+weight slices use the other four. XLA's stream pool reassigns xprof stream ids across steps, so check per step.
+Exposed copies (stackseq-03 / F1 / hmo-02, s/step): optimizer D2H tail 0.261 / 0.261 / 0.260; carry H2D 0.219 /
+0.218 / 0.219; **carry D2H 0.141 / 0.004 / 0.006**; optimizer H2D 0.100 / 0.101 / 0.099; total 0.773 / 0.641 / 0.624.
