@@ -15,6 +15,7 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.fast_track.adamh import scale_by_adamh
+from experiments.grug.fast_track.eig_muon import EIG_MODES, scale_by_eig_direction
 from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon, _target_named_sharding
 from experiments.grug.fast_track.okls import OKLS_MATMUL_DTYPES, scale_with_grug_okls
 from experiments.grug.fast_track.stiefel import scale_with_stiefel_muon
@@ -430,6 +431,16 @@ def scale_with_grug_muon_free(
         return new_updates, (muon_state, init_norms)
 
     return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _eig_hyperball(inner: optax.GradientTransformation, learning_rate, per_expert: bool) -> optax.GradientTransformation:
+    """``inner``'s direction (``eig_muon``) taken as a MuonH Frobenius hyperball step."""
+
+    def update_fn(updates, state, params=None):
+        directions, state = inner.update(updates, state, params)
+        return _scale_invariant_hyperball_updates(params, directions, learning_rate, per_expert), state
+
+    return optax.GradientTransformation(inner.init, update_fn)
 
 
 def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_rate) -> optax.GradientTransformation:
@@ -1263,6 +1274,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Matrix type (``_TRUNCATE_FAMILIES``) whose MuonH updates drop their weakest ``muon_truncate_frac`` of
     singular directions (``_truncate_bottom_directions``). None: no truncation."""
     muon_truncate_frac: float = 0.0
+    eig_families: tuple[str, ...] = ()
+    """Matrix types (``_TRUNCATE_FAMILIES``) whose MuonH direction is replaced by an eigenbasis variant
+    (``eig_muon.scale_by_eig_direction``, mode ``eig_mode``), still taken as a hyperball step."""
+    eig_mode: str = "snr"
+    eig_lr_mult: float = 1.0
+    eig_beta: float = 0.95
+    eig_beta2: float = 0.99
+    """Second-moment β of ``eig_mode="soap"`` (the other modes use ``eig_beta`` for both moments)."""
+    eig_factor_beta: float = 0.95
+    eig_refresh_every: int = 10
+    eig_whiten_power: float = 0.25
     muonh_routed_slow_rate: float | None = None
     """The routed experts' Bi-Maxwell slow-rail EMA rate (None: ``BiMaxwellRails``'s default, 0.02)."""
     muonh_routed_slow_weight: float | None = None
@@ -1604,6 +1626,22 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 ),
                 "muonh_attn": muonh_transform_at(learning_rate * self.muonh_attn_lr_mult, 2),
                 "muonh_trunc": muonh_transform_at(learning_rate, 5, truncate_frac=self.muon_truncate_frac),
+                "eig": optax.chain(
+                    _eig_hyperball(
+                        scale_by_eig_direction(
+                            self.eig_mode,
+                            beta=self.eig_beta,
+                            beta2=self.eig_beta2,
+                            factor_beta=self.eig_factor_beta,
+                            refresh_every=self.eig_refresh_every,
+                            whiten_power=self.eig_whiten_power,
+                            ns_steps=self.backend_steps,
+                        ),
+                        learning_rate * self.eig_lr_mult,
+                        self.hyperball_per_expert,
+                    ),
+                    _match_named_update_sharding(),
+                ),
                 "muonh_qk": muonh_transform_at(
                     learning_rate * self.muonh_qk_lr_mult, 4, momentum=self.muonh_qk_momentum
                 ),
@@ -1734,6 +1772,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             self.muon_truncate_frac == 0.0
         ) or not 0.0 <= self.muon_truncate_frac < 1:
             raise ValueError("muon_truncate_family and a muon_truncate_frac in (0, 1) go together")
+        unknown_eig = set(self.eig_families) - set(_TRUNCATE_FAMILIES)
+        if unknown_eig:
+            raise ValueError(f"unknown eig_families {sorted(unknown_eig)}; choose from {sorted(_TRUNCATE_FAMILIES)}")
+        if self.eig_mode not in EIG_MODES:
+            raise ValueError(f"eig_mode must be one of {EIG_MODES}, got {self.eig_mode!r}")
         if self.routed_expert_optimizer not in ("muonh", "adam"):
             raise ValueError(f"routed_expert_optimizer must be muonh or adam, got {self.routed_expert_optimizer!r}")
         if self.embed2_update not in ("adam", "sinkhorn"):
@@ -1769,6 +1812,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     path_lower
                 ):
                     return "muonh_trunc"
+                if any(_TRUNCATE_FAMILIES[f].search(path_lower) for f in self.eig_families):
+                    return "eig"
                 if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.okls_targets):
                     return "okls"
                 if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.muon_free_families):

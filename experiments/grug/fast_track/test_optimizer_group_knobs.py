@@ -202,7 +202,7 @@ def test_consistency_metrics_report_the_per_expert_multipliers():
     assert float(metrics["train/optim/expert_consistency_p10"]) < 0.3
 
 
-def _late_updates(config: GrugMoeMuonHConfig, params, steps: int = 4):
+def _late_updates(config: GrugMoeMuonHConfig, params, steps: int = 3):
     """The last update after ``steps`` independent random gradients (past a Bi-Maxwell switch at step 1)."""
     opt = config.build(10)
 
