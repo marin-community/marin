@@ -388,7 +388,7 @@ def build_h100_ladder_run(
     dump_hlo: bool = False,
     xla_memory_report: bool = False,
     pgle_runs: int = 0,
-    pipeline_depth: int = 1,
+    pipeline_depth: int = 0,
     ema_beta: float | None = None,
     ema_last_steps: int | None = None,
     ema_blend_sweep: tuple[float, ...] = (),
@@ -776,8 +776,9 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 @click.option(
     "--pipeline-depth",
     type=click.IntRange(0, 1),
-    default=1,
-    help="Train steps dispatched before the previous step's host work (1: overlap; 0: finish each step first).",
+    default=0,
+    help="Train steps dispatched before the previous step's host work (1: overlap, crashes near step 515; "
+    "0: finish each step first).",
 )
 @click.option("--ema-beta", type=float, default=None, help="Weight-EMA decay; evals after the EMA start score the EMA.")
 @click.option("--ema-last-steps", type=int, default=None, help="Run the weight EMA over only the last N steps.")

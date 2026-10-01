@@ -221,8 +221,9 @@ class GrugTrainerConfig:
     # Write the compiled (optimized) train-step HLO text here after the first step, for profile attribution.
     hlo_dump_path: str | None = None
     # Train steps dispatched before the previous step's host work: 1 overlaps that work (logging, callbacks) with
-    # the devices; 0 finishes every step before dispatching the next.
-    pipeline_depth: int = 1
+    # the devices; 0 finishes every step before dispatching the next. 1 crashes the devices around step 515
+    # (CUDA_ERROR_ILLEGAL_ADDRESS, with or without PGLE; batch 160), so it is opt-in until that is understood.
+    pipeline_depth: int = 0
     # Dump XLA's buffer assignment and memory-usage report for the train step and upload them here (process 0),
     # also when the step fails, e.g. with an out-of-memory error: attributes the temp buffer to HLO values.
     xla_memory_report_path: str | None = None
