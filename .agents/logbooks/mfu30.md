@@ -529,3 +529,19 @@ H-A4 at 0.78/105; production wheel): **29.768 / 13.186 s** vs sonic-02 29.783 / 
 everything added on top of D. Peak 123.20 (vs 125.02). Loss at 180000 exact; dloss max 6.8e-4, late mean
 +7.7e-5, 38/49 positive (above the same-code max 3.3e-4). B is attributing the delta from the two traces:
 which added component eats the expected E (~-0.13) and sconv (~-0.1) gains.
+
+## M30-030 stackpipe-03 attributed; final lineage = sequential, no re-gather (2026-10-01)
+
+B (M30B-025), comparing profiled steps 1 and 3 (step 2 had a rank stall) of sonic-02 vs stackpipe-03 (s/step):
+compute 11.211 -> 10.820 (-0.391), exposed collectives 1.324 -> 1.527 (+0.203), exposed copies 0.620 -> 0.774
+(+0.154), idle ~0. Compute: E ~-0.15 (`moe_expert_elementwise` -0.198, +0.05 epilogue cost); Triton sconv
+-0.110 (0.218 -> 0.108 s kernel); shared-expert GEMMs freed from contention -0.132 vs expert GEMMs under
+pipelined transports +0.081; attention -0.05; router/dispatch/shared elementwise -0.07. Exposure: pipelining
+left forward return c1 bare (0.021 -> 0.188) and did not move recomputed dispatch c1 or dy-c1's reverse
+return in the backward. #9481 collectives net ~+0.01 (MLP-weight prefetch -0.052; re-gather +0.093 forward
+gathers vs -0.061 old FSDP gathers, +0.034 remat_carry gathers). **Carry D2H stall lost the draw: carry_stall
+147 ms/step** (sonic-02 2.8), +0.15 s/step. Loss drift (max 6.8e-4) attributed to E's 1-ulp dx/dW13 change.
+Decision: sequential chunks, keep mirror + E + sconv + MLP-weight prefetch + QB-after-MLP + B's forward order,
+drop the re-gather, add the stream fix. Cancelled `m30-f1-{pipe,seq}-01`; queued `m30-f1-seq-02`
+(streams on) and `m30-f0-seq-01` (streams off), both from `research/mcwitt/mfu30-final-seq` @ d4234c88e7,
+custom wheel, traced. Expected F1 if the attribution holds: ~13.18 - 0.39 = ~12.8 s (~30.7%).
