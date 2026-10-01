@@ -696,7 +696,7 @@ Audit groups public task keys across all acquired source shards into
 `ceil(input_rows / 100)` partitions, independently of `max_workers`, then forms
 review windows within each partition. Zephyr atomically writes audit observation shards
 with `write_parquet(skip_existing=True)`. On restart, its existing writer skips
-completed shards before upstream grader or model work, including eager mappers.
+completed shards before consuming the lazy grader and model iterator.
 Normalization and grouping may recompute. An incomplete partition repeats its
 grader and model work and may resubmit in-flight calls; saved transport files
 remain evidence. There is no per-task cache shared across sources.
