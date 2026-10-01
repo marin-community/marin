@@ -21,6 +21,7 @@ import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import (
     _interleave_gate_up,
     _interleave_halves,
+    _invert_permutation,
     _prepare_moe_dispatch,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _scaled_capacity,
@@ -34,7 +35,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
-from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
+from levanter.grug._moe.ep_ragged_all_to_all import _gather_dispatch_rows, _loop_local_zeros, _LoopLocalZeroSite
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -500,6 +501,33 @@ def test_deepep_local_assignment_packing_uses_local_expert_ids():
     )
     np.testing.assert_allclose(np.asarray(local_assignments.x_dispatch[3:]), 0, rtol=0, atol=0)
     np.testing.assert_allclose(np.asarray(local_assignments.assignment_weights[3:]), 0, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("size", [0, 1, 17, 1024])
+def test_inverse_permutation_restores_original_positions(size):
+    indices = np.random.default_rng(0).permutation(size).astype(np.int32)
+    actual = jax.jit(_invert_permutation)(jnp.asarray(indices))
+    np.testing.assert_array_equal(np.asarray(actual), np.argsort(indices))
+
+
+@pytest.mark.parametrize("topk", [1, 2, 8])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_dispatch_gradient_sums_each_tokens_assignments(topk, dtype):
+    tokens, hidden = 7, 3
+    indices = np.random.default_rng(1).permutation(tokens * topk).astype(np.int32)
+    x = jnp.arange(tokens * hidden, dtype=dtype).reshape(tokens, hidden)
+    cotangent = (jnp.arange(tokens * topk * hidden).reshape(tokens * topk, hidden) / 256).astype(dtype)
+
+    @jax.jit
+    def evaluate(x, cotangent):
+        output, backward = jax.vjp(lambda value: _gather_dispatch_rows(value, jnp.asarray(indices), topk), x)
+        return output, backward(cotangent)[0]
+
+    actual_output, actual_gradient = evaluate(x, cotangent)
+    expected_gradient = np.zeros((tokens, hidden), dtype=np.float32)
+    np.add.at(expected_gradient, indices // topk, np.asarray(cotangent, dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(actual_output), np.asarray(x)[indices // topk])
+    np.testing.assert_array_equal(np.asarray(actual_gradient), np.asarray(expected_gradient, dtype=dtype))
 
 
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():

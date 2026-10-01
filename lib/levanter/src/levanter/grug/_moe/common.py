@@ -228,6 +228,12 @@ def _prepare_moe_dispatch(
     return x_sort, w_sort, token_ids_sort, group_sizes
 
 
+def _invert_permutation(indices: Int[Array, "N"]) -> Int[Array, "N"]:
+    """Invert a permutation of 0 through N-1 without sorting it again."""
+    positions = jnp.arange(indices.shape[0], dtype=indices.dtype)
+    return jnp.zeros_like(indices).at[indices].set(positions, unique_indices=True, mode="promise_in_bounds")
+
+
 @named_call
 def _prepare_moe_dispatch_indices_with_assignment_ids(
     selected_experts: Int[Array, "T K"],
@@ -251,8 +257,7 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
     sorted_assignment_ids = assignment_ids[sort_idx]
     token_ids_sort = sorted_assignment_ids // topk
 
-    sorted_positions = jnp.arange(assignments, dtype=jnp.int32)
-    dispatch_positions = jnp.zeros((assignments,), dtype=jnp.int32).at[sort_idx].set(sorted_positions)
+    dispatch_positions = _invert_permutation(sort_idx).astype(jnp.int32)
     dispatch_positions = dispatch_positions.reshape(tokens, topk)
 
     group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
