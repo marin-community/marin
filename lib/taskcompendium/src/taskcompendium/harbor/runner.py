@@ -22,6 +22,7 @@ from taskcompendium.lowering import (
     validate_environment_config,
 )
 from taskcompendium.submission import chat_request
+from taskcompendium.verifier_registry import validate_launch_parallel_tool_calls
 
 DEFAULT_CHAT_TIMEOUT = 120
 
@@ -60,6 +61,7 @@ async def run_trial(
         if "parallel_tool_calls" in request and request["parallel_tool_calls"] != launch.parallel_tool_calls:
             raise ValueError("Launch parallel-tool policy conflicts with the submission convention")
         request["parallel_tool_calls"] = launch.parallel_tool_calls
+    validate_launch_parallel_tool_calls(specification.verifier, request.get("parallel_tool_calls"))
     agent = {
         "import_path": "taskcompendium.harbor.adapter:ChatAgent",
         "model_name": launch.model,

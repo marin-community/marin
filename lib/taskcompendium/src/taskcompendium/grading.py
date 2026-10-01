@@ -9,6 +9,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, JsonValue, field_validator, model_validator
 from tasktrove_verify.grade import InvalidTask, numeric_tolerance
+from tasktrove_verify.json_comparison import json_values_equal
 from tasktrove_verify.modes.grade_exact import grade_exact_candidate
 from tasktrove_verify.modes.grade_math import grade_numeric_candidate
 from tasktrove_verify.spec import ExactSpec, NumericSpec
@@ -98,23 +99,6 @@ class NumericAnswerVerifier(Verifier):
             expected=self.expected, tolerance_abs=self.tolerance_abs, tolerance_rel=self.tolerance_rel
         )
         return GradeResult(Outcome.GRADED, grade_numeric_candidate(contract, value).reward)
-
-
-def json_values_equal(expected: JsonValue, actual: JsonValue, numeric_tolerance: float | None = None) -> bool:
-    """Compare JSON types and ordered arrays, optionally tolerating float differences."""
-    if type(expected) is not type(actual):
-        return False
-    if isinstance(expected, dict) and isinstance(actual, dict):
-        return expected.keys() == actual.keys() and all(
-            json_values_equal(value, actual[key], numeric_tolerance) for key, value in expected.items()
-        )
-    if isinstance(expected, list) and isinstance(actual, list):
-        return len(expected) == len(actual) and all(
-            json_values_equal(left, right, numeric_tolerance) for left, right in zip(expected, actual, strict=True)
-        )
-    if isinstance(expected, float) and isinstance(actual, float) and numeric_tolerance is not None:
-        return abs(expected - actual) <= numeric_tolerance
-    return expected == actual
 
 
 class StructuredExactVerifier(Verifier):
