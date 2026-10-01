@@ -1096,32 +1096,8 @@ class MoEMLP(eqx.Module):
             batch_axes=_token_axes(mesh),
             num_experts=self.cfg.num_experts,
         )
-        # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
-        # `latent_dim`-wide rows in both directions. The router above already read the full-width
-        # token, and the shared experts in the enclosing block never see this path.
-        routed_input = x_flat
-        if self.w_latent_down is not None and self.latent_norm is not None:
-            routed_input = jnp.einsum(
-                "td,dl->tl",
-                x_flat,
-                self.w_latent_down.astype(x_flat.dtype),
-                out_sharding=_token_spec(),
-            )
-            # Keep the expert input scale independent of the down-projection initialization.
-            routed_input = self.latent_norm(routed_input)
-        moe_out = self.expert_mlp(
-            routed_input,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            token_valid=token_valid_flat,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=self.cfg.report_capacity_overflow,
-        )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
         s_minus_alpha = reshard(router_logits - qb_alpha, _token_spec())
-        # The QB statistics feed only the next step's router bias. Their collectives run after the
-        # routed MLP, so none of them holds the collective slot through an expert GEMM.
-        s_minus_alpha, _ = _forward_barrier((s_minus_alpha, moe_out))
         if self.cfg.qb_estimator == QbEstimator.HIST:
             beta, margin_min, margin_max = _qb_beta_hist(
                 s_minus_alpha,
@@ -1168,6 +1144,27 @@ class MoEMLP(eqx.Module):
             router_stats["margin_min"] = zero
             router_stats["margin_max"] = zero
 
+        # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
+        # `latent_dim`-wide rows in both directions. The router above already read the full-width
+        # token, and the shared experts in the enclosing block never see this path.
+        routed_input = x_flat
+        if self.w_latent_down is not None and self.latent_norm is not None:
+            routed_input = jnp.einsum(
+                "td,dl->tl",
+                x_flat,
+                self.w_latent_down.astype(x_flat.dtype),
+                out_sharding=_token_spec(),
+            )
+            # Keep the expert input scale independent of the down-projection initialization.
+            routed_input = self.latent_norm(routed_input)
+        moe_out = self.expert_mlp(
+            routed_input,
+            selected_experts.astype(jnp.int32),
+            combine_weights,
+            token_valid=token_valid_flat,
+            mesh=get_abstract_mesh(),
+            report_capacity_overflow=self.cfg.report_capacity_overflow,
+        )
         if self.cfg.report_capacity_overflow:
             routed_flat, capacity_overflow = moe_out
             dropped_assignments = capacity_overflow.dropped
