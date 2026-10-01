@@ -235,3 +235,14 @@ s/step, but it re-draws (2). It is worth one add-on arm on the final program aft
 gated on `carry_stall.py`. The larger lever is (2): a lost draw costs 0.165-0.19 s/step (~0.35-0.4 MFU), and
 the PGLE endgame re-draws it. A deterministic fix would pin the carry D2H to its own stream or keep the
 weight slices off the memcpy streams.
+
+### Decisions after the diagnosis (orchestrator, 2026-09-30 19:15 PT)
+
+- `--xla_gpu_enable_triton_gemm=false` is out of the final program.
+- The fused norm is a post-lineage add-on arm. It is kept only if its trace passes `carry_stall.py` and
+  `copy_schedule.py`.
+- The deterministic stream-collision fix goes to A.
+- Rack queue: `m30-ctl-s0-r2` (running since 02:07Z) -> `m30b-sonic-02` -> `m30c-stackpipe-trace-03` ->
+  `m30c-stackseq-trace-03`.
+- Every landed trace (including sonic-02 and ctl-r2 when profiled) gets `stack/trace_checks.sh <run>`. It
+  pulls the xplane and runs the carry-stall, copy-schedule, exposed-memcpy and XLA-remat checks.

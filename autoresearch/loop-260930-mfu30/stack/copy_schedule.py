@@ -7,13 +7,16 @@ Shows where the scheduler put each large host copy relative to the forward and b
 first momentum H2D (`copy-start.44`, 10.1 GiB) starts after the backward loop; if it sits before the
 forward loop it holds 10 GiB through the backward peak.
 
-Usage: copy_schedule.py <train_step.hloproto.pb> [min_gib]
+Usage: copy_schedule.py <trace .xplane.pb | train_step.hloproto.pb> [min_gib]
 """
 
 import sys
 from pathlib import Path
 
 from google.protobuf.internal import decoder
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from overlap import load
 
 BYTES_PER_ELEMENT = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 2, 8: 4, 9: 8, 10: 2, 11: 4, 12: 8, 16: 2}
 GIB = 2**30
@@ -65,8 +68,24 @@ def first_array_bytes(shape):
     return n * BYTES_PER_ELEMENT.get(element_type, 0)
 
 
+def train_step_hlo_proto(path: str) -> bytes:
+    """The largest jit_train_step HloProto in a trace, or the file itself if it is an HloProto."""
+    if not path.endswith("xplane.pb"):
+        return Path(path).read_bytes()
+    meta = next(p for p in load(path).planes if p.name == "/host:metadata")
+    stat_names = {int(k): v.name for k, v in meta.stat_metadata.items()}
+    protos = [
+        s.bytes_value
+        for m in meta.event_metadata.values()
+        if m.name.startswith("jit_train_step")
+        for s in m.stats
+        if stat_names.get(int(s.metadata_id)) == "Hlo Proto"
+    ]
+    return max(protos, key=len)
+
+
 def main(path: str, min_gib: float) -> None:
-    module = next(v for f, v in fields(Path(path).read_bytes()) if f == 1)
+    module = next(v for f, v in fields(train_step_hlo_proto(path)) if f == 1)
     instructions, main_id, schedules = {}, None, {}
     for num, value in fields(module):
         if num == 3:
