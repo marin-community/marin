@@ -11,7 +11,7 @@ from typing import Protocol
 import pyarrow as pa
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
-from levanter.tokenizers import MarinTokenizer, load_tokenizer, tokenizer_content_hash
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.datakit.normalize import normalize_step
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -148,7 +148,7 @@ class FastTrackDataConfig:
     quality_model: str
     quality_model_version: str
     pool_workers: int
-    tokenizer: str
+    tokenizer: TokenizerSpec
     tokenizer_vocab: int
     sequence_length: int
 
@@ -194,10 +194,10 @@ def repeated_document_scale(pool_workers: int) -> PipelineScale:
 
 def materialize_fast_track_data(config: FastTrackDataConfig) -> FastTrackDataStore:
     """Run the DataKit graph and return its clustered store metadata."""
-    tokenizer = load_tokenizer(config.tokenizer)
+    tokenizer = load_tokenizer(config.tokenizer.name)
     if len(tokenizer) != config.tokenizer_vocab:
         raise ValueError(
-            f"tokenizer {config.tokenizer!r} has {len(tokenizer)} entries; "
+            f"tokenizer {config.tokenizer.name!r} has {len(tokenizer)} entries; "
             f"the fast-track model requires {config.tokenizer_vocab}"
         )
     prepared = config.source.prepare(
@@ -208,8 +208,6 @@ def materialize_fast_track_data(config: FastTrackDataConfig) -> FastTrackDataSto
         )
     )
     scale = prepared.scale
-    tokenizer_spec = TokenizerSpec(config.tokenizer, tokenizer_content_hash(config.tokenizer))
-
     with ZephyrContext(
         name=f"fast-track-{config.run_id}-data",
         resources=scale.pool.worker,
@@ -222,7 +220,7 @@ def materialize_fast_track_data(config: FastTrackDataConfig) -> FastTrackDataSto
             quality_model_version=config.quality_model_version,
             scale=scale,
             zephyr_context=zephyr_context,
-            tokenizer=tokenizer_spec,
+            tokenizer=config.tokenizer,
             max_concurrent=DEFAULT_MAX_CONCURRENT,
         )
     log_store_summary(store)

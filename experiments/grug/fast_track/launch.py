@@ -27,6 +27,7 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import LmDataConfig
+from levanter.tokenizers import tokenizer_content_hash
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
@@ -43,6 +44,7 @@ from experiments.datakit.reference_pipeline import (
     QUALITY_MODEL_VERSION,
     SAMPLE_PREFIX,
     SAMPLE_SOURCES,
+    TokenizerSpec,
     quality_model_path,
 )
 from experiments.datakit.store.mixture import FlatCacheComponent, MixtureWeighting, flat_cache_mixture
@@ -766,7 +768,7 @@ def main(
             quality_model=quality_model,
             quality_model_version=quality_model_version,
             pool_workers=pool_workers,
-            tokenizer=V16384_TOKENIZER,
+            tokenizer=TokenizerSpec(V16384_TOKENIZER, tokenizer_content_hash(V16384_TOKENIZER)),
             tokenizer_vocab=V16384_VOCAB,
             sequence_length=SEQ_LEN,
         )
