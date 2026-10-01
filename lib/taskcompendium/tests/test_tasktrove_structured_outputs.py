@@ -6,7 +6,7 @@
 import io
 import json
 import tarfile
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -16,6 +16,7 @@ from tasktrove_verify.spec import CsvColumnsSpec, XmlElementsSpec, parse_spec
 from taskcompendium.grading import Outcome
 from taskcompendium.importers.tasktrove import import_task as import_tasktrove
 from taskcompendium.importers.tasktrove.convert import read_archive
+from taskcompendium.importers.tasktrove.structured_outputs import CSV_MODE, XML_MODE
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import ConversationTrace, TextMessage, VerifierKind
 from taskcompendium.submission import GradingAttempt, PlainText, render_instruction
@@ -26,12 +27,28 @@ from .harbor_replay import run_replay_trial
 SOURCE = "synthetic-structured-output"
 RELEASE_URI = "fixture://tasktrove"
 RELEASE_REVISION = "test-revision"
+
+
+@dataclass(frozen=True)
+class StructuredTaskFixture:
+    path: str
+    mode: str
+    tags: tuple[str, ...]
+    wrapper: str
+    tail: str
+    contract: str
+    request: str
+    kind: VerifierKind
+    answers: tuple[str, str]
+    contract_type: type[XmlElementsSpec] | type[CsvColumnsSpec]
+
+
 TASKS = {
-    "xml": {
-        "path": "synthetic-xml.tar.gz",
-        "mode": "xml-elements",
-        "tags": ["structured-outputs", "xml-elements", "synthetic", "xml"],
-        "wrapper": (
+    "xml": StructuredTaskFixture(
+        path="synthetic-xml.tar.gz",
+        mode=XML_MODE,
+        tags=("structured-outputs", XML_MODE, "synthetic", "xml"),
+        wrapper=(
             """You will produce a structured response. Write your final answer to `/app/answer.txt`.
 Emit a single well-formed XML document. The verifier checks the output structure.
 
@@ -39,23 +56,23 @@ Emit a single well-formed XML document. The verifier checks the output structure
 
 """
         ),
-        "tail": (
+        tail=(
             """\n## Submitting your answer (IMPORTANT)
 Write your XML document to `/app/answer.txt`.
 An empty or missing `/app/answer.txt` scores 0.
 """
         ),
-        "contract": 'mode = "xml-elements"\nrequired = ["root"]\nany_of = []\n',
-        "request": "Create one well-formed XML document that follows the provided JSON Schema.",
-        "kind": VerifierKind.XML_ELEMENTS,
-        "answers": ("<root><item>value</item></root>", "<other />"),
-        "contract_type": XmlElementsSpec,
-    },
-    "csv": {
-        "path": "synthetic-csv.tar.gz",
-        "mode": "csv-columns",
-        "tags": ["structured-outputs", "csv-columns", "synthetic", "csv"],
-        "wrapper": (
+        contract='mode = "xml-elements"\nrequired = ["root"]\nany_of = []\n',
+        request="Create one well-formed XML document that follows the provided JSON Schema.",
+        kind=VerifierKind.XML_ELEMENTS,
+        answers=("<root><item>value</item></root>", "<other />"),
+        contract_type=XmlElementsSpec,
+    ),
+    "csv": StructuredTaskFixture(
+        path="synthetic-csv.tar.gz",
+        mode=CSV_MODE,
+        tags=("structured-outputs", CSV_MODE, "synthetic", "csv"),
+        wrapper=(
             """You will produce a structured response. Write your final answer to `/app/answer.txt`.
 Emit CSV data conforming to the schema. The verifier checks the output structure.
 
@@ -63,18 +80,18 @@ Emit CSV data conforming to the schema. The verifier checks the output structure
 
 """
         ),
-        "tail": (
+        tail=(
             """\n## Submitting your answer (IMPORTANT)
 Write your CSV data to `/app/answer.txt`.
 An empty or missing `/app/answer.txt` scores 0.
 """
         ),
-        "contract": 'mode = "csv-columns"\nrequired = ["id", "label"]\nany_of = []\n',
-        "request": "Create CSV data following the provided schema",
-        "kind": VerifierKind.CSV_COLUMNS,
-        "answers": ("id,label\n1,ready\n", "id,other\n1,ready\n"),
-        "contract_type": CsvColumnsSpec,
-    },
+        contract='mode = "csv-columns"\nrequired = ["id", "label"]\nany_of = []\n',
+        request="Create CSV data following the provided schema",
+        kind=VerifierKind.CSV_COLUMNS,
+        answers=("id,label\n1,ready\n", "id,other\n1,ready\n"),
+        contract_type=CsvColumnsSpec,
+    ),
 }
 
 
@@ -82,23 +99,23 @@ def _archive(mode: str):
     task = TASKS[mode]
     metadata = f"""[metadata]
 tasktrove_source = "{SOURCE}"
-tasktrove_path = "{task["path"]}"
+tasktrove_path = "{task.path}"
 family = "other"
 converter = "nemotron_structured_outputs"
-    mode = "{task["mode"]}"
-tags = {json.dumps(task["tags"])}
+    mode = "{task.mode}"
+tags = {json.dumps(task.tags)}
 """
     prompt = "".join(
         (
-            task["wrapper"],
+            task.wrapper,
             'JSON Schema: {"required": ["root"]}\n\nSynthetic prompt text.\n',
-            task["tail"],
+            task.tail,
         )
     )
     members = {
         "task.toml": metadata.encode(),
         "instruction.md": prompt.encode(),
-        "tests/verifier.toml": task["contract"].encode(),
+        "tests/verifier.toml": task.contract.encode(),
     }
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as output:
@@ -106,7 +123,7 @@ tags = {json.dumps(task["tags"])}
             member = tarfile.TarInfo(name)
             member.size = len(data)
             output.addfile(member, io.BytesIO(data))
-    return read_archive(buffer.getvalue(), SOURCE, task["path"], RELEASE_URI, RELEASE_REVISION)
+    return read_archive(buffer.getvalue(), SOURCE, task.path, RELEASE_URI, RELEASE_REVISION)
 
 
 def test_structured_output_imports_keep_ordered_tags_and_generic_verifier_modes():
@@ -114,9 +131,9 @@ def test_structured_output_imports_keep_ordered_tags_and_generic_verifier_modes(
         specification = import_tasktrove(_archive(mode))
         assert specification.source.dataset == RELEASE_URI
         assert specification.source.revision == RELEASE_REVISION
-        assert specification.source.row == f"{SOURCE}:{task['path']}"
-        assert specification.tags == tuple(task["tags"])
-        assert specification.verifier.kind is task["kind"]
+        assert specification.source.row == f"{SOURCE}:{task.path}"
+        assert specification.tags == task.tags
+        assert specification.verifier.kind is task.kind
 
 
 @pytest.mark.parametrize("mode", ("xml", "csv"))
@@ -125,10 +142,10 @@ async def test_structured_output_import_matches_source_checker(mode: str, tmp_pa
     archive = _archive(mode)
     specification = import_tasktrove(archive)
     source_contract = parse_spec(archive.files["tests/verifier.toml"].decode())
-    assert isinstance(source_contract, task["contract_type"])
+    assert isinstance(source_contract, task.contract_type)
     convention = PlainText(id="plain")
 
-    for answer, expected_reward in zip(task["answers"], (1.0, 0.0), strict=True):
+    for answer, expected_reward in zip(task.answers, (1.0, 0.0), strict=True):
         output = tmp_path / "answer.txt"
         output.write_text(answer)
         source_result = source_grade(replace(source_contract, output=str(output)), tmp_path, tmp_path)
@@ -154,7 +171,7 @@ async def test_structured_output_import_runs_through_harbor(mode: str, valid: bo
         HarborEnvironmentConfig(),
         tmp_path / "task",
     )
-    answer = task["answers"][0 if valid else 1]
+    answer = task.answers[0 if valid else 1]
     trial = await run_replay_trial(harbor_task, {"role": "assistant", "content": answer}, tmp_path / "trials", mode)
 
     outcome = json.loads((tmp_path / f"trials/{mode}/verifier/taskcompendium-result.json").read_text())
@@ -168,5 +185,5 @@ def test_structured_output_prompt_hides_only_source_submission_scaffolding():
         prompt = render_instruction(specification, PlainText(id="plain"))
         assert "/app/answer.txt" not in prompt
         assert "The verifier checks" not in prompt
-        assert task["request"].split(" that")[0] in prompt
+        assert task.request.split(" that")[0] in prompt
         assert "Synthetic prompt text." in prompt
