@@ -382,11 +382,11 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
     [
         (
             VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": 12}'),
-            "Invalid 'exact_answer' verifier parameters",
+            "Invalid 'exact' verifier parameters",
         ),
         (
             VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": "12", "extra": true}'),
-            "Invalid 'exact_answer' verifier parameters",
+            "Invalid 'exact' verifier parameters",
         ),
     ],
 )

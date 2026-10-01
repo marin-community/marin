@@ -3,12 +3,13 @@
 
 """Typed submissions and private grading without an execution provider."""
 
+import json
 from typing import Literal
 
 import pytest
 from pydantic import PrivateAttr, TypeAdapter
 
-from taskcompendium.grading import Outcome, exact_answer, structured_exact
+from taskcompendium.grading import Outcome, exact_answer, numeric_answer, structured_exact
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -30,6 +31,7 @@ from taskcompendium.submission import (
     TextSubmission,
 )
 from taskcompendium.verifier_registry import grade_answer, resolve_verifier
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 
 def _task(verifier, answer_type=AnswerType.TEXT):
@@ -92,5 +94,28 @@ async def test_serialized_json_convention_extracts_answer_and_scores_invalid_sub
 
 async def test_invalid_private_verifier_is_not_scored_as_agent_failure():
     task = _task(VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json="{}"))
-    with pytest.raises(ValueError, match="Invalid 'exact_answer' verifier parameters"):
+    with pytest.raises(ValueError, match="Invalid 'exact' verifier parameters"):
         await grade_answer(task, JsonAnswer(id="json"), _attempt(task, '{"answer":'))
+
+
+@pytest.mark.parametrize(
+    "wire_kind,verifier,answer_type,correct,wrong",
+    [
+        ("exact", exact_answer("yes"), AnswerType.TEXT, "yes", "no"),
+        ("numeric", numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.NUMBER, "12", "13"),
+        ("mcq", multiple_choice_answer("B", 3), AnswerType.TEXT, "B", "A"),
+    ],
+)
+async def test_schema_016_canonical_verifier_kinds_serialize_load_and_grade(
+    wire_kind, verifier, answer_type, correct, wrong
+):
+    serialized = json.loads(_task(verifier, answer_type).model_dump_json())
+    assert serialized["verifier"]["kind"] == wire_kind
+    serialized["schema_version"] = "0.16"
+    serialized["verifier"]["kind"] = wire_kind
+    loaded = TaskSpec.model_validate_json(json.dumps(serialized))
+    convention = PlainText(id="plain")
+    correct_result = await grade_answer(loaded, convention, _attempt(loaded, correct))
+    wrong_result = await grade_answer(loaded, convention, _attempt(loaded, wrong))
+    assert (correct_result.status, correct_result.reward) == (Outcome.GRADED, 1.0)
+    assert (wrong_result.status, wrong_result.reward) == (Outcome.GRADED, 0.0)
