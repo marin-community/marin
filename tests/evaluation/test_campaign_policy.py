@@ -18,7 +18,7 @@ from marin.external_dependencies import EVALCHEMY
 
 from experiments.evaluation.evals import EvalchemyDefinition
 
-CAMPAIGN_ROOT = Path(__file__).resolve().parents[2] / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled"
+CAMPAIGN_ROOT = Path(__file__).resolve().parents[2] / "experiments/evaluation/campaigns/eval-campaign-09-25"
 
 
 def test_harbor_runtime_selection_uses_the_lock_not_the_shared_declaration(tmp_path, monkeypatch):
