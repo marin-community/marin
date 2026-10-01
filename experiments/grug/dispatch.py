@@ -21,13 +21,13 @@ ConfigT = TypeVar("ConfigT")
 # `JobRequest.priority` is the Iris priority band as a bare int. INHERIT is Iris's own default.
 INHERIT_PRIORITY = priority_band_value("inherit")
 
-# Runtime-tuning env vars forwarded from the dispatcher to the train tasks.
+# Environment variables forwarded from the dispatcher to the train tasks.
 # Iris tasks don't inherit the submitter's shell, so anything the launcher was
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
 _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_")
-_FORWARDED_ENV_NAMES = ("LD_PRELOAD",)
+_FORWARDED_ENV_NAMES = ("LD_PRELOAD", "WANDB_MODE")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
