@@ -159,7 +159,9 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
         for source in sorted(root.rglob("*")):
             if source.is_file():
                 destination = prefix_join(config.output_path, source.relative_to(root).as_posix())
-                StoragePath(destination).upload_from(str(source))
+                target = StoragePath(destination)
+                target.parent.mkdirs()
+                target.upload_from(str(source))
 
 
 def task_packages_step(version: str) -> ArtifactStep[Artifact]:
