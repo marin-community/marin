@@ -9,7 +9,7 @@ where its instances sit (forward, recompute or backward), and its order among th
 one layer. For one middle forward layer and one middle backward layer it prints the sequence of ragged
 all-to-alls with the compute scopes that run under each and between consecutive ones.
 
-Usage: python ragged_order.py <rows.pkl> <opnames.pkl> [compute_stream_prefix]
+Usage: python ragged_order.py <rows.pkl> <opnames.pkl>
 """
 
 import collections
@@ -35,9 +35,10 @@ def _label(row, ops):
 
 def main():
     rows_path, ops_path = sys.argv[1], sys.argv[2]
-    compute_stream = sys.argv[3] if len(sys.argv) > 3 else "Stream #17"
-    data = pickle.load(open(rows_path, "rb"))
-    ops = pickle.load(open(ops_path, "rb"))
+    with open(rows_path, "rb") as fh:
+        data = pickle.load(fh)
+    with open(ops_path, "rb") as fh:
+        ops = pickle.load(fh)
     rows = sorted((r for r in data["rows"] if r[6] == "jit_train_step"), key=lambda r: r[2])
     launches = data["launches"]
     end = max(r[3] for r in rows)
