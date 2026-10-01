@@ -16,6 +16,9 @@ ln(vocab_size) (11.76 at full vocab). A loss that drops below that floor means s
 targets. Checkpoints are never written. The trainer's forced final save of the 67B model plus Adam state would
 be about 1 TB, so the default hooks are replaced with the logging and profiler hooks only.
 
+The default batch is one sequence per device. On a single device pass ``--batch-size 2``: a global batch of 1
+fails in the next-token loss (see ``main``).
+
 Example, 8 GPUs, full 67B shape, one 4096-token sequence per GPU, profile of steps 10-12::
 
     RAGGED_DOT_IMPL=xla python lib/levanter/scripts/train_snowball_synthetic.py \\
@@ -153,18 +156,7 @@ def report_memory() -> None:
         )
 
 
-def main() -> None:
-    args = parse_args()
-    preset = PRESETS[args.size]
-    model_cfg = dataclasses.replace(
-        preset.model, attention_implementation="reference", moe_implementation=args.moe_impl
-    )
-    if args.layers is not None:
-        model_cfg = dataclasses.replace(model_cfg, num_layers=args.layers)
-    seq_len = preset.seq_len if args.seq_len is None else args.seq_len
-    batch_size = jax.device_count() if args.batch_size is None else args.batch_size
-    run_id = args.run_id or f"snowball-{args.size}-{time.strftime('%Y%m%d-%H%M%S')}"
-
+def build_trainer_config(args: argparse.Namespace, preset: Preset, run_id: str, batch_size: int) -> TrainerConfig:
     compute_mapping = {"batch": ["replica_dcn", "data", "expert"], "vocab": "model"}
     if args.context_axis > 1:
         # Snowball only shards activations over a context axis wider than one device; the loss must agree.
@@ -173,8 +165,7 @@ def main() -> None:
         axes={"data": -1, "replica": 1, "model": 1, "context": args.context_axis, "expert": args.expert_axis},
         compute_mapping=compute_mapping,
     )
-    profile = args.profile_steps > 0
-    trainer_cfg = TrainerConfig(
+    return TrainerConfig(
         id=run_id,
         log_dir=args.log_dir,
         mesh=mesh,
@@ -187,7 +178,7 @@ def main() -> None:
         checkpointer=CheckpointerConfig(base_path=str(args.log_dir / run_id / "checkpoints")),
         distributed=DistributedConfig(initialize_jax_distributed=False),
         profiler=ProfilerConfig(
-            enabled=profile,
+            enabled=args.profile_steps > 0,
             start_step=args.profile_start,
             num_steps=args.profile_steps,
             upload=XprofUploadConfig(enabled=False),
@@ -196,6 +187,42 @@ def main() -> None:
         log_jaxprs=False,
         log_xla_hlo=False,
     )
+
+
+def log_throughput_summary(
+    step_durations: list[float], batch_size: int, seq_len: int, flops_per_example: float, num_steps: int
+) -> None:
+    median = statistics.median(step_durations)
+    throughput = compute_instant_throughput(batch_size, median, seq_len, flops_per_example, aggregate_device_flops())
+    logger.info(
+        "median step over steps %d-%d: %.3f s  %s tokens/s  %s model TFLOP/s  MFU %s%%",
+        FIRST_TIMED_STEP,
+        num_steps - 1,
+        median,
+        f"{throughput.tokens_per_second:,.0f}" if throughput.tokens_per_second is not None else "n/a",
+        f"{throughput.model_flops_per_second / 1e12:.1f}" if throughput.model_flops_per_second is not None else "n/a",
+        f"{throughput.mfu:.2f}" if throughput.mfu is not None else "n/a",
+    )
+
+
+def main() -> None:
+    args = parse_args()
+    preset = PRESETS[args.size]
+    model_cfg = dataclasses.replace(
+        preset.model, attention_implementation="reference", moe_implementation=args.moe_impl
+    )
+    if args.layers is not None:
+        model_cfg = dataclasses.replace(model_cfg, num_layers=args.layers)
+    seq_len = preset.seq_len if args.seq_len is None else args.seq_len
+    batch_size = jax.device_count() if args.batch_size is None else args.batch_size
+    if batch_size == 1:
+        # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
+        # drops the sharding of that slice, then rejects concatenating it with the (1, seq_len - 1) remainder.
+        raise ValueError("a global batch of 1 fails in the loss under explicit mesh axes; pass --batch-size 2 or more")
+    run_id = args.run_id or f"snowball-{args.size}-{time.strftime('%Y%m%d-%H%M%S')}"
+
+    trainer_cfg = build_trainer_config(args, preset, run_id, batch_size)
+    profile = args.profile_steps > 0
 
     def loss_function(model, example, *, key=None):
         return model.compute_next_token_loss(example, key=key)
@@ -253,23 +280,7 @@ def main() -> None:
         trainer.tracker.finish()
 
     if step_durations:
-        median = statistics.median(step_durations)
-        throughput = compute_instant_throughput(
-            batch_size, median, seq_len, flops_per_example, aggregate_device_flops()
-        )
-        logger.info(
-            "median step over steps %d-%d: %.3f s  %s tokens/s  %s model TFLOP/s  MFU %s%%",
-            FIRST_TIMED_STEP,
-            args.steps - 1,
-            median,
-            f"{throughput.tokens_per_second:,.0f}" if throughput.tokens_per_second is not None else "n/a",
-            (
-                f"{throughput.model_flops_per_second / 1e12:.1f}"
-                if throughput.model_flops_per_second is not None
-                else "n/a"
-            ),
-            f"{throughput.mfu:.2f}" if throughput.mfu is not None else "n/a",
-        )
+        log_throughput_summary(step_durations, batch_size, seq_len, flops_per_example, args.steps)
     report_memory()
 
 
