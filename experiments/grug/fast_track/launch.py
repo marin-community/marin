@@ -387,6 +387,7 @@ def build_h100_ladder_run(
     seed: int = 0,
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
+    final_param_dump: tuple[str, ...] = (),
     xla_memory_report: bool = False,
     pgle_runs: int = 0,
     pipeline_depth: int = 0,
@@ -605,6 +606,8 @@ def build_h100_ladder_run(
                 grug_trainer,
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
+                final_param_dump_path=prefix_join(ctx.output_path, "final_params.npz") if final_param_dump else None,
+                final_param_dump_patterns=final_param_dump,
                 pipeline_depth=pipeline_depth,
                 loader_buffer_batches=loader_buffer_batches,
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
@@ -764,6 +767,11 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Capture a JAX profile of a few steps from this step (uploaded to the run's xprof directory).",
 )
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
+@click.option(
+    "--final-param-dump",
+    multiple=True,
+    help="Regex (repeatable) of param paths to write to <output>/final_params.npz after training.",
+)
 @click.option(
     "--xla-memory-report",
     is_flag=True,
@@ -937,6 +945,7 @@ def main(
     seed: int,
     profile_start_step: int | None,
     dump_hlo: bool,
+    final_param_dump: tuple[str, ...],
     xla_memory_report: bool,
     pgle_runs: int,
     pipeline_depth: int,
@@ -985,6 +994,7 @@ def main(
         seed=seed,
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
+        final_param_dump=tuple(final_param_dump),
         xla_memory_report=xla_memory_report,
         pgle_runs=pgle_runs,
         pipeline_depth=pipeline_depth,

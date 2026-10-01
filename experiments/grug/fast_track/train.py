@@ -29,6 +29,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -265,6 +266,10 @@ class GrugTrainerConfig:
     routing_dump_steps: tuple[int, ...] = ()
     routing_dump_batches: int = 8
     routing_dump_path: str | None = None
+    # After training, write the params whose dotted path matches any of ``final_param_dump_patterns`` (``re.search``)
+    # to ``final_param_dump_path`` as one npz (process 0), for offline analysis of small learned tables.
+    final_param_dump_path: str | None = None
+    final_param_dump_patterns: tuple[str, ...] = ()
     # Optimizer diagnostics (``grad_capture.py``): for ``grad_capture_len`` steps from each start, write the raw
     # gradient and applied update of the captured matrices to ``<grad_capture_path>/grad_capture_step<N>.npz``.
     grad_capture_starts: tuple[int, ...] = ()
@@ -1325,6 +1330,22 @@ def _init_unigram_bias(state: GrugTrainState, train_loader, *, num_batches: int)
 ROUTING_DUMP_FILE = "routing_step{step}.npz"
 
 
+def _dump_final_params(params, patterns: tuple[str, ...], path: str) -> None:
+    """Gather the params matching ``patterns`` from every process and write them to ``path`` (process 0)."""
+    selected = {}
+    for key_path, leaf in jax.tree_util.tree_leaves_with_path(params):
+        name = jax.tree_util.keystr(key_path, simple=True, separator=".")
+        if isinstance(leaf, jax.Array) and any(re.search(pattern, name) for pattern in patterns):
+            selected[name] = leaf
+    if not selected:
+        raise ValueError(f"no params match final_param_dump_patterns {patterns}")
+    host = {name: np.asarray(multihost_utils.process_allgather(leaf, tiled=True)) for name, leaf in selected.items()}
+    if jax.process_index() == 0:
+        with fsspec.open(path, "wb") as f:
+            np.savez(f, **host)
+        logger.info("wrote %d final params to %s", len(host), path)
+
+
 def _routing_dump_sequences(
     data_config: LmDataConfig, *, seq_len: int, num_sequences: int
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -2194,6 +2215,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if dump_routing is not None and pending_dumps:
                 # Steps past the end of the run dump the final weights.
                 dump_routing(state)
+            if config.trainer.final_param_dump_path is not None:
+                _dump_final_params(
+                    state.params, config.trainer.final_param_dump_patterns, config.trainer.final_param_dump_path
+                )
             if capture_writer is not None:
                 capture_writer.close()
             blends: list[tuple[str, Callable[[str], float]]] = [

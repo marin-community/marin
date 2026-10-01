@@ -1271,6 +1271,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Decoupled weight decay (annealed like ``gate_router_weight_decay``) on the zero-centered norm gains'
     ``gamma`` (``zero_centered_gains``), pulling each gain toward 1."""
     attn_res_query_lr_scale: float = 0.1
+    attn_res_token_query_lr_mult: float = 1.0
+    """Extra LR multiplier for the token-embedding AttnRes query table (``attn_res_token_query``), on top of
+    ``attn_res_query_lr_scale``."""
     kda_beta_lr_mult: float = 2.0
     muon_head_dim: int | None = None
     kda_beta_mlp_group: str = "kda_beta"
@@ -1656,6 +1659,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     for category, beta1 in self._adam_category_beta1().items()
                 },
                 "attn_res_query": plain_adam_at(adam_lr * self.attn_res_query_lr_scale),
+                "attn_res_token_query": plain_adam_at(
+                    adam_lr * self.attn_res_query_lr_scale * self.attn_res_token_query_lr_mult
+                ),
                 "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult, 1),
                 "okls": optax.chain(
                     scale_with_grug_okls(
@@ -1927,6 +1933,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
+            if path_lower.endswith("attn_res_query_token"):
+                return "attn_res_token_query"
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
             # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.

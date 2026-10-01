@@ -12,6 +12,7 @@ import pytest
 import experiments.grug.fast_track.test_kda_local as t
 from experiments.grug.fast_track.model import _attn_res_num_gates
 from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
+from experiments.grug.fast_track.train import _dump_final_params
 
 
 def _tokens():
@@ -40,7 +41,17 @@ def test_a_no_op_at_init_then_the_table_gets_a_gradient_and_changes_the_output(m
         assert not np.allclose(np.asarray(forward(moved, tokens)), np.asarray(forward(model, tokens)), atol=1e-6)
 
 
-def test_table_trains_with_the_attn_res_query_group():
+def test_table_trains_with_its_own_group():
     _, model = t._model(attn_res_token_query="shared")
     mask = GrugMoeMuonHConfig().create_mask(eqx.filter(model, eqx.is_array))
-    assert mask.attn_res_query_token == "attn_res_query"
+    assert mask.attn_res_query_token == "attn_res_token_query"
+
+
+def test_final_param_dump_writes_the_matching_tables(tmp_path):
+    mesh, model = t._model(attn_res_token_query="shared")
+    path = str(tmp_path / "final_params.npz")
+    with jax.set_mesh(mesh):
+        _dump_final_params(model, ("attn_res_query_token$", "attn_res_query_final$"), path)
+    dumped = np.load(path)
+    assert sorted(dumped.files) == ["attn_res_query_final", "attn_res_query_token"]
+    np.testing.assert_array_equal(dumped["attn_res_query_token"], np.asarray(model.attn_res_query_token))
