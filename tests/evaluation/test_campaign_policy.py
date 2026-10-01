@@ -11,6 +11,7 @@ from marin.evaluation import eval_policy
 from marin.evaluation.campaign_policy import CAMPAIGN, SEPTEMBER_29_VERSION
 from marin.evaluation.eval_policy import policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
+from marin.evaluation.harbor import driver_config
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef, ModelConfigRef, ModelRef
 from marin.external_dependencies import EVALCHEMY
@@ -18,6 +19,19 @@ from marin.external_dependencies import EVALCHEMY
 from experiments.evaluation.evals import EvalchemyDefinition
 
 CAMPAIGN_ROOT = Path(__file__).resolve().parents[2] / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled"
+
+
+def test_harbor_runtime_selection_uses_the_lock_not_the_shared_declaration(tmp_path, monkeypatch):
+    locked_commit = "1" * 40
+    (tmp_path / "uv.lock").write_text(
+        f'[[package]]\nname = "harbor"\nsource = {{ git = "https://example.com/harbor#{locked_commit}" }}\n'
+    )
+    monkeypatch.setattr(driver_config, "_harbor_env_dir", lambda project: tmp_path)
+    assert driver_config.harbor_runtime_project(locked_commit) == driver_config.HARBOR_RUNTIME_PROJECT
+    archived_commit = "2" * 40
+    assert driver_config.harbor_runtime_project(archived_commit) == (
+        f"{driver_config.HARBOR_RUNTIME_PROJECT}/pins/{archived_commit}"
+    )
 
 
 def _campaign_run(model_name: str, benchmark: str) -> tuple[ModelRef, EvalRef]:

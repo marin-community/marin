@@ -25,6 +25,7 @@ JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://api.together.xyz/v1}"
 TAU2_JUDGE_MODEL="${TAU2_JUDGE_MODEL:-openai/openai/gpt-oss-120b}"
 
 CAMPAIGN_SHA_MARIN=$(git -C "$MARIN_DIR" rev-parse HEAD)
+HARBOR_RUNTIME_PROJECT="config/external/harbor"
 eval "$(PYTHONPATH="$MARIN_DIR/lib/marin/src" python3 - <<'PY'
 import shlex
 
@@ -53,7 +54,7 @@ validate_marin_checkout() {
 
   local pins
   pins=$(python3 - \
-    "$MARIN_DIR/config/external/harbor/uv.lock" <<'PY'
+    "$MARIN_DIR/$HARBOR_RUNTIME_PROJECT/uv.lock" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -265,6 +266,7 @@ from experiments.evaluation.evals import EvalchemyDefinition
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.external_dependencies import EVALCHEMY
 from marin.evaluation.model_config import load_model_config
+REGISTRY_COMMIT = "2666d6526477ae3e46030a8dc4f3f2c68fd7a84f"
 
 models = Path(os.environ["MODEL_CONFIG_DIR"])
 chat_templates = Path(os.environ["CHAT_TEMPLATE_DIR"])
@@ -453,7 +455,7 @@ assert swebench["datasets"] == [
     {
         "name": "swebench-verified",
         "version": "1.0",
-        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/registry.json",
+        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{REGISTRY_COMMIT}/registry.json",
     }
 ]
 for name in (
@@ -470,7 +472,7 @@ assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwarg
     "max_output_tokens": 32768,
 }
 
-registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
+registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{REGISTRY_COMMIT}/"
 for path in harbor.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
     for agent in document.get("agents") or []:
