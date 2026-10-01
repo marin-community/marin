@@ -200,6 +200,14 @@ class KdaHeadPairing(StrEnum):
     """Each sub-step applies its head's full log-decay: the pair's state decays twice per token."""
 
 
+class ContentGateActivation(StrEnum):
+    """The nonlinearity between the low-rank content gate's two projections (``bigram_gate_rank``)."""
+
+    NONE = "none"
+    SILU = "silu"
+    GELU = "gelu"
+
+
 class UngatedExpertActivation(StrEnum):
     """The activation of the ungated (single ``W_up``) experts."""
 
@@ -1228,6 +1236,12 @@ class GrugModelConfig:
     bigram_gate_rank: int = 0
     """With ``bigram_gate``, a per-channel gate instead of a scalar: ``g_t = sigmoid(rms(e_t) * rms(b_t) @ A @ B + c)``
     with rank-r ``A`` (random) and ``B`` (zero), so each token keeps some bigram features and drops others."""
+    bigram_gate_act: ContentGateActivation = ContentGateActivation.NONE
+    """The rank-``bigram_gate_rank`` gate's middle nonlinearity: ``sigmoid(act(i @ A) @ B + c)`` (also the trigram
+    gate's), as in GatedNorm. With ``B`` zero-init the gate still starts at ``sigmoid(c)``."""
+    bigram_gate_logit_scale: float = 1.0
+    """Scale on the content gates' learned logits, ``sigmoid(s * f(i) + c)``; the bias is unscaled, so the initial
+    gate is unchanged. Under Adam, ``s`` < 1 slows how fast the logits move."""
     embed2_fsdp: bool = False
     """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes. The lookup either
     all-gathers it (default) or reads rows in place (``embed2_row_sharded_gather``). Same math."""
@@ -6021,6 +6035,8 @@ class Transformer(eqx.Module):
                         self.bigram_gate_b,
                         self.bigram_gate_a_lr,
                         self.bigram_gate_b_lr,
+                        act=cfg.bigram_gate_act,
+                        logit_scale=cfg.bigram_gate_logit_scale,
                     )
                     bigram_gate_stats = {
                         "attn_res_bigram_gate_mean": jax.lax.stop_gradient(jnp.mean(gate)),
@@ -6062,6 +6078,8 @@ class Transformer(eqx.Module):
                         self.trigram_gate_b,
                         self.trigram_gate_a_lr,
                         self.trigram_gate_b_lr,
+                        act=cfg.bigram_gate_act,
+                        logit_scale=cfg.bigram_gate_logit_scale,
                     )
                     bigram_gate_stats["attn_res_trigram_gate_mean"] = jax.lax.stop_gradient(jnp.mean(gate3))
                     bigram_gate_stats["attn_res_trigram_gate_std"] = jax.lax.stop_gradient(jnp.std(gate3))
@@ -7140,6 +7158,9 @@ def _content_gate(
     bias: jax.Array,
     a_lr: jax.Array | None,
     b_lr: jax.Array | None,
+    *,
+    act: ContentGateActivation = ContentGateActivation.NONE,
+    logit_scale: float = 1.0,
 ) -> tuple[Float[Array, "B S D"], jax.Array]:
     """Engram-style content gate on an n-gram source: ``sigmoid(f(hidden * source) + bias)``, with ``f`` a rank-r
     projection to per-channel logits (``a_lr``, ``b_lr``) or a ``w`` dot to one logit per token. Both inputs are
@@ -7148,10 +7169,17 @@ def _content_gate(
     interaction = hidden.astype(dtype) * source
     if a_lr is not None and b_lr is not None:
         low = jnp.einsum("bsd,dr->bsr", interaction, a_lr.astype(dtype))
+        if act == ContentGateActivation.SILU:
+            low = jax.nn.silu(low)
+        elif act == ContentGateActivation.GELU:
+            low = jax.nn.gelu(low)
         logits = jnp.einsum("bsr,rd->bsd", low, b_lr.astype(dtype), out_sharding=_batch_spec())
-        gate = jax.nn.sigmoid(logits + bias.astype(dtype))
+        gate = jax.nn.sigmoid(logit_scale * logits + bias.astype(dtype))
         return source * gate, gate
-    gate = jax.nn.sigmoid(jnp.einsum("bsd,d->bs", interaction, w.astype(dtype)) + bias.astype(dtype))
+    if act != ContentGateActivation.NONE:
+        raise ValueError("bigram_gate_act needs the low-rank gate (bigram_gate_rank > 0)")
+    logit = jnp.einsum("bsd,d->bs", interaction, w.astype(dtype))
+    gate = jax.nn.sigmoid(logit_scale * logit + bias.astype(dtype))
     return source * gate[..., None], gate
 
 
