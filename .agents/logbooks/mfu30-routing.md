@@ -583,3 +583,43 @@ only E changes values (dx and dW13 at bf16-rounding level, median ~1 ulp); D's d
 sonic-02 (inside the band), the short conv is bitwise in out/dx with dw at 1e-7, pipelining and the mirror and #9481
 model commits are bitwise. So E is the expected source; consecutive-step loss deltas are strongly correlated, so
 38/49 is not evidence of bias on its own.
+
+## M30B-026 Attribution: `m30c-stackseq-trace-03` vs sonic-02 and stackpipe-03
+
+Profiled steps 1 and 3 of each trace (no outlier in stackseq-03: 13.173, 13.159, 13.080 s). Spans without the
+step tail: sonic-02 13.177, stackpipe-03 13.144, stackseq-03 13.087 s (-0.090 vs sonic-02, ~+0.2 MFU points from
+the profiled steps alone; the score is the orchestrator's).
+
+| s/step | sonic-02 | stackpipe-03 | stackseq-03 |
+|---|---|---|---|
+| compute | 11.211 | 10.820 | 10.804 |
+| exposed collectives | 1.324 | 1.527 | 1.491 |
+| of which ragged a2a | 0.732 | 0.947 | 0.838 |
+| exposed copies | 0.620 | 0.774 | 0.769 |
+
+Ragged all-to-alls (s/step exposed; instructions identified from the HLO):
+
+| transport | sonic-02 | stackpipe-03 | stackseq-03 |
+|---|---|---|---|
+| fwd dispatch c0 | 0.141 | 0.179 | 0.187 |
+| fwd dispatch c1 / return c0 | 0 / 0 | 0 / 0 | 0.008 / 0 |
+| fwd return c1 | 0.021 | 0.188 | 0.184 |
+| bwd recomputed dispatch c0 | 0.254 | 0.280 | 0.292 |
+| bwd dy c1 reverse return | 0.149 | 0.149 | 0 (under the c0 recompute GEMMs) |
+| bwd recomputed dispatch c1 | 0.167 | 0.150 | 0.167 |
+
+- Shared experts after the MoE: also in the sequential arm, so not caused by pipelining. In both -03 arms the
+  shared-expert forward GEMMs run after the routed MoE, interleaved with the QB collectives (psum, pmin, pmax,
+  psum_invariant, 0.15-0.9 ms each) that #9481's QB-after-MLP commit moved behind the MoE output; in sonic-02 they
+  covered dispatch c1, return c0 and return c1. Return c1 is bare in both (+0.16), and the expert GEMMs, now the
+  ones under the transports, are slower (+0.12 in both) while the shared GEMMs, alone, are faster (-0.105). The
+  shared experts do not depend on the MoE output, so this is the scheduler's choice; QB-after-MLP is the likely
+  trigger, not yet isolated.
+- Carry stall: hit in stackseq-03 too (`carry_stall.py` 141 ms/step), as in stackpipe-03 (147); sonic-02 2.8.
+  Both -03 arms run the production wheel; A's stream fix is in F1.
+- Sequential vs pipelined: sequential exposes 0.109 less ragged time, because its scheduler put dy c1's reverse
+  return under the c0 recompute GEMMs; pipelined's ran bare between the two recomputed dispatches.
+- Compute in stackseq-03 matches stackpipe-03 (E -0.15, Triton short conv -0.11, GEMM contention shift ~0,
+  attention and small items -0.15).
+- Re-gather: forward attention gathers +0.096 under the new scope against -0.043 on the old ones, backward
+  `remat_carry` gathers +0.046; net about +0.1 (dropped in F1).
