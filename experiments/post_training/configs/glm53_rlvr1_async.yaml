@@ -87,7 +87,7 @@ trainer:
     ref_num_nodes: 10
     ref_num_gpus_per_node: 8
     policy_strict_spread_pg: true
-  run_name: datakit-rlvr1-turn49152-window102400-production-20261001-v1
+  run_name: datakit-rlvr1-turn49152-window102400-production-20261001-v2
   hf_hub_repo_id: null
   debug_mode: light
   restore_dataloader_state: true
@@ -99,7 +99,7 @@ trainer:
     # 128 groups × 16 responses exceed the engines' 768 sequence slots.
     max_in_flight: 128
     # Expiring checkpoint prefix: checkpoints store URIs instead of copying route payloads.
-    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-turn49152-window102400-production-2026.10.01.2
+    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-turn49152-window102400-production-2026.10.01.3
 generator:
   # Frozen EAGLE-3 recipe from Echo wiki 541; no online draft training.
   speculative_decoding:
@@ -112,8 +112,8 @@ generator:
     enabled: true
     successful_length:
       free_tokens: 8192
-      penalty_per_token: 0.00001220703125
-      max_penalty: 0.1
+      penalty_per_token: 0.000018310546875
+      max_penalty: 0.15
     loop:
       max_period_tokens: 256
       tail_tokens: 2048
