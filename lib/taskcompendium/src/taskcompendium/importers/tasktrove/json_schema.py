@@ -10,7 +10,7 @@ from types import MappingProxyType
 from tasktrove_verify.spec import JsonSchemaSpec, SchemaFormat, parse_spec
 
 from taskcompendium.grading import json_schema_answer
-from taskcompendium.importers.tasktrove.convert import VERIFIER_SPEC, import_metadata, task_id
+from taskcompendium.importers.tasktrove.convert import VERIFIER_FILE, import_metadata, task_id
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
 
@@ -41,7 +41,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
             or archive.source.row.partition(":")[0] != metadata.source
         ):
             raise ValueError("Unsupported TaskTrove JSON-schema source")
-        contract = parse_spec(archive.files[VERIFIER_SPEC].decode())
+        contract = parse_spec(archive.files[VERIFIER_FILE].decode())
         if not isinstance(contract, JsonSchemaSpec) or contract.schema != "schema.json":
             raise ValueError("JSON-schema tasks must use tests/schema.json")
         schema = json.loads(archive.files["tests/schema.json"])

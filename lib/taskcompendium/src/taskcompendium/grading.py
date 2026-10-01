@@ -10,8 +10,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 from tasktrove_verify.grade import InvalidTask, numeric_tolerance
 from tasktrove_verify.json_comparison import json_values_equal
-from tasktrove_verify.modes.extract import extract_boxed
-from tasktrove_verify.modes.grade_exact import grade_exact_candidate
+from tasktrove_verify.modes.grade_exact import grade_exact_submission
 from tasktrove_verify.modes.grade_math import grade_numeric_candidate
 from tasktrove_verify.spec import ExactSpec, NumericSpec, SchemaFormat
 
@@ -77,12 +76,8 @@ class ExactAnswerVerifier(Verifier):
             ignore_whitespace=self.collapse_whitespace,
             ordered=self.ordering is ExactAnswerOrder.ORDERED,
         )
-        boxed = extract_boxed(submission.value)
-        if boxed is not None:
-            result = grade_exact_candidate(contract, boxed)
-            if result.reward:
-                return GradeResult(Outcome.GRADED, result.reward)
-        return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, submission.value).reward)
+        result = grade_exact_submission(contract, submission.value)
+        return GradeResult(Outcome.GRADED, result.reward)
 
 
 class JsonSchemaVerifier(Verifier):

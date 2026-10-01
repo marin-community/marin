@@ -119,9 +119,9 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes still need private resources and an isolated verifier runtime.
 
-### TaskTrove Exact Answers
+### TaskTrove puzzle choices and ordered lists
 
-The exact importer accepts the cleaned `math-answer` / `all_puzzles` source tuple in `exact` mode. It preserves the ordered list of accepted values and the source normalization settings in the private verifier, removes the file-output wrapper, and retains the source tags and provenance. Boxed answers are checked using the pinned TaskTrove extraction rule.
+`taskcompendium.importers.tasktrove.puzzle_choices_and_lists.import_task` accepts choices and ordered lists from the cleaned `math-answer` / `all_puzzles` source tuple in `exact` mode. The source converter represents this subset with `ExactSpec`; numbers and coordinates use `MathSpec` and the mathematical importer. It preserves the ordered list of accepted values and the source normalization settings in the private verifier, removes the file-output wrapper, and retains the source tags and provenance. The `ExactAnswerVerifier` delegates boxed-answer selection and whole-response fallback to `tasktrove-verify`, which owns exact grading.
 
 ### TaskTrove JSON Schema
 
