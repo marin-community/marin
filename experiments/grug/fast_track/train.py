@@ -1973,9 +1973,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 router_tie_active=router_tie_active,
                             )
                         )
+                    dispatch_start = time.perf_counter()
                     state, metrics, inline_watch_stats = train_step(
                         state, batch, loop_active=loop_active, router_tie_active=router_tie_active
                     )
+                    # Host time to hand the step to the devices (argument flattening, donation, launch); the GPUs
+                    # idle through it because the previous step has already finished.
+                    dispatch_time = time.perf_counter() - dispatch_start
                     if inline_watch_stats is not None and watch_due:
                         watch_stats = inline_watch_stats
                     step = int(state.step) - 1
@@ -2015,6 +2019,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         last_loss = metrics["train/loss"]
                         last_step_duration = duration
                         levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                        levanter.tracker.log({"throughput/dispatch_time": dispatch_time}, step=step)
                         levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
                         # One batched device-to-host copy: handing the tracker device scalars makes it fetch each
                         # one separately, which cost 0.1-0.7 s of host time per logging step (and more with one
