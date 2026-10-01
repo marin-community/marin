@@ -171,3 +171,40 @@ forward carry D2H by an iteration (hidden on main today); it may fail to pipelin
 barriers (engagement: `collective_pipeliner` "Transforming"/pipelined-while lines plus the reload's
 position in the trace); #8317 family is covered by the forced overlap limit 1 plus the loss check against
 the paired stack arm.
+
+## M30A-012 m30a-hmo-02 result: H-A4 engaged, -0.157 s/step on one draw (2026-10-01)
+
+Score (orchestrator, 180011-180059 minus profiled): 28.580 MFU / 13.734 s vs `mhep-ctx4k-s0` 28.258 /
+13.891 (+0.32 MFU, -0.157 s). Peak 104.07 GiB (+0.98). Loss 180000 = 1.2614134550 exactly; then
+-2.4e-6, +1.7e-5, +3.6e-5; max |d| 4.4e-4; late mean +1.58e-4, positive on 48/49 late steps.
+
+Remat logs (rank 0, `jit_train_step`): `HloRematerialization() with memory limit of 161.31GiB`, adjusted
+for output (73.65 GiB, host included) to **87.66 GiB**. That equals `(138.22 - 35.09) x 0.85`, so the
+XLA base is the allocator pool (`XLA_PYTHON_CLIENT_MEM_FRACTION x 184.3`), not 0.8 x device memory:
+raising the fraction raises the scheduler/remat limit too. Per-computation peaks: backward body
+`region_81` 48.89 GiB, forward body 16.11 GiB, main 89.94 GiB. Remat ran only in main: 7 instructions,
+89.94 -> 87.45 GiB (`Remat via recomputation` x7, `Remat via offload` x0, compression x0). Baseline had 143
+instructions (84 in the backward body).
+
+Trace (`hmo02/`, steps 180021-23) vs the Sep 24 baseline trace (different main, step 144k; a same-code
+main trace does not exist yet):
+- XLA remat kernels 0.633 -> 0.0007 s/step; `all-gather.127.remat` is gone, and the backward body now has
+  no synchronous all-gather at all (baseline: the original plus the clone).
+- Arena 67.49 -> 68.47 GiB. The remat had been cutting phantom (host) bytes, so H-A4 costs ~1 GiB.
+- Where the 0.633 s went: 0.227 s was the sync AG clone, mostly rank-skew wait; it moved to the
+  backward latent reduce-scatter (`symk_ReduceScatter` moe_latent_proj exposed 0.051 -> 0.255). Of the
+  0.400 s of fusion clones, 0.111 s ran under collectives, so ~0.29 s was on the critical path; the power
+  cap gives some of that back. Expected ~0.25 s vs -0.157 measured on one draw (seed controls spread
+  0.25 MFU, ~0.12 s). Compute-stream busy 11.79 -> 11.63 s cross-version.
+- Exposed host copies unchanged (0.618 s), as expected.
+
+#9481 overlap: with the flag there is no XLA-remat re-gather left. #9481's "re-gather attention weights
+in the backward" then adds a deliberate second (async) AG per layer in the backward, which holds the
+overlap-1 collective slot. It looks redundant with the flag; A/B the stack with and without
+`ebde49980b`.
+
+Stack implication: the remat limit (87.66 GiB at slop 85, fraction 0.75) already binds by 2.3 GiB on
+main+flag. B's D adds ~18 GiB live across the backward, so remat (device-only view) would cut ~18 GiB
+again and the LHS would sit at its limit. The stack needs `--xla_gpu_memory_limit_slop_factor` ~110
+(limit 113.4 GiB) or a higher fraction; physical peak ~104 + 18 - E/unfilled savings ~ 120 GiB fits under
+138.2.
