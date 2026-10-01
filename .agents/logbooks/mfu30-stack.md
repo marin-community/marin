@@ -378,3 +378,24 @@ Against stackseq-03, the 0.123 s gain is about the stall the wheel removes (0.14
 The orchestrator holds the PGLE build until `m30-f1-noqb-01` and the pre-registered confirmation runs land
 (M30-034: seeds 0-2 x 100 steps, unprofiled; each seed's median over 180011-180099 >= 30.0, with loss in the
 band).
+
+### m30-f1-noqb-01 (2026-10-01 01:35 PT)
+
+Arm: f1-seq-02 with #9481's QB-after-MLP commit reverted (`research/mcwitt/mfu30-final-seq-noqb` @ `3b88a218cc`).
+
+Score: 30.127 MFU and 13.029 s/step, -0.096 MFU (+0.041 s) against f1-seq-02. Peak 123.50 GiB. Loss against
+s0: max |d| 3.8e-4, mean -3.4e-5.
+
+Trace checks:
+- Carry stall: 4.7 ms/step.
+- `copy-start.44` sits after the backward.
+- Zero XLA remat.
+
+The revert does what B intended: the forward shared-expert GEMMs move back between the ragged all-to-all
+starts and dones, as in sonic-02. It buys little:
+- exposed ragged all-to-all 0.81 vs 0.85 s;
+- total exposed collectives 1.488 vs 1.491 s;
+- compute busy +0.06 s.
+
+The step difference is inside one-draw noise (seed spread ~0.12 s). No evidence for the revert, so f1-seq-02's
+program (QB-after-MLP kept) stays the final program.
