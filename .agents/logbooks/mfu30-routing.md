@@ -460,3 +460,58 @@ before it started). Env: `XLA_FLAGS=--xla_gpu_enable_host_memory_offloading=true
 rank-0 "Rematerialized N instructions in module jit_train_step" N <~ 10, "Peak memory for main" (> ~110 -> try slop
 110), W&B memory/limit_gib ~143.76, memory/peak_gib < ~139, loss at 180000 == 1.2614134550. The delta to
 unfilled-02 is D + memory settings.
+
+## M30B-023 `m30b-sonic-02` (A+B+C + D + H-A4, fraction 0.78 / slop 105): remat logs and exposure
+
+Score (orchestrator): 29.783% / 13.179 s vs control 28.258% / 13.891 s (+1.52 MFU, -0.712 s/step), steady state
+29.70-29.85, W&B memory/peak_gib 125.02 of 143.75; loss at 180000 exact; later dloss inside the same-code band.
+
+Remat (rank logs, `TF_CPP_VMODULE=hlo_rematerialization=1`): "Rematerialized 0 instructions in module
+jit_train_step" on all 64 processes. Rank 0: "HloRematerialization() with memory limit of 187.74GiB", "Peak memory
+for main.808_spmd: 105.08GiB", "Peak memory usage of module (before): 178.72GiB", unchanged after. Limit and module
+peak differ from A's 114.1 GiB device limit and the main peak by the same 73.64 GiB, which I read as host-space
+buffers counted on both sides: main peaks at 105.08 GiB against 114.1, 9.0 GiB of headroom, nothing recomputed.
+
+Profile (rank 0, steps 180021-180023), against unfilled-02 (s/step):
+
+| | unfilled-02 | sonic-02 |
+|---|---|---|
+| span (profiled) | 13.762 | 13.229 |
+| compute | 11.533 | 11.188 |
+| exposed collectives | 1.516 | 1.336 (ragged a2a 0.838 -> 0.736) |
+| exposed copies | 0.631 | 0.622 |
+| idle | 0.082 | 0.084 |
+
+Compute: D drops the recomputed down projection (`moe_expert_gemm` remat -0.263) and the recomputed return
+(`moe_dispatch` remat -0.063, `moe_combine` remat -0.030); the flag drops XLA's remat clones (norms -0.083, attention
+elementwise -0.087, shared MLP remat -0.120); D's expert-side backward adds `moe_combine` bwd +0.076,
+`moe_expert_elementwise` bwd +0.069, `moe_dispatch` bwd +0.014. Attention is +0.08 in every phase (unexplained).
+
+Ragged all-to-alls per layer, identified from operand shapes and consumers in the HLO (`b/ragged_order.py`):
+- Forward: dispatch c0 (`.8.1`, 3.4 ms) 10% covered, 0.144 exposed; dispatch c1 (`.9.1`), return c0 (`.10.1`) and
+  return c1 (`.11.1`) run under the shared-expert GEMMs and the c0 down projection (0.020 exposed). unfilled-02's
+  forward exposed 0.339.
+- Backward, in order: remat dispatch c0 (`.1.1`, median 5.6 ms, fastest 3.0 ms) 0% covered, 0.254 exposed, 0.111 of
+  it above the fastest instance (rank skew at the MoE backward's entry); remat expert GEMMs c0 (5.9 ms) with no
+  transport under them; remat dispatch c1 (`.3.1`, 3.4 ms) 0.169 exposed, held behind the c0 recompute by the chunk
+  barrier; reverse return of dy c1 (`.2.1`, 3.1 ms) 0.149 exposed, issued directly behind it; reverse return of dy c0
+  (`.13`) under the c1 recompute; row-dot returns (`.6.1` 0.9 ms, `.7.1` 1.2 ms, 0.112 busy) fully covered;
+  reverse dispatches of dx (`.4.1`, `.5.1`, ~4.1 ms) under the shared-expert backward GEMMs. The recomputed
+  return (unfilled-02 `.1.1`, 0.199 exposed) is gone.
+
+C's checks: `stack/carry_stall.py` 2.8 ms/step exposed carry D2H (healthy; unfilled-02 15.6). `stack/copy_schedule.py`:
+momentum H2D `copy-start.44/43/42` (10.12 GiB each) after the backward loop and D2H `copy-start.97/98/99` at the
+end, the same placement as unfilled-02. Exposed copies (0.62): carry reloads in the backward (H2D `dynamic_slice`)
+0.219, optimizer D2H `97/98/99` 0.211, H2D `44` 0.064; 0.364 of it in the last tenth of the step.
+
+Remaining exposure by lever (s/step):
+- Pipelined chunks (forward, and the recompute that reuses it): forward dispatch c0 0.144 (the shared-expert
+  GEMMs could cover it once MLP c0 covers dispatch c1); remat dispatch c1 0.169 (no barrier between dispatch c1 and
+  the c0 recompute, so it can run under the 5.9 ms of c0 remat GEMMs). Up to ~0.31.
+- Scheduling / PGLE: reverse return dy c1 0.149 (dy is ready at the MoE backward's entry; the c0 remat GEMMs have
+  no transport under them); FSDP all-gathers ~0.27 (`remat_carry` bwd ring 0.110, forward ring 0.104, `moe_dispatch`
+  forward 0.053).
+- Not schedulable: rank-skew waits, `reduce-scatter.18` 0.274 + ring 0.066 (0.296 above the fastest instance) and
+  0.111 inside remat dispatch c0. Remat dispatch c0's transfer (0.143) has only the shared-expert backward GEMMs
+  as candidate cover, and they currently cover the reverse dispatches.
+- Copies (A's area): 0.62, mostly at the step end.
