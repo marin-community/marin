@@ -82,6 +82,10 @@ def probe_block(settings: ProbeSettings) -> dict:
     return block
 
 
+# Exact-token GSM8K transport renders Iceball's prompts with this template.
+ICEBALL_PROBE_RECIPE = {"generator": {"chat_template": {"source": "name", "name_or_path": "qwen3_with_thinking"}}}
+
+
 def probe_step(spec: SkyRLSpec, execution: IrisSkyRLExecution, settings: ProbeSettings) -> ArtifactStep[SkyRLRun]:
     """Launch a probe using the model, data, topology and execution of an RL recipe."""
     name = user_owned_name(f"checkpoints/mismatch-probe/{spec.name.rsplit('/', 1)[-1]}")
@@ -141,7 +145,11 @@ def main(
         resume_path=resume_path,
         extra_trainer_modes=extra_trainer_modes,
     )
-    return probe_step(iceball_rl_spec(model, data), iceball_rl_execution(), settings)
+    spec = iceball_rl_spec(model, data)
+    spec = replace(
+        spec, config_yaml=yaml.safe_dump(merge(yaml.safe_load(spec.config_yaml), ICEBALL_PROBE_RECIPE), sort_keys=False)
+    )
+    return probe_step(spec, iceball_rl_execution(), settings)
 
 
 if __name__ == "__main__":

@@ -189,9 +189,6 @@ generator:
   enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
-  chat_template:
-    source: name
-    name_or_path: qwen3_with_thinking
   sampling_params:
     logprobs: 0
     temperature: 1.0
