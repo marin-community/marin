@@ -545,3 +545,19 @@ Decision: sequential chunks, keep mirror + E + sconv + MLP-weight prefetch + QB-
 drop the re-gather, add the stream fix. Cancelled `m30-f1-{pipe,seq}-01`; queued `m30-f1-seq-02`
 (streams on) and `m30-f0-seq-01` (streams off), both from `research/mcwitt/mfu30-final-seq` @ d4234c88e7,
 custom wheel, traced. Expected F1 if the attribution holds: ~13.18 - 0.39 = ~12.8 s (~30.7%).
+
+## M30-031 stackseq-03 attribution (agent B, M30B-026)
+
+Profiled steps 1 and 3, spans without the tail (s/step): sonic-02 13.177 / stackpipe-03 13.144 / stackseq-03
+13.087; compute 11.211 / 10.820 / 10.804; exposed collectives 1.324 / 1.527 / 1.491, of which ragged
+0.732 / 0.947 / 0.838; exposed copies 0.620 / 0.774 / 0.769. Ragged exposure, sonic-02 / pipe / seq:
+forward dispatch c0 0.141 / 0.179 / 0.187; forward return c1 0.021 / 0.188 / 0.184; backward recomputed
+dispatch c0 0.254 / 0.280 / 0.292; backward dy-c1 reverse return 0.149 / 0.149 / **0** (sequential put it under
+the c0 recompute); backward recomputed dispatch c1 0.167 / 0.150 / 0.167.
+(1) In both -03 arms the shared-expert forward GEMMs run after the routed MoE, interleaved with the QB
+collectives that #9481's QB-after-MLP commit put behind the MoE output. Forward return c1 is bare (+0.16),
+expert GEMMs under the transports +0.12, shared GEMMs alone -0.105. Likely trigger: QB-after-MLP (being
+isolated by compile on GB200x4). (2) Carry stall hit again: 141 ms/step (production wheel). (3) Sequential
+beats pipelined by 0.109 s of ragged exposure. (4) Compute matches stackpipe-03 (E -0.15, sconv -0.11).
+(5) Re-gather nets ~+0.1 s/step (dropped in F1). If QB-after-MLP is confirmed, the final program drops it too
+(variant `research/mcwitt/mfu30-final-seq-noqb`).
