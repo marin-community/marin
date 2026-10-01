@@ -8,7 +8,7 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.readers import load_parquet
 
-from experiments.post_training.curriculum_sft.finance import (
+from experiments.post_training.baby_rsi.finance import (
     REPORTING_ANALYSIS,
     REPORTING_DISCLOSURES,
     WORKING_CAPITAL,
@@ -19,7 +19,7 @@ from experiments.post_training.curriculum_sft.finance import (
     rounded,
     write_finance_problems,
 )
-from experiments.post_training.curriculum_sft.generation import PROBLEMS_FILENAME
+from experiments.post_training.baby_rsi.generation import PROBLEMS_FILENAME
 
 
 @pytest.mark.parametrize("seed", range(50))

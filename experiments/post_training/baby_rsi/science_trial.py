@@ -15,7 +15,7 @@ The generate stage calls the GLM relay, so submit it through the hub to ``cw-us-
       --job-name curriculum-science-generate-<date> \\
       -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924 \\
       -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \\
-      -- uv run python experiments/post_training/curriculum_sft/science_trial.py \\
+      -- uv run python experiments/post_training/baby_rsi/science_trial.py \\
       --stage generate --version <version> --run
 
 The distill, baseline, train, and after stages run on ``cw-rno2a`` with ``MARIN_PREFIX`` set to the
@@ -34,14 +34,14 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.curriculum_sft.science import (
+from experiments.post_training.baby_rsi.science import (
     NMR_CAPABILITY,
     ORGANIC_MECHANISMS_CAPABILITY,
     SPECIAL_RELATIVITY_CAPABILITY,
     generate_science_questions,
 )
-from experiments.post_training.curriculum_sft.self_distill import SELF_CHAT_FILENAME, AnswerCheck, self_distill_step
-from experiments.post_training.curriculum_sft.trial import (
+from experiments.post_training.baby_rsi.self_distill import SELF_CHAT_FILENAME, AnswerCheck, self_distill_step
+from experiments.post_training.baby_rsi.trial import (
     CONTEXT_LENGTH,
     HF_MODEL,
     HF_REVISION,

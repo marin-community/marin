@@ -19,14 +19,14 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.curriculum_sft.code_tasks import (
+from experiments.post_training.baby_rsi.code_tasks import (
     DYNAMIC_SEMANTICS_CAPABILITY,
     IMPLEMENTATION_CAPABILITY,
     TaskKind,
     generate_code_tasks,
 )
-from experiments.post_training.curriculum_sft.self_distill import SELF_CHAT_FILENAME, AnswerCheck, self_distill_step
-from experiments.post_training.curriculum_sft.trial import (
+from experiments.post_training.baby_rsi.self_distill import SELF_CHAT_FILENAME, AnswerCheck, self_distill_step
+from experiments.post_training.baby_rsi.trial import (
     CONTEXT_LENGTH,
     HF_MODEL,
     HF_REVISION,

@@ -44,8 +44,8 @@ from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.modes.extract import extract_boxed
 from zephyr.readers import load_parquet
 
-from experiments.post_training.curriculum_sft.code_tasks import EXECUTION_TIMEOUT, literals_equal, run_tests
-from experiments.post_training.curriculum_sft.generation import (
+from experiments.post_training.baby_rsi.code_tasks import EXECUTION_TIMEOUT, literals_equal, run_tests
+from experiments.post_training.baby_rsi.generation import (
     MANIFEST_FILENAME,
     PROBLEMS_FILENAME,
     REASONING_CHAT_SCHEMA,
@@ -54,7 +54,7 @@ from experiments.post_training.curriculum_sft.generation import (
     sequence_token_counter,
     write_table,
 )
-from experiments.post_training.curriculum_sft.instruction_following import follows_constraints
+from experiments.post_training.baby_rsi.instruction_following import follows_constraints
 
 logger = logging.getLogger(__name__)
 

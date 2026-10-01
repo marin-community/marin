@@ -31,7 +31,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.curriculum_sft.generation import MANIFEST_FILENAME, PROBLEMS_FILENAME, write_table
+from experiments.post_training.baby_rsi.generation import MANIFEST_FILENAME, PROBLEMS_FILENAME, write_table
 
 logger = logging.getLogger(__name__)
 

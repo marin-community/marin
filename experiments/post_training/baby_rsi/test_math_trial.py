@@ -9,9 +9,9 @@ from marin.execution.lazy import materialized_config
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.curriculum_sft.generation import CHAT_FILENAME
-from experiments.post_training.curriculum_sft.math_trial import CURRICULUM_IDS, SOLUTIONS_VERSION, build_math_trial
-from experiments.post_training.curriculum_sft.trial import HF_MODEL, HF_REVISION, S3_TRIAL_PREFIX, STEPS
+from experiments.post_training.baby_rsi.generation import CHAT_FILENAME
+from experiments.post_training.baby_rsi.math_trial import CURRICULUM_IDS, SOLUTIONS_VERSION, build_math_trial
+from experiments.post_training.baby_rsi.trial import HF_MODEL, HF_REVISION, S3_TRIAL_PREFIX, STEPS
 
 
 @pytest.fixture(autouse=True)

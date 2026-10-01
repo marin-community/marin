@@ -12,7 +12,7 @@ generation is a small CPU step, so the distill stage builds it in the same graph
 
     uv run iris --cluster=cw-rno2a job run --no-wait --job-name curriculum-finance-distill-<date> \\
       -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924 \\
-      -- uv run python experiments/post_training/curriculum_sft/finance_trial.py \\
+      -- uv run python experiments/post_training/baby_rsi/finance_trial.py \\
       --stage distill --version <version> --run
 
 FinanceBench grades answers with an external judge. CoreWeave workers have no GCP credentials to
@@ -30,14 +30,14 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 
-from experiments.post_training.curriculum_sft.finance import (
+from experiments.post_training.baby_rsi.finance import (
     REPORTING_ANALYSIS,
     REPORTING_DISCLOSURES,
     WORKING_CAPITAL,
     generate_finance_problems,
 )
-from experiments.post_training.curriculum_sft.self_distill import SELF_CHAT_FILENAME, AnswerCheck, self_distill_step
-from experiments.post_training.curriculum_sft.trial import (
+from experiments.post_training.baby_rsi.self_distill import SELF_CHAT_FILENAME, AnswerCheck, self_distill_step
+from experiments.post_training.baby_rsi.trial import (
     CONTEXT_LENGTH,
     HF_MODEL,
     HF_REVISION,

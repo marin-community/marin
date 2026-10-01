@@ -7,7 +7,7 @@ import pytest
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
 
-from experiments.post_training.curriculum_sft.self_distill import (
+from experiments.post_training.baby_rsi.self_distill import (
     AnswerCheck,
     SelfDistillConfig,
     answer_matches,

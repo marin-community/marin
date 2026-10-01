@@ -39,6 +39,7 @@ packages = ["src/taskcompendium"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 timeout = 60
+pythonpath = ["../.."]
 addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
 markers = [
     "slow: long-running test",

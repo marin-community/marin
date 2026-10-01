@@ -10,22 +10,22 @@ from marin.execution.lazy import materialized_config
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.curriculum_sft.science import (
+from experiments.post_training.baby_rsi.science import (
     LETTERS,
     GenerateScienceConfig,
     apply_verification,
     parse_question_batch,
     shuffle_options,
 )
-from experiments.post_training.curriculum_sft.science_trial import (
+from experiments.post_training.baby_rsi.science_trial import (
     CURRICULUM_IDS,
     QUESTIONS_VERSION,
     build_generation,
     build_science_trial,
     build_self_distill,
 )
-from experiments.post_training.curriculum_sft.self_distill import AnswerCheck, answer_matches
-from experiments.post_training.curriculum_sft.trial import S3_TRIAL_PREFIX
+from experiments.post_training.baby_rsi.self_distill import AnswerCheck, answer_matches
+from experiments.post_training.baby_rsi.trial import S3_TRIAL_PREFIX
 
 PACKET = {
     "capability_id": "d03.example",

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from experiments.post_training.curriculum_sft.code_tasks import (
+from experiments.post_training.baby_rsi.code_tasks import (
     ExecutionStatus,
     GenerateCodeTasksConfig,
     TaskKind,

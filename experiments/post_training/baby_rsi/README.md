@@ -1,4 +1,42 @@
-# Curriculum SFT
+# Baby RSI
+
+Baby RSI is a finite feedback pipeline. It connects task generation, rollout execution, training,
+evaluation, and failure analysis through versioned artifacts.
+
+The interface sketch follows the `TaskSpec`, `RolloutEngine`, `Trainer`, and feedback-loop contracts
+in [Post-training - Boxes/Systems](https://docs.google.com/document/d/1qRs0UIuYIzMOdIchHy6OItT2VUKJVQFK4nJ0L2zinZ4).
+TaskCompendium supplies `TaskSpec`, Parquet task storage, `RolloutEngine`, `RolloutData`, rollout
+execution, and grading. `interfaces.py` defines the remaining feedback-loop boundaries.
+
+`pipeline.py` builds a fixed number of rounds. Each round has this dependency chain:
+
+```text
+evaluation -> failure analysis -> task generation -> teacher rollouts -> training -> evaluation
+```
+
+The current pipeline uses a deterministic dummy model, generator, trainer, and analysis engine.
+The shared `ShellboxRolloutEngine` runs and grades each task. The initial policy passes addition and
+fails multiplication. Failure analysis emits an abstract multiplication error without copying the
+held-out question. The problem generator creates a different multiplication task. The teacher
+rollout passes its private verifier, and the trainer records the capability as learned. The final
+evaluation then passes both held-out tasks.
+
+Print the one-round artifact plan:
+
+```bash
+uv run --project lib/taskcompendium --frozen --with-editable lib/marin \
+  python -m experiments.post_training.baby_rsi.pipeline --rounds 1 --version dev
+```
+
+This command keeps TaskCompendium in its isolated project and lock file. The `lib/marin` overlay
+supplies the artifact graph without adding TaskCompendium to the root Marin environment.
+
+The dummy report is an interface and dependency test. It is not a model-training result. Replace
+each dummy implementation independently while its typed input and output stay unchanged.
+
+## Existing curriculum SFT components
+
+Existing curriculum artifacts keep their `curriculum-sft` names so completed outputs remain reusable.
 
 `generation.py` builds verified single-turn reasoning data for one capability of the pinned
 `TASK_CURRICULUM` artifact in two GLM 5.3 steps:
@@ -47,7 +85,7 @@ uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-08a \
   --job-name curriculum-math-generate-<date> \
   -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924 \
   -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \
-  -- uv run python experiments/post_training/curriculum_sft/math_trial.py \
+  -- uv run python experiments/post_training/baby_rsi/math_trial.py \
   --stage generate --version <SOLUTIONS_VERSION> --run
 ```
 
@@ -62,7 +100,7 @@ Training and evaluation run on `cw-rno2a` with `MARIN_PREFIX` set to the `ttl=7d
 ```bash
 uv run iris --cluster=cw-rno2a job run --no-wait --job-name curriculum-math-sft-<version> \
   -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924 \
-  -- uv run python experiments/post_training/curriculum_sft/math_trial.py \
+  -- uv run python experiments/post_training/baby_rsi/math_trial.py \
   --stage train --learning-rate 1e-5 --warmup 1 --version <version> --run
 ```
 
@@ -79,7 +117,7 @@ the 39 HF shards again. Conversations stay separate (`pack=False`) because Snowb
 consume packed-document attention masks. The launcher saves a sharded bfloat16 Hugging Face
 checkpoint at the final training step under the training artifact's `hf/` directory.
 
-`math_trial.py` declares a bounded loop: deterministic OlympiadBench and Math500 on the pinned
+`math_trial.py` declares a fixed trial: deterministic OlympiadBench and Math500 on the pinned
 September 20 HF model, three algebra capabilities, four Snowball updates, and the same evaluations
 after training. The deterministic OlympiadBench variant uses Minerva/SymPy equivalence without an
 LLM judge; its scores are not comparable to historical judge-backed OlympiadBench runs. Generation
