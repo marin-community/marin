@@ -67,7 +67,13 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
-from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, RematMode, Transformer
+from experiments.grug.moe_hero_ep.model import (
+    OFFLOAD_CARRY_REMAT_MODE,
+    RAGGED_MOE_IMPLEMENTATION,
+    GrugModelConfig,
+    RematMode,
+    Transformer,
+)
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -96,13 +102,9 @@ DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
-# The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
-# dispatch and combine form one long dependent chain, so admitting several concurrent collectives
-# only contends for the SMs the transport itself needs.
-RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
-# Offload and latency hiding race the reloaded residual with its consumer when overlap exceeds 1.
-OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT = 1
-RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
+# The ragged transport and the carry offload run with one collective in flight. Both force it rather
+# than default it; see `_apply_hero_ep_runtime_defaults`.
+SERIAL_COLLECTIVE_OVERLAP_LIMIT = 1
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -216,12 +218,7 @@ def _apply_hero_ep_runtime_defaults(
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
-    if ragged:
-        overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
-    elif inline_watch_enabled:
-        overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
-    else:
-        overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     # The scheduler's longer buffer live ranges fit on the ragged transport only once the layer
     # carry leaves HBM. Without that offload its first-step NCCL allocations fail.
     latency_hiding = not ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE
@@ -246,9 +243,11 @@ def _apply_hero_ep_runtime_defaults(
         # away from the caller instead of defaulting it. With the carry offload, a reloaded
         # residual races its consumer. On the ragged transport, the backward's transports do not
         # depend on the recomputed forward's, and with several collectives in flight the two
-        # overlapped and gave run-to-run different gradients, or hung, on GB200.
+        # overlapped and gave run-to-run different gradients, or hung, on GB200. The transport's
+        # dispatch and combine also form one dependent chain, so admitting more collectives only
+        # contends for the SMs it needs.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
-        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT}")
+        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={SERIAL_COLLECTIVE_OVERLAP_LIMIT}")
     if ragged:
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this

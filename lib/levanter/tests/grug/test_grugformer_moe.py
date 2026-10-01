@@ -19,6 +19,7 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import (
+    _deinterleave_gate_up,
     _interleave_gate_up,
     _interleave_halves,
     _invert_permutation,
@@ -688,6 +689,21 @@ def test_interleave_places_gate_and_up_in_alternating_columns(dtype):
     assert interleaved.dtype == w13.dtype
     np.testing.assert_array_equal(np.asarray(interleaved[..., 0::2]), np.asarray(w13[..., :moe_dim]))
     np.testing.assert_array_equal(np.asarray(interleaved[..., 1::2]), np.asarray(w13[..., moe_dim:]))
+
+
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
+def test_deinterleave_matches_the_interleave_transpose(dtype):
+    moe_dim = 4
+    w13 = _arange_w13(dtype, moe_dim=moe_dim)
+    cotangent = (jnp.arange(w13.size, dtype=jnp.float32).reshape(w13.shape) / 7).astype(dtype)
+
+    _, transpose = jax.vjp(lambda w: _interleave_gate_up(w, moe_dim), w13)
+    (expected,) = transpose(cotangent)
+
+    np.testing.assert_array_equal(np.asarray(_deinterleave_gate_up(cotangent)), np.asarray(expected))
+    np.testing.assert_array_equal(
+        np.asarray(_deinterleave_gate_up(_interleave_gate_up(w13, moe_dim))), np.asarray(w13)
+    )
 
 
 @pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])

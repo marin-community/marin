@@ -11,7 +11,7 @@
 # its XLA delta and the cuDNN headers (a 2.29.7-header wheel hung the ragged hero).
 #
 # usage (inside the job): XLA_REF=<branch|sha> CUDNN_VERSION=<uv.lock nvidia-cudnn-cu13> \
-#        [SENTINEL_FILE=<path> SENTINEL=<string>] [BAZEL_JOBS=64] [S3_DEST=s3://.../prefix] \
+#        S3_DEST=s3://.../prefix [SENTINEL_FILE=<path> SENTINEL=<string>] [BAZEL_JOBS=64] \
 #        bash experiments/grug/moe_hero_ep/pjrt_build_job.sh
 set -euo pipefail
 
@@ -43,7 +43,7 @@ git clone -q --filter=blob:none https://github.com/jax-ml/jax.git jax
 git -C jax checkout -q --detach "$JAX_COMMIT"
 echo "xla $XLA_SHA (ref $XLA_REF)"; echo "jax $JAX_COMMIT ($JAX_VERSION)"
 # A silently absent delta builds a healthy-looking wheel that benchmarks as a null result.
-if [ -n "${SENTINEL_FILE:-}" ] && ! grep -q "${SENTINEL:?set SENTINEL with SENTINEL_FILE}" "xla/${SENTINEL_FILE}"; then
+if [ -n "${SENTINEL_FILE:-}" ] && ! grep -qF "${SENTINEL:?set SENTINEL with SENTINEL_FILE}" "xla/${SENTINEL_FILE}"; then
   echo "xla/${SENTINEL_FILE} does not contain ${SENTINEL}" >&2; exit 1
 fi
 
@@ -75,10 +75,10 @@ sha256sum "$WHEEL"
 mkdir -p "${IRIS_OUTPUT_DIR:-/tmp/out}" && cp "$WHEEL" "${IRIS_OUTPUT_DIR:-/tmp/out}/"
 "$PY" - "$WHEEL" "$S3_DEST/${XLA_SHA:0:12}" <<'PY'
 import os, sys
-import fsspec
+from rigging.filesystem.buckets import filesystem_for
 wheel, dest = sys.argv[1], sys.argv[2]
-fs = fsspec.filesystem("s3")
-target = f"{dest.rstrip('/')}/{os.path.basename(wheel)}"
+# Route by the bucket's declared backend, so a CoreWeave or R2 destination gets its endpoint.
+fs, target = filesystem_for(f"{dest.rstrip('/')}/{os.path.basename(wheel)}")
 fs.put(wheel, target)
 print("uploaded", target, fs.size(target))
 PY

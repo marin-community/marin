@@ -78,13 +78,15 @@ def test_expert_mlp_forward_and_all_gradients_match_reference(tail_rows):
             outputs.append(h @ c[expert])
         return jnp.concatenate(outputs)
 
-    expert_mlp = jax.jit(lambda a, b, c: sonic._expert_mlp_quack_wgrad(a, b, c, cu))
-    actual, actual_pullback = jax.vjp(expert_mlp, x, w13, w2)
+    @jax.jit
+    def run(a, b, c, dy):
+        y, residuals = sonic._expert_mlp_quack_wgrad_fwd(a, b, c, cu)
+        dx, dw13, dw2, _row_dot = sonic._expert_mlp_quack_wgrad_backward(residuals, dy)
+        return y, (dx, dw13, dw2)
+
+    actual, actual_gradients = run(x, w13, w2, dy)
     expected, expected_pullback = jax.vjp(jax.jit(reference), x, w13, w2)
-    primal = expert_mlp(x, w13, w2)
-    _assert_bfloat16_close(primal[:_NUM_TOKENS], expected)
     _assert_bfloat16_close(actual[:_NUM_TOKENS], expected)
-    actual_gradients = actual_pullback(dy)
     expected_gradients = expected_pullback(dy[:_NUM_TOKENS])
     _assert_bfloat16_close(actual_gradients[0][:_NUM_TOKENS], expected_gradients[0][:_NUM_TOKENS])
     for got, want in zip(actual_gradients[1:], expected_gradients[1:], strict=True):
@@ -132,20 +134,13 @@ def test_expert_mlp_backward_row_dot_is_the_output_scale_gradient():
     @jax.jit
     def run(x, w13, w2, dy):
         y, residuals = sonic._expert_mlp_quack_wgrad_fwd(x, w13, w2, cu)
-        return (
-            y,
-            sonic._expert_mlp_quack_wgrad_backward(residuals, dy),
-            sonic._expert_mlp_quack_wgrad_bwd(residuals, dy),
-        )
+        return y, sonic._expert_mlp_quack_wgrad_backward(residuals, dy)[3]
 
-    y, (dx, dw13, dw2, row_dot), (dx_vjp, dw13_vjp, dw2_vjp, _cu_ct) = run(x, w13, w2, dy)
+    y, row_dot = run(x, w13, w2, dy)
 
     # The row dot is d/ds of <s * y, dy> for a per-row scale s, without reading y.
     expected = np.sum(np.asarray(y, np.float32) * np.asarray(dy, np.float32), axis=-1)
     _assert_bfloat16_close(row_dot, expected)
-    # The remaining outputs are the VJP's.
-    for got, want in zip((dx, dw13, dw2), (dx_vjp, dw13_vjp, dw2_vjp), strict=True):
-        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
 
 
 def test_muon_symmetric_gemm_matches_gram_matrix():

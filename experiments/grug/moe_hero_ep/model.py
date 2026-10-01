@@ -124,6 +124,7 @@ LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
 # value leaves the recompute only the dispatch and the gate/up projection. At the hero shapes it
 # is 402 MB per layer, 18 GiB of HBM across 48 layers.
 MOE_OUTPUT_REMAT_NAME = "grug_moe_routed_output"
+RAGGED_MOE_IMPLEMENTATION: MoeImplementation = "ragged_all_to_all"
 
 
 def _batch_spec() -> P:
@@ -1276,7 +1277,7 @@ class Block(eqx.Module):
         mlp_in = self._gated_rms_norm(self.rms_mlp, self.mlp_gated_norm, x)
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
         mlp, shared = self.mlp, self.shared
-        if resolve_moe_implementation(mlp.cfg.moe_implementation) == "ragged_all_to_all":
+        if resolve_moe_implementation(mlp.cfg.moe_implementation) == RAGGED_MOE_IMPLEMENTATION:
             mlp, shared, mlp_in = _prefetch_mlp_weights(mlp, shared, mlp_in)
         mlp_out, router_stats = mlp(mlp_in, token_valid)
         if shared is not None:

@@ -363,6 +363,7 @@ def _runtime_env_config(
         processes_per_task=processes_per_task,
         max_retries_failure=0,
         max_task_failures=10,
+        pip_packages=(),
     )
 
 

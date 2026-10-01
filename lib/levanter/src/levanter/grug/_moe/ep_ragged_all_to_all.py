@@ -34,6 +34,7 @@ from jaxtyping import Array, Bool, Float, Int
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import (
     _assignment_validity,
+    _deinterleave_gate_up,
     _interleave_gate_up,
     _invert_permutation,
     _scaled_capacity,
@@ -153,12 +154,7 @@ class _CuteExpertMlp:
         from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad_backward  # noqa: PLC0415
 
         dx, dw13_interleaved, dw2, output_dot_cotangent = _expert_mlp_quack_wgrad_backward(residuals, cotangent)
-        w13_interleaved = residuals[1]
-        moe_dim = w13_interleaved.shape[2] // 2
-        # The interleave is a fixed permutation of the last axis; its transpose restores gate/up halves.
-        _, deinterleave = jax.vjp(lambda w: _interleave_gate_up(w, moe_dim), jnp.zeros_like(w13_interleaved))
-        (dw13,) = deinterleave(dw13_interleaved)
-        return dx, dw13, dw2, output_dot_cotangent
+        return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot_cotangent
 
 
 @functools.cache
