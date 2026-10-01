@@ -11,7 +11,7 @@ import finelog.client.object_query_client as object_query_client_mod
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finelog.client import ObjectQueryClient
+from finelog.client import DirectQuerySegment, ObjectQueryClient
 from finelog.errors import QueryTimeoutError, StatsError
 
 
@@ -76,11 +76,12 @@ def _write_catalog(
         "directQuerySegments": [
             {
                 "segmentId": object_path.name,
-                "source": {"objectId": object_id},
+                "source": {"objectId": object_id, "byteSize": str(object_path.stat().st_size)},
                 "level": 1,
                 "minSeq": "1",
                 "maxSeq": "2",
                 "rowCount": "2",
+                "createdAtMs": "1700000000000",
             }
         ],
     }
@@ -230,6 +231,23 @@ def test_object_query_folds_segment_replacement_from_catalog_delta(tmp_path: Pat
 
     assert len(pin.object_uris) == 1
     assert result.to_pydict() == {"worker_id": ["w-3"]}
+
+
+def test_pin_catalog_exposes_direct_query_segment_metadata(tmp_path: Path) -> None:
+    _write_catalog(tmp_path)
+    object_path = tmp_path / "_finelog/tables/iris.worker/objects/v1/l1/content/seg_L1_0000000000000000001.parquet"
+
+    pin = ObjectQueryClient(str(tmp_path)).pin_catalog("iris.worker")
+
+    assert pin.segments == (
+        DirectQuerySegment(
+            object_uri=str(object_path),
+            byte_size=object_path.stat().st_size,
+            row_count=2,
+            created_at_ms=1700000000000,
+        ),
+    )
+    assert pin.object_uris == (str(object_path),)
 
 
 def test_object_query_reads_catalog_written_before_sha_field_removal(tmp_path: Path) -> None:

@@ -5,8 +5,9 @@
 """Analyze cross-region GCS operations from archived Iris task logs.
 
 This script:
-- locates finelog log parquet segments under ``<finelog.remote_log_dir>/log``
-- downloads the recent segments needed for a time window
+- pins the finelog ``log`` table's object catalog under ``<finelog.remote_log_dir>``
+  and selects the stable segments created recently enough to hold the window
+- downloads those segments
 - downloads the latest controller checkpoint unless a checkpoint directory is supplied
 - joins task log entries against task attempt / worker region metadata
 - reports cross-region ``gs://`` path mentions
@@ -22,12 +23,14 @@ import re
 import sqlite3
 import time
 from collections import Counter
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 import duckdb
+from finelog.client import DirectQuerySegment, ObjectQueryClient
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
@@ -37,6 +40,9 @@ from rigging.filesystem.factory import url_to_fs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 GS_RE = re.compile(r"gs://[^\s'\"`]+")
+
+# Finelog namespace that holds Iris task log lines (``key`` = ``<task_id>:<attempt>``).
+LOG_NAMESPACE = "log"
 
 # Extensions that typically carry bulk bytes. A single cross-region read of one
 # of these is orders of magnitude more expensive than a small JSON/config file.
@@ -241,58 +247,54 @@ def classify_op(line: str) -> str:
     return "other"
 
 
-def choose_log_objects(
-    remote_logs_dir: str,
+def choose_log_segments(
+    segments: Sequence[DirectQuerySegment],
     window: TimeWindow,
     lookback_hours: float,
-) -> list[dict]:
-    logging.info(f"Listing log objects in {remote_logs_dir}")
-    fs, path = url_to_fs(remote_logs_dir)
-    entries = sorted(fs.ls(path, detail=True), key=lambda e: e["mtime"])
-    logging.info(f"Found {len(entries)} total log objects")
-    mtime_cutoff = window.start - dt.timedelta(hours=lookback_hours)
+) -> list[DirectQuerySegment]:
+    """Select the catalog segments that can hold log lines from ``window``.
+
+    A segment only holds rows ingested before it was created, so anything
+    created earlier than ``window.start - lookback_hours`` cannot contribute;
+    the lookback covers shipping delay between a worker emitting a line and
+    the finelog server sealing the segment that carries it.
+    """
+    cutoff = window.start - dt.timedelta(hours=lookback_hours)
+    cutoff_ms = int(cutoff.timestamp() * 1000)
     logging.info(f"Analysis window: {window.start.isoformat()} to {window.end.isoformat()}")
-    logging.info(f"Lookback: {lookback_hours} hours, so filtering for objects modified after {mtime_cutoff.isoformat()}")
-
-    before_window: dict | None = None
-    chosen: list[dict] = []
-    for entry in entries:
-        entry_mtime = entry["mtime"].astimezone(dt.UTC)
-        if entry_mtime < mtime_cutoff:
-            before_window = entry
-            continue
-        chosen.append(entry)
-
-    if before_window is not None:
-        chosen.insert(0, before_window)
-        before_mtime = before_window["mtime"].astimezone(dt.UTC)
-        logging.info(f"Included 1 file before cutoff (mtime: {before_mtime.isoformat()})")
-
+    logging.info(f"Lookback: {lookback_hours} hours, so selecting segments created after {cutoff.isoformat()}")
+    chosen = sorted(
+        (segment for segment in segments if segment.created_at_ms >= cutoff_ms),
+        key=lambda segment: segment.created_at_ms,
+    )
     if chosen:
-        oldest = chosen[0]["mtime"].astimezone(dt.UTC)
-        newest = chosen[-1]["mtime"].astimezone(dt.UTC)
-        logging.info(f"Selected {len(chosen)} files (mtime range: {oldest.isoformat()} to {newest.isoformat()})")
-        logging.info(f"File names: {[Path(e['name']).name for e in chosen]}")
+        oldest = _fmt_ms(chosen[0].created_at_ms)
+        newest = _fmt_ms(chosen[-1].created_at_ms)
+        total_bytes = sum(segment.byte_size for segment in chosen)
+        logging.info(
+            f"Selected {len(chosen)} of {len(segments)} segments "
+            f"(created {oldest} to {newest}, {total_bytes / 2**20:.0f} MiB)"
+        )
+        logging.info(f"Object names: {[Path(segment.object_uri).name for segment in chosen]}")
     return chosen
 
 
-def _download_one(fs, entry: dict, target_dir: Path, index: int, total: int) -> Path:
-    name = entry["name"]
-    remote_size = entry.get("size")
-    local_path = target_dir / Path(name).name
-    cached_ok = local_path.exists() and remote_size is not None and local_path.stat().st_size == remote_size
+def _download_one(fs, segment: DirectQuerySegment, target_dir: Path, index: int, total: int) -> Path:
+    name = Path(segment.object_uri).name
+    local_path = target_dir / name
+    cached_ok = local_path.exists() and local_path.stat().st_size == segment.byte_size
     if cached_ok:
-        logging.info(f"  [{index}/{total}] {Path(name).name} already cached")
+        logging.info(f"  [{index}/{total}] {name} already cached")
         return local_path
     if local_path.exists():
         logging.info(
-            f"  [{index}/{total}] {Path(name).name} cached but size mismatch "
-            f"(local={local_path.stat().st_size}, remote={remote_size}); re-downloading"
+            f"  [{index}/{total}] {name} cached but size mismatch "
+            f"(local={local_path.stat().st_size}, remote={segment.byte_size}); re-downloading"
         )
     else:
-        logging.info(f"  [{index}/{total}] Downloading {Path(name).name}")
+        logging.info(f"  [{index}/{total}] Downloading {name}")
     tmp_path = local_path.with_suffix(local_path.suffix + ".part")
-    with fs.open(name, "rb") as src, tmp_path.open("wb") as dst:
+    with fs.open(segment.object_uri, "rb") as src, tmp_path.open("wb") as dst:
         while True:
             chunk = src.read(8 * 1024 * 1024)
             if not chunk:
@@ -302,22 +304,21 @@ def _download_one(fs, entry: dict, target_dir: Path, index: int, total: int) -> 
     return local_path
 
 
-def download_log_objects(remote_logs_dir: str, entries: list[dict], target_dir: Path) -> list[Path]:
-    fs, _ = url_to_fs(remote_logs_dir)
+def download_log_segments(remote_log_dir: str, segments: list[DirectQuerySegment], target_dir: Path) -> list[Path]:
+    fs, _ = url_to_fs(remote_log_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    logging.info(f"Downloading {len(entries)} parquet files to {target_dir}")
+    logging.info(f"Downloading {len(segments)} parquet files to {target_dir}")
 
-    index_map = {id(entry): i for i, entry in enumerate(entries, 1)}
-    total = len(entries)
+    total = len(segments)
     results: dict[int, Path] = {}
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         futures = {
-            pool.submit(_download_one, fs, entry, target_dir, index_map[id(entry)], total): entry for entry in entries
+            pool.submit(_download_one, fs, segment, target_dir, index, total): index
+            for index, segment in enumerate(segments, 1)
         }
         for fut in as_completed(futures):
-            entry = futures[fut]
-            results[index_map[id(entry)]] = fut.result()
+            results[futures[fut]] = fut.result()
 
     local_paths = [results[i] for i in range(1, total + 1)]
     logging.info(f"Finished downloading {len(local_paths)} parquet files")
@@ -882,7 +883,7 @@ def write_csv(summary: dict, path: Path) -> None:
     "--download-lookback-hours",
     type=float,
     default=12.0,
-    help="Extra lookback on log object mtimes when choosing parquet segments. Defaults to 12.",
+    help="Extra lookback on segment creation time when choosing parquet segments. Defaults to 12.",
 )
 @click.option(
     "--summary-json",
@@ -925,18 +926,26 @@ def main(
     finelog_cfg = load_finelog_config(cfg.finelog.config)
     if not finelog_cfg.remote_log_dir:
         raise click.ClickException(f"finelog config {cfg.finelog.config!r} has no remote_log_dir.")
-    remote_logs_dir = f"{finelog_cfg.remote_log_dir.rstrip('/')}/log"
+    remote_log_dir = finelog_cfg.remote_log_dir.rstrip("/")
 
-    log_entries = choose_log_objects(remote_logs_dir, window, download_lookback_hours)
+    # The pin is an immutable catalog snapshot; its objects stay readable for at
+    # least the catalog's query lifetime, which comfortably covers the download.
+    pin = ObjectQueryClient(remote_log_dir).pin_catalog(LOG_NAMESPACE)
+    logging.info(
+        f"Pinned {LOG_NAMESPACE!r} catalog generation {pin.catalog_generation} "
+        f"under {remote_log_dir}: {len(pin.segments)} stable segments"
+    )
+    log_segments = choose_log_segments(pin.segments, window, download_lookback_hours)
     local_logs_dir = out_path / "logs"
-    local_logs = download_log_objects(remote_logs_dir, log_entries, local_logs_dir)
+    local_logs = download_log_segments(remote_log_dir, log_segments, local_logs_dir)
     local_logs = validate_parquet_files(local_logs)
     db_path = download_checkpoint(cfg, out_path, checkpoint_dir)
 
     summary = analyze(local_logs, db_path, window)
     summary["local_log_files"] = [str(path) for path in local_logs]
     summary["local_db_path"] = str(db_path)
-    summary["remote_logs_dir"] = remote_logs_dir
+    summary["remote_log_dir"] = remote_log_dir
+    summary["log_catalog_generation"] = pin.catalog_generation
 
     summary_json_path = Path(summary_json) if summary_json else out_path / "cross_region_ops_summary.json"
     appendix_csv_path = Path(appendix_csv) if appendix_csv else out_path / "cross_region_ops_appendix.csv"
