@@ -56,6 +56,7 @@ from experiments.grug.fast_track.model import (
     upper_softmax_slice_mask,
 )
 from experiments.grug.fast_track.train import (
+    TRAIN_LOADER_BUFFER_SIZE,
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
@@ -389,6 +390,7 @@ def build_h100_ladder_run(
     xla_memory_report: bool = False,
     pgle_runs: int = 0,
     pipeline_depth: int = 0,
+    loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE,
     ema_beta: float | None = None,
     ema_last_steps: int | None = None,
     ema_blend_sweep: tuple[float, ...] = (),
@@ -604,6 +606,7 @@ def build_h100_ladder_run(
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 pipeline_depth=pipeline_depth,
+                loader_buffer_batches=loader_buffer_batches,
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
                 grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
@@ -780,6 +783,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Train steps dispatched before the previous step's host work (1: overlap, crashes near step 515; "
     "0: finish each step first).",
 )
+@click.option(
+    "--loader-buffer-batches",
+    type=int,
+    default=TRAIN_LOADER_BUFFER_SIZE,
+    help="Batches the train loader keeps on the devices ahead of the step.",
+)
 @click.option("--ema-beta", type=float, default=None, help="Weight-EMA decay; evals after the EMA start score the EMA.")
 @click.option("--ema-last-steps", type=int, default=None, help="Run the weight EMA over only the last N steps.")
 @click.option(
@@ -931,6 +940,7 @@ def main(
     xla_memory_report: bool,
     pgle_runs: int,
     pipeline_depth: int,
+    loader_buffer_batches: int,
     ema_beta: float | None,
     ema_last_steps: int | None,
     ema_blend: tuple[float, ...],
@@ -978,6 +988,7 @@ def main(
         xla_memory_report=xla_memory_report,
         pgle_runs=pgle_runs,
         pipeline_depth=pipeline_depth,
+        loader_buffer_batches=loader_buffer_batches,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         ema_blend_sweep=tuple(ema_blend),

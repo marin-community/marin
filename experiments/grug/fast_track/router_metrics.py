@@ -20,12 +20,12 @@ except ModuleNotFoundError:
 
 def local_routing_stats(
     selected_experts: Int[Array, "T K"],
-    router_probs: Float[Array, "T E"],
     router_logits: Float[Array, "T E"],
     mesh: jax.sharding.AbstractMesh,
     *,
     num_experts: int,
     batch_axes: tuple[str, ...],
+    token_stride: int = 1,
 ) -> dict[str, jax.Array]:
     """Per-shard partial sums for the router metrics, cross-device reduction deferred.
 
@@ -34,29 +34,33 @@ def local_routing_stats(
     reaches the router bias only next step (via the trainer's pending_qb_betas). Return the unreduced
     per-shard partials and let ``reduce_router_stats`` do the collective once over the stacked scan
     outputs.
+
+    ``token_stride`` > 1 scores every ``token_stride``-th token of each shard and scales the sums back up:
+    the softmax and logsumexp over every expert, and the one-hot counts, cost several ms per step at d512.
     """
 
-    def _local(sel: jax.Array, probs: jax.Array, logits: jax.Array) -> dict[str, jax.Array]:
-        probs_f = probs.astype(jnp.float32)
-        logits_f = logits.astype(jnp.float32)
+    def _local(sel: jax.Array, logits: jax.Array) -> dict[str, jax.Array]:
+        sel = sel[::token_stride]
+        logits_f = logits[::token_stride].astype(jnp.float32)
+        probs_f = jax.nn.softmax(logits_f, axis=-1)
         counts = jnp.sum(jax.nn.one_hot(sel, num_experts, dtype=jnp.float32), axis=(0, 1))
         z = jsp.special.logsumexp(logits_f, axis=-1)
         return {
-            "routing_counts_local": counts[None, :],
-            "router_prob_sum_local": jnp.sum(probs_f, axis=0)[None, :],
-            "router_z_sq_sum_local": jnp.sum(z**2)[None],
+            "routing_counts_local": token_stride * counts[None, :],
+            "router_prob_sum_local": token_stride * jnp.sum(probs_f, axis=0)[None, :],
+            "router_z_sq_sum_local": token_stride * jnp.sum(z**2)[None],
         }
 
     return shard_map(
         _local,
         mesh=mesh,
-        in_specs=(P(batch_axes, None), P(batch_axes, None), P(batch_axes, None)),
+        in_specs=(P(batch_axes, None), P(batch_axes, None)),
         out_specs={
             "routing_counts_local": P(batch_axes, None),
             "router_prob_sum_local": P(batch_axes, None),
             "router_z_sq_sum_local": P(batch_axes),
         },
-    )(selected_experts, router_probs, router_logits)
+    )(selected_experts, router_logits)
 
 
 def reduce_router_stats(

@@ -202,6 +202,9 @@ def _pgle_disabled():
         jax.config.update("jax_enable_pgle", prev)
 
 
+TRAIN_LOADER_BUFFER_SIZE = 512
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -224,6 +227,8 @@ class GrugTrainerConfig:
     # the devices; 0 finishes every step before dispatching the next. 1 crashes the devices around step 515
     # (CUDA_ERROR_ILLEGAL_ADDRESS, with or without PGLE; batch 160), so it is opt-in until that is understood.
     pipeline_depth: int = 0
+    # Batches the train loader's background thread keeps on the devices ahead of the step.
+    loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE
     # Dump XLA's buffer assignment and memory-usage report for the train step and upload them here (process 0),
     # also when the step fails, e.g. with an out-of-memory error: attributes the temp buffer to HLO values.
     xla_memory_report_path: str | None = None
@@ -368,7 +373,6 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_TRAIN_LOADER_BUFFER_SIZE = 512
 # On one GB200 tray, four-batch requests delivered the first data in 3.7s and sustained 3.4 batches/s.
 _TRAIN_LOADER_FETCH_BATCH_SIZE = 4
 
@@ -378,6 +382,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
+    max_buffered_batches: int = TRAIN_LOADER_BUFFER_SIZE,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
@@ -385,7 +390,7 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
-        max_buffered_batches=_TRAIN_LOADER_BUFFER_SIZE,
+        max_buffered_batches=max_buffered_batches,
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
         fetch_batch_size=_TRAIN_LOADER_FETCH_BATCH_SIZE,
@@ -1719,6 +1724,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             train_dataset,
             batch_schedule=batch_schedule,
             mesh=mesh,
+            max_buffered_batches=config.trainer.loader_buffer_batches,
         )
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)

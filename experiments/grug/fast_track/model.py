@@ -716,6 +716,9 @@ class GrugModelConfig:
     """Activation of the ungated routed experts (``moe_ungated_relu2``)."""
     shared_ungated_activation: UngatedExpertActivation = UngatedExpertActivation.RELU2
     """Activation of the ungated shared experts (``shared_ungated_relu2``)."""
+    router_stats_stride: int = 1
+    """Score the logging-only router metrics (expert counts, mean probabilities, router z) on every n-th token
+    of each shard (``local_routing_stats``). Training is unaffected; QB's thresholds use every token."""
     simbal_loss_weight: float = 0.0
     """SimBal (arXiv 2506.14038): adds ``weight * sum_l ||R_l^T R_l - I||_1`` over the real-expert router
     columns ``R_l`` [D, E] to the training loss (unnormalized, as in the paper; it uses 0.1). 0: off."""
@@ -3287,7 +3290,6 @@ class MoEMLP(eqx.Module):
         if cap is not None:
             router_logits = cap * jnp.tanh(router_logits / cap)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-        router_probs = jax.nn.softmax(router_logits, axis=-1)
         k = self.cfg.num_experts_per_token
         banks = _expert_banks(self.cfg)
         num_real = self.cfg.num_experts
@@ -3352,11 +3354,11 @@ class MoEMLP(eqx.Module):
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
         router_stats = local_routing_stats(
             reshard(selected_experts, P(_BATCH_AXES, None)),
-            reshard(router_probs, P(_BATCH_AXES, None)),
             reshard(router_logits, P(_BATCH_AXES, None)),
             mesh,
             num_experts=num_real + self.cfg.num_null_experts,
             batch_axes=_BATCH_AXES,
+            token_stride=self.cfg.router_stats_stride,
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha` by binning
         # them into fixed bins over the live global range and reading the (1-K/E) quantile.
