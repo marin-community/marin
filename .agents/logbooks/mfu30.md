@@ -635,3 +635,12 @@ same-code band. With autotune off, final-seq and noqb agree on loss, qb_beta, ma
 diffs in z-loss/LB metrics, so QB-after-MLP leaves the QB statistics unchanged. Margin work started: C builds
 PGLE profiles (plain + A's D2H patch) from the f1-seq-02 trace on `research/mcwitt/mfu30-final-pgle`; B
 prototypes holding one shared expert back to cover forward return c1 (up to ~0.19 s).
+
+## M30-037 PGLE arms queued (2026-10-01)
+
+C built PGLE profiles from m30-f1-seq-02's trace (rank-0, 180021-180023) on `research/mcwitt/mfu30-final-pgle`
+@ 883faa103f (final-seq + two .pbtxt files): 3,674 instruction costs, 3,672 match the f1-seq-02 HLO; 95.5% of
+costly instructions covered (all 12 ragged all-to-alls, 110 copy-starts). The D2H variant sets the seven
+end-of-step copy-starts to 277.4 ms each. Queued after the confirmations (custom wheel, streams on, traced,
+seed 0, 60 steps): `m30-pgle-d2h-01` and `m30-pgle-plain-01`. Watch: carry stall, copy-start.44 hoisting
+(+10 GiB), the PGLE accuracy-checker WARN lines (to confirm the profile applied), and the loss band.
