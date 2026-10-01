@@ -181,6 +181,8 @@ class FinalAction(Convention):
 
 
 class ProviderState(Convention):
+    """Extract an authoritative snapshot of the named tool provider after final assistant termination."""
+
     answer_format: Literal[AnswerFormat.STATE] = AnswerFormat.STATE
     provider: str = Field(min_length=1)
 
@@ -188,10 +190,10 @@ class ProviderState(Convention):
         final = attempt.conversation.events[-1]
         if not isinstance(final, (TextMessage, AssistantToolCalls)):
             raise SubmissionFailure("State submission requires a final assistant message")
-        provider = attempt.tool_providers[self.provider]
-        if not isinstance(provider, StateReadable):
-            raise TypeError(f"Provider {self.provider!r} does not expose canonical state")
-        state = provider.canonical_state()
+        tool_provider = attempt.tool_providers[self.provider]
+        if not isinstance(tool_provider, StateReadable):
+            raise TypeError(f"Tool provider {self.provider!r} does not expose canonical state")
+        state = tool_provider.canonical_state()
         _validate_json_state(state)
         return StateSubmission(json.loads(json.dumps(state, allow_nan=False)))
 

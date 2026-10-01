@@ -31,7 +31,6 @@ from taskcompendium.lowering import (
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
     ToolBinding,
-    provider_class,
     read_environment_config,
     read_specification,
     read_submission_convention,
@@ -39,7 +38,7 @@ from taskcompendium.lowering import (
     validate_provider_surface,
 )
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, ConversationTrace
-from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider
+from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, ToolProviderCache, parse_git_provider
 from taskcompendium.submission import GradingAttempt
 from taskcompendium.tool_provider import ManagedToolProvider, ToolProvider, tool_schema_sha256
 from taskcompendium.verifier_registry import grade_answer
@@ -85,18 +84,23 @@ class CompositeToolEnvironment(BaseEnvironment):
         self.providers: dict[str, ToolProvider] = {}
         self.tool_owners: dict[str, str] = {}
         super().__init__(*args, **kwargs)
-        for name, binding in self.bindings.items():
-            source = (
-                self.environment_dir / PROVIDER_SOURCES_DIR / name
-                if parse_git_provider(binding.provider) is not None
-                else None
-            )
-            validate_provider_surface(binding, source)
-            provider_type = provider_class(binding, source)
-            provider = provider_type(**self.provider_kwargs(binding))
-            if not isinstance(provider, ToolProvider):
-                raise TypeError(f"Provider {name!r} does not expose tool methods")
-            self.providers[name] = provider
+        self.provider_cache = ToolProviderCache()
+        try:
+            for name, binding in self.bindings.items():
+                source = (
+                    self.environment_dir / PROVIDER_SOURCES_DIR / name
+                    if parse_git_provider(binding.provider) is not None
+                    else None
+                )
+                validate_provider_surface(binding, source, cache=self.provider_cache)
+                staged = self.provider_cache.stage(binding.provider, source)
+                tool_provider = self.provider_cache.load(staged, **self.provider_kwargs(binding))
+                if not isinstance(tool_provider, ToolProvider):
+                    raise TypeError(f"Tool provider {name!r} does not expose tool methods")
+                self.providers[name] = tool_provider
+        except BaseException:
+            self.provider_cache.close()
+            raise
 
     @staticmethod
     def type() -> str:
@@ -120,25 +124,31 @@ class CompositeToolEnvironment(BaseEnvironment):
                 if isinstance(provider, ManagedToolProvider):
                     started.append(provider)
                     await provider.start()
-        except Exception as error:
+        except BaseException as error:
             cleanup_errors = []
-            for provider in reversed(started):
-                try:
-                    await provider.stop()
-                except Exception as cleanup_error:
-                    cleanup_errors.append(cleanup_error)
+            try:
+                for provider in reversed(started):
+                    try:
+                        await provider.stop()
+                    except Exception as cleanup_error:
+                        cleanup_errors.append(cleanup_error)
+            finally:
+                self.provider_cache.close()
             if cleanup_errors:
-                raise ExceptionGroup("Provider start and cleanup failed", [error, *cleanup_errors]) from error
+                raise BaseExceptionGroup("Provider start and cleanup failed", [error, *cleanup_errors]) from error
             raise
 
     async def stop(self, delete: bool) -> None:
         errors = []
-        for provider in reversed(tuple(self.providers.values())):
-            if isinstance(provider, ManagedToolProvider):
-                try:
-                    await provider.stop()
-                except Exception as error:
-                    errors.append(error)
+        try:
+            for provider in reversed(tuple(self.providers.values())):
+                if isinstance(provider, ManagedToolProvider):
+                    try:
+                        await provider.stop()
+                    except Exception as error:
+                        errors.append(error)
+        finally:
+            self.provider_cache.close()
         if errors:
             raise ExceptionGroup("Provider cleanup failed", errors)
 
