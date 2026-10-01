@@ -508,14 +508,20 @@ fn metadata_int64_bounds(
     let mut lo: Option<i64> = None;
     let mut hi: Option<i64> = None;
     for rg in md.row_groups() {
-        if let Some(Statistics::Int64(s)) = rg.column(col_idx).statistics() {
-            if let Some(&m) = s.min_opt() {
-                lo = Some(lo.map_or(m, |x: i64| x.min(m)));
-            }
-            if let Some(&m) = s.max_opt() {
-                hi = Some(hi.map_or(m, |x: i64| x.max(m)));
-            }
+        if rg.num_rows() == 0 {
+            continue;
         }
+        let Some(Statistics::Int64(s)) = rg.column(col_idx).statistics() else {
+            return Some((None, None));
+        };
+        if s.null_count_opt() == Some(rg.num_rows() as u64) {
+            continue;
+        }
+        let (Some(&minimum), Some(&maximum)) = (s.min_opt(), s.max_opt()) else {
+            return Some((None, None));
+        };
+        lo = Some(lo.map_or(minimum, |value| value.min(minimum)));
+        hi = Some(hi.map_or(maximum, |value| value.max(maximum)));
     }
     Some((lo, hi))
 }
@@ -595,7 +601,8 @@ pub fn segment_bounds(
 /// than tracking liveness.
 static ROW_GROUP_LAYOUTS: OnceLock<Mutex<HashMap<PathBuf, CachedRowGroups>>> = OnceLock::new();
 
-/// A segment's row-group row counts and the file identity they were read from.
+/// Cached row-group layout and complete integer bounds from one immutable footer.
+#[derive(Clone)]
 struct CachedRowGroups {
     dev: u64,
     ino: u64,
@@ -603,6 +610,7 @@ struct CachedRowGroups {
     modified: SystemTime,
     segment_identity: Uuid,
     rows: Arc<[usize]>,
+    integer_bounds: Arc<HashMap<String, (i64, i64)>>,
 }
 
 /// Entries held before the row-group cache is cleared. A hub holds low thousands
@@ -619,15 +627,20 @@ const ROW_GROUP_CACHE_ENTRIES: usize = 8192;
 /// the file's length and modified time; a path written again is read again rather
 /// than answered from the old entry.
 pub fn segment_row_group_rows(path: &Path) -> Option<Arc<[usize]>> {
-    cached_segment_identity_and_row_group_rows(path).map(|(_, rows)| rows)
+    cached_segment_footer(path).map(|footer| footer.rows)
 }
 
 /// Immutable segment identity plus row-group layout from one cached footer read.
 pub fn segment_id_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<[usize]>)> {
-    cached_segment_identity_and_row_group_rows(path)
+    cached_segment_footer(path).map(|footer| (footer.segment_identity, footer.rows))
 }
 
-fn cached_segment_identity_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<[usize]>)> {
+/// Complete signed integer bounds from cached local Parquet metadata.
+pub fn segment_integer_bounds(path: &Path) -> Option<Arc<HashMap<String, (i64, i64)>>> {
+    cached_segment_footer(path).map(|footer| footer.integer_bounds)
+}
+
+fn cached_segment_footer(path: &Path) -> Option<CachedRowGroups> {
     let file = std::fs::File::open(path).ok()?;
     let meta = file.metadata().ok()?;
     let (dev, ino, len, modified) = (meta.dev(), meta.ino(), meta.len(), meta.modified().ok()?);
@@ -635,7 +648,7 @@ fn cached_segment_identity_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<
     let cache = ROW_GROUP_LAYOUTS.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(entry) = cache.lock().unwrap().get(path) {
         if entry.dev == dev && entry.ino == ino && entry.len == len && entry.modified == modified {
-            return Some((entry.segment_identity, Arc::clone(&entry.rows)));
+            return Some(entry.clone());
         }
     }
 
@@ -648,22 +661,37 @@ fn cached_segment_identity_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<
         .iter()
         .map(|rg| rg.num_rows() as usize)
         .collect();
+    let integer_bounds = reader
+        .metadata()
+        .file_metadata()
+        .schema_descr()
+        .columns()
+        .iter()
+        .filter(|column| {
+            column.path().parts().len() == 1
+                && column.physical_type() == PhysicalType::INT64
+                && column.converted_type() != parquet::basic::ConvertedType::UINT_64
+        })
+        .filter_map(|column| {
+            let (minimum, maximum) = metadata_int64_bounds(reader.metadata(), column.name())?;
+            Some((column.name().to_string(), (minimum?, maximum?)))
+        })
+        .collect();
+    let entry = CachedRowGroups {
+        dev,
+        ino,
+        len,
+        modified,
+        segment_identity,
+        rows,
+        integer_bounds: Arc::new(integer_bounds),
+    };
     let mut cache = cache.lock().unwrap();
     if cache.len() >= ROW_GROUP_CACHE_ENTRIES {
         cache.clear();
     }
-    cache.insert(
-        path.to_path_buf(),
-        CachedRowGroups {
-            dev,
-            ino,
-            len,
-            modified,
-            segment_identity,
-            rows: Arc::clone(&rows),
-        },
-    );
-    Some((segment_identity, rows))
+    cache.insert(path.to_path_buf(), entry.clone());
+    Some(entry)
 }
 
 pub(crate) fn discover_files(dir: &Path) -> Vec<PathBuf> {

@@ -607,13 +607,41 @@ impl TableProvider for NamespaceProvider {
                 let mut segment_paths = self.segment_paths_for_scan(filters, limit);
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
+                let integer_ranges = crate::query::predicate::int_column_ranges(filters);
+                if self.segment_indexes_enabled && !needles.is_empty() && !integer_ranges.is_empty()
+                {
+                    segment_paths = tokio::task::spawn_blocking(move || {
+                        segment_paths
+                            .into_iter()
+                            .filter(|path| {
+                                crate::store::segment::segment_integer_bounds(std::path::Path::new(
+                                    path,
+                                ))
+                                .is_none_or(|bounds| {
+                                    integer_ranges.iter().all(|(column, range)| {
+                                        bounds.get(column).is_none_or(|&(minimum, maximum)| {
+                                            range.overlaps(minimum, maximum)
+                                        })
+                                    })
+                                })
+                            })
+                            .collect()
+                    })
+                    .await
+                    .map_err(|error| {
+                        datafusion::error::DataFusionError::Execution(format!(
+                            "Parquet range prune task join: {error}"
+                        ))
+                    })?;
+                }
+                let mut trigram_pruning = None;
                 if self.segment_indexes_enabled && !needles.is_empty() {
                     let indices = Arc::clone(&self.indices);
                     let artifacts = Arc::clone(&self.segment_artifacts);
                     let early_needles = needles.clone();
                     let early_key_ranges = key_ranges.clone();
-                    segment_paths = tokio::task::spawn_blocking(move || {
-                        crate::query::trigram_prune::prune_segment_paths(
+                    let pruning = tokio::task::spawn_blocking(move || {
+                        crate::query::trigram_prune::plan_segments(
                             &segment_paths,
                             &early_needles,
                             &early_key_ranges,
@@ -627,6 +655,8 @@ impl TableProvider for NamespaceProvider {
                             "trigram segment prune task join: {error}"
                         ))
                     })?;
+                    segment_paths = pruning.paths.clone();
+                    trigram_pruning = Some(pruning);
                 }
                 // Delegate to DataFusion's parquet scan (which keeps the existing
                 // range / min-max row-group pruning), then layer bundle-backed
@@ -715,14 +745,10 @@ impl TableProvider for NamespaceProvider {
                 let indices = Arc::clone(&self.indices);
                 let artifacts = Arc::clone(&self.segment_artifacts);
                 tokio::task::spawn_blocking(move || {
-                    let plan = crate::query::trigram_prune::apply_with_needles(
-                        plan,
-                        &segment_paths,
-                        &needles,
-                        &key_ranges,
-                        &indices,
-                        &artifacts,
-                    );
+                    let plan = match trigram_pruning {
+                        Some(pruning) => crate::query::trigram_prune::apply_pruning(plan, &pruning),
+                        None => plan,
+                    };
                     crate::query::exact_prune::apply(
                         plan,
                         &segment_paths,
@@ -1830,6 +1856,114 @@ mod tests {
             .unwrap();
         assert!(casts_the_data_column(&cast_plan));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn integer_range_skips_old_indexes_and_keeps_unknown_statistics() {
+        let dir = tempdir("integer_range_trigram");
+        let old = worker_batch(1, vec!["DEBUG-old"], vec![10]);
+        let recent = worker_batch(2, vec!["DEBUG-recent"], vec![200]);
+        let unknown = worker_batch(3, vec!["DEBUG-unknown"], vec![300]);
+        let (old_path, _) = write_segment_to_dir(&dir, 1, 1, &old).unwrap();
+        let (recent_path, _) = write_segment_to_dir(&dir, 1, 2, &recent).unwrap();
+        let unknown_path = dir.join("unknown.parquet");
+        let properties = parquet::file::properties::WriterProperties::builder()
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None)
+            .build();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(
+            std::fs::File::create(&unknown_path).unwrap(),
+            worker_arrow(),
+            Some(properties),
+        )
+        .unwrap();
+        writer.write(&unknown).unwrap();
+        writer.close().unwrap();
+        let index_config = crate::indices::SegmentIndexConfig::from_policies(
+            ["worker_id"],
+            &[],
+            &[],
+            Some("worker_id".to_string()),
+        );
+        for (path, batch) in [
+            (&old_path, &old),
+            (&recent_path, &recent),
+            (&unknown_path, &unknown),
+        ] {
+            crate::indices::write_segment_index(path, std::slice::from_ref(batch), &index_config)
+                .unwrap();
+        }
+        // An excluded segment's corrupted index must never be read.
+        let bundle = crate::indices::format::bundle_path(&old_path);
+        let header = crate::indices::format::read_header(&bundle).unwrap();
+        let section = header.section("trigram:worker_id").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(bundle)
+            .unwrap()
+            .write_all_at(&[0xff; 8], section.offset)
+            .unwrap();
+        let paths = [&old_path, &recent_path, &unknown_path]
+            .map(|path| path.to_string_lossy().into_owned());
+        let indices = crate::indices::test_index_registry();
+        let provider = NamespaceProvider::build(worker_arrow(), &paths, Arc::clone(&indices))
+            .unwrap()
+            .with_segment_artifacts(crate::indices::sidecar_artifacts(&paths));
+        let ctx = crate::query::make_ctx();
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql(
+                "SELECT worker_id FROM workers WHERE mem_bytes >= 100 \
+             AND contains(worker_id, 'DEBUG') ORDER BY mem_bytes",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&batches),
+            vec!["DEBUG-recent", "DEBUG-unknown"]
+        );
+        assert_eq!(indices.cache().corruption_counts().sections, 0);
+        assert_eq!(indices.cache().load_stats().section_attempts, 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn trigram_masks_survive_cache_eviction_during_source_planning() {
+        let dir = tempdir("trigram_mask_eviction");
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["DEBUG prompt"]);
+        let paths = vec![path.clone()];
+        let artifacts = crate::indices::sidecar_artifacts(&paths);
+        let indices = crate::indices::test_index_registry();
+        let needles = HashMap::from([("data".to_string(), vec!["DEBUG".to_string()])]);
+        let pruning = crate::query::trigram_prune::plan_segments(
+            &paths,
+            &needles,
+            &HashMap::new(),
+            &indices,
+            &artifacts,
+        );
+        // Evict and remove the derived file after planning; the source remains readable.
+        let bundle = artifacts[&path].bundle.as_ref().unwrap();
+        indices.invalidate(bundle);
+        std::fs::remove_file(bundle).unwrap();
+        let provider = NamespaceProvider::build(log_arrow(), &paths, Arc::clone(&indices))
+            .unwrap()
+            .with_segment_indexes_enabled(false);
+        let ctx = crate::query::make_ctx();
+        let source_plan = provider.scan(&ctx.state(), None, &[], None).await.unwrap();
+        let plan = crate::query::trigram_prune::apply_pruning(source_plan, &pruning);
+        assert_prunes_to_span1(&plan, 1);
+        let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx())
+            .await
+            .unwrap();
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            1
+        );
+        assert_eq!(indices.cache().load_stats().section_attempts, 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
