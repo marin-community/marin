@@ -696,13 +696,26 @@ def independent_reviews(
     task_sources = {}
     task_coverages = {}
     outcomes = []
+    verifyit_packages = set()
     for index, task in enumerate(tasks):
         outcome = attempt(task, config, output / "tasks" / f"{index:04d}", output)
         outcomes.append(outcome)
+        execution = output / outcome["execution_path"]
+        code_index = json.loads((execution / "native-code-index.json").read_text())
+        packages = {json_text(entry["package"]) for entry in code_index if entry.get("package")}
+        expected_verifyit = task.route == Route.GYM and bool(
+            config["runtime"].get("gym_config", {}).get(task.env_id, {}).get("verifyit_enabled", False)
+        )
+        if expected_verifyit and (outcome.get("verifyit_enabled") is not True or not packages):
+            raise ValueError(f"verifyit was enabled but no package code was captured for {task.id}")
+        verifyit_packages.update(packages)
         print(
             f'Attempt {index + 1}/{n}: {task.source_id}/{task.id}; verifier={outcome["verification"]["status"]}',
             flush=True,
         )
+    if len(verifyit_packages) > 1:
+        raise ValueError("Review tasks used different verifyit package revisions")
+    bundle["execution_provenance"]["verifyit"] = json.loads(next(iter(verifyit_packages))) if verifyit_packages else None
     for index, (task, result) in enumerate(zip(tasks, outcomes, strict=True)):
         task_root = output / "tasks" / f"{index:04d}"
         source_key = (task.repository, task.dataset_revision or "snapshot:" + snapshot_id, task.source_id)
@@ -776,6 +789,7 @@ def independent_reviews(
             "verification": verification,
             "execution_path": result["execution_path"],
             "route": task.route,
+            "verifyit_enabled": result.get("verifyit_enabled"),
         }
         bundle["reviews"].append(runtime_review)
         execution = output / result["execution_path"]

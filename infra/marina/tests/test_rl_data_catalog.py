@@ -27,6 +27,7 @@ from infra.marina.applets.rl_data_catalog.server.app import (
 )
 from infra.marina.applets.rl_data_catalog.server.catalog import (
     Snapshot,
+    annotate_verifier_dependency,
     count_metadata,
     dataset_metadata,
     registry_sources,
@@ -37,6 +38,21 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
 )
 from infra.marina.applets.rl_data_catalog.server.composition import canonical_rows, component_rows
 from infra.marina.applets.rl_data_catalog.server.hf_auth import HuggingFaceAuth
+
+
+def cached_verifier_metadata(rows: list[dict]) -> list[dict]:
+    """Supply the previously resolved verifier identity for dataset-only refresh fixtures."""
+    for row in rows:
+        row.setdefault("verifier_mode", "legacy")
+        row.setdefault("verifier_path_revision", row.get("verifier_revision", "code1"))
+        row.setdefault("verifier_path_revised_at", row["verifier_revised_at"])
+        row.setdefault("verifyit_revision", "f" * 40)
+        row.setdefault("verifyit_shared_revision", "shared1")
+        row.setdefault("verifyit_shared_revised_at", row["verifier_revised_at"])
+        row.setdefault("verifyit_dependency_revised_at", row["verifier_revised_at"])
+        row.setdefault("harbor_verifier_revision", "harbor1")
+        row.setdefault("harbor_verifier_revised_at", row["verifier_revised_at"])
+    return rows
 
 
 @pytest.fixture
@@ -184,6 +200,57 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
     assert row["difficulty"] == (None if changed_field else "32/32")
 
 
+def test_verifyit_dependency_change_invalidates_quality_and_difficulty_only_on_active_routes() -> None:
+    date = "2026-10-01T00:00:00Z"
+    aime = {
+        "id": "MarinSkyRL:aime24",
+        "environment": "aime",
+        "dataset_revision": "data1",
+        "verifier_revision": "aime-code",
+        "verifier_revised_at": date,
+        "dataset_revised_at": date,
+    }
+    preference = {**aime, "id": "MarinSkyRL:preference", "environment": "preference"}
+    arc = {
+        **aime,
+        "id": "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
+        "environment": "nemotron_ultra",
+        "component_name": "ultra_sft_step3200_nvarc_transductive",
+        "component_selector": "ultra_sft_step3200_nvarc_transductive",
+    }
+    swe = {
+        **arc,
+        "id": "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "component_name": "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "component_selector": "ultra_sft_step3200_swe_pivot_len40k",
+    }
+    for row in (aime, preference, arc, swe):
+        annotate_verifier_dependency(row, "a" * 40, "shared-code", date, date, "harbor-code", date)
+    before = {row["id"]: row["verifier_revision"] for row in (aime, preference, arc, swe)}
+
+    for row in (aime, preference, arc, swe):
+        row["verifier_revision"] = row["verifier_path_revision"]
+        pin = "b" * 40 if row["environment"] == "aime" else "a" * 40
+        shared = "new-shared-code" if row["environment"] == "nemotron_ultra" else "shared-code"
+        annotate_verifier_dependency(row, pin, shared, date, date, "harbor-code", date)
+        reviewed = source_with_review(
+            {
+                "payload": row,
+                "quality": "good",
+                "difficulty": "measured",
+                "review_id": "review1",
+                "review_date": date,
+                "review_source_revision": "data1",
+                "review_verifier_revision": before[row["id"]],
+                "traces": 3,
+                "verifier_issues": [],
+            }
+        )
+        expected_stale = row["environment"] not in {"preference"} and row is not swe
+        assert reviewed["review_stale"] == expected_stale
+        assert bool(reviewed["difficulty"]) != expected_stale
+
+
 @pytest.mark.parametrize("quality,revision", [("good", "data1"), ("some_issues", "data1"), ("good", "data2")])
 def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measurements(quality, revision) -> None:
     report = {
@@ -251,6 +318,8 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
         ("checklist_judge_missing_settings", "invalid"),
         ("checklist_judge_wrong_model", "invalid"),
         ("checklist_judge_wrong_source", "invalid"),
+        ("verifyit_reverification", "current"),
+        ("verifyit_reverification_missing_provenance", "invalid"),
         ("old_protocol", "historical"),
     ],
 )
@@ -361,6 +430,14 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
                     "chat_template_kwargs": {},
                     "substitution_reason": "OpenAI credits exhausted; the source verifier leaves model blank.",
                 }
+            }
+    elif change in ("verifyit_reverification", "verifyit_reverification_missing_provenance"):
+        report["protocol"]["id"] = "atlas-difficulty-v6-current-verifyit-reverification"
+        if change != "verifyit_reverification_missing_provenance":
+            report["verifier_configuration"] = {
+                "native_code_sha": "a" * 40,
+                "verifyit_commit": "b" * 40,
+                "verifyit_enabled": True,
             }
     elif change == "old_protocol":
         report["protocol"]["id"] = "atlas-difficulty-v2-65k16k"
@@ -670,7 +747,7 @@ def test_unchanged_git_head_refreshes_hf_counts_and_reports_latest_change(verifi
         )
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        snapshot = skyrl_snapshot(client, head, cached)
+        snapshot = skyrl_snapshot(client, head, cached_verifier_metadata(cached))
     row = snapshot.rows[0]
     assert (row["revised_at"], row["task_count"], row["dataset_revision"]) == (expected, 9, "hf2")
     assert (row["verifier_revised_at"], row["dataset_revised_at"]) == (verifier_date, hf_date)
@@ -774,7 +851,7 @@ def test_refresh_reads_card_counts_for_selected_population_and_canonical_names(
         return httpx.Response(200, text=card)
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["count_precision"] == ("estimated" if environment == "nemotron_ultra" else "reported")
     assert row["canonical_source"] == dataset_id + display_suffix
@@ -826,7 +903,7 @@ def test_gpqa_gated_viewer_preserves_audited_count_only_for_same_revision(revisi
         return httpx.Response(401, json={"error": "Gated dataset"})
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["count_metadata_error"]
     assert row["display_name"] == "Idavidrein/gpqa · gpqa_diamond"
@@ -863,7 +940,7 @@ def test_aime_benchmark_and_audited_family_survive_refresh_without_hf_tag() -> N
         )
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["is_benchmark"] is True
     assert row["family"] == "math-answer"
     assert row["family_url"].startswith("https://huggingface.co/datasets/di-zhang-fdu/AIME_1983_2024/blob/")
@@ -903,7 +980,7 @@ def test_github_sources_resolve_counts_and_links_without_invalid_hf_requests(
         return httpx.Response(200, text=card)
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["url"] == f"https://github.com/{dataset_id}"
     assert row["dataset_revision"] == "data1"
@@ -981,7 +1058,7 @@ def test_gym_duplicates_stay_merged_after_dataset_metadata_refresh() -> None:
         )
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        result = skyrl_snapshot(client, head, [dataset, adapter])
+        result = skyrl_snapshot(client, head, cached_verifier_metadata([dataset, adapter]))
     assert len(result.rows) == 1
     refreshed_dataset = result.rows[0]
     assert refreshed_dataset["task_count"] == 9
