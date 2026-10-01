@@ -23,6 +23,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 from haliax.jax_utils import named_call
+from haliax.nn.ragged_dot import Implementation as RaggedDotImplementation
 from jax import shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
@@ -356,6 +357,7 @@ class MoEExpertMlp(eqx.Module):
     pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
+    ragged_dot_implementation: RaggedDotImplementation = eqx.field(static=True, default="auto")
 
     @staticmethod
     def init(
@@ -367,6 +369,7 @@ class MoEExpertMlp(eqx.Module):
         key: jax.Array,
         gate_up_initializer_std: float | None = None,
         implementation: MoeImplementation | str | None = None,
+        ragged_dot_implementation: RaggedDotImplementation = "auto",
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         pooled_transport_capacity_factor: float | None = None,
@@ -390,6 +393,7 @@ class MoEExpertMlp(eqx.Module):
             w_up=_reshard_for_init(w_up, pspecs.w_gate_up),
             w_down=w_down,
             implementation=resolved_implementation,
+            ragged_dot_implementation=ragged_dot_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
@@ -418,6 +422,7 @@ class MoEExpertMlp(eqx.Module):
             token_valid=token_valid,
             activation=self.activation,
             implementation=self.implementation,
+            ragged_dot_implementation=self.ragged_dot_implementation,
             mesh=mesh,
             capacity_factor=self.capacity_factor,
             pooled_transport_capacity_factor=self.pooled_transport_capacity_factor,
@@ -438,6 +443,7 @@ def moe_mlp(
     token_valid: Bool[Array, "T"] | None = None,
     activation: MoeActivation = ActivationFunctionEnum.silu,
     implementation: MoeImplementation | str | None = None,
+    ragged_dot_implementation: RaggedDotImplementation = "auto",
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     pooled_transport_capacity_factor: float | None = None,
@@ -450,6 +456,10 @@ def moe_mlp(
     This helper handles dispatch/permute/unpermute (+EP collectives) from
     precomputed token-to-expert assignments. Routing logits/top-k selection
     stays in the caller (e.g. model MLP block).
+
+    `ragged_dot_implementation` selects grouped matmul kernels independently of
+    dispatch. Explicit selections support local scatter/sonic and ring EP.
+    Other EP implementations and sonic_cute require `"auto"`.
 
     `token_valid` excludes invalid positions from dispatch, capacity accounting,
     and expert gradients. Omitted validity treats every token as valid.
@@ -524,6 +534,7 @@ def moe_mlp(
             activation_fn=activation_fn,
             num_experts=num_experts,
             implementation=resolved_implementation,
+            ragged_dot_implementation=ragged_dot_implementation,
             expert_chunks=expert_chunks,
         )
         if report_capacity_overflow:
@@ -555,7 +566,7 @@ def moe_mlp(
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         if resolved_implementation == "ring":
-            shard_local_fn = _moe_mlp_ep_ring_local
+            shard_local_fn = partial(_moe_mlp_ep_ring_local, ragged_dot_implementation=ragged_dot_implementation)
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
@@ -572,6 +583,11 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_deepep_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
+
+        if resolved_implementation != "ring" and ragged_dot_implementation != "auto":
+            raise ValueError(
+                f"ragged_dot_implementation is not supported by expert-parallel {resolved_implementation!r}"
+            )
 
         w_up_gate_spec = P("expert", None, None)
         w_down_spec = P("expert", None, None)
@@ -652,6 +668,7 @@ def moe_mlp(
             activation_fn=activation_fn,
             num_experts=num_experts,
             implementation=resolved_implementation,
+            ragged_dot_implementation=ragged_dot_implementation,
             expert_chunks=expert_chunks,
         )
         local_token_sharding_axes = _axis_names(x_spec[0])

@@ -32,6 +32,29 @@ def _accelerator_implementation() -> Literal["megablox", "triton"]:
     pytest.skip("requires a supported accelerator ragged-dot implementation")
 
 
+@pytest.mark.parametrize("implementation,env_value", [("xla", "invalid"), ("auto", "xla"), ("auto", "auto")])
+def test_ragged_dot_selection_matches_dense_value_and_gradients(monkeypatch, implementation, env_value):
+    monkeypatch.setenv("RAGGED_DOT_IMPL", env_value)
+    lhs, rhs, group_sizes = _inputs()
+
+    def grouped_loss(lhs, rhs):
+        return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation=implementation) ** 2)
+
+    def dense_loss(lhs, rhs):
+        return jnp.sum(jnp.concatenate((lhs[:2] @ rhs[0], lhs[2:] @ rhs[1])) ** 2)
+
+    actual = jax.value_and_grad(grouped_loss, argnums=(0, 1))(lhs, rhs)
+    expected = jax.value_and_grad(dense_loss, argnums=(0, 1))(lhs, rhs)
+    for actual_leaf, expected_leaf in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert jnp.allclose(actual_leaf, expected_leaf, rtol=1e-5, atol=1e-5)
+
+
+def test_ragged_dot_auto_rejects_unknown_environment_implementation(monkeypatch):
+    monkeypatch.setenv("RAGGED_DOT_IMPL", "invalid")
+    with pytest.raises(ValueError, match="Unknown ragged_dot implementation"):
+        ragged_dot(*_inputs())
+
+
 def test_accelerator_implementation_value_and_gradients_match_xla():
     lhs, rhs, group_sizes = _inputs()
     implementation = _accelerator_implementation()

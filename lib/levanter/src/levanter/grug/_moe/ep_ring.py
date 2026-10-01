@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Bool, Float, Int
 
-from haliax.nn.ragged_dot import ragged_dot
+from haliax.nn.ragged_dot import Implementation, ragged_dot
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
@@ -35,6 +35,7 @@ def _moe_mlp_ep_ring_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    ragged_dot_implementation: Implementation = "auto",
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
@@ -113,11 +114,14 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(physical_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out = tree_checkpoint_name(
+            ragged_dot(x_dispatch, moe_w13_local, group_sizes, implementation=ragged_dot_implementation),
+            _CHECKPOINT_EXPERT_HIDDEN,
+        )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes, implementation=ragged_dot_implementation),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
