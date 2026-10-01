@@ -51,6 +51,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
+    RoutingWeightGradient,
     moe_routing_stats_local,
     qb_beta_topk_shard,
     qb_topk_physical_count,
@@ -115,6 +116,11 @@ OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
 LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
+# The routed experts' combined output, before the latent up projection. The ragged backend's
+# backward reads neither the expert down projection nor the return transport, so saving this
+# value leaves the recompute only the dispatch and the gate/up projection. At the hero shapes it
+# is 402 MB per layer, 18 GiB of HBM across 48 layers.
+MOE_OUTPUT_REMAT_NAME = "grug_moe_routed_output"
 
 
 def _batch_spec() -> P:
@@ -982,6 +988,14 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
                 num_expert_waves=cfg.num_expert_waves,
+                # The routing weights are renormalized sigmoids, so positive, and the cotangents bf16,
+                # with fp32's exponent range: w * dout stays clear of underflow, and the expert-side
+                # gradient saves the backward the expert outputs and their return transport.
+                routing_weight_gradient=(
+                    RoutingWeightGradient.EXPERT_SIDE
+                    if resolve_moe_implementation(cfg.moe_implementation) == "ragged_all_to_all"
+                    else RoutingWeightGradient.EXACT
+                ),
                 pspecs=MoEExpertMlpPspecs(expert=_EXPERT_WEIGHT_AXES),
             ),
             cfg=cfg,
@@ -1103,6 +1117,7 @@ class MoEMLP(eqx.Module):
             sender_dropped_assignments = _zero_dropped_assignments()
             receiver_dropped_assignments = _zero_dropped_assignments()
             skipped_assignments = padding_skipped_assignments(token_valid_flat, topk=self.cfg.num_experts_per_token)
+        routed_flat = tree_checkpoint_name(routed_flat, MOE_OUTPUT_REMAT_NAME)
         router_stats["capacity_overflow"] = dropped_assignments
         router_stats["sender_capacity_overflow"] = sender_dropped_assignments
         router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
@@ -1289,7 +1304,7 @@ class Transformer(eqx.Module):
             # Adding names is therefore not free. The carry alone fits. The carry plus the
             # attention residuals exceeds the host memory the run has.
             remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
-                names_which_can_be_saved=[],
+                names_which_can_be_saved=[MOE_OUTPUT_REMAT_NAME],
                 names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
                 offload_src="device",
                 offload_dst="pinned_host",
