@@ -580,3 +580,18 @@ wheel; H-A4 at 0.78/105): **29.928 / 13.115 s** (+0.15 over sonic-02, +0.16 over
 loss at 180000 exact; dloss max 7.0e-4, late mean +8.0e-5, 27/49 positive. It still carries the re-gather
 (~+0.1 s), the carry stall (141 ms/step) and the QB-after-MLP placement (~+0.16 s, unconfirmed). Expected
 F1-seq-02 if the re-gather and stall attributions hold: ~12.87 s (~30.5%); F1-noqb lower if QB-after-MLP is the trigger.
+
+## M30-034 m30-f1-seq-02: 30.22% (2026-10-01)
+
+Final-seq program (sequential D + mirror + E + B's forward order + Triton sconv + MLP-weight prefetch +
+QB-after-MLP, re-gather off, custom wheel with `XLA_GPU_HOST_TRANSFER_STREAMS=1`, H-A4 at 0.78/105; profiled):
+**30.219 MFU / 12.990 s** (control 28.258 / 13.891; stackseq-03 29.928 / 13.115). Steady state 30.0-30.34,
+slow steps at 180054 (28.67) and 180057 (27.89). Peak 123.50 / limit 143.75. Loss at 180000 exact; dloss
+max 3.8e-4, late mean +9.0e-5, 44/49 positive. This is a single 60-step screen, not the goal claim.
+
+**Pre-registered confirmation (written before further data):** final program (f1-seq or f1-noqb, whichever
+screens higher with clean checks) x seeds {0, 1, 2} x 100 steps (180000 -> 180100, unprofiled, custom wheel,
+streams on). Each is paired with the main control of the same seed and data (mhep-ctx4k-s{0,1,2}; s0 also
+m30-ctl-s0-r2). Goal met iff every seed's median MFU over 180011-180099 is >= 30.0 and its loss divergence vs
+its same-seed control is within the same-code band (max |d| <= ~1e-3, |late mean| <= ~2e-4, no growth
+over the window) with drops in family. If a seed fails, report per-seed values; do not cherry-pick.
