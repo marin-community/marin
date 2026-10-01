@@ -235,3 +235,30 @@ alternatives: (0.80, 100) L 112.4, outside 8.4 GiB free; (0.75, 110) worst case 
 only with stack arms at the same pair. Verification per arm: remat count in `jit_train_step`, `Peak memory
 for main`, `memory/peak_gib` < ~139, `memory/limit_gib` = 143.76. Fallback if D's view exceeds ~125:
 (0.80, 110), else D's output to pinned host (~0.2 s of C2C, eats most of D's gain).
+
+## M30A-014 End-of-step optimizer D2H: priced, PGLE-profile patch built (2026-10-01)
+
+hmo-02 step 1 timeline (s from launch): backward ends 12.78; momentum H2D .44 12.782-12.850 (exposed, the
+first momentum update waits on it), .43/.42 hidden under leaf NS. New momentum ready at 12.855 / 12.991 /
+13.143 (leaf 1/2/3 `input_add_reduce_fusion.37/39/41`); expert NS and updates run to 13.33; embedding
+scatter-add, Adam H2D (.21/.23 13.382-13.419, mostly exposed) and updates end at 13.448. Then the compute
+stream is idle while the writebacks drain serially: .97 13.448-13.520, .98 -13.589, .99 -13.662 (70 ms
+each, 155 GB/s, no overlap between them), router .66/.78, embedding .60/.72 13.673-13.708. Tail: 0.261 s.
+
+Price: the three momentum shards have 0.59 / 0.46 / 0.31 s of compute after them, enough to hide all
+0.21 s; the embedding m/v (ready at 13.42) has ~0.03 s. Removable ~0.25 s, ~0.21-0.23 s after the
+power-cap give-back. No HBM: D2H device buffers live until copy-done at the end either way.
+"Overlap with the next step" is ruled out by the no-state-across-steps constraint.
+
+Why PGLE alone misses it: the profile does carry each copy's real cost (copy-start.97/98/99 ~70 ms), but the
+GPU LHS models async memcpy with unlimited concurrency (`kNumAsyncMemcpy = INT_MAX`), so it covers ~70 ms
+for the whole batch. `autoresearch/loop-260930-mfu30/a/pgle_patch_d2h.py <rows.pkl> <in> <out>` sets every
+D2H copy-start of >= 1 ms/step to the serialized batch total x 1.1 (276 ms on hmo-02's profile; 7 copies).
+It applies after `pgle_build.sh`, before the commit. Without PGLE, the fallback is a JAX
+optimization_barrier tie (allowed on the host path), which with T-shirt latencies hides ~half (~0.1 s).
+
+Also seen in the #9481 PGLE trace t21: every forward carry D2H (4.4 ms, 48/step) is fully exposed under
+PGLE (0.19 s/step vs 0.006 on main and hmo-02); compute stops at copy-start and resumes at copy-done. The
+stack's PGLE arm should check this; it may eat a large part of PGLE's gain. Also under PGLE, t21 hoisted the
+first momentum H2D (copy-start.44) to the start of the backward, holding 10 GiB through the backward peak;
+on the D stack at 0.78/105 that fits (~133 vs 143.76 GiB) but shows up in memory/peak_gib.
