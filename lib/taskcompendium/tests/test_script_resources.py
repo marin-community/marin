@@ -3,7 +3,6 @@
 
 """Private script resources remain pinned and confined to their staging root."""
 
-import base64
 import hashlib
 
 import pytest
@@ -12,23 +11,15 @@ from taskcompendium.models import VerifierKind
 from taskcompendium.verifiers.script import (
     PrivateResource,
     ScriptVerifier,
+    embedded_resource,
     materialize_private_resources,
     script_verifier,
 )
 
 
-def _embedded_resource(path: str, content: bytes, *, executable: bool = False) -> PrivateResource:
-    return PrivateResource(
-        path=path,
-        sha256=hashlib.sha256(content).hexdigest(),
-        executable=executable,
-        embedded_base64=base64.b64encode(content).decode("ascii"),
-    )
-
-
 def test_script_contract_round_trip_stages_private_files(tmp_path):
-    script = _embedded_resource("grader/check.py", b"#!/usr/bin/env python3\nprint('ok')\n", executable=True)
-    answer = _embedded_resource("fixtures/answer.bin", b"private\x00answer")
+    script = embedded_resource("grader/check.py", b"#!/usr/bin/env python3\nprint('ok')\n", executable=True)
+    answer = embedded_resource("fixtures/answer.bin", b"private\x00answer")
     config = ScriptVerifier(
         entrypoint=script.path,
         args=("--fixture", "/tests/fixtures/answer.bin"),
@@ -51,7 +42,7 @@ def test_script_contract_round_trip_stages_private_files(tmp_path):
 
 
 def test_uri_digest_mismatch_leaves_no_staged_files(tmp_path):
-    script = _embedded_resource("grader.py", b"#!/usr/bin/env python3\n")
+    script = embedded_resource("grader.py", b"#!/usr/bin/env python3\n")
     reference = PrivateResource(
         path="answer.txt", sha256=hashlib.sha256(b"expected").hexdigest(), uri="gs://test/answer"
     )
@@ -65,9 +56,9 @@ def test_uri_digest_mismatch_leaves_no_staged_files(tmp_path):
 
 def test_private_resource_path_cannot_escape_staging_root(tmp_path):
     with pytest.raises(ValueError, match="relative to /tests"):
-        _embedded_resource("../agent/answer.txt", b"secret")
+        embedded_resource("../agent/answer.txt", b"secret")
 
-    script = _embedded_resource("grader/check.py", b"private")
+    script = embedded_resource("grader/check.py", b"private")
     destination = tmp_path / "tests"
     destination.mkdir()
     (destination / "grader").symlink_to(tmp_path, target_is_directory=True)

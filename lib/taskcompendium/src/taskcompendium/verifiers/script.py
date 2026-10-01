@@ -96,7 +96,7 @@ class NetworkPolicy(StrEnum):
 
 
 def embedded_resource(path: str, content: bytes, *, executable: bool = False) -> PrivateResource:
-    """Pin embedded private file content by its SHA256 digest."""
+    """Pin private resource bytes for inclusion in a script verifier."""
     return PrivateResource(
         path=path,
         sha256=hashlib.sha256(content).hexdigest(),

@@ -43,8 +43,15 @@ from taskcompendium.lowering import (
     read_submission_convention,
     validate_exported_private_resources,
 )
-from taskcompendium.models import AnswerType, ConversationTrace, TaskSpec
-from taskcompendium.submission import SubmissionConvention, extract_answer
+from taskcompendium.models import ConversationTrace, TaskSpec
+from taskcompendium.submission import (
+    FileSubmission,
+    GradingAttempt,
+    SubmissionConvention,
+    SubmissionFailure,
+    TextSubmission,
+    WorkspaceSubmission,
+)
 from taskcompendium.verifier_registry import grade_answer, resolve_verifier
 from taskcompendium.verifiers.script import ScriptVerifier
 
@@ -185,40 +192,8 @@ class ChatAgent(BaseAgent):
         _record_submission(self.logs_dir, self.request["messages"], response, context)
 
 
-class ReplayAgent(BaseAgent):
-    """Submit a fixed text response and optionally prepare a workspace."""
-
-    def __init__(self, *args, response: str, request: dict[str, Any], workspace_command: str | None = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.response = response
-        self.request = request
-        self.workspace_command = workspace_command
-
-    @staticmethod
-    def name() -> str:
-        return "taskcompendium-replay"
-
-    def version(self) -> str:
-        return "0.1"
-
-    async def setup(self, environment: BaseEnvironment) -> None:
-        pass
-
-    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        if self.workspace_command is not None:
-            completed = await environment.exec(self.workspace_command, cwd="/app")
-            if completed.return_code != 0:
-                raise RuntimeError(
-                    f"Workspace replay command failed ({completed.return_code}): "
-                    f"{(completed.stderr or completed.stdout or '')[-1000:]}"
-                )
-        _record_submission(
-            self.logs_dir, self.request["messages"], {"role": "assistant", "content": self.response}, context
-        )
-
-
 class SemanticVerifier(BaseVerifier):
-    """Grade the final submission with the task's private verifier."""
+    """Grade the submitted answer against the task's private reference."""
 
     async def verify(self) -> VerifierResult:
         script_task = False
@@ -233,7 +208,7 @@ class SemanticVerifier(BaseVerifier):
                 script_task = True
                 result = await self._grade_script(specification, convention, conversation, verifier)
             else:
-                result = grade_answer(specification, convention, conversation, self.environment)
+                result = await grade_answer(specification, convention, GradingAttempt(conversation, self.environment))
         except UnsafeWorkspaceError as error:
             result = GradeResult(Outcome.INVALID_TASK, None, "Final workspace cannot be captured safely")
             self._write_result(result)
@@ -247,7 +222,7 @@ class SemanticVerifier(BaseVerifier):
             self._write_result(result)
             raise RuntimeError(result.error) from error
         self._write_result(result)
-        if result.status != Outcome.GRADED or result.reward is None:
+        if result.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE) or result.reward is None:
             raise RuntimeError(result.error or result.status.value)
         return VerifierResult(rewards={"reward": result.reward})
 
@@ -258,25 +233,12 @@ class SemanticVerifier(BaseVerifier):
         conversation: ConversationTrace,
         verifier: ScriptVerifier,
     ) -> GradeResult:
-        if specification.answer_type in (AnswerType.TEXT, AnswerType.NUMBER):
-            try:
-                answer = extract_answer(conversation.events[-1], convention)
-            except (ValueError, TypeError) as error:
-                return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        else:
-            answer = None
         root = self.task.paths.task_dir
         try:
             validate_exported_private_resources(specification, root)
         except ValueError:
             return GradeResult(Outcome.INVALID_TASK, None, "Pinned private resources are unavailable or changed")
         environment_config = read_environment_config(root / ENVIRONMENT_CONFIG_FILE)
-        submission = ScriptSubmission(
-            protocol_version=verifier.protocol_version,
-            answer_type=specification.answer_type,
-            convention_id=convention.id,
-            answer=answer,
-        )
         with tempfile.TemporaryDirectory(prefix="taskcompendium-snapshot-") as temporary:
             scratch = Path(temporary)
             workspace = scratch / "workspace"
@@ -284,6 +246,19 @@ class SemanticVerifier(BaseVerifier):
                 await capture_workspace(self.environment, workspace)
             else:
                 workspace.mkdir()
+
+            try:
+                extracted = await convention.extract(GradingAttempt(conversation, workspace))
+            except SubmissionFailure as error:
+                return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+            if not isinstance(extracted, (TextSubmission, FileSubmission, WorkspaceSubmission)):
+                raise TypeError("Script verifier requires text, file, or workspace submission")
+            submission = ScriptSubmission(
+                protocol_version=verifier.protocol_version,
+                answer_type=specification.answer_type,
+                convention_id=convention.id,
+                answer=extracted.value if isinstance(extracted, TextSubmission) else None,
+            )
 
             def resolve_exported(uri: str) -> bytes:
                 for resource in verifier.resources:

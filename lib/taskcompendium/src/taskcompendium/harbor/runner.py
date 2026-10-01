@@ -4,7 +4,6 @@
 """Resolve a launch separately from a task-owned Harbor environment configuration."""
 
 from pathlib import Path
-from typing import Any
 
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
@@ -23,17 +22,9 @@ from taskcompendium.lowering import (
     validate_environment_config,
 )
 from taskcompendium.submission import chat_request
+from taskcompendium.verifier_registry import validate_launch_parallel_tool_calls
 
 DEFAULT_CHAT_TIMEOUT = 120
-
-
-class ReplayLaunch(BaseModel):
-    """A fixed response for exercising the Harbor trial path."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    response: str
-    workspace_command: str | None = None
 
 
 class ChatLaunch(BaseModel):
@@ -45,12 +36,14 @@ class ChatLaunch(BaseModel):
     api_base: str = Field(min_length=1)
     api_key_env: str | None = Field(default=None, min_length=1)
     request_timeout: float = Field(default=DEFAULT_CHAT_TIMEOUT, gt=0, allow_inf_nan=False)
+    temperature: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    parallel_tool_calls: bool | None = None
 
 
 async def run_trial(
     task_dir: Path,
     environment_config: HarborEnvironmentConfig,
-    launch: ReplayLaunch | ChatLaunch,
+    launch: ChatLaunch,
     trials_dir: Path,
     trial_name: str,
 ) -> TrialResult:
@@ -60,33 +53,30 @@ async def run_trial(
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     validate_environment_config(specification, environment_config)
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
-    request = chat_request(specification, convention)
-    if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT and isinstance(launch, ChatLaunch):
+    if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT:
         raise ValueError("Direct chat launch cannot use a workspace Docker environment")
-    if environment_config.environment != WORKSPACE_DOCKER_ENVIRONMENT and isinstance(launch, ReplayLaunch):
-        if launch.workspace_command is not None:
-            raise ValueError("A workspace replay command requires a workspace Docker environment")
-    if isinstance(launch, ReplayLaunch):
-        agent: dict[str, Any] = {
-            "import_path": "taskcompendium.harbor.adapter:ReplayAgent",
-            "kwargs": {**launch.model_dump(), "request": request},
-        }
-    else:
-        agent = {
-            "import_path": "taskcompendium.harbor.adapter:ChatAgent",
-            "model_name": launch.model,
-            "kwargs": {**launch.model_dump(exclude={"model"}), "request": request},
-        }
+    request = chat_request(specification, convention)
+    if launch.temperature is not None:
+        request["temperature"] = launch.temperature
+    if launch.parallel_tool_calls is not None:
+        if "parallel_tool_calls" in request and request["parallel_tool_calls"] != launch.parallel_tool_calls:
+            raise ValueError("Launch parallel-tool policy conflicts with the submission convention")
+        request["parallel_tool_calls"] = launch.parallel_tool_calls
+    validate_launch_parallel_tool_calls(specification.verifier, request.get("parallel_tool_calls"))
+    agent = {
+        "import_path": "taskcompendium.harbor.adapter:ChatAgent",
+        "model_name": launch.model,
+        "kwargs": {
+            **launch.model_dump(exclude={"model", "temperature", "parallel_tool_calls"}),
+            "request": request,
+        },
+    }
     config = TrialConfig.model_validate(
         {
             "task": {"path": str(task_dir.resolve())},
             "trials_dir": str(trials_dir.resolve()),
             "trial_name": trial_name,
-            "environment": (
-                {"type": "docker"}
-                if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT
-                else {"import_path": "taskcompendium.harbor.adapter:NoToolEnvironment"}
-            ),
+            "environment": {"import_path": "taskcompendium.harbor.adapter:NoToolEnvironment"},
             "agent": agent,
             "verifier": {"import_path": "taskcompendium.harbor.adapter:SemanticVerifier"},
         }
