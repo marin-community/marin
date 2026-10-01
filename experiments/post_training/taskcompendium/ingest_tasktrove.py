@@ -36,6 +36,7 @@ RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3"
 MCQA_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 SPLITS = ("tasks", "sft")
 SUPPORTED_MODES = frozenset({"mcq", "math", "numeric"})
+ARCHIVE_BATCH_SIZE = 128
 PUBLIC_CANDIDATE_COHORTS = MappingProxyType(
     {
         MCQA_SOURCE: "mcq",
@@ -263,12 +264,14 @@ def ingest(
                             metadata_rows = metadata_rows[:remaining]
                         read_archives = any(row.get("mode") in selected_modes for row in metadata_rows)
                         archive_batches = (
-                            parquet.iter_batches(row_groups=[row_group], columns=["task_binary"], batch_size=128)
+                            parquet.iter_batches(
+                                row_groups=[row_group], columns=["task_binary"], batch_size=ARCHIVE_BATCH_SIZE
+                            )
                             if read_archives and "task_binary" in available
                             else None
                         )
-                        for row_start in range(0, len(metadata_rows), 128):
-                            metadata_batch = metadata_rows[row_start : row_start + 128]
+                        for row_start in range(0, len(metadata_rows), ARCHIVE_BATCH_SIZE):
+                            metadata_batch = metadata_rows[row_start : row_start + ARCHIVE_BATCH_SIZE]
                             binary_batch = (
                                 next(archive_batches).column(0).to_pylist()
                                 if archive_batches
