@@ -417,3 +417,20 @@ Match against f1-seq-02's HLO:
 
 Flags: `--xla_gpu_pgle_profile_file_or_directory_path=/app/experiments/grug/moe_hero_ep/pgle/<file>`. The bundle
 unpacks into `/app`, Iris's task working directory, so the repo-relative form resolves there too.
+
+### m30-f0-seq-02 (2026-10-01 02:05 PT)
+
+Arm: f1-seq-02 on the same custom wheel, with `XLA_GPU_HOST_TRANSFER_STREAMS` unset.
+
+Score: 30.214 MFU and 12.991 s/step, -0.009 MFU (+0.004 s) against f1-seq-02 and +0.280 against stackseq-03.
+Peak 123.50 GiB. Loss against s0: max |d| 3.3e-4, mean -5.7e-5.
+
+Trace checks:
+- Carry stall: 3.9 ms/step. The carry copies run on streams #78/#85, again off the compute memcpy streams.
+- `copy-start.44` sits after the backward.
+- Zero XLA remat.
+
+Exposed collectives total 1.48 s.
+
+The wheel build alone removes the stall, and the env var adds nothing measurable. F0 and F1 are the same
+program within noise.
