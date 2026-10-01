@@ -80,6 +80,7 @@ def snowball_recipe(
     extra_modes: tuple[str, ...] = (),
     train_numerics: str | None = None,
     batch_invariant: bool = False,
+    decode_invariant: bool = False,
     model_slice: bool = False,
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
@@ -153,6 +154,7 @@ def snowball_recipe(
             "backend": "vllm",
             "model_dtype": "bfloat16",
             "vllm_attention_backend": "FLASH_ATTN",
+            "decode_invariant": decode_invariant,
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
             "gpu_memory_utilization": SLICE_GPU_MEMORY_UTILIZATION if model_slice else 0.75,
@@ -190,6 +192,7 @@ def build_spec(
     extra_modes: tuple[str, ...] = (),
     train_numerics: str | None = None,
     batch_invariant: bool = False,
+    decode_invariant: bool = False,
     model_slice: SnowballSlice | None = None,
 ) -> tuple[SkyRLSpec, IrisSkyRLExecution]:
     """``model_slice`` runs a Snowball export cut to its first layers on ``SLICE_GPUS`` GPUs of one node."""
@@ -228,6 +231,7 @@ def build_spec(
                 extra_modes=extra_modes,
                 train_numerics=train_numerics,
                 batch_invariant=batch_invariant,
+                decode_invariant=decode_invariant,
                 model_slice=model_slice is not None,
             ),
             runtime=SkyRLRuntime(profile=SNOWBALL_RECIPE.profile),
@@ -306,6 +310,11 @@ def build_run(**kwargs) -> ArtifactStep[SkyRLRun]:
 @click.option("--extra-mode", "extra_modes", multiple=True, help="Score this trainer mode as well (a candidate).")
 @click.option("--train-numerics", help="MarinSkyRL numerics set the policy trains and scores under by default.")
 @click.option("--batch-invariant/--no-batch-invariant", default=False, help="vLLM and trainer batch-invariant kernels.")
+@click.option(
+    "--decode-invariant/--no-decode-invariant",
+    default=False,
+    help="Decode-invariant vLLM engines: a token's bytes are the same in decode and prefill steps of any composition.",
+)
 @click.option("--drift-updates", type=click.IntRange(min=1), default=1, show_default=True, help="Drift updates scored.")
 @click.option("--slice-model-uri", help="A Snowball export cut to its first layers, run on two GPUs of one node.")
 @click.option("--slice-model-version", help="Artifact version of --slice-model-uri.")
@@ -334,6 +343,7 @@ def main(
     extra_modes: tuple[str, ...],
     train_numerics: str | None,
     batch_invariant: bool,
+    decode_invariant: bool,
     drift_updates: int,
     slice_model_uri: str | None,
     slice_model_version: str | None,
@@ -368,6 +378,7 @@ def main(
         extra_modes=extra_modes,
         train_numerics=train_numerics,
         batch_invariant=batch_invariant,
+        decode_invariant=decode_invariant,
         model_slice=None if slice_model_uri is None else SnowballSlice(slice_model_uri, slice_model_version),
     )
 

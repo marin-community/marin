@@ -305,6 +305,8 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     frozen = analyze_archive(str(frozen_root), bootstrap_draws=20)
     assert frozen["prefill_reference"] == "vllm.rescore_frozen@0"
     assert frozen["comparisons"]["native_vs_reread"]["reference"] == "vllm.rescore_frozen@0"
+    # Generation against the re-read of the engine run that generated it: the source's frozen re-read.
+    assert frozen["comparisons"]["decode_vs_prefill"]["reference"] == "vllm.rescore_frozen@0"
     assert frozen["comparisons"]["native_vs_reread"]["metrics"]["abs_mean"] == pytest.approx(0.11)
     assert frozen["comparisons"]["reread_vs_frozen"]["metrics"]["abs_mean"] == pytest.approx(0.01)
     assert frozen["paired_vs_reread"]["reread_replay"]["native"]["metrics"]["abs_mean"][

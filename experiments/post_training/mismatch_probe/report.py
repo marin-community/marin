@@ -230,6 +230,11 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
                 _trainer_scoring(0, mode),
                 _trainer_scoring(0, f"{REREAD_REPLAY_MODE}{stack}"),
             )
+    if prefill is not None:
+        # vLLM against itself: generation (decode steps) against the cache-off re-read (one prefill of each prefix) of
+        # the same engine run, and against the cache-on re-read (one prefix per response token, cached keys).
+        add("decode_vs_prefill", GENERATION_SCORING, prefill)
+    add("decode_vs_cached_prefill", GENERATION_SCORING, _rescore_scoring(0, "on"))
     add("reread_noise", RESCORE_AGAIN_SCORING, RESCORE_SCORING)
     add("reread_vs_frozen", RESCORE_SCORING, FROZEN_RESCORE_SCORING)
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
