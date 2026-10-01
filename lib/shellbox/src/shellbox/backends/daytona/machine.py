@@ -4,6 +4,8 @@
 """Run the machine contract on a Daytona sandbox."""
 
 import asyncio
+import hashlib
+import json
 import math
 import shlex
 import tarfile
@@ -11,16 +13,47 @@ import tempfile
 import uuid
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
-from daytona import AsyncDaytona, AsyncSandbox, CreateSandboxFromImageParams, Image, Resources
+from daytona import (
+    AsyncDaytona,
+    AsyncSandbox,
+    CreateSandboxFromSnapshotParams,
+    CreateSnapshotParams,
+    DaytonaConflictError,
+    DaytonaNotFoundError,
+    Image,
+    Resources,
+)
+from daytona_api_client_async import SnapshotState
 
-from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+SNAPSHOT_POLL_INTERVAL = 1
+
+
+async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
+    identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
+    name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
+    try:
+        snapshot = await client.snapshot.get(name)
+    except DaytonaNotFoundError:
+        image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
+        try:
+            snapshot = await client.snapshot.create(CreateSnapshotParams(name=name, image=image, resources=resources))
+        except DaytonaConflictError:
+            # Another rollout can create this image through a separate client or event loop.
+            snapshot = await client.snapshot.get(name)
+    while snapshot.state != SnapshotState.ACTIVE:
+        if snapshot.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE):
+            raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
+        await asyncio.sleep(SNAPSHOT_POLL_INTERVAL)
+        snapshot = await client.snapshot.get(name)
+    return name
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -204,13 +237,10 @@ class DaytonaMachineFactory:
         self.network_policy = network_policy
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
-        if isinstance(spec.source, RegistryImage):
-            source = spec.source.reference
-        elif isinstance(spec.source, DockerfileSource):
+        if isinstance(spec.source, DockerfileSource):
             if spec.source.dockerfile.parent != spec.source.context:
                 raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-            source = Image.from_dockerfile(spec.source.dockerfile)
-        else:
+        elif not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
         resources = Resources(
             cpu=spec.cpus,
@@ -225,17 +255,19 @@ class DaytonaMachineFactory:
         )
         async with AsyncExitStack() as lifetime:
             client = await lifetime.enter_async_context(self.client_factory())
-            sandbox = await client.create(
-                CreateSandboxFromImageParams(
-                    image=source,
-                    os_user="root",
-                    env_vars=spec.env,
-                    resources=resources,
-                    **network,
-                    ttl_minutes=self.ttl_minutes,
-                ),
-                timeout=self.create_timeout if spec.startup_timeout is None else spec.startup_timeout,
-            )
+            timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
+            async with asyncio.timeout(timeout):
+                snapshot = await _snapshot(client, spec.source, resources)
+                sandbox = await client.create(
+                    CreateSandboxFromSnapshotParams(
+                        snapshot=snapshot,
+                        os_user="root",
+                        env_vars=spec.env,
+                        **network,
+                        ttl_minutes=self.ttl_minutes,
+                    ),
+                    timeout=timeout,
+                )
             lifetime.push_async_callback(client.delete, sandbox)
             machine = DaytonaMachine(sandbox, spec, lifetime)
             if spec.workdir:

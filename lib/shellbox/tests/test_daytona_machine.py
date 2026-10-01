@@ -6,6 +6,7 @@
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,8 +14,10 @@ import pytest
 
 pytest.importorskip("daytona")
 
+from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
+from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
-from shellbox.image import RegistryImage
+from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, MachineSpec
 
 
@@ -41,6 +44,21 @@ class LocalProcess:
         return SimpleNamespace(exit_code=process.returncode, result=stdout.decode(errors="replace"))
 
 
+class LocalSnapshots:
+    def __init__(self):
+        self.snapshots = {}
+
+    async def get(self, name):
+        if name not in self.snapshots:
+            raise DaytonaNotFoundError("Snapshot does not exist", status_code=404)
+        return self.snapshots[name]
+
+    async def create(self, params):
+        snapshot = SimpleNamespace(name=params.name, state=SnapshotState.ACTIVE, params=params)
+        self.snapshots[params.name] = snapshot
+        return snapshot
+
+
 class LocalDaytona:
     def __init__(self):
         self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
@@ -48,8 +66,11 @@ class LocalDaytona:
         self.closed = False
         self.params = None
         self.timeout = None
+        self.snapshot = LocalSnapshots()
 
     async def create(self, params, *, timeout):
+        assert isinstance(params, CreateSandboxFromSnapshotParams)
+        await self.snapshot.get(params.snapshot)
         self.params = params
         self.timeout = timeout
         return self.sandbox
@@ -88,7 +109,8 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
             assert client.params.network_block_all is None
             assert client.params.domain_allow_list == "example.org"
         assert client.params.ttl_minutes == 360
-        assert (client.params.resources.cpu, client.params.resources.memory, client.params.resources.disk) == (2, 2, 2)
+        resources = (await client.snapshot.get(client.params.snapshot)).params.resources
+        assert (resources.cpu, resources.memory, resources.disk) == (2, 2, 2)
         assert client.params.os_user == "root"
         assert client.timeout == 900
         try:
@@ -160,3 +182,56 @@ def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) 
             result.result()
     assert all(client.closed for client in clients)
     assert sum(client.deleted for client in clients) == 2
+
+
+def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path: Path) -> None:
+    snapshots = LocalSnapshots()
+    clients = []
+
+    def client_factory():
+        client = LocalDaytona()
+        client.snapshot = snapshots
+        clients.append(client)
+        return client
+
+    context = tmp_path / "context"
+    context.mkdir()
+    dockerfile = context / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\nCOPY input /input\n")
+    source = context / "input"
+    source.write_text("first")
+    spec = MachineSpec(
+        source=DockerfileSource(context, dockerfile), workdir=str(tmp_path / "work"), cpus=1, memory_mb=1024
+    )
+    factory = DaytonaMachineFactory(client_factory)
+
+    async def scenario():
+        for current in (spec, spec, replace(spec, memory_mb=2048)):
+            machine = await factory.create(current)
+            await machine.close()
+        source.write_text("second")
+        machine = await factory.create(spec)
+        await machine.close()
+
+    asyncio.run(scenario())
+    names = [client.params.snapshot for client in clients]
+    assert names[0] == names[1]
+    assert len(set(names)) == 3
+    assert all(client.deleted and client.closed for client in clients)
+
+
+def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> None:
+    client = LocalDaytona()
+
+    class FailedSnapshots(LocalSnapshots):
+        async def create(self, params):
+            snapshot = await super().create(params)
+            snapshot.state = SnapshotState.BUILD_FAILED
+            snapshot.error_reason = "COPY input was missing"
+            return snapshot
+
+    client.snapshot = FailedSnapshots()
+    with pytest.raises(RuntimeError, match="COPY input was missing"):
+        asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
+    assert client.params is None
+    assert client.closed
