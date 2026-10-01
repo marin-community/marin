@@ -215,3 +215,21 @@ dot is. Dropping the bf16 rounding emulation (f32 intermediates) saves 5-15%. Th
 (statistics kernel + cuBLAS logits GEMM + elementwise kernel) would take ~0.91 ms against 1.0 ms for XLA
 with the Triton-GEMM flag: ~0.02 s/step. The ~0.1 s/step version needs an epilogue-fused K=128 GEMM
 (CuTe/QuACK with x, rstd and w as epilogue inputs, out and gate as outputs).
+
+## M30C-008 m30c-grnflag-01 result and diagnosis (2026-09-30)
+
+Score: 28.023 MFU vs control 28.261 (-0.238), 14.007 s (+0.118), peak 117.70 GiB (+14.6). Loss is in the
+rounding band: max |d| 3.0e-4, mean -1.9e-5. The regression comes from two side effects, not from the
+kernels' own cost (full write-up: `research/mcwitt/mfu30-stack`, `.agents/logbooks/mfu30-stack.md`, "grnflag-01
+diagnosis"):
+
+1. `--xla_gpu_enable_triton_gemm=false` reorders the optimizer phase. Its 120 Muon Newton-Schulz GEMMs become
+   cuBLAS calls, which the T-shirt LHS costs at 1000 instead of 1. The 10.1 GiB expert-momentum H2D
+   (`copy-start.44`) then floats to the start of the step and is live through the backward: arena +13.6 GiB,
+   and more XLA remat (0.868 vs 0.633 s/step of remat kernels).
+2. Forward carry D2H stall, 0.165 s/step. The per-layer weight dynamic-slice copies need a memcpy stream, and
+   the round-robin assignment queues them behind the carry D2H. Both components change the async-slice
+   count, so the stall cannot be pinned on either one; #9481's PGLE trace shows the same stall.
+
+Decision: no single-component screen now. Revisit the fused norm (kernel only, no flag) as an add-on arm on the
+final stack program. Its trace has to pass `stack/carry_stall.py`.
