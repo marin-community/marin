@@ -673,6 +673,16 @@ def main() -> int:
             return dict(gate=_errors(g, ref["g"]), up=_errors(u, ref["u"]), h=_errors(act(_t(h)), ref["h"]))
 
         run(v, "fwd_gate_up", _time_jax, fwd_gu, (x, w13_il, cu), err_gu, _peak_jax)
+        # A forward whose backward recomputes the projection needs no pre-activations.
+        run(
+            "quack_no_preact",
+            "fwd_gate_up",
+            _time_jax,
+            jax.jit(lambda x, w, cu: quack_gated_grouped_gemm(x, w, cu, **_QUACK_GATED_KW)),
+            (x, w13_il, cu),
+            lambda h: dict(h=_errors(act(_t(h)), ref["h"])),
+            _peak_jax,
+        )
         fwd_down = jax.jit(lambda h, w, cu: quack_grouped_gemm(h, w, cu, b_major="n", **_QUACK_GROUPED_KW))
         run(
             v,
