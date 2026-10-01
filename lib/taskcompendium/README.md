@@ -119,10 +119,12 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 The TaskTrove Clean importers read archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Their caller passes archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks subset and path against the archive manifest, computes the immutable archive SHA256, and retains the caller-supplied release URI and revision. Importers preserve ordered source tags and source-row identity. Submission conventions supply answer delivery instructions.
 
-This dependency graph supports these TaskTrove subsets for the archive templates described below:
+This dependency graph supports these retained TaskTrove Clean subsets for the archive templates described below:
 
 - `laion__nemotron-gym-knowledge-mcqa-v2` : `taskcompendium.importers.tasktrove.mcqa.import_task`
 - `laion__nemotron-gym-reasoning-gym-v2` : `taskcompendium.importers.tasktrove.reasoning_gym.import_task`
+
+The script parent also supplies `taskcompendium.importers.tasktrove.prompt_injection.import_task` for the `laion__nemotron-gym-agentic-indirect-prompt-injection-v3` archive template. The cleaned-release policy excludes that subset because its checker only rejects known unsafe actions and does not establish that an action is correct. The importer remains available for that source template; its presence does not establish acceptance into the cleaned or public release.
 
 The MCQA importer checks the source answer-line template and uses the shared `tasktrove-verify` MCQ scorer. The Reasoning Gym importer removes the recognized harness preamble and retains only the generated question in model-visible context. Its grading routes are described below. These are importer contracts; they do not establish how many source archives pass conversion.
 
