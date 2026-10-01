@@ -1026,17 +1026,10 @@ project_grants:
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
-  - group:eng-all@openathena.ai
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marina@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/cloudsql.instanceUser
   members:
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
   - principal: human-012
-  - group:eng-all@openathena.ai
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marina@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/cloudtasks.enqueuer
   members:
   - serviceAccount:hai-gcp-models@appspot.gserviceaccount.com
@@ -1124,8 +1117,6 @@ project_grants:
   - serviceAccount:github-ci-tpu-launcher-306@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-iap-proxy@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marina@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/container.serviceAgent
   members:
   - serviceAccount:codalab-mercury@hai-gcp-models.iam.gserviceaccount.com
@@ -1241,7 +1232,6 @@ project_grants:
   - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-worker@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ray-autoscaler-sa-v1@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/logging.viewer
   members:
   - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
@@ -1304,7 +1294,6 @@ project_grants:
 - role: roles/run.invoker
   members:
   - serviceAccount:hai-gcp-models@appspot.gserviceaccount.com
-  - serviceAccount:marina@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/run.serviceAgent
   members:
   - serviceAccount:service-748532799086@serverless-robot-prod.iam.gserviceaccount.com
@@ -1334,7 +1323,6 @@ project_grants:
   - serviceAccount:ray-autoscaler-sa-v1@hai-gcp-models.iam.gserviceaccount.com
   - principal: human-035
   - principal: human-059
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/secretmanager.viewer
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
@@ -1380,14 +1368,12 @@ project_grants:
 - role: roles/storage.objectUser
   members:
   - principal: human-039
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storage.objectViewer
   members:
   - serviceAccount:checkpoint-download@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-gcs-proxy@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marina@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storageinsights.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-storageinsights.iam.gserviceaccount.com
@@ -1423,7 +1409,6 @@ project_grants:
   members:
   - serviceAccount:github-iris@hai-gcp-models.iam.gserviceaccount.com
   - principal: human-037
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/websecurityscanner.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-websecurityscanner.iam.gserviceaccount.com
