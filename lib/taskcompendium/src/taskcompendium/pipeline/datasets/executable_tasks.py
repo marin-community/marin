@@ -27,6 +27,7 @@ from taskcompendium.models import (
     VerifierSpec,
     task_resource,
 )
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.shell_files import BASH
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -43,7 +44,6 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.runtime.shell import ShellFactory
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier, grade_submission
 
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 CONFIGS = {
     "nl2bash": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
     "taco": "laion__exp_rpt_taco-v2",

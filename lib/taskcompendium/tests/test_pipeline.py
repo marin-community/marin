@@ -255,7 +255,7 @@ def test_conflicting_review_is_rejected_at_every_confidence(apple_row, confidenc
 
 
 @pytest.mark.parametrize("fault", ["missing", "duplicate", "wrong_id", "truncated", "wrong_tool", "provider_failure"])
-def test_review_faults_never_admit_tasks(tmp_path, apple_row, fault):
+def test_review_faults_never_admit_tasks(apple_row, fault):
     raw = RawRow("task-0", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), apple_row)
     task = svamp.normalize(raw)
     assert isinstance(task, TaskSpec)

@@ -8,14 +8,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
 
 import pyarrow as pa
 
-from taskcompendium.harbor.protocol import assistant_message
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import AssistantToolCalls, ConversationInput, TaskSpec, TextMessage
-from taskcompendium.pipeline.batches import BatchClient, batch_output
+from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
+from taskcompendium.pipeline.batches import BatchClient, batch_output, batch_tool_arguments
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -102,46 +100,16 @@ def write_rewrite_audit(
 
 
 def rewrite_records(output: str, task_ids: Sequence[str]) -> list[RewriteRecord]:
-    responses: dict[str, list[dict[str, Any]]] = {}
-    for line in output.split("\n"):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if row["custom_id"] not in task_ids:
-            raise ValueError(f"Unexpected rewrite response ID: {row['custom_id']}")
-        responses.setdefault(row["custom_id"], []).append(row)
+    """Validate typed proposals and task identities after batch protocol checks."""
     records = []
-    for task_id in task_ids:
-        rows = responses.get(task_id, [])
-        if not rows:
-            records.append(
-                RewriteRecord(
-                    task_id=task_id, status=ReviewStatus.UNAVAILABLE, proposal=None, detail="Missing batch response"
-                )
-            )
+    for response in batch_tool_arguments(output, task_ids, tool_name=TOOL_NAME):
+        task_id = response.task_id
+        if response.status != ReviewStatus.REVIEWED:
+            records.append(RewriteRecord(task_id=task_id, status=response.status, proposal=None, detail=response.detail))
             continue
         try:
-            if len(rows) != 1:
-                raise ValueError("Duplicate rewrite response ID")
-            response = rows[0].get("response")
-            if response is None or response.get("status_code") != 200:
-                records.append(
-                    RewriteRecord(
-                        task_id=task_id, status=ReviewStatus.UNAVAILABLE, proposal=None, detail="Provider request failed"
-                    )
-                )
-                continue
-            choices = response["body"]["choices"]
-            if len(choices) != 1 or choices[0]["finish_reason"] not in {"stop", "tool_calls"}:
-                raise ValueError("Incomplete or truncated rewrite")
-            message = assistant_message(choices[0]["message"])
-            if (
-                not isinstance(message, AssistantToolCalls)
-                or len(message.calls) != 1
-                or message.calls[0].name != TOOL_NAME
-            ):
-                raise ValueError("Expected exactly one propose_rewrite call")
-            proposal = RewriteProposal.model_validate_json(json.dumps(message.calls[0].arguments))
+            assert response.arguments is not None
+            proposal = RewriteProposal.model_validate_json(json.dumps(response.arguments))
             if proposal.task_id != task_id:
                 raise ValueError("Rewrite task ID does not match request")
         except (KeyError, TypeError, ValueError) as error:

@@ -10,9 +10,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from taskcompendium.harbor.protocol import assistant_message
-from taskcompendium.models import AssistantToolCalls, ResourceVisibility, TaskSpec
-from taskcompendium.pipeline.batches import BatchClient, batch_output
+from taskcompendium.models import ResourceVisibility, TaskSpec
+from taskcompendium.pipeline.batches import BatchClient, batch_output, batch_tool_arguments
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 
 TOOL_NAME = "review_task"
@@ -156,52 +155,16 @@ def completion_body(
 
 
 def review_records(output: str, task_ids: Sequence[str]) -> list[ReviewRecord]:
-    """Validate batch membership and tool calls, preserving incomplete assessments."""
-    expected = set(task_ids)
-    responses: dict[str, list[dict[str, Any]]] = {}
-    for line in output.split("\n"):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        custom_id = row["custom_id"]
-        if custom_id not in expected:
-            raise ValueError(f"Unexpected batch response ID: {custom_id}")
-        responses.setdefault(custom_id, []).append(row)
-
+    """Validate typed verdicts and task identities after batch protocol checks."""
     records = []
-    for task_id in task_ids:
-        rows = responses.get(task_id, [])
-        if not rows:
-            records.append(
-                ReviewRecord(
-                    task_id=task_id, status=ReviewStatus.UNAVAILABLE, verdict=None, detail="Missing batch response"
-                )
-            )
+    for response in batch_tool_arguments(output, task_ids, tool_name=TOOL_NAME):
+        task_id = response.task_id
+        if response.status != ReviewStatus.REVIEWED:
+            records.append(ReviewRecord(task_id=task_id, status=response.status, verdict=None, detail=response.detail))
             continue
         try:
-            if len(rows) != 1:
-                raise ValueError("Duplicate batch response ID")
-            response = rows[0].get("response")
-            if response is None or response.get("status_code") != 200:
-                records.append(
-                    ReviewRecord(
-                        task_id=task_id, status=ReviewStatus.UNAVAILABLE, verdict=None, detail="Provider request failed"
-                    )
-                )
-                continue
-            body = response["body"]
-            choices = body["choices"]
-            # GLM's relay reports completed tool calls with finish_reason=stop.
-            if len(choices) != 1 or choices[0]["finish_reason"] not in {"tool_calls", "stop"}:
-                raise ValueError("Incomplete or truncated structured response")
-            message = assistant_message(choices[0]["message"])
-            if (
-                not isinstance(message, AssistantToolCalls)
-                or len(message.calls) != 1
-                or message.calls[0].name != TOOL_NAME
-            ):
-                raise ValueError("Expected exactly one review_task call")
-            verdict = ReviewVerdict.model_validate_json(json.dumps(message.calls[0].arguments))
+            assert response.arguments is not None
+            verdict = ReviewVerdict.model_validate_json(json.dumps(response.arguments))
             if verdict.task_id != task_id:
                 raise ValueError("Review task ID does not match request")
         except (KeyError, TypeError, ValueError) as error:

@@ -9,7 +9,7 @@ from verifyit.grade import negative_candidate
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import NumericSpec
 
-from taskcompendium.grading import ExactAnswerVerifier, GradingAttempt, NumericAnswerVerifier, Outcome
+from taskcompendium.grading import ExactAnswerVerifier, GradingAttempt, NumericAnswerVerifier, Outcome, Verifier
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, GraderReadiness
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
@@ -59,8 +59,16 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
     else:
         return [CheckResult(check="grader_controls", status=CheckStatus.UNSUPPORTED, detail=task.verifier.kind.value)]
 
+    return _answer_checks(
+        task, verifier, (("empty", "", 0.0), ("reference", positive, 1.0), ("perturbed", negative, 0.0))
+    )
+
+
+def _answer_checks(
+    task: TaskSpec, verifier: Verifier, controls: tuple[tuple[str, str, float], ...]
+) -> list[CheckResult]:
     results = []
-    for name, answer, expected in (("empty", "", 0.0), ("reference", positive, 1.0), ("perturbed", negative, 0.0)):
+    for name, answer, expected in controls:
         attempt = GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
         result = verifier.grade(attempt)
         # MCQA empty submissions fail extraction, which is a valid negative control.
@@ -83,21 +91,7 @@ def verify_witness(task: TaskSpec, witness: str, negative: str) -> list[CheckRes
     It stays outside the model-visible task and never becomes its reference key.
     """
     verifier = resolve_verifier(task.verifier)
-    checks = []
-    for name, answer, expected in (("empty", "", 0.0), ("witness", witness, 1.0), ("negative", negative, 0.0)):
-        result = verifier.grade(
-            GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
-        )
-        passed = (
-            result.reward == expected
-            if result.status == Outcome.GRADED
-            else expected == 0.0 and result.status == Outcome.EXTRACTION_ERROR
-        )
-        status = CheckStatus.PASS if passed else CheckStatus.FAIL
-        if result.status == Outcome.INFRA_ERROR:
-            status = CheckStatus.INFRA_ERROR
-        checks.append(CheckResult(check=name, status=status, detail=f"{result.status}: reward={result.reward}"))
-    return checks
+    return _answer_checks(task, verifier, (("empty", "", 0.0), ("witness", witness, 1.0), ("negative", negative, 0.0)))
 
 
 def _action_checks(task: TaskSpec, verifier: PredictedActionVerifier) -> list[CheckResult]:

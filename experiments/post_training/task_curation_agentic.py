@@ -48,6 +48,13 @@ from experiments.post_training.tasktrove.taskbinary import read_task_binary
 FIXTURE = Path(__file__).parent / "tasktrove/fixtures/nl2bash.tar.gz"
 
 
+@dataclass(frozen=True)
+class PilotSource:
+    recipe: DatasetRecipe
+    limit: int | None
+    factory: EnvironmentFactory | None
+
+
 def nl2bash_snapshot(path: Path) -> DatasetRecipe:
     """Adapt the existing cleanup output without importing experiments from the library."""
     binary = FIXTURE.read_bytes()
@@ -85,9 +92,7 @@ def nl2bash_snapshot(path: Path) -> DatasetRecipe:
     )
 
 
-def pilot_recipes(
-    output: Path, image: str, max_steps: int
-) -> tuple[tuple[DatasetRecipe, int | None, EnvironmentFactory | None], ...]:
+def pilot_recipes(output: Path, image: str, max_steps: int) -> tuple[PilotSource, ...]:
     digest = subprocess.run(
         ["docker", "image", "inspect", "--format", "{{.Id}}", image], check=True, text=True, capture_output=True
     ).stdout.strip()
@@ -100,14 +105,14 @@ def pilot_recipes(
     )
     shell_suite = episode_suite(factory, max_steps=max_steps)
     return (
-        (nemo_actions.recipe, None, None),
-        (replace(shell_files.recipe, check_suite=shell_suite), None, factory),
-        (
+        PilotSource(nemo_actions.recipe, None, None),
+        PilotSource(replace(shell_files.recipe, check_suite=shell_suite), None, factory),
+        PilotSource(
             replace(calendar.recipe, check_suite=episode_suite(CalendarFactory(), max_steps=max_steps)),
             None,
             CalendarFactory(),
         ),
-        (replace(nl2bash_snapshot(output / "sources/nl2bash.jsonl"), check_suite=shell_suite), 1, factory),
+        PilotSource(replace(nl2bash_snapshot(output / "sources/nl2bash.jsonl"), check_suite=shell_suite), 1, factory),
     )
 
 
@@ -215,8 +220,9 @@ def main() -> None:
                 args.relay_job,
                 max_tokens=args.max_tokens,
             )
-            for recipe, fixed_limit, factory in recipes:
-                limit = fixed_limit or args.limit
+            for source in recipes:
+                recipe = source.recipe
+                limit = source.limit or args.limit
                 manifest = run_pipeline(
                     recipe,
                     source_rows(recipe.source, limit),
@@ -237,7 +243,7 @@ def main() -> None:
                     ),
                     flush=True,
                 )
-                if factory is not None and args.solve_per_source:
+                if source.factory is not None and args.solve_per_source:
                     with (args.output / recipe.name / "normalized.jsonl").open() as stream:
                         for index, line in enumerate(stream):
                             if index >= args.solve_per_source:
@@ -245,7 +251,7 @@ def main() -> None:
                             task = TaskSpec.model_validate_json(line)
                             result = solve_probe(
                                 task,
-                                factory,
+                                source.factory,
                                 reviewer,
                                 args.output / recipe.name / "solver" / str(index),
                                 args.max_steps,

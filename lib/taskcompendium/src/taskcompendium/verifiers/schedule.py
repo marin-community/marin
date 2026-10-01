@@ -6,6 +6,8 @@
 The scoring rules are retained from the TaskTrove cleanup's standalone calendar
 checker: IDs, names, durations, explicit windows, supported text constraints, and
 pairwise overlap. This is a final-answer adapter, not an interactive environment.
+The scoring helpers deliberately mirror that standalone checker, which executes
+in source containers without TaskCompendium installed.
 """
 
 import json

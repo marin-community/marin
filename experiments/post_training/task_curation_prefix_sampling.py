@@ -18,7 +18,11 @@ import requests
 from huggingface_hub import HfFileSystem
 from huggingface_hub.hf_file_system import HfFileSystemFile
 
+from experiments.post_training.task_curation_partitions import assign_partitions
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
+
+READ_BLOCK_BYTES = 64 * 1024
+PAGE_HEADER_READ_BYTES = 8192
 
 
 class TransferBudget:
@@ -35,7 +39,7 @@ class BudgetedHfFile(HfFileSystemFile):
         super().__init__(fs, path, **kwargs)
 
     def _fetch_range(self, start: int, end: int) -> bytes:
-        # Serializing range requests makes the cumulative limit hold across DuckDB's workers.
+        # Protect the cumulative transfer budget when files share this counter.
         with self.budget.lock:
             requested = end - start
             if requested > self.budget.maximum - self.budget.transferred:
@@ -49,7 +53,7 @@ class BudgetedHfFile(HfFileSystemFile):
                 received = 0
                 record = {"start": start, "end": end, "received": 0}
                 self.budget.ranges.append(record)
-                for chunk in response.iter_content(chunk_size=65536):
+                for chunk in response.iter_content(chunk_size=READ_BLOCK_BYTES):
                     received += len(chunk)
                     self.budget.transferred += len(chunk)
                     record["received"] = received
@@ -62,13 +66,19 @@ class BudgetedHfFile(HfFileSystemFile):
 class BudgetedHfFileSystem(HfFileSystem):
     def __init__(self, *, budget: TransferBudget):
         self.budget = budget
-        super().__init__(block_size=65536)
+        super().__init__(block_size=READ_BLOCK_BYTES)
 
     def _open(self, path: str, mode: str = "rb", block_size: int | None = None, revision: str | None = None, **kwargs):
         if mode != "rb":
             raise ValueError("The prefix sampler only reads files")
         return BudgetedHfFile(
-            self, path, budget=self.budget, mode=mode, block_size=block_size or 65536, revision=revision, **kwargs
+            self,
+            path,
+            budget=self.budget,
+            mode=mode,
+            block_size=block_size or READ_BLOCK_BYTES,
+            revision=revision,
+            **kwargs,
         )
 
 
@@ -92,7 +102,7 @@ class SnappyPrefixReader:
 
     def read_compressed(self, count: int) -> bytes:
         while len(self.buffer) - self.offset < count:
-            block = self.stream.read(max(65536, count - len(self.buffer) + self.offset))
+            block = self.stream.read(max(READ_BLOCK_BYTES, count - len(self.buffer) + self.offset))
             if not block:
                 raise ValueError("Truncated Snappy block")
             self.buffer.extend(block)
@@ -139,7 +149,7 @@ def snappy_dictionary_prefix(stream: BinaryIO, count: int) -> list[bytes]:
 
 
 def column_prefix(parquet, column, stream: BinaryIO, count: int) -> list[bytes]:
-    """Read dictionary indexes before deciding how much of their dictionary is needed."""
+    """Return a non-null byte-array prefix from V1 pages and Snappy dictionaries."""
     from fastparquet import core, parquet_thrift  # noqa: PLC0415 -- optional page-decoding dependency.
     from fastparquet.cencoding import NumpyIO, ThriftObject  # noqa: PLC0415
 
@@ -150,7 +160,7 @@ def column_prefix(parquet, column, stream: BinaryIO, count: int) -> list[bytes]:
     page_offset = metadata.data_page_offset
     while len(indexes) < count:
         stream.seek(page_offset)
-        buffer = NumpyIO(stream.read(8192))
+        buffer = NumpyIO(stream.read(PAGE_HEADER_READ_BYTES))
         header = ThriftObject.from_buffer(buffer, "PageHeader")
         header_size = buffer.tell()
         if header.type != parquet_thrift.PageType.DATA_PAGE:
@@ -179,7 +189,7 @@ def column_prefix(parquet, column, stream: BinaryIO, count: int) -> list[bytes]:
     if not dictionary_indexes:
         return [value for value in indexes if isinstance(value, bytes)]
     stream.seek(metadata.dictionary_page_offset)
-    buffer = NumpyIO(stream.read(8192))
+    buffer = NumpyIO(stream.read(PAGE_HEADER_READ_BYTES))
     dictionary_header = ThriftObject.from_buffer(buffer, "PageHeader")
     if dictionary_header.type != parquet_thrift.PageType.DICTIONARY_PAGE:
         raise ValueError("The declared dictionary offset must point to a dictionary page")
@@ -209,7 +219,7 @@ def sample_prefix(
     filesystem = BudgetedHfFileSystem(budget=budget)
     shard = f"{config}/tasks.parquet"
     path = f"datasets/open-thoughts/TaskTrove@{revision}/{shard}"
-    with filesystem.open(path, block_size=65536, cache_type="none") as stream:
+    with filesystem.open(path, block_size=READ_BLOCK_BYTES, cache_type="none") as stream:
         parquet = ParquetFile(stream)
         columns = {column.meta_data.path_in_schema[0]: column for column in parquet.row_groups[0].columns}
         paths = column_prefix(parquet, columns["path"], stream, count)
@@ -235,12 +245,7 @@ def sample_prefix(
             snapshots[-1]["verifier_data"] = json.loads(files["tests/verifier_data.json"])
     if len(snapshots) != count:
         raise ValueError(f"Read {len(snapshots)} rows; requested {count}")
-    groups = sorted({row["sample_group"] for row in snapshots})
-    random.Random(f"{seed}:{name}").shuffle(groups)
-    holdout = set(groups[: round(len(groups) * 0.3)])
-    for row in snapshots:
-        row["sample_partition"] = "holdout" if row["sample_group"] in holdout else "development"
-    snapshots.sort(key=lambda row: (row["sample_partition"] == "holdout", row["sample_index"]))
+    assign_partitions(snapshots, random.Random(f"{seed}:{name}"), "sample_index")
     serialized = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in snapshots)
     directory = output / name
     directory.mkdir(parents=True, exist_ok=True)
