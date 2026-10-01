@@ -429,6 +429,42 @@ def test_escaping_provider_name_prevents_export(tmp_path, name):
     assert not (tmp_path / "outside").exists()
 
 
+async def test_git_staging_preserves_unused_source_without_import_policy_checks(tmp_path):
+    binding, checkout = _git_provider(tmp_path)
+    module = binding.provider.rsplit(":", maxsplit=2)[1]
+    package = checkout / "src" / module
+    entrypoint = package / "__init__.py"
+    entrypoint.write_text(entrypoint.read_text() + f"\nif False:\n    import {module}.optional\n")
+    unused = package / "unused.py"
+    unused.write_bytes(b'value = t"{name}"\n')
+    subprocess.run(("git", "-C", str(checkout), "add", "."), check=True)
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "optional source",
+        ),
+        check=True,
+    )
+    commit = subprocess.check_output(("git", "-C", str(checkout), "rev-parse", "HEAD"), text=True).strip()
+    previous = binding.provider.split("@", maxsplit=1)[1].split(":", maxsplit=1)[0]
+    provider = binding.provider.replace(previous, commit)
+    snapshot = tmp_path / "snapshot"
+    stage_git_provider(provider, checkout, snapshot)
+    assert (snapshot / "src" / module / "unused.py").read_bytes() == unused.read_bytes()
+    with ToolProviderCache() as cache:
+        staged = cache.stage(provider, snapshot)
+        service = cache.load(staged, seed_sha256=binding.seed_sha256, action_interface=binding.action_interface)
+        assert await service.dispatch_action("lookup_a", "{}", "call") == "('first', 1, 1)"
+
+
 async def test_cache_isolates_revisions_and_fresh_instances(tmp_path):
     first, first_checkout = _git_provider(tmp_path / "first", module="same_package", revision="first")
     second, second_checkout = _git_provider(tmp_path / "second", module="same_package", revision="second")

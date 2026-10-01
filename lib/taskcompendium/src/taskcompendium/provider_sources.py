@@ -8,7 +8,6 @@ Installed providers use ``python:module:Class``. Git providers use
 tasks supplies a local checkout of that exact commit; trials use only staged files.
 """
 
-import ast
 import base64
 import hashlib
 import importlib
@@ -184,7 +183,6 @@ def stage_git_provider(provider: str, checkout: Path, destination: Path) -> None
     destination.mkdir(parents=True, exist_ok=False)
     total_bytes = 0
     manifest_files: list[dict[str, object]] = []
-    package_name = locator.module.split(".")[0]
     for file in files:
         path, mode, blob = file.path, file.mode, file.blob
         size = int(_git(checkout, "cat-file", "-s", blob).decode())
@@ -194,20 +192,6 @@ def stage_git_provider(provider: str, checkout: Path, destination: Path) -> None
         payload = _git(checkout, "cat-file", "blob", blob)
         if len(payload) != size:
             raise ValueError(f"Git provider blob length differs: {path}")
-        if path.endswith(".py") and path.startswith((f"src/{package_name}/", f"{package_name}/")):
-            for node in ast.walk(ast.parse(payload, filename=path)):
-                if isinstance(node, ast.Import) and any(
-                    imported.name == package_name or imported.name.startswith(f"{package_name}.")
-                    for imported in node.names
-                ):
-                    raise ValueError(f"Git provider must use relative imports within its package: {path}")
-                if (
-                    isinstance(node, ast.ImportFrom)
-                    and node.level == 0
-                    and node.module is not None
-                    and (node.module == package_name or node.module.startswith(f"{package_name}."))
-                ):
-                    raise ValueError(f"Git provider must use relative imports within its package: {path}")
         target = destination.joinpath(*path.split("/"))
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
