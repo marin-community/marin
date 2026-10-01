@@ -44,7 +44,7 @@ import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
 from marin.evaluation.eval_measurements import measurements_from_records
-from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
@@ -72,6 +72,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import review, samples
 from .metrics import (
+    DEFAULT_COHORT,
     RUN_FACETS,
     build_comparison,
     build_meta,
@@ -1305,7 +1306,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
-    cohort = params.get("cohort") or SEPTEMBER_24_VERSION
+    cohort = params.get("cohort") or DEFAULT_COHORT
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
         cohort_version=None if cohort == "all" else cohort,

@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
-from marin.evaluation.eval_policy import POLICIES, SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import POLICIES, SEPTEMBER_29_VERSION, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -51,6 +51,7 @@ from marin.evaluation.records import EvalRunRecord, RunStatus
 # Capped-instance launcher validation runs; kept out of the headline panel (they stay visible in the
 # runs list and history).
 SMOKE_SUFFIX = "-smoke"
+DEFAULT_COHORT = SEPTEMBER_29_VERSION
 
 # Presentation grouping of eval columns into suites for the dashboard's column tree. This mirrors the
 # launcher's suite membership (experiments/evaluation/evals.py), which evaldash cannot import: it ships
@@ -453,7 +454,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     }
     return {
         "models": all_models,
-        "default_cohort": SEPTEMBER_24_VERSION,
+        "default_cohort": DEFAULT_COHORT,
         "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
