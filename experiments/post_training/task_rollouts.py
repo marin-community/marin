@@ -102,13 +102,16 @@ def write_smoke_tasks(output_path: str) -> None:
                         ),
                         TextMessage(
                             role="user",
-                            content=f"Execute `echo {value} > /workspace/value` with the shell tool. "
-                            "After the command completes, reply done.",
+                            content="What number is in /workspace/source? Use the shell tool to copy that file "
+                            "to /workspace/value and read the copied file. Reply with the number.",
                         ),
                     )
                 ),
                 environment_requirements=EnvironmentRequirements(capabilities=("filesystem", "shell")),
-                environment=EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
+                environment=EnvironmentSpec(
+                    kind=EnvironmentKind.SHELLSIM,
+                    files=(EnvironmentFile(path="/workspace/source", content=f"{value}\n".encode()),),
+                ),
                 answer_type=AnswerType.TEXT,
                 verifier=VerifierSpec(
                     kind=VerifierKind.STAGED,

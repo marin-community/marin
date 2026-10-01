@@ -405,8 +405,9 @@ vLLM service or a Docker rollout.
 ## Multi-turn GPU smoke
 
 The `experiments.post_training.task_rollouts` artifact main supplies eight ShellSim
-tasks to the shared engine. Each task writes a file in one stage and reads it in
-the next stage. Private graders check the file and the final answer. The run uses
+tasks to the shared engine. Each task copies a source file in one stage and reads
+the copy in the next stage. The prompt does not disclose the number in the source file.
+Private graders check the file and the final answer. The run uses
 one sample per task, behavior log probabilities, one optimizer step, and HF export.
 
 Run the preflight with a fresh version, then add `--run` to submit it:
