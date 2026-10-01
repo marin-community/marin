@@ -1329,7 +1329,7 @@ secrets = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#2859b70463fe3e581917094c6672b85427e4b2c8" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#5cb37254f40f45fffc0e3184dec43cd930c5bce3" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -2595,7 +2595,7 @@ dependencies = [
 [[package]]
 name = "verifyit"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/verifyit?rev=d3edc5d240d53edbd0c0e4a53c0e112629550f7e#d3edc5d240d53edbd0c0e4a53c0e112629550f7e" }
+source = { git = "https://github.com/marin-community/verifyit?rev=a04f28fd8c00879f949031e58ce9fbe5f4d5da6e#a04f28fd8c00879f949031e58ce9fbe5f4d5da6e" }
 dependencies = [
     { name = "tomlkit" },
 ]
