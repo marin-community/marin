@@ -640,7 +640,10 @@ def review_config(config_path: Path) -> dict:
         for task_key in ["model", "messages", "api_key", "stream", "n"]
     ):
         raise ValueError("Model parameters must not override identity, conversation, or credentials")
-    if native.get("harbor_agent", {}).get("name", "terminus-2") != "terminus-2":
+    if native.get("harbor_agent", {}).get("name", "terminus-2") not in {
+        "terminus-2",
+        "offline_terminus:OfflineTerminus2",
+    }:
         raise ValueError("Harbor reviews currently use terminus-2 so solver and judges share the configured model")
     if not model["name"] or not model["base_url"] or model["timeout"] <= 0:
         raise ValueError("Provide an explicit model name, base_url, and positive timeout")

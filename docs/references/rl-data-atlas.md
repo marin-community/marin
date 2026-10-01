@@ -363,7 +363,25 @@ Prepare a review sample in a Harbor environment that supports Hub package
 references and schema 1.3 network policies. Official Harbor revision
 `bf991e490394ef9c3250a6db2bc5cbda903cb4c3` supports both. Verify that the runtime
 preserves `no-network` for the environment, agent, and verifier before executing
-the sample. From the Marin repository root, this example fetches only metadata
+the sample. The sampled images lack `tmux`, which Terminus-2 needs. To provision
+agent tools offline, set `runtime.harbor_agent.name` to
+`offline_terminus:OfflineTerminus2` and its `kwargs.debian_package_manifest` to
+an absolute manifest path, with its SHA-256 in `kwargs.debian_package_manifest_sha256`.
+The manifest is a JSON array of `filename` and
+`sha256` records for local Debian packages, including all dependencies missing
+from the task image. Download packages before execution and verify their
+checksums against the distribution's package index. The agent installs only
+those packages and records them in `agent/offline-tooling.json` before normal
+Terminus-2 setup. Task files, resource limits, and network policies remain
+unchanged. Set `kwargs.record_terminal_session` to false when the bundle omits
+asciinema; the saved conversation and agent trajectory remain available.
+
+The [Skill2Env paper](https://www.alphaxiv.org/abs/2609.reinforcing-agents-collective-skills.pdf)
+uses Pi for training rollouts and evaluation. This intake uses Atlas's
+Terminus-2 setup with the released tasks and native verifiers. Its model scores
+are Atlas measurements and do not reproduce the paper's Pi results.
+
+From the Marin repository root, this example fetches only metadata
 and writes a reproducible three-task selection:
 
 ```python
