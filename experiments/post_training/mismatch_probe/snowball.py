@@ -288,6 +288,7 @@ def build_run(**kwargs) -> ArtifactStep[SkyRLRun]:
 @click.option("--batch-size", type=click.IntRange(min=1), default=32, show_default=True)
 @click.option("--prompt-count", type=click.IntRange(min=1), default=16, show_default=True)
 @click.option("--samples-per-prompt", type=click.IntRange(min=1), default=2, show_default=True)
+@click.option("--prompt-offset", type=click.IntRange(min=0), default=0, show_default=True)
 @click.option("--steps", type=click.IntRange(min=2), default=2, show_default=True)
 @click.option("--request-window-tokens", type=click.IntRange(min=1), default=2048, show_default=True)
 @click.option("--response-tokens", type=click.IntRange(min=1), default=512, show_default=True)
@@ -321,6 +322,7 @@ def main(
     batch_size: int,
     prompt_count: int,
     samples_per_prompt: int,
+    prompt_offset: int,
     steps: int,
     request_window_tokens: int,
     response_tokens: int,
@@ -349,6 +351,7 @@ def main(
             cache_mode,
             reuse_probe,
             None,
+            prompt_offset,
         ),
         campaign=selected,
         routing=Routing(routing),

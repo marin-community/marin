@@ -74,6 +74,8 @@ class ProbeSettings:
     cache_mode: str
     reuse_probe: str | None
     resume_path: str | None
+    # Index of the first validation prompt scored; a confirmation probe uses prompts disjoint from another's.
+    prompt_offset: int = 0
 
 
 PROBE_LAYOUTS = {
@@ -108,7 +110,11 @@ def probe_block(
             "policy": {"megatron_config": {"moe_router_replay": router_replay}},
             "mismatch_probe": {
                 "enabled": True,
-                "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
+                "prompts": {
+                    "count": settings.prompt_count,
+                    "samples_per_prompt": settings.samples_per_prompt,
+                    "offset": settings.prompt_offset,
+                },
                 "seed": settings.seed,
                 "archive_uri": None,
                 "reuse_probe": settings.reuse_probe,
