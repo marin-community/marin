@@ -1062,7 +1062,6 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("loop_active", "router_tie_active"))
     def train_step(state: GrugTrainState, batch, loop_active: bool | None = None, router_tie_active: bool | None = None):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side kernel launches that can cause SPMD sync issues).
@@ -1178,6 +1177,27 @@ def _make_train_step(
         )
 
         return next_state, metrics, watch_stats
+
+    return train_step
+
+
+def _flat_train_step(step_fn, treedef):
+    """``step_fn`` (``_make_train_step``'s step) jitted over the train state's flat leaves, donated.
+
+    Passing the ``GrugTrainState`` itself makes every call flatten the whole equinox tree in Python (one callback per
+    module node: 25-40 ms per step at d512, with the GPUs idle). A list of arrays takes JAX's C++ path; the tree is
+    rebuilt inside the trace, and ``treedef`` must stay the step's output structure."""
+
+    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("loop_active", "router_tie_active"))
+    def train_step(leaves, batch, loop_active: bool | None = None, router_tie_active: bool | None = None):
+        state = jax.tree.unflatten(treedef, leaves)
+        next_state, metrics, watch_stats = step_fn(
+            state, batch, loop_active=loop_active, router_tie_active=router_tie_active
+        )
+        next_leaves, next_treedef = jax.tree.flatten(next_state)
+        if next_treedef != treedef:
+            raise ValueError("the train step changed the state's tree structure")
+        return next_leaves, metrics, watch_stats
 
     return train_step
 
@@ -1609,7 +1629,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     ema_start_step = (
         0 if config.trainer.ema_last_steps is None else max(0, trainer.num_train_steps - config.trainer.ema_last_steps)
     )
-    train_step = _make_train_step(
+    train_step_fn = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
@@ -1902,6 +1922,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc.disable()
         hlo_written = False
 
+        # The step runs on the state's flat leaves (``_flat_train_step``); ``state`` is rebuilt from them each step.
+        state_leaves, state_treedef = jax.tree.flatten(state)
+        train_step = _flat_train_step(train_step_fn, state_treedef)
+
         # Main optimization loop.
         try:
             with HostStallSampler(HOST_STALL_SAMPLE_THRESHOLD) as stall_sampler:
@@ -1974,9 +1998,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             )
                         )
                     dispatch_start = time.perf_counter()
-                    state, metrics, inline_watch_stats = train_step(
-                        state, batch, loop_active=loop_active, router_tie_active=router_tie_active
+                    state_leaves, metrics, inline_watch_stats = train_step(
+                        state_leaves, batch, loop_active=loop_active, router_tie_active=router_tie_active
                     )
+                    state = jax.tree.unflatten(state_treedef, state_leaves)
                     # Host time to hand the step to the devices (argument flattening, donation, launch); the GPUs
                     # idle through it because the previous step has already finished.
                     dispatch_time = time.perf_counter() - dispatch_start
@@ -1999,7 +2024,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     stall_sampler.arm()
                     if config.trainer.hlo_dump_path is not None and not hlo_written and jax.process_index() == 0:
                         _write_train_step_hlo(
-                            train_step, state, batch, loop_active, router_tie_active, config.trainer.hlo_dump_path
+                            train_step, state_leaves, batch, loop_active, router_tie_active, config.trainer.hlo_dump_path
                         )
                     hlo_written = True
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
@@ -2012,6 +2037,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if int(state.step) == config.model.router_embed_tie_release_step:
                         # Before the callbacks, so the checkpoint and evals at this step already see the release.
                         state = _release_router_ties(state)
+                        state_leaves, released_treedef = jax.tree.flatten(state)
+                        if released_treedef != state_treedef:
+                            raise ValueError("releasing the router ties changed the state's tree structure")
                         logger.info("router ties released at step %d", int(state.step))
                     hook_start = time.perf_counter()
                     with jax.profiler.TraceAnnotation("callbacks"):
@@ -2178,11 +2206,13 @@ def _warn_on_long_gc(phase: str, info: dict) -> None:
 
 
 def _write_train_step_hlo(
-    train_step, state, batch, loop_active: bool | None, router_tie_active: bool, path: str
+    train_step, state_leaves, batch, loop_active: bool | None, router_tie_active: bool, path: str
 ) -> None:
-    """Write the optimized HLO of ``train_step`` (with op metadata) to ``path``; recompiles once."""
+    """Write the optimized HLO of the flat ``train_step`` (with op metadata) to ``path``; recompiles once."""
     text = (
-        train_step.lower(state, batch, loop_active=loop_active, router_tie_active=router_tie_active).compile().as_text()
+        train_step.lower(state_leaves, batch, loop_active=loop_active, router_tie_active=router_tie_active)
+        .compile()
+        .as_text()
     )
     with fsspec.open(path, "w") as f:
         f.write(text)
