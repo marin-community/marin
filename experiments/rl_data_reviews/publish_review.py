@@ -152,9 +152,10 @@ def archive_evidence(publication: ReviewPublication, review_id: str) -> None:
     evidence_paths.update(
         str(path.relative_to(root)) for path in root.glob("tasks/*/execution-*/solver/turn-*/response.json")
     )
-    evidence_paths.update(
-        str(path.relative_to(root)) for path in root.glob("tasks/*/execution-*/trial/agent/trajectory.json")
-    )
+    for filename in ["trajectory.json", "offline-tooling.json"]:
+        evidence_paths.update(
+            str(path.relative_to(root)) for path in root.glob(f"tasks/*/execution-*/*/agent/{filename}")
+        )
     artifacts = []
     for relative in sorted(evidence_paths):
         path = root / relative
