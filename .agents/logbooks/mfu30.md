@@ -679,3 +679,14 @@ setting compiles first wins). All campaign arms on this wheel set it ON; a real 
 `JAX_ENABLE_COMPILATION_CACHE=false`. For landing, the switch belongs in DebugOptions (part of the cache key)
 or default-on in a promoted wheel. Confirmation arms (env ON, same program) reuse F1's cached executable,
 which is consistent.
+
+## M30-040 Holdback arm queued (2026-10-01)
+
+B (M30B-029): the holdback cause is confirmed. Without it, XLA merges both shared experts' gate/up and the latent
+down projection into one GEMM on `mlp_in`; with it, the held expert's GEMMs stay separate. Gradient diffs:
+`shared[1].w_gate` max_rel 4.2e-3 (0.05% of elements), `w_up` 4.0e-3 (0.06%), `token_embed` 8.3e-3 (2.6%),
+i.e. ~1-2 bf16 ulp, accepted under the ruling. Module bitwise in all 3 cases; loss and router metrics bitwise;
+recompute resurrects nothing; no new collectives. Queued `m30-holdback-01` (ab78bbe3ad,
+`--held-back-shared-experts 1`, otherwise identical to f1-seq-02; custom wheel, streams on, traced) as a paired
+comparison against f1-seq-02. Target: forward return c1 (0.186 s/step exposed in F1).
+Rack queue: m30-conf-seq-s0/s1/s2 -> m30-pgle-d2h-01 -> m30-pgle-plain-01 -> m30-holdback-01.
