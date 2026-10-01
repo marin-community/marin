@@ -336,3 +336,14 @@ different data order: s1 loss at 180000 is 1.2063 vs 1.2614), so run-to-run MFU 
 seed 0 is a same-data loss reference. Short conv cleared its final GB200 check (`m30b-sconv-03`, 8/8,
 out/dx bitwise); it is on both stack branches behind `--sconv-implementation triton_gpu`
 (`mfu30-stack` @ cc55c78f45, `-pipelined` @ a7cc657e28), default off.
+
+## M30-017 Control spread; same-code repeat queued (2026-10-01)
+
+Third control `mhep-ctx4k-s2-20260930`: 28.012 / 14.013 s (s0 28.258, s1 28.229). The 0.25 MFU spread
+across seeds confounds data order (routing balance) with rack conditions. All campaign arms use seed 0,
+so s0 is their same-data reference. A same-code, same-seed repeat of s0 (`m30-ctl-s0-r2`, main
+code + logbook only, identical flags to the ctx4k runs, 100 steps) is queued behind the campaign arms. It
+calibrates (1) the same-code loss band (attention-backward nondeterminism only) and (2) MFU drift across
+the night. Keep bar is provisionally max(0.15, 3 x sd of seed-0 repeats) once the repeat exists.
+The resurrected `gcab-freeze` rerun (another session's job, flagged to the user) took the rack at 00:39Z,
+ahead of our arms.
