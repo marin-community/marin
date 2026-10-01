@@ -4,6 +4,7 @@
 """Export a direct-chat TaskSpec submission as a Harbor task package."""
 
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,8 +12,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from taskcompendium.models import TaskSpec
-from taskcompendium.submission import SubmissionConvention, render_instruction
+from taskcompendium.models import SCHEMA_VERSION, TaskSpec
+from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
+from taskcompendium.verifier_registry import validate_verifier
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"
@@ -57,12 +59,12 @@ def compatible_lowerings(
     environment_configs: Sequence[HarborEnvironmentConfig],
 ) -> tuple[LoweringCandidate, ...]:
     """Enumerate conventions and environments that preserve this task's contract."""
-    if specification.requirements.capabilities or specification.requirements.action_interfaces:
+    if specification.environment_requirements.capabilities or specification.environment_requirements.action_interfaces:
         return ()
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
-        if convention.supports(specification.answer_type)
+        if submission_compatible(specification, convention)
         for environment_config in environment_configs
     )
 
@@ -101,12 +103,17 @@ def validate_environment_config(specification: TaskSpec, environment_config: Har
     """Require direct chat to satisfy every declared semantic operation."""
     if environment_config != HarborEnvironmentConfig():
         raise ValueError("Only direct-chat environment configuration is supported")
-    if specification.requirements.capabilities or specification.requirements.action_interfaces:
+    if specification.environment_requirements.capabilities or specification.environment_requirements.action_interfaces:
         raise ValueError("Direct chat cannot satisfy capability or action-interface requirements")
 
 
 def read_specification(path: Path) -> TaskSpec:
-    return TaskSpec.model_validate_json(path.read_text())
+    data = json.loads(path.read_text())
+    if data["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(f"Unsupported TaskSpec schema: {data['schema_version']}")
+    specification = TaskSpec.model_validate(data)
+    validate_verifier(specification.verifier)
+    return specification
 
 
 def read_environment_config(path: Path) -> HarborEnvironmentConfig:
@@ -125,6 +132,7 @@ def lower_to_harbor(
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_environment_config(specification, environment_config)
+    validate_verifier(specification.verifier)
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()

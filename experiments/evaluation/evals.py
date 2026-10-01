@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_NUM_CONCURRENT,
@@ -21,13 +22,13 @@ from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.graphwalks import GRAPHWALKS_REVISION, GraphWalksExecutor
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
-from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
+from marin.evaluation.harbor.driver_config import ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
 from marin.evaluation.serving_config import resolved_serve_config
-from marin.external_dependencies import EVALCHEMY
+from marin.external_dependencies import ExternalDependency
 from rigging.secrets import SecretSpec
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ class EvalchemyDefinition:
         return EvalRef(
             name=config.name,
             mechanism="evalchemy",
+            source_digest=source_config_digest(self.config_path),
             family=self.family,
             tasks=tuple(
                 EvalTaskRef(
@@ -87,12 +89,14 @@ class EvalchemyDefinition:
             ),
             evalchemy=EvalchemyRef(
                 apply_chat_template=config.apply_chat_template,
+                debug=config.debug,
                 max_gen_toks=config.max_gen_toks,
                 max_eval_instances=config.max_eval_instances,
                 num_concurrent=config.num_concurrent,
                 batch_size=config.batch_size,
                 seed=config.seed,
                 extra_gen_kwargs=dict(config.extra_gen_kwargs),
+                chat_template_kwargs=dict(config.chat_template_kwargs),
                 extra_model_args=dict(config.extra_model_args),
                 max_length=config.max_length,
                 judge=(
@@ -103,8 +107,10 @@ class EvalchemyDefinition:
             ),
         )
 
-    def config_for(self, source: EvalchemyConfig, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
-        config = evalchemy_run_config(self.name, source)
+    def config_for(
+        self, source: EvalchemyConfig, model: ModelConfig, limit: int | None, dependency: ExternalDependency
+    ) -> EvalchemyRunConfig:
+        config = evalchemy_run_config(self.name, source, dependency)
         effective_limit = config.max_eval_instances if limit is None else limit
         model_max_gen_toks = model.generation.max_gen_toks
         max_gen_toks = config.max_gen_toks
@@ -130,6 +136,10 @@ class EvalchemyDefinition:
                 **config.extra_gen_kwargs,
                 **model.generation.extra_gen_kwargs,
             },
+            chat_template_kwargs={
+                **model.generation.chat_template_kwargs,
+                **config.chat_template_kwargs,
+            },
         )
 
 
@@ -153,6 +163,7 @@ class HarborDefinition:
         return EvalRef(
             name=self.name,
             mechanism="harbor",
+            source_digest=source_config_digest(self.config_path),
             family=self.family,
             tasks=(
                 EvalTaskRef(
@@ -173,10 +184,6 @@ class HarborDefinition:
                 max_output_tokens=config.max_output_tokens,
             ),
         )
-
-    @property
-    def runtime_descriptor(self) -> str:
-        return HARBOR_RUNTIME
 
     def executor_for(
         self,
@@ -248,7 +255,7 @@ def harbor_definition(
     )
 
 
-def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
+def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: ExternalDependency) -> EvalchemyRunConfig:
     """Lower one launch file into Marin's served Evalchemy runner."""
     tasks: list[EvalTaskConfig] = []
     for task_name in config.tasks:
@@ -285,16 +292,18 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         name=name,
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
+        debug=config.debug,
         max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,
         batch_size=config.batch_size,
         seed=config.seed,
         extra_gen_kwargs=extra_gen_kwargs,
+        chat_template_kwargs=dict(config.chat_template_kwargs),
         extra_model_args=extra_model_args,
         max_length=config.max_length,
         runtime=EvalchemyRuntimeConfig(
-            requirement=EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
+            requirement=dependency.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
         ),
         judge=config.judge,
     )
@@ -328,6 +337,7 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "mbppplus",
     "mmlu-smoke",
     "gsm8k-smoke",
+    "aime24-smoke",
     "mmlu-pro",
     "gpqa-diamond",
     "cruxeval",
