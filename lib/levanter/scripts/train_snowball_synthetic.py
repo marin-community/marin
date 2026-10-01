@@ -170,6 +170,8 @@ def build_trainer_config(args: argparse.Namespace, preset: Preset, run_id: str, 
         log_dir=args.log_dir,
         mesh=mesh,
         use_explicit_mesh_axes=True,
+        # The tiny preset is a CPU check; the default demands an accelerator everywhere except macOS.
+        require_accelerator=False,
         mp=jmp.get_policy(args.mp or preset.mp),
         train_batch_size=batch_size,
         num_train_steps=args.steps,
@@ -244,8 +246,9 @@ def main() -> None:
     optimizer = AdamConfig(learning_rate=args.learning_rate, warmup=0.0).build(args.steps)
     step_durations: list[float] = []
 
-    def record_step(info: StepInfo) -> None:
-        if info.step >= FIRST_TIMED_STEP:
+    def record_step(info: StepInfo, force: bool = False) -> None:
+        # The trainer re-runs every hook with force=True after the last step; that call would duplicate the sample.
+        if not force and info.step >= FIRST_TIMED_STEP:
             step_durations.append(info.step_duration)
 
     with Trainer(trainer_cfg, optimizer, loss_function, add_default_hooks=False) as trainer:
