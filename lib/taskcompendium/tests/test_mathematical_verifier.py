@@ -11,10 +11,7 @@ from tasktrove_verify.spec import MathType
 from taskcompendium.grading import Outcome
 from taskcompendium.models import (
     AnswerType,
-    AssistantToolCalls,
     ConversationInput,
-    ConversationToolCall,
-    ConversationTrace,
     EnvironmentRequirements,
     Source,
     TaskSpec,
@@ -22,9 +19,11 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
-from taskcompendium.submission import AnswerCall, GradingAttempt, JsonAnswer, PlainText
+from taskcompendium.submission import AnswerCall, JsonAnswer, PlainText
 from taskcompendium.verifier_registry import grade_answer, resolve_verifier
 from taskcompendium.verifiers.mathematical import mathematical_answer
+
+from .submission_helpers import answer_attempt
 
 
 def _task(expected, math_type):
@@ -36,17 +35,6 @@ def _task(expected, math_type):
         verifier=mathematical_answer(expected, math_type),
         source=Source(dataset="hand-authored", revision="1", row="math", importer_revision="1"),
     )
-
-
-def _attempt(task, convention, candidate):
-    if isinstance(convention, AnswerCall):
-        response = AssistantToolCalls(
-            calls=(ConversationToolCall(call_id="answer", name="submit_answer", arguments={"answer": candidate}),)
-        )
-    else:
-        content = json.dumps({"answer": candidate}) if isinstance(convention, JsonAnswer) else candidate
-        response = TextMessage(role="assistant", content=content)
-    return GradingAttempt(ConversationTrace(events=(*task.context.events, response)), object())
 
 
 @pytest.mark.parametrize("convention", [PlainText(id="plain"), JsonAnswer(id="json"), AnswerCall(id="call")])
@@ -68,7 +56,7 @@ def _attempt(task, convention, candidate):
 )
 async def test_mathematical_answers_share_scoring_across_conventions(expected, math_type, candidate, reward, convention):
     task = TaskSpec.model_validate_json(_task(expected, math_type).model_dump_json())
-    result = await grade_answer(task, convention, _attempt(task, convention, candidate))
+    result = await grade_answer(task, convention, answer_attempt(task, convention, candidate))
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 

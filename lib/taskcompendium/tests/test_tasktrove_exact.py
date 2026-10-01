@@ -12,28 +12,14 @@ from taskcompendium.importers.tasktrove.exact import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import (
     AnswerType,
-    AssistantToolCalls,
-    ConversationToolCall,
-    ConversationTrace,
-    TextMessage,
     VerifierKind,
 )
-from taskcompendium.submission import AnswerCall, GradingAttempt, JsonAnswer, PlainText
+from taskcompendium.submission import AnswerCall, JsonAnswer, PlainText
 from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
+from .submission_helpers import answer_attempt
 from .tasktrove_fixtures import FIXTURE_DATASET_URI, FIXTURE_REVISION, exact_archive
-
-
-def _attempt(specification, convention, response: str):
-    if isinstance(convention, AnswerCall):
-        event = AssistantToolCalls(
-            calls=(ConversationToolCall(call_id="answer", name="submit_answer", arguments={"answer": response}),)
-        )
-    else:
-        content = json.dumps({"answer": response}) if isinstance(convention, JsonAnswer) else response
-        event = TextMessage(role="assistant", content=content)
-    return GradingAttempt(ConversationTrace(events=(*specification.context.events, event)), object())
 
 
 def _task():
@@ -64,7 +50,7 @@ def test_exact_import_preserves_source_contract_and_intrinsic_puzzle():
 @pytest.mark.parametrize("response, reward", [("GREEN,  blue", 1.0), ("blue, green", 0.0)])
 async def test_exact_import_uses_selected_submission_convention(convention, response, reward):
     specification = _task()
-    result = await grade_answer(specification, convention, _attempt(specification, convention, response))
+    result = await grade_answer(specification, convention, answer_attempt(specification, convention, response))
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
