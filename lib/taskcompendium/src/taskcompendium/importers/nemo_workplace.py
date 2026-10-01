@@ -21,7 +21,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.provider_sources import import_staged_provider
+from taskcompendium.provider_sources import ToolProviderCache
 from taskcompendium.submission import ProviderState, SubmissionConvention
 
 DATASET = "nvidia/Nemotron-RL-agent-workplace_assistant"
@@ -131,14 +131,15 @@ def select_dataset_rows(source: bytes, split: WorkplaceSplit) -> tuple[bytes, ..
     return tuple(selected)
 
 
-def _provider_module(provider_source: Path) -> ModuleType:
-    provider = import_staged_provider(PROVIDER, provider_source)
+def _provider_module(provider_source: Path, *, cache: ToolProviderCache) -> ModuleType:
+    provider = cache.stage(PROVIDER, provider_source).factory
     return importlib.import_module(provider.__module__)
 
 
 def workplace_environment_config(provider_source: Path) -> HarborEnvironmentConfig:
     """Load the Workplace tool binding from a verified provider snapshot."""
-    return _environment_config(_provider_module(provider_source))
+    with ToolProviderCache() as cache:
+        return _environment_config(_provider_module(provider_source, cache=cache))
 
 
 def _environment_config(provider: ModuleType) -> HarborEnvironmentConfig:
@@ -196,35 +197,37 @@ def import_row(data: bytes, provider_source: Path) -> WorkplaceImport:
     expected_digest = ROW_SHA256_BY_ID.get(row_id)
     if expected_digest is None or hashlib.sha256(data).hexdigest() != expected_digest:
         raise ValueError(f"Workplace row {row_id} does not match its pinned raw digest")
-    provider = _provider_module(provider_source)
-    if provider._seed_digest() != provider.SEED_SHA256:
-        raise ValueError("Workplace seed differs from its pinned digest")
-    return _import_row(row, provider, source_row=str(row_id), task_id=f"nemo-workplace-{row_id}")
+    with ToolProviderCache() as cache:
+        provider = _provider_module(provider_source, cache=cache)
+        if provider._seed_digest() != provider.SEED_SHA256:
+            raise ValueError("Workplace seed differs from its pinned digest")
+        return _import_row(row, provider, source_row=str(row_id), task_id=f"nemo-workplace-{row_id}")
 
 
 def import_dataset_split(source: bytes, split: WorkplaceSplit, provider_source: Path) -> tuple[WorkplaceImport, ...]:
     """Convert every row in one pinned NeMo Workplace dataset split."""
     selected = select_dataset_rows(source, split)
-    provider = _provider_module(provider_source)
-    if provider._seed_digest() != provider.SEED_SHA256:
-        raise ValueError("Workplace seed differs from its pinned digest")
-    imports = []
-    for data in selected:
-        row = json.loads(data)
-        row_id = row["id"]
-        row_sha256 = hashlib.sha256(data).hexdigest()
-        try:
-            imports.append(
-                _import_row(
-                    row,
-                    provider,
-                    source_row=f"{split}:{row_id}:{row_sha256}",
-                    task_id=f"nemo-workplace-{split}-{row_id}",
+    with ToolProviderCache() as cache:
+        provider = _provider_module(provider_source, cache=cache)
+        if provider._seed_digest() != provider.SEED_SHA256:
+            raise ValueError("Workplace seed differs from its pinned digest")
+        imports = []
+        for data in selected:
+            row = json.loads(data)
+            row_id = row["id"]
+            row_sha256 = hashlib.sha256(data).hexdigest()
+            try:
+                imports.append(
+                    _import_row(
+                        row,
+                        provider,
+                        source_row=f"{split}:{row_id}:{row_sha256}",
+                        task_id=f"nemo-workplace-{split}-{row_id}",
+                    )
                 )
-            )
-        except ValueError as exc:
-            raise ValueError(f"Workplace {split} row {row_id}: {exc}") from exc
-    return tuple(imports)
+            except ValueError as exc:
+                raise ValueError(f"Workplace {split} row {row_id}: {exc}") from exc
+        return tuple(imports)
 
 
 def _import_row(row: dict[str, Any], provider: ModuleType, *, source_row: str, task_id: str) -> WorkplaceImport:
