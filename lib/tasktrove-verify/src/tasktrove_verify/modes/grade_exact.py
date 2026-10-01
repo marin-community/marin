@@ -58,6 +58,21 @@ def grade_exact_candidate(spec: ExactSpec, candidate: str) -> Reward:
     )
 
 
+def grade_exact_submission(spec: ExactSpec, submission: str) -> Reward:
+    """Score a text submission, preferring its last boxed answer when present."""
+    if not spec.expected:
+        raise InvalidTask("exact expects at least one expected string")
+    boxed = extract_boxed(submission)
+    if boxed is None:
+        return grade_exact_candidate(spec, submission)
+
+    result = grade_exact_candidate(spec, boxed)
+    if result.reward:
+        return result
+    fallback = grade_exact_candidate(spec, submission)
+    return scored(fallback.reward, **result.detail)
+
+
 def grade(spec: ExactSpec, tests_dir: Path, workspace: Path) -> Reward:
     if not spec.expected:
         raise InvalidTask("exact expects at least one expected string")
@@ -65,10 +80,4 @@ def grade(spec: ExactSpec, tests_dir: Path, workspace: Path) -> Reward:
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
-    boxed = extract_boxed(text)
-    candidates = [boxed, text] if boxed is not None else [text]
-    result = grade_exact_candidate(spec, candidates[0])
-    if result.reward or len(candidates) == 1:
-        return result
-    fallback = grade_exact_candidate(spec, candidates[1])
-    return scored(fallback.reward, **result.detail)
+    return grade_exact_submission(spec, text)

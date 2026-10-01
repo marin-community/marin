@@ -21,7 +21,7 @@ def _clean_instruction(instruction: str) -> str:
     problem, task_separator, _ = content.partition("## Task")
     if not separator or not puzzle_separator or not task_separator or not problem.strip():
         raise ValueError("Unsupported exact-mode puzzle instruction")
-    return f"{title.strip()}\n\n## Puzzle Type{problem.rstrip()}\n\nReturn only the requested answer."
+    return f"{title.strip()}\n\n## Puzzle Type{problem.rstrip()}"
 
 
 def import_task(archive: TaskArchive) -> TaskSpec:
