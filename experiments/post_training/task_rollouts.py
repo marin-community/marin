@@ -162,6 +162,9 @@ trainer:
       max_grad_norm: 1.0
 generator:
   backend: vllm
+  engine_init_kwargs:
+    enable_auto_tools: true
+    tool_parser: hermes
   chat_template_kwargs:
     enable_thinking: false
   model_dtype: bfloat16
