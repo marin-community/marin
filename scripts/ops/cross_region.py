@@ -325,25 +325,6 @@ def download_log_segments(remote_log_dir: str, segments: list[DirectQuerySegment
     return local_paths
 
 
-def validate_parquet_files(paths: list[Path]) -> list[Path]:
-    """Return parquets whose footer duckdb can read; log and drop the rest.
-
-    The most recent segment is frequently still being written upstream, so the
-    GCS read races the writer and we get a file without a parquet footer.
-    """
-    con = duckdb.connect()
-    good: list[Path] = []
-    for path in paths:
-        try:
-            con.execute(f"SELECT 1 FROM read_parquet('{path}') LIMIT 0")
-            good.append(path)
-        except duckdb.Error as exc:
-            logging.warning(f"Skipping unreadable parquet {path.name}: {exc}")
-            # Remove so a later resume re-downloads it fresh.
-            path.unlink(missing_ok=True)
-    return good
-
-
 def download_checkpoint(config: IrisClusterConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
     chosen = checkpoint_dir or _find_latest_checkpoint_dir(config.storage.remote_state_dir)
     if chosen is None:
@@ -938,7 +919,6 @@ def main(
     log_segments = choose_log_segments(pin.segments, window, download_lookback_hours)
     local_logs_dir = out_path / "logs"
     local_logs = download_log_segments(remote_log_dir, log_segments, local_logs_dir)
-    local_logs = validate_parquet_files(local_logs)
     db_path = download_checkpoint(cfg, out_path, checkpoint_dir)
 
     summary = analyze(local_logs, db_path, window)
