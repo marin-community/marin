@@ -7,6 +7,7 @@ import functools
 import gc
 import glob
 import io
+import json
 import logging
 import math
 import os
@@ -269,6 +270,9 @@ class GrugTrainerConfig:
     # After training, write the params whose dotted path matches any of ``final_param_dump_patterns`` (``re.search``)
     # to ``final_param_dump_path`` as one npz (process 0), for offline analysis of small learned tables.
     final_param_dump_path: str | None = None
+    # Written by process 0 once the final eval has run; a restarted job that finds it exits instead of retraining
+    # (a preemption during the post-training blend evals otherwise reran the whole run).
+    completion_marker_path: str | None = None
     final_param_dump_patterns: tuple[str, ...] = ()
     # Optimizer diagnostics (``grad_capture.py``): for ``grad_capture_len`` steps from each start, write the raw
     # gradient and applied update of the captured matrices to ``<grad_capture_path>/grad_capture_step<N>.npz``.
@@ -1630,6 +1634,10 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    marker = config.trainer.completion_marker_path
+    if marker is not None and fsspec.core.url_to_fs(marker)[0].exists(marker):
+        logger.info("run already completed (%s exists); not retraining", marker)
+        return
     if config.tensorstore_cache_bytes is not None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
 
@@ -2212,6 +2220,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if marker is not None and jax.process_index() == 0:
+                with fsspec.open(marker, "w") as f:
+                    json.dump({"step": int(state.step), "final_loss": float(last_loss)}, f)
             if dump_routing is not None and pending_dumps:
                 # Steps past the end of the run dump the final weights.
                 dump_routing(state)

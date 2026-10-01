@@ -607,6 +607,7 @@ def build_h100_ladder_run(
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 final_param_dump_path=prefix_join(ctx.output_path, "final_params.npz") if final_param_dump else None,
+                completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
                 final_param_dump_patterns=final_param_dump,
                 pipeline_depth=pipeline_depth,
                 loader_buffer_batches=loader_buffer_batches,
