@@ -8,7 +8,7 @@ import json
 import math
 import tarfile
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -62,19 +62,6 @@ from taskcompendium.models import (
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, chat_request, conversation_messages
 from taskcompendium.verifier_registry import grade_answer, validate_task_verifiers
 
-SHELL_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "shell",
-        "description": "Run a shell command in the task workspace. Files persist between commands.",
-        "parameters": {
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-            "additionalProperties": False,
-        },
-    },
-}
 MISSING_FILE_EXIT = 44
 
 
@@ -97,10 +84,6 @@ class ModelTurn:
     stop_reason: str
     text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-class RolloutModel(Protocol):
-    async def complete(self, request: ModelRequest) -> ModelTurn: ...
 
 
 class GenerationLimitReached(Exception):
@@ -189,10 +172,6 @@ class TaskSession(Protocol):
     async def grade(self, messages: tuple[dict[str, Any], ...]) -> GradeResult: ...
 
     async def close(self) -> None: ...
-
-
-class TaskSessionFactory(Protocol):
-    def __call__(self, task: TaskSpec, machine: Machine | None, convention: SubmissionConvention) -> TaskSession: ...
 
 
 class RolloutEngine(Protocol):
@@ -547,7 +526,21 @@ def rollout_request(task: TaskSpec, convention: SubmissionConvention) -> dict[st
     if task.environment.kind != EnvironmentKind.NULL:
         if task.final_tools.functions:
             raise ValueError("Executable tasks expose the Shellbox shell tool only")
-        request["tools"] = [SHELL_TOOL]
+        request["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "description": "Run a shell command in the task workspace. Files persist between commands.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ]
     return request
 
 
@@ -694,13 +687,13 @@ class ShellboxRolloutEngine:
 
     def __init__(
         self,
-        model: RolloutModel,
+        model: Callable[[ModelRequest], Awaitable[ModelTurn]],
         factories: Mapping[EnvironmentKind, MachineFactory],
         *,
         max_turns: int,
         command_timeout: float,
         convention: SubmissionConvention,
-        sessions: Mapping[str, TaskSessionFactory] | None = None,
+        sessions: Mapping[str, Callable[[TaskSpec], TaskSession]] | None = None,
     ):
         if max_turns < 1 or command_timeout <= 0:
             raise ValueError("Rollout limits must be positive")
@@ -767,7 +760,7 @@ class ShellboxRolloutEngine:
         if task.environment.interaction is None:
             session = ShellboxTaskSession(task, machine, convention, self.command_timeout, self.factories)
         else:
-            session = self.sessions[task.environment.interaction](task, machine, convention)
+            session = self.sessions[task.environment.interaction](task)
         resources.push_async_callback(session.close)
         return await self._run_session(task, session)
 
@@ -888,7 +881,7 @@ class ShellboxRolloutEngine:
         for index in range(self.max_turns):
             try:
                 async with asyncio.timeout_at(deadline):
-                    turn = await self.model.complete(ModelRequest(tuple(messages), request, tokens, assistant_index))
+                    turn = await self.model(ModelRequest(tuple(messages), request, tokens, assistant_index))
             except GenerationLimitReached as limit:
                 stop_reason = "length"
                 if len(steps) == initial_step_count:

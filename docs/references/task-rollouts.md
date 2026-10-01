@@ -70,7 +70,7 @@ Daytona also executes tasks with `environment.kind: docker`. The caller's machin
 factory selects the backend. Daytona accepts registry images or a Dockerfile at
 the build context root. It does not accept nested Dockerfile paths or local images.
 An `environment.interaction` value selects a factory from the engine's `sessions`
-mapping. The factory receives the task, machine, and submission convention.
+mapping. The callable receives the task and returns a fresh session.
 Without that value, the engine uses its shell-tool session.
 
 The caller supplies a `MachineFactory` for each executable environment kind.
@@ -166,7 +166,7 @@ policy determines whether the interrupted record enters training.
 
 ## Model and token contract
 
-`RolloutModel.complete(ModelRequest)` returns a `ModelTurn` with the parsed
+The model callable accepts `ModelRequest` and asynchronously returns `ModelTurn` with the parsed
 assistant message and exact prompt and response token IDs.
 Optional log probabilities must align with the response tokens.
 For continuation, the next prompt must preserve the complete served token prefix.
@@ -192,6 +192,9 @@ The iterator blocks its caller until the next rollout completes. One thread
 advances the iterator for each engine. That thread can differ from the thread
 that created the engine. The engine uses an internal event loop for model and
 machine operations. An async caller must execute the iterator on a separate thread.
+SkyRL's model callable sends inference requests to the worker's event loop and
+awaits their results from the engine loop. The inference client stays on the
+worker's loop.
 
 `ShellboxRolloutEngine.cancel()` requests cancellation of the active task from
 another thread and prevents more tasks from starting. The iterator reports task
@@ -199,25 +202,28 @@ cancellation with `asyncio.CancelledError` after session and machine cleanup.
 Cleanup errors propagate. The worker must wait for the active `next()` call to
 finish before it reuses the thread.
 
-`RolloutSink.consume` is an async method that accepts `Iterator[RolloutData]` and
-returns `None`. SkyRL's `BufferRolloutSink` returns after its buffer writer commits
-the prompt group.
+`RolloutSink.consume` is an async method that accepts an iterator of completed
+`RolloutData` records and returns `None`. Its caller completes engine execution
+before it calls the sink. SkyRL's `BufferRolloutSink` returns after its buffer
+writer commits the prompt group.
 
 This example connects tasks and a caller-supplied model on the execution thread.
 The model must implement the token contract above.
 
 ```python
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import TaskSpec
-from taskcompendium.rollout import RolloutData, RolloutModel, ShellboxRolloutEngine
+from taskcompendium.rollout import ModelRequest, ModelTurn, RolloutData, ShellboxRolloutEngine
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
-def generate_tasks(tasks: Iterator[TaskSpec], model: RolloutModel) -> Iterator[RolloutData]:
+def generate_tasks(
+    tasks: Iterator[TaskSpec], model: Callable[[ModelRequest], Awaitable[ModelTurn]]
+) -> Iterator[RolloutData]:
     engine = ShellboxRolloutEngine(
         model,
         {
@@ -327,9 +333,10 @@ labels, teacher routes, and Nemotron metadata. Harbor resource settings, turn
 limits, error policies, and reward shaping apply only to Harbor tasks in the batch.
 The worker retains request order and publishes coverage counts for each blend and agent.
 Harbor training concurrency divides `harbor.n_concurrent_trials` across workers.
-The reserved evaluation worker uses the full value. Harbor's limit does not queue
-Gym tasks. `trajectory_runner.max_concurrent_tasks` optionally limits all tasks
-within each worker. Its default is `null`, with no common task limit.
+The reserved evaluation worker uses the full value. Harbor's separate limit does
+not apply to Gym tasks. `trajectory_runner.max_concurrent_tasks` limits all active
+tasks within each worker. Its default is `null`, which uses
+`trajectory_runner.rollout_workers.executor_threads` as the common limit.
 
 The SkyRL adapter uses exact structured-chat inference through vLLM.
 It completes GenRM comparison cohorts before it emits rollout records.

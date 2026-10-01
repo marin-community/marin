@@ -89,7 +89,7 @@ def arithmetic_task() -> TaskSpec:
 
 def engine(model, factories):
     return ShellboxRolloutEngine(
-        model,
+        model.complete,
         factories,
         max_turns=3,
         command_timeout=5,
