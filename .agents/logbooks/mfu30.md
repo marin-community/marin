@@ -347,3 +347,23 @@ calibrates (1) the same-code loss band (attention-backward nondeterminism only) 
 the night. Keep bar is provisionally max(0.15, 3 x sd of seed-0 repeats) once the repeat exists.
 The resurrected `gcab-freeze` rerun (another session's job, flagged to the user) took the rack at 00:39Z,
 ahead of our arms.
+
+## M30-018 First rack results; D arms held for memory settings (2026-10-01)
+
+Scored over 180011-180059 minus 180021-180023 against `mhep-ctx4k-s0` (28.258 / 13.891 s, peak 103.09):
+
+| arm | change | MFU | s/step | dMFU | peak GiB | loss@180000 | dloss max / late mean / late positive |
+|---|---|---|---|---|---|---|---|
+| m30a-hmo-02 | H-A4 `--xla_gpu_enable_host_memory_offloading=true` | 28.580 | 13.734 | +0.32 | 104.07 | exact | 4.4e-4 / +1.6e-4 / 48 of 49 |
+| m30b-unfilled-02 | B's A+B+C (bitwise forward) | 28.668 | 13.692 | +0.41 | 103.75 | exact | 9.6e-4 / +1.8e-4 / 34 of 49 |
+
+A's analysis (M30A-012): zero "Remat via offload"; remat ran only in main (7 instructions; baseline 143);
+`all-gather.127.remat` is gone; arena +0.98 GiB. XLA-remat kernel time 0.633 -> 0.0007 s, but the sync
+all-gather clone's 0.227 s was skew wait that moved to the backward latent reduce-scatter (0.051 -> 0.255 s
+exposed), and 0.111 s of the fusion clones ran under collectives. Remat limit = (pool - persistent) x slop =
+(138.22 - 35.09) x 0.85 = 87.66 GiB; main peaks at 89.94, so remat binds. #9481's attention re-gather
+looks redundant with the flag.
+**Consequence:** D keeps ~18 GiB live across the backward, so at slop 85 XLA remat would cut ~18 GiB and
+likely erase D's gain. The same slop sizes the LHS arena, which must stay under the pool (release-
+threshold hazard). The three D arms queued at slop 85 (`m30b-sonic-01`, `m30c-stack{pipe,seq}-trace-01`)
+were cancelled before they started. A is computing a (MEM_FRACTION, slop) pair; B and C resubmit with it.
