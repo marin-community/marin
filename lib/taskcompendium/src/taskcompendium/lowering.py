@@ -16,7 +16,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
+from taskcompendium.models import SCHEMA_VERSION, SHA256_PATTERN, AnswerType, TaskSpec
 from taskcompendium.path_validation import validate_relative_file_paths
 from taskcompendium.provider_sources import (
     PROVIDER_SOURCES_DIR,
@@ -35,7 +35,6 @@ from taskcompendium.submission import (
 from taskcompendium.tool_provider import ToolProviderFactory, tool_schema_sha256
 from taskcompendium.verifier_registry import validate_verifier
 
-SHA256_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
@@ -53,14 +52,14 @@ class ToolBinding(BaseModel):
 
     # Versioned action contract, such as "nemo_workplace:v1".
     action_interface: str = Field(min_length=1)
-    seed_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
+    seed_sha256: str = Field(pattern=SHA256_PATTERN)
     # Python class locator selected by the code that prepares and launches tasks.
     provider: str
     # Immutable implementation revision expected at export and launch.
     provider_revision: str = Field(min_length=1)
     # Ordered names of functions selected from the provider for this task.
     tools: tuple[Annotated[str, Field(min_length=1)], ...] = Field(min_length=1)
-    tools_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
+    tools_sha256: str = Field(pattern=SHA256_PATTERN)
 
     @model_validator(mode="after")
     def validate_binding(self) -> "ToolBinding":

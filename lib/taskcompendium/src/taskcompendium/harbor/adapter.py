@@ -94,7 +94,9 @@ class CompositeToolEnvironment(BaseEnvironment):
                 )
                 validate_provider_surface(binding, source, cache=self.provider_cache)
                 staged = self.provider_cache.stage(binding.provider, source)
-                tool_provider = self.provider_cache.load(staged, **self.provider_kwargs(binding))
+                tool_provider = self.provider_cache.load(
+                    staged, seed_sha256=binding.seed_sha256, action_interface=binding.action_interface
+                )
                 if not isinstance(tool_provider, ToolProvider):
                     raise TypeError(f"Tool provider {name!r} does not expose tool methods")
                 self.providers[name] = tool_provider
@@ -114,9 +116,6 @@ class CompositeToolEnvironment(BaseEnvironment):
         # Harbor requires this hook; provider bindings are validated before the trial starts.
         pass
 
-    def provider_kwargs(self, binding: ToolBinding) -> dict[str, Any]:
-        return {"seed_sha256": binding.seed_sha256, "action_interface": binding.action_interface}
-
     async def start(self, force_build: bool) -> None:
         started: list[ManagedToolProvider] = []
         try:
@@ -133,6 +132,7 @@ class CompositeToolEnvironment(BaseEnvironment):
                     except Exception as cleanup_error:
                         cleanup_errors.append(cleanup_error)
             finally:
+                self.providers.clear()
                 self.provider_cache.close()
             if cleanup_errors:
                 raise BaseExceptionGroup("Provider start and cleanup failed", [error, *cleanup_errors]) from error
@@ -148,6 +148,7 @@ class CompositeToolEnvironment(BaseEnvironment):
                     except Exception as error:
                         errors.append(error)
         finally:
+            self.providers.clear()
             self.provider_cache.close()
         if errors:
             raise ExceptionGroup("Provider cleanup failed", errors)
@@ -239,7 +240,7 @@ class ChatAgent(BaseAgent):
         calls: tuple[ConversationToolCall, ...],
         environment: CompositeToolEnvironment,
         messages: list[dict[str, Any]],
-        actions: list[dict[str, Any]],
+        actions: list[dict[str, str]],
         seen_call_ids: set[str],
     ) -> None:
         call_ids = [call.call_id for call in calls]
@@ -265,7 +266,7 @@ class ChatAgent(BaseAgent):
             raise ValueError("Provider and terminal tool names overlap")
         tools = [*provider_tools, *terminal_tools]
         messages = list(self.request["messages"])
-        actions: list[dict[str, Any]] = []
+        actions: list[dict[str, str]] = []
         seen_call_ids = {call["id"] for message in messages for call in message.get("tool_calls", ())}
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         for turn in range(1, self.max_turns + 1):

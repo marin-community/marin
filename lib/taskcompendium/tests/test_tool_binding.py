@@ -188,7 +188,7 @@ def git_provider_task(tmp_path, monkeypatch):
     environment_config = HarborEnvironmentConfig(tool_providers={"a": binding, "b": second})
     convention = PlainText(id="plain")
 
-    assert compatible_lowerings(
+    (candidate,) = compatible_lowerings(
         specification,
         (convention,),
         (environment_config,),
@@ -196,16 +196,17 @@ def git_provider_task(tmp_path, monkeypatch):
     )
     task = lower_to_harbor(
         specification,
-        convention,
-        environment_config,
+        candidate.convention,
+        candidate.environment_config,
         tmp_path / "task",
         trusted_provider_sources={"a": checkout},
     )
-    return task, binding, environment_config
+    return task, environment_config
 
 
 def test_git_provider_exports_verified_source_snapshot(git_provider_task):
-    task, binding, _ = git_provider_task
+    task, environment_config = git_provider_task
+    binding = environment_config.tool_providers["a"]
     source = task / "environment" / "provider_sources" / "a"
     validate_staged_git_provider(binding.provider, source)
     assert (source / "LICENSE").read_text() == "Apache-2.0\n"
@@ -213,7 +214,7 @@ def test_git_provider_exports_verified_source_snapshot(git_provider_task):
 
 
 async def test_git_provider_runs_concurrent_offline_trials(git_provider_task, tmp_path, monkeypatch):
-    task, _, environment_config = git_provider_task
+    task, environment_config = git_provider_task
     requests = []
 
     def respond(request, timeout):
@@ -237,14 +238,18 @@ async def test_git_provider_runs_concurrent_offline_trials(git_provider_task, tm
     )
     assert [result.verifier_result.rewards for result in results] == [{"reward": 1.0}] * 2
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == ["lookup_a", "lookup_b"]
-    assert (
-        sum(any(message.get("tool_call_id") == "git1" for message in request["messages"]) for request in requests) == 2
-    )
+    observations = [
+        message["content"]
+        for request in requests
+        for message in request["messages"]
+        if message.get("tool_call_id") == "git1"
+    ]
+    assert observations == ["('first', 1, 1)"] * 2
 
 
 @pytest.mark.parametrize("rewrite_manifest", (False, True), ids=("source", "source-and-manifest"))
 async def test_git_provider_tampering_prevents_launch(git_provider_task, tmp_path, rewrite_manifest):
-    task, _, environment_config = git_provider_task
+    task, environment_config = git_provider_task
     source = task / "environment" / "provider_sources" / "a"
     changed = b"changed\n"
     (source / "LICENSE").write_bytes(changed)
@@ -286,7 +291,6 @@ def test_external_services_export_as_one_chat_task(tmp_path, monkeypatch):
     specification = _specification()
     convention = AnswerCall(id="answer-call")
 
-    assert compatible_lowerings(specification, (convention,), (environment_config,))
     task_dir = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     exported = json.loads((task_dir / "environment_config.json").read_text())
     assert list(exported["tool_providers"]) == ["a", "b"]
@@ -410,7 +414,7 @@ def test_git_provider_without_state_excludes_state_candidate(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("name", ("../../../outside", "/absolute", "nested/provider", "..", r"..\outside"))
-def test_escaping_provider_name_prevents_export(tmp_path, monkeypatch, name):
+def test_escaping_provider_name_prevents_export(tmp_path, name):
     binding, checkout = _git_provider(tmp_path)
     with pytest.raises(ValueError):
         environment_config = HarborEnvironmentConfig(tool_providers={name: binding})
@@ -485,12 +489,14 @@ async def test_environment_releases_imports_after_provider_cleanup(tmp_path, fai
                 await composite.stop(False)
         else:
             await composite.stop(False)
+    # Harbor also stops the environment after a failed start; released providers must not stop twice.
+    await composite.stop(False)
     assert module_name not in sys.modules and module_name + ".counter" not in sys.modules
     assert not source_file.exists()
 
 
 async def test_changed_tool_schema_fails_before_trial_or_endpoint(git_provider_task, tmp_path, monkeypatch):
-    task, _, environment_config = git_provider_task
+    task, environment_config = git_provider_task
     changed = environment_config.model_copy(
         update={
             "tool_providers": {
@@ -501,7 +507,7 @@ async def test_changed_tool_schema_fails_before_trial_or_endpoint(git_provider_t
     )
     (task / "environment_config.json").write_text(changed.model_dump_json())
 
-    def unexpected_request(request, timeout):
+    def unexpected_request(_request, timeout):
         raise AssertionError("Invalid provider must not reach the model endpoint")
 
     monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", unexpected_request)

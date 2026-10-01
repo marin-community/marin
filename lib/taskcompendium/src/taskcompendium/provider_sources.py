@@ -27,6 +27,8 @@ from urllib.parse import urlsplit
 from taskcompendium.path_validation import validate_relative_file_path, validate_relative_file_paths
 from taskcompendium.tool_provider import ToolProvider, ToolProviderFactory
 
+GIT_FILE_MODE = "100644"
+GIT_EXECUTABLE_MODE = "100755"
 PROVIDER_SOURCES_DIR = "provider_sources"
 SOURCE_MANIFEST = ".taskcompendium-provider-manifest.json"
 MAX_PROVIDER_FILE_BYTES = 64 * 1024 * 1024
@@ -161,7 +163,7 @@ def _source_files(checkout: Path, commit: str) -> list[GitSourceFile]:
         path = path_bytes.decode("utf-8")
         if "__pycache__" in Path(path).parts or path.endswith((".pyc", ".pyo")):
             raise ValueError(f"Git provider contains generated Python cache: {path}")
-        if mode not in {"100644", "100755"} or kind != "blob":
+        if mode not in {GIT_FILE_MODE, GIT_EXECUTABLE_MODE} or kind != "blob":
             raise ValueError(f"Git provider contains a symlink, submodule, or special file: {path}")
         files.append(GitSourceFile(path=path, mode=mode, blob=blob))
     if len(files) > MAX_PROVIDER_FILES:
@@ -209,7 +211,7 @@ def stage_git_provider(provider: str, checkout: Path, destination: Path) -> None
         target = destination.joinpath(*path.split("/"))
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
-        executable = mode == "100755"
+        executable = mode == GIT_EXECUTABLE_MODE
         target.chmod(0o755 if executable else 0o644)
         manifest_files.append({"path": path, "executable": executable})
     manifest = {
@@ -264,7 +266,7 @@ def validate_staged_git_provider(provider: str, source: Path) -> None:
         blob = _git_object_digest("blob", payload)
         if bool(target.stat().st_mode & 0o100) != item["executable"]:
             raise ValueError(f"Git provider source executable bit differs: {path}")
-        tree_files.append((path, "100755" if item["executable"] else "100644", blob))
+        tree_files.append((path, GIT_EXECUTABLE_MODE if item["executable"] else GIT_FILE_MODE, blob))
     if any(path.is_symlink() for path in source.rglob("*")):
         raise ValueError("Git provider source contains unexpected files or symlinks")
     observed = {str(path.relative_to(source)) for path in source.rglob("*") if not path.is_dir()}
