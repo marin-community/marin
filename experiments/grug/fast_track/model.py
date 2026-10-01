@@ -122,6 +122,12 @@ _ATTN_RES_W_V = "attn_res_weights_v"
 _ROUTING_SELECTED = "routing_selected"
 _ROUTING_WEIGHTS = "routing_weights"
 ROUTING_SELECTED_KEY = "routing_selected_per_layer"
+# Per-layer routed-expert inputs and shared-expert pre-activations for ``Transformer.neuron_inputs`` (the
+# neuron-health dump); passthroughs, so the training forward drops them.
+_ROUTED_INPUT = "routed_input"
+_SHARED_PRE = "shared_pre"
+ROUTED_INPUT_KEY = "routed_input_per_layer"
+SHARED_PRE_KEY = "shared_pre_per_layer"
 ROUTING_WEIGHTS_KEY = "routing_weights_per_layer"
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
@@ -3293,7 +3299,7 @@ class MoEMLP(eqx.Module):
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
-        return routed, {**router_stats, **assignments}
+        return routed, {**router_stats, **assignments, _ROUTED_INPUT: routed_input}
 
 
 def _shared_experts_tail(
@@ -3406,6 +3412,9 @@ def moe_and_shared_fused(
     )
     if overlap is not None:
         return routed, stats
+    if not gated:
+        # Ungated shared experts: these parts are their pre-activations (``Transformer.neuron_inputs``).
+        stats = {**stats, _SHARED_PRE: jnp.concatenate(parts[len(moe_weights) :], axis=-1)}
     shared_out = _shared_experts_tail(
         mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, x_flat, gate, _batch_spec()
     )
@@ -5804,6 +5813,9 @@ class Transformer(eqx.Module):
                     raise ValueError("return_routing needs loop_passes=1 (passes merge the per-layer stats)")
                 router_metrics[ROUTING_SELECTED_KEY] = stacked_router_stats[_ROUTING_SELECTED]
                 router_metrics[ROUTING_WEIGHTS_KEY] = stacked_router_stats[_ROUTING_WEIGHTS]
+                router_metrics[ROUTED_INPUT_KEY] = stacked_router_stats[_ROUTED_INPUT]
+                if _SHARED_PRE in stacked_router_stats:
+                    router_metrics[SHARED_PRE_KEY] = stacked_router_stats[_SHARED_PRE]
             if cfg.newton_muon:
                 gram_sum = jnp.sum(stacked_router_stats[NEWTON_GRAM_LOCAL_KEY], axis=1)
                 router_metrics[NEWTON_GRAM_KEY] = reshard(gram_sum / (batch_size * seq_len), P(None, None, None))
@@ -6177,6 +6189,21 @@ class Transformer(eqx.Module):
             jax.lax.reshape(selected, (selected.shape[0], b, s, selected.shape[-1]), out_sharding=spec),
             jax.lax.reshape(weights, (weights.shape[0], b, s, weights.shape[-1]), out_sharding=spec),
         )
+
+    def neuron_inputs(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> tuple[Int[Array, "L T K"], Float[Array, "L T I"], Float[Array, "L T J"]]:
+        """Every MoE layer's selected experts, the routed experts' input (after the latent projection and norm)
+        and the ungated shared experts' pre-activations, with ``T = B * S`` (a debug forward for the neuron-health
+        dump)."""
+        if self.config.dense_mlp:
+            raise ValueError("neuron_inputs needs MoE layers")
+        _, metrics = self(token_ids, mask=mask, return_routing=True)
+        if SHARED_PRE_KEY not in metrics:
+            raise ValueError("neuron_inputs needs ungated, fused shared experts (no moe_shared_overlap)")
+        return metrics[ROUTING_SELECTED_KEY], metrics[ROUTED_INPUT_KEY], metrics[SHARED_PRE_KEY]
 
     def layer_kinds(self) -> tuple[str, ...]:
         """Per layer, its mixer and context, e.g. ``kda_local`` or ``mla_global``."""

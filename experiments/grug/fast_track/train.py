@@ -6,6 +6,7 @@ import dataclasses
 import functools
 import gc
 import glob
+import io
 import logging
 import os
 import re
@@ -27,7 +28,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
-from jax.sharding import Mesh, NamedSharding
+from jax.sharding import Mesh, NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
@@ -1357,6 +1358,74 @@ def _routing_counts_step(mp: jmp.Policy):
     return add
 
 
+NEURON_DUMP_FILE = "neurons_step{step}.npz"
+
+
+def _neuron_counts_layer(
+    w_up: jax.Array, routed_input: jax.Array, selected: jax.Array, shared_pre: jax.Array, valid: jax.Array
+) -> dict[str, jax.Array]:
+    """One layer's ReLU² neuron activity: per routed expert and hidden unit, how many of the tokens routed to it
+    have a positive pre-activation (and the summed ReLU² output); per shared hidden unit the same over every token;
+    and histograms of how many units each token (routed: each token-expert assignment) switches on."""
+    num_experts, _, width = w_up.shape
+    replicated = P(*(None,) * w_up.ndim)
+    w_up = reshard(w_up.astype(routed_input.dtype), replicated)
+    hist_spec = P(None)
+
+    def expert(_, e):
+        pre = jnp.einsum("ti,ij->tj", routed_input, w_up[e], out_sharding=P(_BATCH_AXES, None)).astype(jnp.float32)
+        routed = jnp.any(selected == e, axis=-1) & valid
+        on = (pre > 0) & routed[:, None]
+        units_on = jnp.sum(pre > 0, axis=-1)
+        hist = jnp.zeros((width + 1,), jnp.int32).at[units_on].add(routed.astype(jnp.int32), out_sharding=hist_spec)
+        return None, (
+            jnp.sum(on, axis=0, dtype=jnp.int32),
+            jnp.sum(routed, dtype=jnp.int32),
+            jnp.sum(jnp.where(on, jnp.square(pre), 0.0), axis=0),
+            hist,
+        )
+
+    _, (active, tokens, sq, hist) = jax.lax.scan(expert, None, jnp.arange(num_experts))
+    shared = shared_pre.astype(jnp.float32)
+    shared_on = (shared > 0) & valid[:, None]
+    shared_width = shared.shape[-1]
+    shared_hist = (
+        jnp.zeros((shared_width + 1,), jnp.int32)
+        .at[jnp.sum(shared > 0, axis=-1)]
+        .add(valid.astype(jnp.int32), out_sharding=hist_spec)
+    )
+    return {
+        "routed_active": active,
+        "routed_tokens": tokens,
+        "routed_sq": sq,
+        "routed_hist": jnp.sum(hist, axis=0),
+        "shared_active": jnp.sum(shared_on, axis=0, dtype=jnp.int32),
+        "shared_sq": jnp.sum(jnp.where(shared_on, jnp.square(shared), 0.0), axis=0),
+        "shared_hist": shared_hist,
+        "shared_tokens": jnp.sum(valid, dtype=jnp.int32),
+    }
+
+
+def _neuron_counts_step(mp: jmp.Policy):
+    """Jitted ``(params, qb_betas, tokens, segment_ids) -> {name: [L, ...]}``: one batch's neuron activity per layer
+    (``_neuron_counts_layer``), for the neuron-health dump."""
+
+    @jax.jit
+    def counts(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
+        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
+        selected, routed_input, shared_pre = model.neuron_inputs(
+            tokens, AttentionMask.causal().with_segment_ids(segment_ids)
+        )
+        valid = reshard((segment_ids >= 0).reshape(-1), P(_BATCH_AXES))
+        per_layer = [
+            _neuron_counts_layer(layer.mlp.expert_mlp.w_up, routed_input[i], selected[i], shared_pre[i], valid)
+            for i, layer in enumerate(model.layers())
+        ]
+        return jax.tree.map(lambda *xs: jnp.stack(xs), *per_layer)
+
+    return counts
+
+
 def write_routing_dump(
     path: str,
     counts: tuple[np.ndarray, np.ndarray, np.ndarray],
@@ -1399,6 +1468,7 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
         ).result()
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
     add = _routing_counts_step(trainer_cfg.trainer.mp)
+    neuron_counts = _neuron_counts_step(trainer_cfg.trainer.mp)
     shape = (cfg.num_layers, cfg.vocab_size, cfg.num_experts + cfg.num_null_experts)
     replicated = NamedSharding(mesh, P(None, None, None))
     layer_kinds = np.asarray(model.layer_kinds())
@@ -1420,15 +1490,24 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
             jax.device_put(np.zeros(shape, np.float32), replicated),
         )
         params = _router_tie_view(state.params, step)
+        neurons = None
         for start in range(0, num_sequences, batch_size):
             batch = slice(start, start + batch_size)
-            counts = add(
-                params, state.pending_qb_betas, global_batch(tokens[batch]), global_batch(segments[batch]), counts
-            )
+            batch_tokens, batch_segments = global_batch(tokens[batch]), global_batch(segments[batch])
+            counts = add(params, state.pending_qb_betas, batch_tokens, batch_segments, counts)
+            # Neuron activity (ReLU² experts): summed over the same held-out batches, written beside the routing dump.
+            batch_neurons = neuron_counts(params, state.pending_qb_betas, batch_tokens, batch_segments)
+            neurons = batch_neurons if neurons is None else jax.tree.map(jnp.add, neurons, batch_neurons)
         current, previous, weighted = (np.asarray(c) for c in jax.block_until_ready(counts))
         path = f"{trainer_cfg.routing_dump_path.rstrip('/')}/{ROUTING_DUMP_FILE.format(step=step)}"
+        neuron_arrays = {name: np.asarray(v) for name, v in jax.device_get(neurons).items()}
         if jax.process_index() == 0:
             write_routing_dump(path, (current, previous, weighted), cfg, layer_kinds, step, int(np.sum(segments >= 0)))
+            buffer = io.BytesIO()
+            np.savez(buffer, step=np.asarray(step), layer_kinds=layer_kinds, **neuron_arrays)
+            neuron_path = f"{trainer_cfg.routing_dump_path.rstrip('/')}/{NEURON_DUMP_FILE.format(step=step)}"
+            with fsspec.open(neuron_path, "wb") as f:
+                f.write(buffer.getvalue())
         logger.info(
             "routing dump at step %d: %d sequences in %.1fs -> %s", step, num_sequences, time.time() - started, path
         )
