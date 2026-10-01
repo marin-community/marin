@@ -367,3 +367,11 @@ looks redundant with the flag.
 likely erase D's gain. The same slop sizes the LHS arena, which must stay under the pool (release-
 threshold hazard). The three D arms queued at slop 85 (`m30b-sonic-01`, `m30c-stack{pipe,seq}-trace-01`)
 were cancelled before they started. A is computing a (MEM_FRACTION, slop) pair; B and C resubmit with it.
+Memory settings for D-containing arms (A, fitted to hmo-02's logs): `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78`,
+`--xla_gpu_memory_limit_slop_factor=105`. Pool P = fraction x 184.3 = 143.76; remat/LHS limit
+L = (P - 35.09) x slop = 114.1 GiB vs D's estimated remat view ~104-106. Remat's view includes the 18.9 GiB
+of S(1) collective buffers, so the arena is capped at L - 18.9 = 95.2. Worst-case pool use is 130.8 (13
+under the pool); outside the pool 40.5 GiB vs ~28.5 needed (0.83 is the documented failure point).
+Verify per arm: "Rematerialized N instructions" <~ 10, "Peak memory for main" <= ~110 (else slop 110),
+memory/limit_gib 143.76, memory/peak_gib < ~139. D arms compare only against arms at the same settings;
+the goal comparison is the full stack (settings included) vs main at defaults.
