@@ -161,7 +161,7 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
 
 async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, specification):
     specification = specification.model_copy(
-        update={"verifier": exact_answer("Straße Park"), "answer_type": AnswerType.TEXT}
+        update={"verifier": exact_answer(("Straße Park",)), "answer_type": AnswerType.TEXT}
     )
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
@@ -261,7 +261,7 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
 @pytest.mark.parametrize(
     "answer_type,verifier,response",
     [
-        (AnswerType.TEXT, exact_answer("12"), "12"),
+        (AnswerType.TEXT, exact_answer(("12",)), "12"),
         (AnswerType.NUMBER, mathematical_answer("13/2", MathType.SCALAR), "6.5"),
         (AnswerType.NUMBER, numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0), "12.0"),
     ],

@@ -19,6 +19,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST, read_archive
+from taskcompendium.importers.tasktrove.exact import import_task as import_exact
 from taskcompendium.importers.tasktrove.mathematical import import_task as import_math
 from taskcompendium.importers.tasktrove.mcqa import import_task as import_mcqa
 from taskcompendium.importers.tasktrove.models import IMPORTER_REVISION
@@ -35,7 +36,8 @@ from experiments.post_training.taskcompendium.records import (
 RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3"
 MCQA_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 SPLITS = ("tasks", "sft")
-SUPPORTED_MODES = frozenset({"mcq", "math", "numeric"})
+DEFAULT_MODES = frozenset({"mcq", "math", "numeric"})
+SUPPORTED_MODES = frozenset({*DEFAULT_MODES, "exact"})
 ARCHIVE_BATCH_SIZE = 128
 PUBLIC_CANDIDATE_COHORTS = MappingProxyType(
     {
@@ -133,6 +135,8 @@ def _convert(row: dict[str, Any], release_uri: str, release_revision: str) -> Co
         specification = import_mcqa(archive)
     elif mode == "math":
         specification = import_math(archive).specification
+    elif mode == "exact":
+        specification = import_exact(archive)
     else:
         specification = import_numeric(archive)
     source_metadata = {key: metadata[key] for key in SOURCE_METADATA_KEYS if key in metadata}
@@ -150,7 +154,7 @@ def ingest(
     """Stream both release splits, preserving one ledger row per input row."""
     if limit is not None and limit < 1:
         raise ValueError("limit must be positive")
-    selected_modes = SUPPORTED_MODES if target_modes is None else target_modes
+    selected_modes = DEFAULT_MODES if target_modes is None else target_modes
     if not selected_modes or selected_modes - SUPPORTED_MODES:
         raise ValueError(f"Target modes must be a nonempty subset of {sorted(SUPPORTED_MODES)}")
     configure_coreweave_s3()
@@ -221,15 +225,19 @@ def ingest(
     candidate_archive_bytes_parsed = 0
     failure: Exception | None = None
 
+    def ensure_writer(name: str) -> pq.ParquetWriter:
+        if writers[name] is None:
+            target = {"catalog": catalog_path, "ledger": ledger_path}[name]
+            handle = target.open("wb").open()
+            writer_handles[name] = handle
+            writers[name] = pq.ParquetWriter(handle, schemas[name])
+        assert writers[name] is not None
+        return writers[name]
+
     def flush() -> None:
         for name in buffers:
             if buffers[name]:
-                if writers[name] is None:
-                    target = {"catalog": catalog_path, "ledger": ledger_path}[name]
-                    handle = target.open("wb").open()
-                    writer_handles[name] = handle
-                    writers[name] = pq.ParquetWriter(handle, schemas[name])
-                writers[name].write_table(pa.Table.from_pylist(buffers[name], schema=schemas[name]))
+                ensure_writer(name).write_table(pa.Table.from_pylist(buffers[name], schema=schemas[name]))
                 buffers[name].clear()
 
     try:
@@ -424,6 +432,8 @@ def ingest(
         failure = error
     finally:
         flush()
+        for name in writers:
+            ensure_writer(name)
         for writer in writers.values():
             if writer is not None:
                 writer.close()
@@ -478,7 +488,7 @@ def ingest(
         "public_candidate_schema": "PublicTask-v1",
         "public_projection_published": False,
         "public_candidate_routes": ["tasks"],
-        "public_candidate_cohorts": PUBLIC_CANDIDATE_COHORTS,
+        "public_candidate_cohorts": dict(PUBLIC_CANDIDATE_COHORTS),
         "public_allowlist_fields": [
             "record_version",
             "id",

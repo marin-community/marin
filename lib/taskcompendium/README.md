@@ -122,6 +122,9 @@ The TaskTrove MCQA importer reads archives from a cleaned release. See the [publ
 ### TaskTrove math
 
 With `taskcompendium[math]` installed, `taskcompendium.importers.tasktrove.mathematical.import_task` converts supported Clean-release math archives into private `TaskSpec` values. It preserves the symbolic reference, source identity, and ordered source tags. The shared classifier uses `answer_type=number` only for proven finite real scalars; other supported symbolic answers use `text`. Unsupported file-delivery instructions, tool requirements, invalid verifier configurations, and extra task resources are rejected.
+### TaskTrove Exact Answers
+
+The exact importer accepts the cleaned `math-answer` / `all_puzzles` source tuple in `exact` mode. It preserves the ordered list of accepted values and the source normalization settings in the private verifier, removes the file-output wrapper, and retains the source tags and provenance. The `ExactAnswerVerifier` delegates boxed-answer selection and whole-response fallback to `tasktrove-verify`, which owns exact grading.
 
 ### NeMo predicted function calls
 

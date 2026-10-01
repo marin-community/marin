@@ -1,0 +1,21 @@
+{
+  "dataset": "open-athena/task-trove",
+  "dataset_revision": "9065fa568394f286dab0081e43dc76fc87c48984",
+  "release_card_license": "apache-2.0",
+  "license_source": "https://huggingface.co/datasets/open-athena/task-trove/blob/9065fa568394f286dab0081e43dc76fc87c48984/README.md",
+  "source_row_redistribution_status": "see source-specific review status",
+  "manifest_sha256": "5b8b0337d1473fbf2dd6bc2e682b4c597ca988edcb398e5abcd6f009c3aef75a",
+  "parquet_lfs_sha256": "83320be884448b96ec715738520c0989fbc99a914cef6b97811f6d66c43a1a94",
+  "parquet_uri": "https://huggingface.co/datasets/open-athena/task-trove/resolve/9065fa568394f286dab0081e43dc76fc87c48984/data/part-00000.parquet",
+  "upstream_dataset": "open-thoughts/TaskTrove",
+  "upstream_revision": "0292300",
+  "samples": [
+    {
+      "source": "laion__all-puzzles-v2",
+      "source_path": "all_puzzles-5039",
+      "row_index": 113,
+      "archive_sha256": "2fa5479915b7aebc0d45149ae8b00db6ea32d1f858cda9820dcf832c071e7b71",
+      "redistribution_status": "source-level rights review pending"
+    }
+  ]
+}

@@ -78,13 +78,13 @@ class ChangingText(PlainText):
 
 
 async def test_verifier_grades_the_single_extracted_submission():
-    task = _task(exact_answer("first"))
+    task = _task(exact_answer(("first",)))
     result = await grade_answer(task, ChangingText(id="changing"), _attempt(task, "Done."))
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
 
 async def test_serialized_json_convention_extracts_answer_and_scores_invalid_submission():
-    task = _task(exact_answer("yes"))
+    task = _task(exact_answer(("yes",)))
     convention = TypeAdapter(SubmissionConvention).validate_json(JsonAnswer(id="json").model_dump_json())
     valid = await grade_answer(task, convention, _attempt(task, '{"answer":"yes"}'))
     invalid = await grade_answer(task, convention, _attempt(task, '{"answer":'))
@@ -101,7 +101,7 @@ async def test_invalid_private_verifier_is_not_scored_as_agent_failure():
 @pytest.mark.parametrize(
     "wire_kind,verifier,answer_type,correct,wrong",
     [
-        ("exact", exact_answer("yes"), AnswerType.TEXT, "yes", "no"),
+        ("exact", exact_answer(("yes",)), AnswerType.TEXT, "yes", "no"),
         ("numeric", numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.NUMBER, "12", "13"),
         ("mcq", multiple_choice_answer("B", 3), AnswerType.TEXT, "B", "A"),
     ],

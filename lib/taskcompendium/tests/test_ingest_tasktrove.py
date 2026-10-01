@@ -4,10 +4,16 @@
 import io
 import json
 import tarfile
+import tomllib
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from experiments.post_training.taskcompendium import ingest_tasktrove
+
+from taskcompendium.models import TaskSpec
+
+from .tasktrove_fixtures import exact_archive, exact_archive_bytes
 
 SOURCE = "synthetic__mcqa-demo"
 ARCHIVE_PATH = "synthetic-mcqa.tar.gz"
@@ -44,6 +50,31 @@ tags = ["qa", "mcq", "synthetic"]
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
     return archive_data.getvalue()
+
+
+def _synthetic_exact_row() -> dict[str, object]:
+    archive = exact_archive()
+    metadata = tomllib.loads(archive.files["task.toml"].decode())["metadata"]
+    return {
+        "path": archive.archive_path,
+        "source": archive.upstream_subset,
+        "family": metadata["family"],
+        "template_id": metadata.get("template_id"),
+        "converter": metadata["converter"],
+        "mode": metadata["mode"],
+        "route": "rl",
+        "tags": metadata["tags"],
+        "task_binary": exact_archive_bytes(),
+    }
+
+
+def _write_release(tmp_path, rows: list[dict[str, object]]):
+    release = tmp_path / "release"
+    (release / "tasks").mkdir(parents=True)
+    (release / "sft").mkdir()
+    (release / "manifest.json").write_text('{"tag":"synthetic-release"}')
+    pq.write_table(pa.Table.from_pylist(rows), release / "tasks/part-00000.parquet")
+    return release
 
 
 def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path, monkeypatch):
@@ -159,3 +190,77 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     assert mcq_report["archive_payload_bytes_materialized"] > mcq_report["candidate_archive_bytes_parsed"]
     assert [row["disposition"] for row in mcq_ledger] == ["imported", "out-of-scope", "rejected", "out-of-scope"]
     assert "mode not selected" in mcq_ledger[3]["reason"]
+
+
+def test_exact_ingest_requires_explicit_selection_and_stays_private(tmp_path, monkeypatch):
+    release = _write_release(tmp_path, [_synthetic_exact_row()])
+    monkeypatch.setattr(ingest_tasktrove, "configure_coreweave_s3", lambda: None)
+
+    default_report = ingest_tasktrove.ingest(
+        str(release), str(tmp_path / "default-output"), tmp_path / "default-summary"
+    )
+    default_ledger = pq.read_table(tmp_path / "default-output/ingestion-ledger.parquet").to_pylist()
+    default_catalog = pq.read_table(tmp_path / "default-output/private-catalog.parquet")
+    assert default_report["status"] == "complete"
+    assert default_report["input_rows_processed"] == 1
+    assert default_report["counts"].get("imported", 0) == 0
+    assert [row["disposition"] for row in default_ledger] == ["out-of-scope"]
+    assert default_catalog.num_rows == 0
+    assert default_catalog.schema.names == [
+        "id",
+        "source",
+        "path",
+        "route",
+        "mode",
+        "family",
+        "converter",
+        "template_id",
+        "tags",
+        "archive_sha256",
+        "source_metadata_json",
+        "specification_json",
+    ]
+    assert default_report["artifacts"]["private_catalog"]["sha256"]
+    assert default_report["artifacts"]["ledger"]["sha256"]
+    assert default_report["public_candidate_proof_count"] == 0
+    assert default_report["artifacts"]["public_candidates"]["present"] is False
+    assert default_report["artifacts"]["candidate_proof"]["present"] is False
+
+    report = ingest_tasktrove.ingest(
+        str(release),
+        str(tmp_path / "exact-output"),
+        tmp_path / "exact-summary",
+        target_modes=frozenset({"exact"}),
+    )
+    ledger = pq.read_table(tmp_path / "exact-output/ingestion-ledger.parquet").to_pylist()
+    catalog = pq.read_table(tmp_path / "exact-output/private-catalog.parquet").to_pylist()
+    assert report["status"] == "complete"
+    assert report["counts"]["imported"] == 1
+    assert report["public_candidate_counts"] == {}
+    assert report["public_candidate_projection_materialized"] is False
+    assert report["public_candidate_proof_count"] == 0
+    assert [row["disposition"] for row in ledger] == ["imported"]
+    assert ledger[0]["mode"] == "exact"
+    assert len(catalog) == 1
+    specification = TaskSpec.model_validate_json(catalog[0]["specification_json"])
+    assert specification.verifier.kind.value == "exact"
+    assert specification.tags == ("test", "puzzle", "ordered-list")
+    prompt = specification.context.events[0].content
+    assert "reverse alphabetical order" in prompt
+    assert "Return only the requested answer." not in prompt
+
+
+def test_empty_release_writes_hashed_empty_parquet_artifacts(tmp_path, monkeypatch):
+    release = _write_release(tmp_path, [])
+    monkeypatch.setattr(ingest_tasktrove, "configure_coreweave_s3", lambda: None)
+
+    report = ingest_tasktrove.ingest(str(release), str(tmp_path / "empty-output"), tmp_path / "empty-summary")
+
+    assert report["status"] == "complete"
+    assert report["input_rows_processed"] == 0
+    for artifact in ("private_catalog", "ledger"):
+        artifact_report = report["artifacts"][artifact]
+        assert artifact_report["sha256"]
+        table = pq.read_table(tmp_path / "empty-output" / Path(artifact_report["uri"]).name)
+        assert table.num_rows == 0
+        assert table.schema.names

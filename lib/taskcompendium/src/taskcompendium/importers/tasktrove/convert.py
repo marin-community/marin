@@ -11,16 +11,54 @@ members as bytes and checks their paths, count, and total size before import.
 
 import hashlib
 import io
+import json
 import tarfile
 import tomllib
 import zlib
+from dataclasses import dataclass
 
 from taskcompendium.importers.tasktrove.models import TaskArchive
 
 TASK_MANIFEST = "task.toml"
 METADATA_TABLE = "metadata"
+INSTRUCTION_FILE = "instruction.md"
+VERIFIER_FILE = "tests/verifier.toml"
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 1_024
+
+
+@dataclass(frozen=True)
+class TaskTroveMetadata:
+    """Typed metadata shared by the supported archive importers."""
+
+    source: str
+    family: str
+    converter: str
+    mode: str
+    tags: tuple[str, ...]
+
+
+def import_metadata(archive: TaskArchive) -> TaskTroveMetadata:
+    """Read and validate the fields shared by TaskTrove Clean importers."""
+    try:
+        metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())[METADATA_TABLE]
+        if not isinstance(metadata, dict):
+            raise ValueError("metadata must be a table")
+        source, family, converter, mode = (metadata[key] for key in ("tasktrove_source", "family", "converter", "mode"))
+        tags = metadata.get("tags", [])
+        if not all(isinstance(value, str) for value in (source, family, converter, mode)):
+            raise ValueError("source, family, converter, and mode must be strings")
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            raise ValueError("tags must be an ordered list of strings")
+    except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:
+        raise ValueError(f"Invalid TaskTrove importer metadata: {error}") from error
+    return TaskTroveMetadata(source, family, converter, mode, tuple(tags))
+
+
+def task_id(archive: TaskArchive) -> str:
+    """Return a stable task identifier from the pinned source identity."""
+    identity = json.dumps((archive.source.dataset, archive.source.revision, archive.source.row), separators=(",", ":"))
+    return f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}"
 
 
 def read_archive(

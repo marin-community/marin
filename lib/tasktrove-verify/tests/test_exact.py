@@ -7,6 +7,7 @@ import pytest
 from tasktrove_verify.grade import Status
 from tasktrove_verify.grade import grade as dispatch
 from tasktrove_verify.modes import grade_exact
+from tasktrove_verify.modes.grade_exact import grade_exact_submission
 from tasktrove_verify.spec import ExactSpec
 
 
@@ -66,6 +67,11 @@ def test_exact_reward_detail_carries_the_extracted_candidate(tmp_path):
     _answer(tmp_path, "The capital is \\boxed{Lyon}.\n")
     detail = grade_exact.grade(ExactSpec(expected=("Paris",)), tmp_path, tmp_path).detail
     assert detail == {"extracted": "Lyon", "expected": ["Paris"]}
+
+
+def test_exact_submission_uses_whole_text_when_boxed_answer_does_not_match():
+    result = grade_exact_submission(ExactSpec(expected=(r"\boxed{wrong}",)), r"\boxed{wrong}")
+    assert (result.reward, result.detail) == (1.0, {"extracted": "wrong", "expected": [r"\boxed{wrong}"]})
 
 
 def test_exact_without_an_expected_string_is_an_invalid_task(tmp_path):
