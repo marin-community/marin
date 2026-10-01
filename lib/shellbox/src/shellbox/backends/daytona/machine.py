@@ -15,7 +15,7 @@ import tempfile
 import uuid
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -240,14 +240,16 @@ class DaytonaMachineFactory:
         self.network_policy = network_policy
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
+        source: DockerfileSource | RegistryImage
         if isinstance(spec.source, DockerfileSource):
             source = DockerfileSource(spec.source.context.resolve(), spec.source.dockerfile.resolve())
             if source.dockerfile.parent != source.context:
                 raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
             if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
                 raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
-            spec = replace(spec, source=source)
-        elif not isinstance(spec.source, RegistryImage):
+        elif isinstance(spec.source, RegistryImage):
+            source = spec.source
+        else:
             raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
         resources = Resources(
             cpu=spec.cpus,
@@ -264,7 +266,7 @@ class DaytonaMachineFactory:
             client = await lifetime.enter_async_context(self.client_factory())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
-                snapshot = await _snapshot(client, spec.source, resources)
+                snapshot = await _snapshot(client, source, resources)
                 sandbox = await client.create(
                     CreateSandboxFromSnapshotParams(
                         snapshot=snapshot,

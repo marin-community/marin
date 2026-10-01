@@ -99,7 +99,7 @@ class MachineSpec:
     gpus: int = 0
     startup_timeout: float | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.cpus is not None and self.cpus <= 0:
             raise ValueError("cpus must be positive")
         if self.storage_mb is not None and self.storage_mb <= 0:
