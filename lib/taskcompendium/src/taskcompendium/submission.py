@@ -143,7 +143,10 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     messages = conversation_messages(specification.context)
     instruction = submission_instruction(convention)
     if instruction:
-        messages.append({"role": "user", "content": instruction})
+        if messages and messages[-1]["role"] == "user":
+            messages[-1]["content"] += f"\n\n{instruction}"
+        else:
+            messages.append({"role": "user", "content": instruction})
     request: dict[str, Any] = {"messages": messages}
     tools: list[dict[str, object]] = [
         {"type": "function", "function": function.model_dump(exclude_none=True)}

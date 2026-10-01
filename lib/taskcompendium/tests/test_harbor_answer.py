@@ -543,9 +543,9 @@ async def test_chat_trial_preserves_conversation_roles(tmp_path, specification, 
         {"role": "system", "content": "Answer arithmetic questions."},
         {"role": "user", "content": "What is 2 + 2?"},
         {"role": "assistant", "content": "4"},
-        {"role": "user", "content": "What is 7 + 5?"},
     ]
     assert messages[-1]["role"] == "user"
+    assert messages[-1]["content"].startswith("What is 7 + 5?")
 
 
 async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specification, chat_endpoint):
