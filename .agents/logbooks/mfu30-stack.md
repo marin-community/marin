@@ -325,3 +325,34 @@ Orchestrator decision: sequential lineage, no re-gather. F1 pipe/seq-01 are canc
 
 stackseq-03's trace settles whether pipelining or #9481's model commits moved the shared-expert GEMMs after
 the MoE.
+
+### m30c-stackseq-trace-03 (2026-09-30 21:50 PT)
+
+Score: 29.928 MFU and 13.115 s/step, +1.667 against s0 and +0.144 MFU (-0.063 s) against sonic-02. Peak
+123.41 GiB.
+
+Trace checks:
+- Carry stall: 140.9 ms/step (2.9 ms per copy); lost the draw like stackpipe-03.
+- `copy-start.44` sits after the backward.
+- Zero XLA remat.
+
+Exposed collectives total 1.50 s: ragged all-to-all 0.85, backward weight all-gathers 0.16. As in
+stackpipe-03, every forward shared-expert GEMM comes after the last ragged all-to-all done. So the cause is
+common to both lineages: #9481's QB-after-MLP barrier (B), which `m30-f1-noqb-01` tests. Without the stall,
+this arm would be ~12.97 s (~30.25 MFU).
+
+Loss, steps 180001-180059 (dloss = arm - reference):
+
+| arm | reference | max abs dloss | mean | late mean | rms | positive |
+|---|---|---|---|---|---|---|
+| ctl-s0-r2 (same code) | s0 | 3.3e-4 | +1.3e-5 | +2.2e-5 | 9.2e-5 | 33/59 |
+| sonic-02 | s0 | 2.4e-4 | -3.4e-6 | +9.9e-6 | 7.8e-5 | 29/59 |
+| grnflag-01 | s0 | 3.0e-4 | -1.9e-5 | -3.5e-5 | 8.9e-5 | 26/59 |
+| stackpipe-03 | s0 | 6.8e-4 | +6.9e-5 | +1.16e-4 | 1.2e-4 | 47/59 |
+| stackseq-03 | s0 | 7.0e-4 | +7.0e-5 | +1.33e-4 | 2.0e-4 | 36/59 |
+| stackpipe-03 | sonic-02 | 4.4e-4 | +7.3e-5 | +1.06e-4 | 8.3e-5 | 51/59 |
+| stackseq-03 | sonic-02 | 6.8e-4 | +7.3e-5 | +1.23e-4 | 1.9e-4 | 33/59 |
+
+Both stack arms sit above the same-code band (late mean +1.2e-4 to +1.3e-4 against +-2e-5). That is about
+the size of hmo-02 (+1.58e-4) and unfilled-02 (+1.56e-4). One pair per arm cannot tell an offset carried
+from early steps from a bias. The PGLE-scored run's repeats must settle it.
