@@ -572,3 +572,11 @@ re-gather off): `m30-f1-seq-02` (final-seq d4234c88e7, streams on), `m30-f1-noqb
 (final-seq-noqb 3b88a218cc = d4234c88e7 + revert of #9481's QB-after-MLP 0b6113396b, streams on),
 `m30-f0-seq-02` (final-seq, streams off). F1-seq vs F1-noqb tests the ~0.16 s forward return c1 exposure.
 The winner's trace feeds the PGLE build.
+
+## M30-033 stackseq-03 score (2026-10-01)
+
+`m30c-stackseq-trace-03` (sequential D + mirror + E + #9481 model commits incl. re-gather + Triton sconv; production
+wheel; H-A4 at 0.78/105): **29.928 / 13.115 s** (+0.15 over sonic-02, +0.16 over stackpipe-03); peak 123.41;
+loss at 180000 exact; dloss max 7.0e-4, late mean +8.0e-5, 27/49 positive. It still carries the re-gather
+(~+0.1 s), the carry stall (141 ms/step) and the QB-after-MLP placement (~+0.16 s, unconfirmed). Expected
+F1-seq-02 if the re-gather and stall attributions hold: ~12.87 s (~30.5%); F1-noqb lower if QB-after-MLP is the trigger.
