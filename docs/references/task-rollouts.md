@@ -401,3 +401,24 @@ uv run --no-sync pytest skyrl-train/tests/cpu/rollouts/test_engine.py -q
 
 The CPU tests use ShellSim and model or HTTP fixtures. They do not validate a live
 vLLM service or a Docker rollout.
+
+## Multi-turn GPU smoke
+
+The `experiments.post_training.task_rollouts` artifact main supplies eight ShellSim
+tasks to the shared engine. Each task writes a file in one stage and reads it in
+the next stage. Private graders check the file and the final answer. The run uses
+one sample per task, behavior log probabilities, one optimizer step, and HF export.
+
+Run the preflight with a fresh version, then add `--run` to submit it:
+
+```bash
+uv run python -m experiments.post_training.task_rollouts --version YYYY.MM.DD.N
+```
+
+The smoke uses Qwen3-0.6B with eight H100 policy GPUs and eight H100 inference GPUs.
+It uses reward-weighted advantages because each task has one sample. Score the
+trainer's `WANDB_MIRROR` log with the companion SkyRL `ci/marin_nightly/gate.py`
+and `specs/task-rollouts.json`. Measure elapsed time from artifact submission until
+checkpoint export completes and the coordinator succeeds.
+Also verify the final checkpoint and export metadata. This run validates live
+inference and training with ShellSim. Docker and Daytona require separate checks.
