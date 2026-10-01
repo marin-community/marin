@@ -18,12 +18,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.importers.tasktrove import puzzle_choices_and_lists
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST, read_archive
 from taskcompendium.importers.tasktrove.mathematical import import_task as import_math
 from taskcompendium.importers.tasktrove.mcqa import import_task as import_mcqa
 from taskcompendium.importers.tasktrove.models import IMPORTER_REVISION
 from taskcompendium.importers.tasktrove.numeric import import_task as import_numeric
-from taskcompendium.importers.tasktrove.puzzle_choices_and_lists import import_task as import_puzzle_choices_and_lists
 from taskcompendium.models import TaskSpec
 
 from experiments.post_training.taskcompendium.records import (
@@ -136,7 +136,8 @@ def _convert(row: dict[str, Any], release_uri: str, release_revision: str) -> Co
     elif mode == "math":
         specification = import_math(archive).specification
     elif mode == "exact":
-        specification = import_puzzle_choices_and_lists(archive)
+        # Exact is a general verifier mode; this pass admits only the audited puzzle source.
+        specification = puzzle_choices_and_lists.import_task(archive)
     else:
         specification = import_numeric(archive)
     source_metadata = {key: metadata[key] for key in SOURCE_METADATA_KEYS if key in metadata}
@@ -505,6 +506,12 @@ def ingest(
             "limit": limit,
             "supported_modes": sorted(SUPPORTED_MODES),
             "target_modes": sorted(selected_modes),
+            "source_restrictions": {
+                "exact": {
+                    "family": puzzle_choices_and_lists.FAMILY,
+                    "converter": puzzle_choices_and_lists.CONVERTER,
+                }
+            },
             "splits": list(SPLITS),
         },
     }

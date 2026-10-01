@@ -125,6 +125,8 @@ With `taskcompendium[math]` installed, `taskcompendium.importers.tasktrove.mathe
 
 ### TaskTrove puzzle choices and ordered lists
 
+The `exact` verifier supports arbitrary normalized text answers. This importer and bulk ingestion currently admit one audited source subset.
+
 `taskcompendium.importers.tasktrove.puzzle_choices_and_lists.import_task` accepts choices and ordered lists from the cleaned `math-answer` / `all_puzzles` source tuple in `exact` mode. The source converter represents this subset with `ExactSpec`; numbers and coordinates use `MathSpec` and the mathematical importer. It preserves the ordered list of accepted values and the source normalization settings in the private verifier, removes the file-output wrapper, and retains the source tags and provenance. The `ExactAnswerVerifier` delegates boxed-answer selection and whole-response fallback to `tasktrove-verify`, which owns exact grading.
 
 ### NeMo predicted function calls
