@@ -1,0 +1,665 @@
+{
+  "schema_version": 1,
+  "runtimes": {
+    "evalchemy": "af61e0baaa291071f815f14f567852adece6e14c",
+    "harbor": "2666d6526477ae3e46030a8dc4f3f2c68fd7a84f"
+  },
+  "native32k_locations": [
+    "inclusionAI/Ling-lite-1.5",
+    "open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38"
+  ],
+  "evalchemy": {
+    "aime24": {
+      "name": "aime24",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:29e05a59e92c2aff97812d918b2edd79c0f3de0a373b43c72f36b69e2c787186",
+      "tasks": [
+        {
+          "name": "AIME24",
+          "num_fewshot": 0,
+          "task_alias": "aime24",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "seed": 42,
+        "extra_gen_kwargs": {
+          "do_sample": "true",
+          "temperature": "0.7"
+        },
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null
+      }
+    },
+    "boolq": {
+      "name": "boolq",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:f2a1bfc80b0ec4109bb89157c467b74005a5a20a22fa950dab4f44c780fa62b6",
+      "tasks": [
+        {
+          "name": "boolq",
+          "num_fewshot": 0,
+          "task_alias": "boolq_0shot",
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {},
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    },
+    "cruxeval": {
+      "name": "cruxeval",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:65bd8ac58b423b7fd516e4cdedde1369393bea8afc688bcc3be5572659b3969a",
+      "tasks": [
+        {
+          "name": "CruxEval",
+          "num_fewshot": 0,
+          "task_alias": "cruxeval",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null
+      }
+    },
+    "financebench": {
+      "name": "financebench",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:ff68bb55411d7c15bfbcc58f033ae947dbc330c9add1104920408945797223a4",
+      "tasks": [
+        {
+          "name": "FinanceBench",
+          "num_fewshot": 0,
+          "task_alias": "financebench",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "judge": {
+          "base_url": "https://api.together.xyz/v1",
+          "model": "openai/gpt-oss-120b"
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null
+      }
+    },
+    "gpqa-diamond": {
+      "name": "gpqa-diamond",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:f4b49ee239d368fe9f65b62663276b90becaf8e0ce1768e99dcf370e2764fc63",
+      "tasks": [
+        {
+          "name": "GPQADiamond",
+          "num_fewshot": 0,
+          "task_alias": "gpqa-diamond",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {
+          "do_sample": "true",
+          "temperature": "0.7"
+        },
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null
+      }
+    },
+    "gsm8k-0shot": {
+      "name": "gsm8k-0shot",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:173f8897d1b4ab1e81587111839e4b534853ebd6df98e1ee6a10ee57d085da65",
+      "tasks": [
+        {
+          "name": "gsm8k",
+          "num_fewshot": 0,
+          "task_alias": "gsm8k_0shot",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    },
+    "humanevalplus": {
+      "name": "humanevalplus",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:2d02189fefd56cb1d9f283ec3cdf82df7da1de810cdce63012e785277c03f9e0",
+      "tasks": [
+        {
+          "name": "HumanEvalPlus",
+          "num_fewshot": 0,
+          "task_alias": "humanevalplus",
+          "generation": true,
+          "unsafe_code": true,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    },
+    "ifbench": {
+      "name": "ifbench",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:cbe79d3b33dffcfc5189b9f349c548236bd979de3d7c504c766ff8b162e682c6",
+      "tasks": [
+        {
+          "name": "IFBench",
+          "num_fewshot": 0,
+          "task_alias": "ifbench",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null
+      }
+    },
+    "math500": {
+      "name": "math500",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:7846a64f268b603a082add8da7bb1aaf001ff49c15e2e22b4dacab81eaf8adbd",
+      "tasks": [
+        {
+          "name": "MATH500",
+          "num_fewshot": 0,
+          "task_alias": "math500",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    },
+    "mbppplus": {
+      "name": "mbppplus",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:9cdee19d343ac4fdff07550d8ee4288deb11d5699d568dee87ff46ac13e6cb2f",
+      "tasks": [
+        {
+          "name": "MBPPPlus",
+          "num_fewshot": 0,
+          "task_alias": "mbppplus",
+          "generation": true,
+          "unsafe_code": true,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    },
+    "mmlu-pro": {
+      "name": "mmlu-pro",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:584b10b83da64be4cb114a8f7715edb235a3bc3598c522dc3d8be053900f1f78",
+      "tasks": [
+        {
+          "name": "MMLUPro",
+          "num_fewshot": 0,
+          "task_alias": "mmlu-pro",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "max_length": 65536,
+        "max_gen_toks": null,
+        "max_eval_instances": null
+      }
+    },
+    "mrcr": {
+      "name": "mrcr",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:e2ba247d6a66d59e04cf9ff6a68670d4e68f503f38c16362e28469494f8ad0b3",
+      "tasks": [
+        {
+          "name": "MRCR",
+          "num_fewshot": 0,
+          "task_alias": "mrcr",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "huggingface",
+        "max_gen_toks": 4096,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_length": 73728,
+        "max_eval_instances": null
+      }
+    },
+    "nupa": {
+      "name": "nupa",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:3ff248af79f339c1d5514d20143e8881d74432306fcb11d064ab3a7f0c613148",
+      "tasks": [
+        {
+          "name": "NUPA5K-Loose",
+          "num_fewshot": 0,
+          "task_alias": "nupa5k",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 20222943,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {},
+        "max_length": 73664,
+        "max_gen_toks": null,
+        "max_eval_instances": null
+      }
+    },
+    "olympiadbench": {
+      "name": "olympiadbench",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:75a5ff7e093bec052364a58e6735d3605c23eba2b5bc0348f255d7c4a25f91ca",
+      "tasks": [
+        {
+          "name": "OlympiadBench",
+          "num_fewshot": 0,
+          "task_alias": "olympiadbench",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "seed": 42,
+        "extra_gen_kwargs": {
+          "do_sample": "true",
+          "temperature": "0.7"
+        },
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null
+      }
+    },
+    "piqa": {
+      "name": "piqa",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:b8b365553547783b40a08769171c87dc9cc1f1b59dda2d2a256f4acff370a029",
+      "tasks": [
+        {
+          "name": "piqa",
+          "num_fewshot": 0,
+          "task_alias": "piqa_0shot",
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {},
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    },
+    "triviaqa": {
+      "name": "triviaqa",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:9163a251af774fc9da5e856e0eca3247ee1eb40e155af35cd6185900006f24c3",
+      "tasks": [
+        {
+          "name": "triviaqa",
+          "num_fewshot": 5,
+          "task_alias": "triviaqa_5shot",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    },
+    "truthfulqa": {
+      "name": "truthfulqa",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:1fc7570aaab932a15979c883895fb3f1b80c97141d809f4f94ead0e58723152f",
+      "tasks": [
+        {
+          "name": "truthfulqa_mc2",
+          "num_fewshot": 0,
+          "task_alias": "truthfulqa_mc2_0shot",
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {},
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    },
+    "winogrande": {
+      "name": "winogrande",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:b920d6f13a6ceddfeed73b978f94ae2f6daf18b0f74e0dad295bec448bb7988a",
+      "tasks": [
+        {
+          "name": "winogrande",
+          "num_fewshot": 5,
+          "task_alias": "winogrande_5shot",
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "chat_tokenizer_backend": "none",
+        "num_concurrent": 16,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "chat_template_kwargs": {},
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "batch_size": null,
+        "seed": null
+      }
+    }
+  },
+  "harbor": {
+    "bfclparity-pi": {
+      "sources": {
+        "standard": "sha256:8dbde2b2392750e4a30bc02d192f987f4a30cbcc8678e6f9c1acc02e172033ff",
+        "native32k": "sha256:8dbde2b2392750e4a30bc02d192f987f4a30cbcc8678e6f9c1acc02e172033ff"
+      },
+      "model_info": {
+        "max_input_tokens": 32768
+      },
+      "identity": {
+        "dataset": "bfcl_parity",
+        "version": "1.0",
+        "agent": "pi",
+        "env": "daytona"
+      }
+    },
+    "bixbench-pi": {
+      "sources": {
+        "standard": "sha256:854d45356a5b293d91cf5c87eb4d9b76f56e5a848c73aff4ea651cd86d70b37a",
+        "native32k": "sha256:5846d7033f1ba597778340e9fa251b18ecad0929e038cb2ccb07b45141dff7cb"
+      },
+      "model_info": {
+        "max_input_tokens": 65536,
+        "max_output_tokens": 16384
+      },
+      "identity": {
+        "dataset": "bixbench-cli-marin-corrections",
+        "version": "3",
+        "agent": "pi",
+        "env": "daytona"
+      }
+    },
+    "ds-1000-local": {
+      "sources": {
+        "standard": "sha256:e806181a8871acd9954ab4c2d8e0b8a0d90a0800a9c913475beb5e307df4dea1",
+        "native32k": "sha256:e806181a8871acd9954ab4c2d8e0b8a0d90a0800a9c913475beb5e307df4dea1"
+      },
+      "model_info": {
+        "max_input_tokens": 32768
+      },
+      "identity": {
+        "dataset": "ds-1000",
+        "version": "mini-200",
+        "agent": "terminus-2",
+        "env": "daytona"
+      }
+    },
+    "ot-tblite-recovery": {
+      "sources": {
+        "standard": "sha256:56ef0c78ac7780cbd267fbec3b0a2c064563eba92c9a343dce8d896a51428667",
+        "native32k": "sha256:56ef0c78ac7780cbd267fbec3b0a2c064563eba92c9a343dce8d896a51428667"
+      },
+      "model_info": {
+        "max_input_tokens": 32768
+      },
+      "identity": {
+        "dataset": "openthoughts-tblite",
+        "version": "2.0",
+        "agent": "terminus-2",
+        "env": "daytona"
+      }
+    },
+    "sotopia-hard": {
+      "sources": {
+        "standard": "sha256:d14c22234930c8551b9d4f43b19c2bb5ef9b89c3cd678bc0511cb7fa5df8cd6a",
+        "native32k": "sha256:d14c22234930c8551b9d4f43b19c2bb5ef9b89c3cd678bc0511cb7fa5df8cd6a"
+      },
+      "model_info": {
+        "max_input_tokens": 32768
+      },
+      "identity": {
+        "dataset": "open-athena/sotopia-hard-harbor",
+        "version": "65be6de928ab289e43a2730182b5b75cf2f75d41",
+        "agent": "marin.evaluation.harbor.sotopia_agent:SotopiaAgent",
+        "env": "daytona"
+      }
+    },
+    "swebench-verified": {
+      "sources": {
+        "standard": "sha256:705560d4c5fdb695a10efdf2ade172cfe343d5ba0a7e8d79dc3afdb18c74e674",
+        "native32k": "sha256:705560d4c5fdb695a10efdf2ade172cfe343d5ba0a7e8d79dc3afdb18c74e674"
+      },
+      "model_info": {
+        "max_input_tokens": 32768
+      },
+      "identity": {
+        "dataset": "swebench-verified",
+        "version": "1.0",
+        "agent": "mini-swe-agent",
+        "env": "daytona"
+      }
+    },
+    "tau3-pi": {
+      "sources": {
+        "standard": "sha256:635238ba621f171c2e148ff860be0763791137b6734e157eef938008f33fd644",
+        "native32k": "sha256:635238ba621f171c2e148ff860be0763791137b6734e157eef938008f33fd644"
+      },
+      "model_info": {
+        "max_input_tokens": 32768
+      },
+      "identity": {
+        "dataset": "tau3-bench",
+        "version": "1.0.1",
+        "agent": "acp:pi-acp@0.0.33",
+        "env": "daytona"
+      }
+    },
+    "tb2-recovery": {
+      "sources": {
+        "standard": "sha256:f919b270a90e3a0cb1e858fad32eb051a30b1d59b1e963dd73d8ac2903896d5a",
+        "native32k": "sha256:92a4e435e96a91037767ec0bd6dfa6cf6161acd4bacafaafc56f7f13f64e3b4c"
+      },
+      "model_info": {
+        "max_input_tokens": 65536,
+        "max_output_tokens": 16384
+      },
+      "identity": {
+        "dataset": "terminal-bench/terminal-bench-2-1",
+        "version": "6",
+        "agent": "terminus-2",
+        "env": "daytona"
+      }
+    }
+  }
+}
