@@ -294,6 +294,9 @@ def profile(
         if captured_profile and upload_uri is not None:
             try:
                 remote_session_name = f"steps-{start_step}-to-{end_step}"
+                if process_index is None and jax.process_count() > 1:
+                    # Every process traces; processes sharing a host would otherwise upload over each other's files.
+                    remote_session_name += f"-process{jax.process_index()}"
                 _upload_profile_sessions(local_path, existing_sessions, upload_uri, remote_session_name)
             except Exception as exc:
                 upload_error = exc

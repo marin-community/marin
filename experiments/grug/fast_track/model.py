@@ -507,6 +507,15 @@ class GrugModelConfig:
     """Layers with no MoE latent at all: the routed experts read and write the full stream (no ``w_latent_down`` or
     ``w_latent_up``) at half the expert width, so the expert parameters and FLOPs match the latent layers'. Like
     ``latent_out_full_layers`` these layers live in the tail stacks; the two cannot be combined."""
+    wide_expert_layers: tuple[int, ...] = ()
+    """Layers whose routed experts are ``wide_expert_intermediate_dim`` wide (the latent read and write unchanged):
+    extra expert capacity in chosen layers only. Tail stacks again; exclusive with the other tail modes."""
+    wide_expert_intermediate_dim: int | None = None
+    topk_layers: tuple[int, ...] = ()
+    """Layers that activate ``topk_layer_k`` routed experts per token instead of ``num_experts_per_token``: more
+    active expert compute in chosen layers at the same parameters. Tail stacks again; exclusive with the other
+    tail modes."""
+    topk_layer_k: int | None = None
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -1289,8 +1298,15 @@ class GrugModelConfig:
             raise ValueError(f"latent_select_layers must be all, kda or global, got {self.latent_select_layers!r}")
         if self.latent_select_layers != "all" and self.local_mixer != LocalMixer.KDA:
             raise ValueError("latent_select_layers kda/global needs local_mixer=KDA")
-        if self.latent_out_full_layers and self.latent_free_layers:
-            raise ValueError("latent_out_full_layers and latent_free_layers share the tail stacks; pick one")
+        tail_modes = (self.latent_out_full_layers, self.latent_free_layers, self.wide_expert_layers, self.topk_layers)
+        if sum(bool(x) for x in tail_modes) > 1:
+            raise ValueError(
+                "latent_out_full_layers, latent_free_layers, wide_expert_layers and topk_layers share the tail stacks"
+            )
+        if bool(self.topk_layers) != (self.topk_layer_k is not None):
+            raise ValueError("topk_layers and topk_layer_k go together")
+        if bool(self.wide_expert_layers) != (self.wide_expert_intermediate_dim is not None):
+            raise ValueError("wide_expert_layers and wide_expert_intermediate_dim go together")
         tail = _tail_layers(self)
         if tail:
             if not self.attn_res or self.latent_dim is None or self.latent_out_dim is not None or self.dense_mlp:
@@ -6179,8 +6195,13 @@ class Transformer(eqx.Module):
             if self.loop_inject_scale is not None
             else {}
         )
-        # The routed input's width can differ by layer (``latent_free_layers``), so it stays a per-layer tuple.
-        widths = {k: [stats[k] for stats in layer_stats] for k in (_ROUTED_INPUT,) if k in layer_stats[0]}
+        # Stats whose shape differs by layer (the routed input under ``latent_free_layers``, the top-K assignments under
+        # ``topk_layers``) stay per-layer tuples.
+        widths = {
+            k: [stats[k] for stats in layer_stats]
+            for k in layer_stats[0]
+            if len({jnp.shape(stats[k]) for stats in layer_stats}) > 1
+        }
         stacked = jax.tree.map(
             lambda *xs: jnp.stack(xs), *[{k: v for k, v in stats.items() if k not in widths} for stats in layer_stats]
         )
@@ -6671,11 +6692,22 @@ def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[i
 
 def _tail_layers(cfg: GrugModelConfig) -> tuple[int, ...]:
     """The layers held by the tail stacks (``latent_out_full_layers`` or ``latent_free_layers``)."""
-    return cfg.latent_out_full_layers or cfg.latent_free_layers
+    return cfg.latent_out_full_layers or cfg.latent_free_layers or cfg.wide_expert_layers or cfg.topk_layers
 
 
 def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
     """The tail stacks' layer config: a full-width expert write, or no latent at half the expert width."""
+    if cfg.topk_layers:
+        assert cfg.topk_layer_k is not None
+        return dataclasses.replace(cfg, num_experts_per_token=cfg.topk_layer_k, topk_layers=(), topk_layer_k=None)
+    if cfg.wide_expert_layers:
+        assert cfg.wide_expert_intermediate_dim is not None
+        return dataclasses.replace(
+            cfg,
+            intermediate_dim=cfg.wide_expert_intermediate_dim,
+            wide_expert_layers=(),
+            wide_expert_intermediate_dim=None,
+        )
     if cfg.latent_free_layers:
         return dataclasses.replace(
             cfg, latent_dim=None, intermediate_dim=cfg.intermediate_dim // 2, latent_free_layers=()

@@ -86,3 +86,27 @@ def test_latent_free_layer_matches_the_latent_layers_expert_parameters():
 def test_tail_modes_cannot_be_combined():
     with pytest.raises(ValueError):
         t._config(latent_out_full_layers=(5,), latent_free_layers=(4,))
+
+
+def test_wide_expert_layer_keeps_the_latent_and_widens_only_its_experts():
+    mesh, model = t._model(wide_expert_layers=(5,), wide_expert_intermediate_dim=24)
+    layers = model.layers()
+    assert layers[5].mlp.expert_mlp.w_up.shape[-2:] == (_LATENT, 24)
+    assert layers[5].mlp.w_latent_up is not None and layers[3].mlp.expert_mlp.w_up.shape[-1] == 16
+    with jax.set_mesh(mesh):
+        loss = eqx.filter_jit(lambda m, x: m.next_token_loss(x, jnp.ones(x.shape, jnp.float32)))(model, _tokens())
+    assert np.isfinite(float(loss))
+    with pytest.raises(ValueError):
+        t._config(wide_expert_layers=(5,))
+
+
+def test_topk_layer_routes_more_experts_in_that_layer_only():
+    mesh, model = t._model(topk_layers=(5,), topk_layer_k=3)
+    assert model.layers()[5].mlp.cfg.num_experts_per_token == 3
+    assert model.layers()[3].mlp.cfg.num_experts_per_token == 2
+    with jax.set_mesh(mesh):
+        loss, grads = eqx.filter_jit(
+            eqx.filter_value_and_grad(lambda m, x: m.next_token_loss(x, jnp.ones(x.shape, jnp.float32)))
+        )(model, _tokens())
+    assert np.isfinite(float(loss))
+    assert np.abs(np.asarray(grads.stacked_blocks_tail.stacked.mlp.expert_mlp.w_up)).sum() > 0
