@@ -181,7 +181,7 @@ The package tests use a test-only `ReplayAgent` in `tests/harbor_replay.py` to w
 Run the package tests from the repository root:
 
 ```bash
-uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskcompendium/tests -q
+uv run --project lib/taskcompendium --extra harbor --extra pipeline --group test pytest lib/taskcompendium/tests -q
 
 # Type-check the package from its own project directory after installing its dependencies.
 cd lib/taskcompendium
