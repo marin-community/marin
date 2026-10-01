@@ -8,8 +8,9 @@ the training corpus; to score *new* text we need both the serialised model and t
 remap. :class:`PooledScorer` bundles them, ``load_pooled_scorer`` builds one from a
 model dir. ``bme_windows`` / ``pool_bme`` are the whole-doc (begin/middle/end)
 scoring halves that production scoring runs around :meth:`PooledScorer.encode` and
-:meth:`PooledScorer.predict_ids`; ``score_bme`` composes them for calibration fitting. This module deliberately depends only on
-the model + inference forward, not on the training loop or the zephyr/iris pipeline.
+:meth:`PooledScorer.predict_ids`; ``score_bme`` composes them for calibration fitting.
+This module deliberately depends only on the model + inference forward, not on the
+training loop or the zephyr/iris pipeline.
 """
 
 import json
