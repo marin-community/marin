@@ -1,38 +1,47 @@
-"""Which memcpy streams carry the layer-carry host copies, and what else shares them.
+"""Which memcpy streams carry the layer-carry host copies, step by step, and what else shares them.
 
-With XLA_GPU_HOST_TRANSFER_STREAMS=1 the carry H2D (`wrapped_dynamic-slice*`, MemcpyH2D) and D2H
-(`wrapped_dynamic-update-slice*`, MemcpyD2H) should each own a stream that no D2D weight-slice copy uses.
+XLA borrows its async streams from a pool on every execution, so the xprof stream that serves a given
+execution-stream id can change from step to step. The check therefore groups copies per step. With
+XLA_GPU_HOST_TRANSFER_STREAMS=1 the carry H2D (`wrapped_dynamic-slice*`, MemcpyH2D) and D2H
+(`wrapped_dynamic-update-slice*`, MemcpyD2H) should share their stream with no D2D slice copy.
 
     uv run python stream_check.py <rows.pkl from tfop_dump.py>
 """
 
+import bisect
 import collections
 import pickle
 import sys
 
 
+def label(name: str, hlo_op: str) -> str:
+    if "dynamic-update-slice" in hlo_op and "D2H" in name:
+        return "carry D2H"
+    if "dynamic-slice" in hlo_op and "H2D" in name and "wrapped" in hlo_op:
+        return "carry H2D"
+    if hlo_op.startswith("copy-start"):
+        return "opt-state " + name.split()[0]
+    return "other " + name.split()[0]
+
+
 def main(path: str) -> None:
     data = pickle.load(open(path, "rb"))
-    rows = [r for r in data["rows"] if r[6] == "jit_train_step" and "Memcpy" in r[1]]
-    steps = len(data["launches"])
-    per_stream = collections.defaultdict(collections.Counter)
-    for stream, name, start, end, _tf_op, hlo_op, *_ in rows:
-        kind = name.split()[0][:9]
-        if "dynamic-update-slice" in (hlo_op or "") and "D2H" in name:
-            label = "carry D2H"
-        elif "dynamic-slice" in (hlo_op or "") and "H2D" in name:
-            label = "carry H2D"
-        elif (hlo_op or "").startswith("copy-start"):
-            label = f"opt-state {kind}"
-        else:
-            label = f"other {kind}"
-        per_stream[stream[:12]][label] += 1
-    carry_streams = {s for s, c in per_stream.items() if c["carry D2H"] or c["carry H2D"]}
-    for stream in sorted(per_stream):
-        counts = {k: round(v / steps, 1) for k, v in per_stream[stream].most_common()}
-        print(f"{stream}: {counts}")
-    shared = {s: dict(per_stream[s]) for s in carry_streams if any(k.startswith("other") for k in per_stream[s])}
-    print("carry streams:", sorted(carry_streams), "| shared with other copies:" , "NONE" if not shared else shared)
+    launches = data["launches"]
+    rows = [r for r in data["rows"] if r[6] == "jit_train_step" and "Memcpy" in r[1] and not r[0].startswith("Stream #17")]
+    per = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
+    for stream, name, start, _end, _tf_op, hlo_op, *_ in rows:
+        step = max(bisect.bisect_right(launches, start) - 1, 0)
+        per[step][stream[:10]][label(name, hlo_op or "")] += 1
+    clean = True
+    for step in sorted(per):
+        print(f"step {step}:")
+        for stream, counts in sorted(per[step].items()):
+            has_carry = counts["carry D2H"] or counts["carry H2D"]
+            shared = has_carry and any(k.startswith("other") for k in counts)
+            clean &= not shared
+            tag = " <- carry SHARED with slices" if shared else (" <- carry alone" if has_carry else "")
+            print(f"  {stream}: {dict(counts.most_common())}{tag}")
+    print("RESULT:", "carry copies never share a stream with D2D slice copies" if clean else "carry copies share streams")
 
 
 if __name__ == "__main__":

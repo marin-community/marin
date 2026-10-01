@@ -387,3 +387,31 @@ xplane, then runs `stream_check.py` (per-stream memcpy kinds; whether the carry 
 C's `carry_stall.py`, and the anatomy summary. On hmo-02 (production wheel) the carry D2H/H2D share all
 four memcpy streams with ~740 D2D slice copies per step each, and carry_stall reads 6.0 ms/step there
 (a won draw).
+
+## M30A-022 F1 (m30-f1-seq-02) trace: stream fix works (2026-10-01)
+
+Orchestrator score: 30.219 MFU / 12.990 s (steady 30.0-30.34), peak 123.50 of 143.75 GiB; loss max |d|
+3.8e-4, late mean +9e-5, 44/49 positive.
+- Wheel loaded: all 16 tasks logged `- jax-cuda13-pjrt==0.11.1+marin.708c3a4ec79c` / `+
+  jax-cuda13-pjrt==0.11.1+marin.283d5b6d98cd` (from the presigned URL). The job succeeded, so
+  `verify_ragged_pjrt` accepted the wheel.
+- Streams: XLA borrows its async streams from a pool each execution, so the xprof stream behind an
+  execution-stream id rotates between steps. Aggregated over steps, the slices appear to share the carry
+  streams; per step they never do. Every step has one stream with only carry H2D (48) plus optimizer H2D
+  (54), one with only carry D2H (48) plus optimizer D2H (56), and the D2D slice copies on the other four
+  (`stream_check.py` now groups by step).
+- `carry_stall.py`: 3.7 ms/step (stackseq-03 on the production wheel: 140.9 ms/step, a lost draw).
+
+Exposed copies, s/step (`copy_exposure.py`):
+
+| class | stackseq-03 | F1 | hmo-02 |
+|---|---|---|---|
+| opt-state D2H (end-of-step tail) | 0.261 | 0.261 | 0.260 |
+| carry H2D (backward reload) | 0.219 | 0.218 | 0.219 |
+| carry D2H | 0.141 | 0.004 | 0.006 |
+| opt-state H2D | 0.100 | 0.101 | 0.099 |
+| other D2D | 0.050 | 0.056 | 0.038 |
+| total | 0.773 | 0.641 | 0.624 |
+
+What is left: the end-of-step D2H tail (0.26; target of `pgle_patch_d2h.py` under PGLE), the backward carry
+reload (0.22; arm2 carry prefetch), and the first momentum and embedding H2D (0.10; PGLE hoists it).
