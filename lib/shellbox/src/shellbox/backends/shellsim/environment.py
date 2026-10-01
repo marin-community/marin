@@ -11,7 +11,7 @@ from pathlib import Path
 
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
-from upath import UPath
+from rigging.filesystem.storage_path import StoragePath
 
 from shellbox.backends.shellsim.machine import (
     DEFAULT_CPU_LIMIT,
@@ -31,29 +31,28 @@ from shellbox.machine import (
     ShellSimBuiltins,
 )
 
-_LOCAL_PROTOCOLS = ("", "file", "local")
 _COPY_CHUNK_BYTES = 1024 * 1024
 
 
-def _download_target(target: Path | UPath | str) -> Path | UPath:
-    path = target if isinstance(target, UPath) else UPath(str(target))
-    if path.protocol in _LOCAL_PROTOCOLS:
-        return Path(path.path)
+def _download_target(target: Path | StoragePath | str) -> Path | StoragePath:
+    path = StoragePath(str(target))
+    if path.is_local:
+        return Path("/" + path.key) if path.scheme == "file" else Path(str(path))
     return path
 
 
-def _copy_file_to_remote(source: Path, target: UPath) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
+def _copy_file_to_remote(source: Path, target: StoragePath) -> None:
+    target.parent.mkdirs()
     with source.open("rb") as local_file, target.open("wb") as remote_file:
         shutil.copyfileobj(local_file, remote_file, length=_COPY_CHUNK_BYTES)
 
 
-def _copy_dir_to_remote(source: Path, target: UPath) -> None:
-    target.mkdir(parents=True, exist_ok=True)
+def _copy_dir_to_remote(source: Path, target: StoragePath) -> None:
+    target.mkdirs()
     for entry in source.rglob("*"):
         remote_entry = target / entry.relative_to(source).as_posix()
         if entry.is_dir():
-            remote_entry.mkdir(parents=True, exist_ok=True)
+            remote_entry.mkdirs()
         else:
             _copy_file_to_remote(entry, remote_entry)
 
@@ -165,7 +164,7 @@ class ShellSimEnvironment(BaseEnvironment):
             raise RuntimeError("ShellSim environment is not running")
         await self.machine.upload(Path(source_dir), target_dir)
 
-    async def download_file(self, source_path: str, target_path: Path | UPath | str) -> None:
+    async def download_file(self, source_path: str, target_path: Path | StoragePath | str) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
         target = _download_target(target_path)
@@ -177,7 +176,7 @@ class ShellSimEnvironment(BaseEnvironment):
             await self.machine.download(source_path, staged)
             await asyncio.to_thread(_copy_file_to_remote, staged, target)
 
-    async def download_dir(self, source_dir: str, target_dir: Path | UPath | str) -> None:
+    async def download_dir(self, source_dir: str, target_dir: Path | StoragePath | str) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
         target = _download_target(target_dir)

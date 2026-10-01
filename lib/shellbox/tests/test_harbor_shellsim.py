@@ -30,8 +30,8 @@ def test_shellsim_harbor_trial(tmp_path: Path) -> None:
 def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
     pytest.importorskip("harbor")
     pytest.importorskip("shellsim")
-    upath = pytest.importorskip("upath")
-
+    StoragePath = pytest.importorskip("rigging.filesystem.storage_path").StoragePath
+    JobConfig = pytest.importorskip("harbor_config").JobConfig
     environment_module = importlib.import_module("shellbox.backends.shellsim.environment")
     machine_module = importlib.import_module("shellbox.backends.shellsim.machine")
 
@@ -46,13 +46,18 @@ def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
             (source / "nested" / "trace.txt").write_text("trace")
             await machine.upload(source, "/logs/agent")
 
-            remote = upath.UPath(f"memory://shellbox-{tmp_path.name}")
+            remote = StoragePath(f"memory://shellbox-{tmp_path.name}")
+            harbor_remote = JobConfig(jobs_dir=str(remote)).jobs_dir
             await environment.download_file("/logs/agent/agent.log", remote / "agent.log")
-            await environment.download_dir("/logs/agent", remote / "downloaded")
+            await environment.download_dir("/logs/agent", harbor_remote / "downloaded")
+            await environment.download_file("/logs/agent/agent.log", tmp_path / "local-agent.log")
+            await environment.download_dir("/logs/agent", f"file://{tmp_path}/local-download")
 
             assert (remote / "agent.log").read_text() == "agent failed"
             assert (remote / "downloaded" / "agent.log").read_text() == "agent failed"
             assert (remote / "downloaded" / "nested" / "trace.txt").read_text() == "trace"
+            assert (tmp_path / "local-agent.log").read_text() == "agent failed"
+            assert (tmp_path / "local-download" / "nested" / "trace.txt").read_text() == "trace"
         finally:
             await machine.close()
 
