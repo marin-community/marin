@@ -6,7 +6,7 @@
 Plan first::
 
     uv run python -m experiments.post_training.taskcompendium_grug_smoke \
-      --version 2026.09.28.1 --runtime-commit <MarinSkyRL-commit>
+      --version 2026.10.01.3 --runtime-commit ecf04c239911812edd99b7d1c187cbf97efd3c29
 
 The source task packages contain private verifier material. The data artifact is
 stored in Marin's private artifact store and staged only for the RL environment.
