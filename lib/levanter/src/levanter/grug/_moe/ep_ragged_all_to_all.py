@@ -496,8 +496,8 @@ def _routed_experts(
     the gate/up projection.
 
     ``holdback`` (any pytree, or None) comes back unchanged, but only once the last chunk's expert
-    MLP inputs for the backward exist: a scheduling dependency for caller work that should run
-    beside the last chunk's return. Its cotangent passes through.
+    MLP inputs for the backward exist: an ordering token for caller work that should run beside
+    the last chunk's return. It carries no gradient.
     """
     outputs, _residuals = _routed_experts_forward(
         sorted_x, weights, moe_w13_local, moe_w2_local, holdback, routing, layout
@@ -513,7 +513,7 @@ def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, holdback
 
 
 def _routed_experts_bwd(layout, residuals, cotangents):
-    out_cotangent, holdback_cotangent = cotangents
+    out_cotangent, _holdback_cotangent = cotangents
     weights, routing, chunk_residuals = residuals
     assignments = routing.sorted_indices.shape[0]
     hidden_dim = out_cotangent.shape[1]
@@ -585,7 +585,7 @@ def _routed_experts_bwd(layout, residuals, cotangents):
         weights_cotangent,
         jnp.concatenate(moe_w13_cotangents, axis=0),
         jnp.concatenate(moe_w2_cotangents, axis=0),
-        holdback_cotangent,
+        None,
         None,
     )
 

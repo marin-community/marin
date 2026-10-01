@@ -1308,7 +1308,12 @@ class Block(eqx.Module):
         if held_back:
             if shared is None or held_back > len(shared):
                 raise ValueError(f"held_back_shared_experts={held_back} exceeds the {len(shared or ())} shared experts")
-            mlp_out, router_stats, held_mlp_in = mlp(mlp_in, token_valid, holdback=mlp_in)
+            # The routed MoE releases its gradient-free copy of `mlp_in` once the last expert chunk
+            # has run its MLP. Gating `mlp_in` on that release, rather than using the copy, keeps
+            # the held-back experts' input cotangents flowing straight into `mlp_in`, so the
+            # gradients sum in the same order as without the holdback.
+            mlp_out, router_stats, released = mlp(mlp_in, token_valid, holdback=jax.lax.stop_gradient(mlp_in))
+            held_mlp_in, _ = _forward_barrier((mlp_in, jax.lax.stop_gradient(released)))
             shared_inputs[len(shared) - held_back :] = [held_mlp_in] * held_back
         else:
             mlp_out, router_stats = mlp(mlp_in, token_valid)

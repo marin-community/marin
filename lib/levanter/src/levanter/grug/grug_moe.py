@@ -726,8 +726,9 @@ def moe_mlp_with_holdback(
     """`moe_mlp` on the expert-parallel ragged transport that also returns ``holdback``.
 
     ``holdback`` (token-sharded like ``x``) comes back unchanged, but only once the last expert
-    chunk has run its MLP: caller work on it becomes ready beside that chunk's return transport,
-    so the scheduler has it to overlap with the return. Its gradient passes through unchanged.
+    chunk has run its MLP: an ordering token, so caller work tied to it becomes ready beside that
+    chunk's return transport and the scheduler has it to overlap with the return. The returned
+    holdback carries no gradient.
     """
     if mesh is None:
         mesh = _current_mesh()
