@@ -38,7 +38,7 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     CapacityDrops,
 )
-from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
+from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available, unwritten_buffer
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
     _clip_receiver_group_sizes,
@@ -68,8 +68,9 @@ class _ExpertMlp(Protocol):
 
     Implementations take both views of the buffer's group sizes: the physical sizes, which charge
     trailing padding to the last expert, and the active sizes, which count only received rows.
-    Portable kernels must cover the whole static buffer because their unwritten output rows are
-    unspecified, while segment-driven kernels can omit inactive rows.
+    Rows past the active count are unspecified, and may be non-finite, in ``x_dispatch`` and in
+    the output's cotangent. Implementations keep them out of the active output rows and out of
+    the weight gradients, and leave their own output rows past the active count unspecified.
     """
 
     def __call__(
@@ -91,12 +92,19 @@ def _ragged_dot_expert_mlp(
     active_group_sizes: Int[Array, "Echunk"],
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> Float[Array, "C H"]:
-    """Portable expert MLP over XLA's `ragged_dot`, including static trailing rows."""
-    del active_group_sizes
+    """Portable expert MLP over XLA's `ragged_dot`, including static trailing rows.
+
+    `ragged_dot` covers the whole static buffer, so the rows past the active count are zeroed on
+    the way in and on the way out. The output mask also zeroes their cotangent rows, which keeps
+    them out of the weight gradients.
+    """
+    active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
+    x_dispatch = jnp.where(active, x_dispatch, 0)
     w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
     moe_dim = moe_w2_local.shape[1]
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    return ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
+    out = ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
+    return jnp.where(active, out, 0)
 
 
 def _cute_expert_mlp(
@@ -166,7 +174,10 @@ def _unpermute_from_global_expert(
     tokens_per_shard: int,
     topk: int,
 ) -> Float[Array, "Tlocal H"]:
-    """Weight each token's expert outputs by its routing weights and sum them."""
+    """Weight each token's expert outputs by its routing weights and sum them.
+
+    Rows whose weight is zero never enter the sum, so they may hold unspecified values.
+    """
     positions = _invert_permutation(sorted_indices)
     if sonic_gather_sum_available():
         # One kernel for the gather and the sum, materializing neither the unpermuted
@@ -176,111 +187,95 @@ def _unpermute_from_global_expert(
         # promoting the larger operand, so the two agree to a single rounding.
         return sonic_gather_sum(intermediate, positions.reshape(tokens_per_shard, topk), combine_weights_local)
     unsorted = _sort_activations(intermediate, positions)
-    reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
+    reshaped = jnp.where(combine_weights_local[..., None] != 0, unsorted.reshape(tokens_per_shard, topk, -1), 0)
     return jnp.einsum(
         "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
     )
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
+@functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
 def _gather_dispatch_rows(
-    x_local: Float[Array, "Tlocal H"], sorted_indices: Int[Array, "TK"], topk: int
+    x_local: Float[Array, "Tlocal H"],
+    sorted_indices: Int[Array, "TK"],
+    accepted: Float[Array, "Tlocal K"],
+    topk: int,
 ) -> Float[Array, "TK H"]:
     """Build the expert-sorted dispatch buffer with one gather.
 
     Equivalent to ``jnp.repeat(x_local, topk, axis=0)[sorted_indices]`` without
     materializing the repeated buffer or running a data-sized permute. The backward pass
-    is the transpose: each token sums the cotangent rows of its ``topk`` sorted slots.
+    is the transpose: each token sums the cotangent rows of its accepted sorted slots.
+    ``accepted`` is 1 for an assignment that reaches its expert and 0 otherwise. The
+    transport never reads the other slots, so their cotangent rows are unspecified.
     """
+    del accepted
     return x_local[sorted_indices // topk]
 
 
 def _gather_dispatch_rows_fwd(
-    x_local: Float[Array, "Tlocal H"], sorted_indices: Int[Array, "TK"], topk: int
-) -> tuple[Float[Array, "TK H"], Int[Array, "TK"]]:
-    return _gather_dispatch_rows(x_local, sorted_indices, topk), sorted_indices
+    x_local: Float[Array, "Tlocal H"],
+    sorted_indices: Int[Array, "TK"],
+    accepted: Float[Array, "Tlocal K"],
+    topk: int,
+) -> tuple[Float[Array, "TK H"], tuple[Int[Array, "TK"], Float[Array, "Tlocal K"]]]:
+    return _gather_dispatch_rows(x_local, sorted_indices, accepted, topk), (sorted_indices, accepted)
 
 
 def _gather_dispatch_rows_bwd(
-    topk: int, sorted_indices: Int[Array, "TK"], cotangent: Float[Array, "TK H"]
-) -> tuple[Float[Array, "Tlocal H"], None]:
+    topk: int,
+    residuals: tuple[Int[Array, "TK"], Float[Array, "Tlocal K"]],
+    cotangent: Float[Array, "TK H"],
+) -> tuple[Float[Array, "Tlocal H"], None, None]:
+    sorted_indices, accepted = residuals
     tokens_per_shard = sorted_indices.shape[0] // topk
     positions = _invert_permutation(sorted_indices).reshape(tokens_per_shard, topk)
     if sonic_gather_sum_available():
-        ones = jnp.ones((tokens_per_shard, topk), dtype=jnp.float32)
-        grad_x = sonic_gather_sum(cotangent, positions, ones)
+        grad_x = sonic_gather_sum(cotangent, positions, accepted)
     else:
-        grad_x = jnp.sum(cotangent[positions], axis=1, dtype=jnp.float32)
-    return grad_x.astype(cotangent.dtype), None
+        grad_x = jnp.sum(jnp.where(accepted[..., None] != 0, cotangent[positions], 0), axis=1, dtype=jnp.float32)
+    return grad_x.astype(cotangent.dtype), None, None
 
 
 _gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
 
 
-class _LoopLocalZeroSite(IntEnum):
+class _TransportBufferSite(IntEnum):
     DISPATCH_OUTPUT = auto()
     RETURN_OUTPUT = auto()
     OPERAND_COTANGENT = auto()
-    OUTPUT_PASSTHROUGH = auto()
 
 
-def _loop_local_zeros(
-    rows: int, hidden_dim: int, dtype, tie: Int[Array, "N"], site: _LoopLocalZeroSite
+def _transport_buffer(
+    rows: int, hidden_dim: int, dtype, tie: Int[Array, "N"], site: _TransportBufferSite
 ) -> Float[Array, "rows H"]:
-    """Return an exact-zero output init for an in-place ``ragged_all_to_all``.
+    """Return an output buffer for an in-place ``ragged_all_to_all``, with unspecified contents.
 
-    A ``jnp.zeros`` init is a trace-time constant. XLA hoists it out of the layer loop and merges
-    equal-shaped inits under CSE. Each collective then writes into one shared constant, so
-    CopyInsertion copies the pristine zeros into every output slot on every layer (#8822).
+    Every consumer of a transport output reads only the rows the collective writes, so the buffer
+    needs no fill. On GPU it comes from a kernel that writes nothing; elsewhere it is zero-filled.
 
-    ``min(tie[0], -site) + site`` is zero for every non-negative ``tie`` but depends on a
-    loop-carried value, so XLA cannot hoist or fold it. ``site`` makes each call's expression
-    distinct, so CSE cannot merge two inits into one shared buffer.
+    A buffer with no inputs, such as ``jnp.zeros`` or ``jax.lax.empty``, is loop invariant. JAX or
+    XLA hoists it out of the layer loop and merges equal-shaped ones, and CopyInsertion then copies
+    it into every output slot on every layer (#8822). ``min(tie[0], -site) + site`` is zero for
+    every non-negative ``tie`` but depends on a loop-carried value, so the buffer built from it
+    stays in the loop. ``site`` makes each call's expression distinct, so CSE cannot merge two
+    buffers into one.
 
     ``tie`` must contain non-negative integers. ``site`` must identify the call site.
     """
-    zero = (jnp.minimum(tie[0], -site) + site).astype(dtype)
-    return jax.lax.broadcast(zero, (rows, hidden_dim))
+    marker = jnp.minimum(tie[0], -site) + site
+    if sonic_gather_sum_available():
+        return unwritten_buffer((rows, hidden_dim), dtype, marker)
+    return jax.lax.broadcast(marker.astype(dtype), (rows, hidden_dim))
 
 
-# JAX's transpose rule uses hoisted zero inits, so this wrapper reproduces it with loop-local buffers.
-@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
-def _ragged_a2a(
-    operand_rows: int,
-    operand: Float[Array, "R H"],
-    output_init: Float[Array, "O H"],
-    params: ExpertA2aParams,
-) -> Float[Array, "O H"]:
-    """``ragged_all_to_all`` over the expert axis whose transpose builds its zero inits in the loop.
-
-    ``operand_rows`` is ``operand.shape[0]``. The backward needs it and does not see the operand.
-    """
-    del operand_rows
-    return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert")
-
-
-def _ragged_a2a_fwd(
-    operand_rows: int,
-    operand: Float[Array, "R H"],
-    output_init: Float[Array, "O H"],
-    params: ExpertA2aParams,
-) -> tuple[Float[Array, "O H"], ExpertA2aParams]:
-    return _ragged_a2a(operand_rows, operand, output_init, params), params
-
-
-def _ragged_a2a_bwd(
-    operand_rows: int,
-    params: ExpertA2aParams,
-    cotangent: Float[Array, "O H"],
-) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
-    hidden_dim = cotangent.shape[1]
-    # Reverse the collective with exchanged offsets, matching JAX's transpose rule.
+def _reverse_ragged_a2a(
+    cotangent: Float[Array, "O H"], init: Float[Array, "R H"], params: ExpertA2aParams
+) -> Float[Array, "R H"]:
+    """Send each received row's cotangent back to the operand row it came from, into ``init``."""
+    # Exchanged offsets reverse the collective, matching JAX's transpose rule.
     exchanged_output_offsets = jax.lax.all_to_all(params.output_offsets, "expert", 0, 0, tiled=True)
     exchanged_input_offsets = jax.lax.all_to_all(params.input_offsets, "expert", 0, 0, tiled=True)
-    init = _loop_local_zeros(
-        operand_rows, hidden_dim, cotangent.dtype, params.recv_sizes, site=_LoopLocalZeroSite.OPERAND_COTANGENT
-    )
-    operand_ct = jax.lax.ragged_all_to_all(
+    return jax.lax.ragged_all_to_all(
         cotangent,
         init,
         exchanged_output_offsets,
@@ -289,24 +284,124 @@ def _ragged_a2a_bwd(
         params.send_sizes,
         axis_name="expert",
     )
-    # Match JAX's transpose rule when masking rows overwritten in the primal. When ``output_init``
-    # carries no gradient, JAX drops this branch at lowering.
-    interval_marks = (
-        jnp.zeros(cotangent.shape[0], jnp.int32)
-        .at[exchanged_output_offsets]
-        .set(1)
-        .at[exchanged_output_offsets + params.recv_sizes]
-        .add(-1)
-    )
-    written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
-    passthrough_zero = _loop_local_zeros(
-        cotangent.shape[0], hidden_dim, cotangent.dtype, params.send_sizes, site=_LoopLocalZeroSite.OUTPUT_PASSTHROUGH
-    )
-    output_ct = jax.lax.select_n(written, cotangent, passthrough_zero)
-    return operand_ct, output_ct, None
 
 
-_ragged_a2a.defvjp(_ragged_a2a_fwd, _ragged_a2a_bwd)
+# The two wrappers below write the received rows into ``output_init`` in place. Every caller
+# passes an ``output_init`` whose rows at the written positions depend on no differentiated
+# input: a fresh transport buffer, or one that earlier chunks wrote only at other rows. On such an
+# input the overwrite has the derivative of adding the received rows to ``output_init``, so the
+# transpose passes the output cotangent to ``output_init`` unchanged. JAX's transpose rule would
+# zero the written rows first, one full pass over the buffer per call. The wrappers also build
+# their backward buffers inside the layer loop, where JAX's rule would hoist them (#8822).
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+def _ragged_a2a_add(
+    operand_rows: int,
+    operand: Float[Array, "R H"],
+    output_init: Float[Array, "O H"],
+    params: ExpertA2aParams,
+) -> Float[Array, "O H"]:
+    """Write the rows ``operand`` sends over the expert axis into ``output_init``.
+
+    ``output_init`` must not depend on a differentiated input at the rows this call writes.
+    ``operand_rows`` is ``operand.shape[0]``. The backward needs it and does not see the operand.
+    Operand rows this call does not send get unspecified cotangent rows.
+    """
+    del operand_rows
+    return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert")
+
+
+def _ragged_a2a_add_fwd(
+    operand_rows: int,
+    operand: Float[Array, "R H"],
+    output_init: Float[Array, "O H"],
+    params: ExpertA2aParams,
+) -> tuple[Float[Array, "O H"], ExpertA2aParams]:
+    return _ragged_a2a_add(operand_rows, operand, output_init, params), params
+
+
+def _ragged_a2a_add_bwd(
+    operand_rows: int,
+    params: ExpertA2aParams,
+    cotangent: Float[Array, "O H"],
+) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
+    init = _transport_buffer(
+        operand_rows,
+        cotangent.shape[1],
+        cotangent.dtype,
+        params.recv_sizes,
+        site=_TransportBufferSite.OPERAND_COTANGENT,
+    )
+    return _reverse_ragged_a2a(cotangent, init, params), cotangent, None
+
+
+_ragged_a2a_add.defvjp(_ragged_a2a_add_fwd, _ragged_a2a_add_bwd)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+def _ragged_a2a_add_forwarding(
+    operand_rows: int,
+    operand: Float[Array, "R H"],
+    output_init: Float[Array, "O H"],
+    params: ExpertA2aParams,
+) -> tuple[Float[Array, "O H"], Float[Array, "R H"]]:
+    """``_ragged_a2a_add`` that also returns ``operand`` for a later call to read.
+
+    Later calls must read rows of the forwarded operand disjoint from the rows this call reads.
+    The backward then writes this call's operand cotangent into the forwarded operand's
+    cotangent, which is zero on those rows, where reading the operand directly in every call
+    would give each call a zero-filled cotangent buffer and a sum over the calls.
+    """
+    del operand_rows
+    return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert"), operand
+
+
+def _ragged_a2a_add_forwarding_fwd(
+    operand_rows: int,
+    operand: Float[Array, "R H"],
+    output_init: Float[Array, "O H"],
+    params: ExpertA2aParams,
+) -> tuple[tuple[Float[Array, "O H"], Float[Array, "R H"]], ExpertA2aParams]:
+    return _ragged_a2a_add_forwarding(operand_rows, operand, output_init, params), params
+
+
+def _ragged_a2a_add_forwarding_bwd(
+    operand_rows: int,
+    params: ExpertA2aParams,
+    cotangents: tuple[Float[Array, "O H"], Float[Array, "R H"]],
+) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
+    del operand_rows
+    cotangent, forwarded_cotangent = cotangents
+    return _reverse_ragged_a2a(cotangent, forwarded_cotangent, params), cotangent, None
+
+
+_ragged_a2a_add_forwarding.defvjp(_ragged_a2a_add_forwarding_fwd, _ragged_a2a_add_forwarding_bwd)
+
+
+def _accepted_assignments(
+    flat_selected: Int[Array, "TK"],
+    sorted_indices: Int[Array, "TK"],
+    group_sizes: Int[Array, "E"],
+    accepted_group_sizes: Int[Array, "E"],
+) -> Bool[Array, "TK"]:
+    """Mark, in assignment order, the assignments that reach their expert.
+
+    Receivers accept a prefix of each expert's group in the expert-sorted buffer, so an
+    assignment is accepted when its rank within its group is below the group's accepted size.
+    Invalid assignments carry the out-of-range expert id ``E`` and are never accepted.
+    """
+    num_experts = group_sizes.shape[0]
+    sorted_experts = flat_selected[sorted_indices]
+    expert = jnp.minimum(sorted_experts, num_experts - 1)
+    group_starts = jnp.cumsum(group_sizes) - group_sizes
+    rank = jnp.arange(sorted_indices.shape[0], dtype=jnp.int32) - group_starts[expert]
+    accepted_sorted = (sorted_experts < num_experts) & (rank < accepted_group_sizes[expert])
+    return (
+        jnp.zeros_like(accepted_sorted)
+        .at[sorted_indices]
+        .set(accepted_sorted, unique_indices=True, mode="promise_in_bounds")
+    )
 
 
 def _moe_mlp_ep_ragged_a2a_local(
@@ -351,7 +446,6 @@ def _moe_mlp_ep_ragged_a2a_local(
         flat_selected = jnp.where(assignment_valid, selected_experts_local.reshape(-1), num_experts)  # [TK]
         sorted_indices = jnp.argsort(flat_selected)  # [TK]
         group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)  # [E]
-        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)  # [TK, H]
         all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
         valid_assignments = jnp.sum(all_group_sizes, dtype=jnp.int32)
         logical_capacity = _scaled_capacity(
@@ -365,22 +459,32 @@ def _moe_mlp_ep_ragged_a2a_local(
             (logical_capacity + chunks - 1) // chunks,
             chunk_experts,
         )
-
-    expert_mlp = _select_expert_mlp(activation_fn)
-    chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
-    # Unwritten rows remain zero for the final combine.
-    returned = _loop_local_zeros(
-        assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_LoopLocalZeroSite.RETURN_OUTPUT
-    )  # [TK, H]
-    accepted_local = jnp.zeros((), dtype=jnp.int32)
-    for chunk_index in range(chunks):
-        with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            chunk_all_group_sizes = jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0)  # [S, E]
-            clipped_group_sizes = _clip_receiver_group_sizes(
-                chunk_all_group_sizes,
+        chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
+        chunk_clipped_group_sizes = [  # [S, E] each
+            _clip_receiver_group_sizes(
+                jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0),
                 local_expert_size=local_experts,
                 receiver_capacity=logical_chunk_capacity,
             )
+            for chunk_index in range(chunks)
+        ]
+        # Every expert belongs to one chunk, so summing the chunks gives each expert's accepted
+        # prefix of this shard's group.
+        accepted_group_sizes = sum(clipped[shard_id] for clipped in chunk_clipped_group_sizes)  # [E]
+        accepted = _accepted_assignments(flat_selected, sorted_indices, group_sizes, accepted_group_sizes)  # [TK]
+        accepted = accepted.reshape(tokens_per_shard, topk)
+        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, accepted.astype(jnp.float32), topk)  # [TK, H]
+
+    expert_mlp = _select_expert_mlp(activation_fn)
+    # Rows no chunk writes are the dropped assignments, which the combine skips.
+    returned = _transport_buffer(
+        assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_TransportBufferSite.RETURN_OUTPUT
+    )  # [TK, H]
+    # Each chunk reads only its own experts' groups of the sorted buffer, so chunks read disjoint
+    # rows and every chunk but the last forwards the buffer to the next.
+    chunk_source = sorted_x
+    for chunk_index, clipped_group_sizes in enumerate(chunk_clipped_group_sizes):
+        with jax.named_scope(f"moe_chunk_{chunk_index}"):
             # Sender starts come from the full (unmasked) sizes, so each chunk reads its
             # groups' accepted prefixes in place in the shared sorted buffer.
             dispatch_params, return_params = _expert_granular_a2a_params(
@@ -394,18 +498,23 @@ def _moe_mlp_ep_ragged_a2a_local(
             # prevent. A variant that overlaps one transport with the MLP stays within memory.
             # But it does not increase the speed. The transport and the MLP compete for the
             # same SMs.
-            chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
+            chunk_source, _ = jax.lax.optimization_barrier((chunk_source, returned))
             # Accepted rows are the prefix of each unclipped expert group and receiver offsets
             # pack arrivals expert-major, so the received buffer feeds the grouped MLP
             # directly: no sender compaction and no receiver-side permute.
-            dispatch_init = _loop_local_zeros(  # [C, H]
+            dispatch_init = _transport_buffer(  # [C, H]
                 chunk_capacity,
                 hidden_dim,
                 x_local.dtype,
                 dispatch_params.send_sizes,
-                site=_LoopLocalZeroSite.DISPATCH_OUTPUT,
+                site=_TransportBufferSite.DISPATCH_OUTPUT,
             )
-            x_dispatch = _ragged_a2a(assignments_per_shard, chunk_source, dispatch_init, dispatch_params)  # [C, H]
+            if chunk_index < chunks - 1:
+                x_dispatch, chunk_source = _ragged_a2a_add_forwarding(  # [C, H]
+                    assignments_per_shard, chunk_source, dispatch_init, dispatch_params
+                )
+            else:
+                x_dispatch = _ragged_a2a_add(assignments_per_shard, chunk_source, dispatch_init, dispatch_params)
             active_all = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
             )
@@ -423,20 +532,20 @@ def _moe_mlp_ep_ragged_a2a_local(
                 activation_fn,
             )
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
-            # Chaining every chunk through one output buffer composes the disjoint writes;
-            # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
-            # slots as zero contributions with no expansion step.
-            returned = _ragged_a2a(chunk_capacity, out_dispatch, returned, return_params)
-            accepted_local = accepted_local + jnp.sum(clipped_group_sizes[shard_id], dtype=jnp.int32)
+            # Chaining every chunk through one output buffer composes the disjoint writes, with
+            # no expansion step.
+            returned = _ragged_a2a_add(chunk_capacity, out_dispatch, returned, return_params)
 
     with jax.named_scope("combine"):
+        # A dropped or padding assignment gets weight zero, so the gather-sum never reads its
+        # unwritten row, and the `where` discards the weight gradient read from that row.
         out_local = _unpermute_from_global_expert(
             returned,
             sorted_indices,
-            jnp.where(token_valid_local[:, None], combine_weights_local, 0),
+            jnp.where(accepted, combine_weights_local, 0),
             tokens_per_shard=tokens_per_shard,
             topk=topk,
         ).astype(x_local.dtype)
-        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - accepted_local
+        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(accepted_group_sizes, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
     return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
