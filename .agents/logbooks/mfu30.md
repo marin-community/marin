@@ -399,3 +399,20 @@ recompute. Rounding band from this arm: loss at 180000 1.2614125 vs 1.2614135; d
 -3.4e-5, 15/43 positive (balanced). Both bitwise-forward arms instead drifted one-signed (~+1.7e-4 late
 mean), which the same-code repeat `m30-ctl-s0-r2` will explain. Stack arms `-02` (which carried both
 components) were cancelled before they started; C resubmits `-03` without them and diagnoses the regression.
+
+## M30-021 grnflag-01 regression diagnosed (agent C, 2026-10-01)
+
+Final score 28.023 vs 28.261 (-0.238), 14.007 s (+0.118), peak 117.70 (+14.6), loss within rounding band
+(max 3.0e-4, mean -1.9e-5 over 60 steps). Two side effects, neither of them kernel speed:
+(1) `--xla_gpu_enable_triton_gemm=false` turns 120 optimizer (Newton-Schulz) GEMMs into cuBLAS calls. The
+fallback scheduler costs them at 1000 vs 1 units and reorders the optimizer phase, so the 10.1 GiB
+expert-momentum H2D (`copy-start.44`) moves from after the backward to the step start and stays live through the
+backward peak: arena 68.5 -> 82.1 GiB, remat kernels 0.633 -> 0.868 s/step. The flag is dropped.
+(2) **Memcpy-stream collision**: per layer the compute stream idles ~3.3 ms on weight-slice copies that XLA's
+round-robin put on the same memcpy stream as the 4.4 ms forward carry D2H (+0.165 s/step). Either change can
+trigger it, and #9481's PGLE trace t21 shows the same stall (0.192 s/step), so it is this collision and not
+PGLE's latency model. Any program change, PGLE included, re-draws the assignment. Checks for every trace:
+`stack/carry_stall.py` (healthy < ~10 ms/step) and `stack/copy_schedule.py` (copy-start.44 after the
+backward). A is making the stall structurally impossible (stream pinning or keeping slices off the memcpy
+streams). The fused-norm kernel may return as a post-lineage add-on if its trace passes both checks.
+Stack trace arms `-03` (no triton_gemm flag, no fused norm): pipelined @ fcb44f6920, sequential @ a1f483afed.
