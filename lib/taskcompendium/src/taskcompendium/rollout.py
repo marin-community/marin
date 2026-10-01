@@ -180,10 +180,6 @@ class RolloutEngine(Protocol):
     def generate(self, tasks: Iterator[TaskSpec]) -> Iterator[RolloutData]: ...
 
 
-class RolloutSink(Protocol):
-    async def consume(self, rollouts: Iterator[RolloutData]) -> None: ...
-
-
 async def _install_files(machine: Machine, files: tuple[EnvironmentFile, ...]) -> None:
     with TemporaryDirectory(prefix="rollout-files-") as directory:
         for index, file in enumerate(files):

@@ -2,13 +2,12 @@
 
 TaskCompendium defines executable tasks and the common rollout loop in
 `lib/taskcompendium/src/taskcompendium/rollout.py`.
-`ShellboxRolloutEngine` calls a model, executes task operations, and grades the result.
-`RolloutSink` accepts the resulting records.
+`ShellboxRolloutEngine` calls a model, executes task operations, and grades each task.
 
 The SkyRL worker is in `MarinSkyRL/skyrl-train/skyrl_train/rollouts/task_worker.py`.
-`TaskRolloutWorker` supplies model inference, completes group grading, and projects
-rollouts into training data. It submits completed prompt groups through
-`BufferRolloutSink`. The engine has no buffer dependency.
+`TaskRolloutWorker` supplies model inference, completes grading that compares rollouts, and projects
+rollouts into training data. It writes completed prompt groups directly to the
+SkyRL buffer. The engine has no buffer dependency.
 The explicit SkyRL entrypoint is `skyrl_train.entrypoints.taskcompendium`.
 The SWE examples use this entrypoint. The default training entrypoint prepares
 Gym source rows as task Parquet and uses the same worker. The Harbor entrypoint
@@ -202,10 +201,9 @@ cancellation with `asyncio.CancelledError` after session and machine cleanup.
 Cleanup errors propagate. The worker must wait for the active `next()` call to
 finish before it reuses the thread.
 
-`RolloutSink.consume` is an async method that accepts an iterator of completed
-`RolloutData` records and returns `None`. Its caller completes engine execution
-before it calls the sink. SkyRL's `BufferRolloutSink` returns after its buffer
-writer commits the prompt group.
+`RolloutEngine.generate` gives the caller completed `RolloutData` records.
+The caller controls their storage. SkyRL's `TaskRolloutWorker.run_task` returns
+successfully only after the buffer writer commits the prompt group.
 
 This example connects tasks and a caller-supplied model on the execution thread.
 The model must implement the token contract above.
@@ -381,10 +379,10 @@ Unavailable terminal grades and verifier errors exclude the rollout from loss an
 baseline calculations. Explicitly skipped grading remains eligible.
 An intermediate tool operation can remain trainable when the terminal grade is valid.
 
-`BufferRolloutSink` projects and finalizes a completed prompt group before one
+`TaskRolloutWorker.run_task` projects and finalizes a completed prompt group before one
 lease-aware buffer write. A failed group produces no partial buffer commit.
 A prompt group contains the rollouts in one leased `RolloutTask` request.
-The sink passes the lease to the buffer writer so the buffer can identify the
+The worker passes the lease to the buffer writer so the buffer can identify the
 worker assignment and policy step for the result.
 
 ## Local checks
