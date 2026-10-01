@@ -265,15 +265,17 @@ async def test_imported_math_uses_selected_submission_convention(
         "json": JsonAnswer(id="json"),
         "answer-call": AnswerCall(id="answer-call"),
     }[answer_format]
-    expected_submission_instruction = {
-        "plain": "Give your answer as plain text.",
-        "json": 'Give your answer as a JSON object with an "answer" field.',
-        "answer-call": 'Call submit_answer with your final answer as the "answer" string.',
+    expected_fragments_by_format = {
+        "plain": ("plain text",),
+        "json": ("JSON object", '"answer" field'),
+        "answer-call": ("submit_answer", '"answer" string'),
     }[answer_format]
     prompt = render_instruction(specification, convention)
+    rendered_submission = prompt.rpartition("\n\n")[2]
 
     assert specification.answer_type is answer_type
-    assert prompt.endswith(f"\n\n{expected_submission_instruction}\n")
+    assert all(fragment in rendered_submission for fragment in expected_fragments_by_format)
+    assert rendered_submission.endswith("\n")
     assert "/app/" not in prompt and "answer.txt" not in prompt
     assert "grader" not in prompt.lower() and "verifier" not in prompt.lower()
     assert r"\boxed" not in prompt

@@ -22,8 +22,9 @@ from taskcompendium.verifiers.mathematical import mathematical_answer
 
 FAMILY = "math-answer"
 MODE = "math"
+_VERIFIER_SPEC = "tests/verifier.toml"
 _SUPPORTED_FILES = frozenset(
-    {TASK_MANIFEST, "instruction.md", "environment/Dockerfile", "tests/test.sh", "tests/verifier.toml"}
+    {TASK_MANIFEST, "instruction.md", "environment/Dockerfile", "tests/test.sh", _VERIFIER_SPEC}
 )
 _FILE_SUBMISSION = re.compile(
     r"^\s*(?:please\s+)?(?:write|save|put|submit|store|place)\s+(?:your\s+)?(?:final\s+)?"
@@ -146,7 +147,7 @@ def import_task(archive: TaskArchive) -> TaskTroveImportResult:
     try:
         tags, evidence = _metadata(archive)
         instructions = _instructions(archive, evidence.converter, evidence.template_id)
-        contract = parse_spec(archive.files["tests/verifier.toml"].decode())
+        contract = parse_spec(archive.files[_VERIFIER_SPEC].decode())
         if not isinstance(contract, MathSpec):
             raise ValueError("TaskTrove mathematical archive must declare a MathSpec")
         verifier = mathematical_answer(contract.expected, contract.math_type)
