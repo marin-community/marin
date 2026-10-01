@@ -95,8 +95,15 @@ def write_smoke_tasks(output_path: str) -> None:
                 context=ConversationInput(
                     events=(
                         TextMessage(
+                            role="system",
+                            content="You are a shell agent. Call the shell tool before you answer each request. "
+                            "A plain-text answer is permitted only after the tool returns its result. "
+                            "Do not claim that a command ran unless you received its result.",
+                        ),
+                        TextMessage(
                             role="user",
-                            content=f"Use the shell tool to run `echo {value} > /workspace/value`. Then reply done.",
+                            content=f"Execute `echo {value} > /workspace/value` with the shell tool. "
+                            "After the command completes, reply done.",
                         ),
                     )
                 ),

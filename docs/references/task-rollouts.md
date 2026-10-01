@@ -420,5 +420,6 @@ It uses reward-weighted advantages because each task has one sample. Score the
 trainer's `WANDB_MIRROR` log with the companion SkyRL `ci/marin_nightly/gate.py`
 and `specs/task-rollouts.json`. Measure elapsed time from artifact submission until
 checkpoint export completes and the coordinator succeeds.
+The gate also requires a tool call in every task and a nonzero gradient.
 Also verify the final checkpoint and export metadata. This run validates live
 inference and training with ShellSim. Docker and Daytona require separate checks.
