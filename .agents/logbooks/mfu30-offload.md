@@ -365,3 +365,15 @@ user's decision. Do not submit any job that installs it, and do not pass the pre
 agents. The pushed XLA branch stays as-is. The two single-node smokes (`m30a-stream-smoke-prod-01`,
 `-hts-01`) ran before the hold. If the user declines, the fallback is the JAX-only integer-zero
 dependency (M30A-015), built only if `carry_stall.py` shows the stall on the final program.
+
+## M30A-020 Wheel hold released (2026-10-01)
+
+The user approved the custom wheel for campaign rack jobs and approved keeping the XLA branch. C owns the
+final-program arms: C cherry-picks `cf5bc74409`, adds `--wheel` to `stack/arm.sh`, and runs F1 (env on,
+traced) / F0 (env off) on the 283d5b6d98cd wheel after the -03 lineage pick.
+
+A's analysis checklist for F1/F0:
+- F1: carry H2D/D2H memcpys on streams 4/5, no weight slices on those streams.
+- F1: `carry_stall.py` < 10 ms/step.
+- F0 vs production-wheel arms: same stream layout, no stream-related regression (cuDNN headers differ).
+Later, for the PGLE arm: `copy-start.44` placement, the D2H tail after `pgle_patch_d2h.py`, and peak memory.
