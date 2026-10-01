@@ -3,8 +3,56 @@
 
 import copy
 import importlib
+import io
 import json
 from pathlib import Path
+
+import pytest
+
+
+@pytest.mark.parametrize("prompt_name", ["JUDGE_PROMPT", "COALESCE_PROMPT"])
+@pytest.mark.parametrize(
+    "empty_findings",
+    [[], [{"dimension": "verifier_coverage", "text": "...", "severity": "info", "kind": "observation"}]],
+)
+def test_empty_provider_opinion_stays_incomplete_and_resume_preserves_raw_calls(
+    tmp_path, monkeypatch, prompt_name, empty_findings
+):
+    monkeypatch.syspath_prepend(str(Path(__file__).parent))
+    runner = importlib.import_module("make_review")
+    opinion = {"summary": "...", "verdict": "keep", "metrics": [], "findings": empty_findings, "tags": []}
+    if prompt_name == "COALESCE_PROMPT":
+        opinion["subject_id"] = "sample"
+    completed = {
+        **opinion,
+        "summary": "The native verifier ran successfully; this sample has no observed grading defect.",
+        "findings": [],
+    }
+    outputs = [{"syntheses": [value]} if prompt_name == "COALESCE_PROMPT" else value for value in [opinion, completed]]
+    responses = [
+        {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(output)}}]} for output in outputs
+    ]
+    pending = iter(responses)
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda request, timeout: io.BytesIO(json.dumps(next(pending)).encode())
+    )
+    model = {"name": "reviewer", "base_url": "https://provider.invalid/v1", "parameters": {}, "timeout": 10}
+    prompt = getattr(runner, prompt_name)
+
+    with pytest.raises(ValueError):
+        runner.judgment(model, prompt, {}, tmp_path, 100_000, None)
+
+    assert not (tmp_path / "parsed.json").exists()
+    assert json.loads((tmp_path / "call-000/response.json").read_text()) == responses[0]
+    assert runner.judgment(model, prompt, {}, tmp_path, 100_000, None) == outputs[1]
+    assert json.loads((tmp_path / "parsed.json").read_text()) == outputs[1]
+    assert json.loads((tmp_path / "call-000/response.json").read_text()) == responses[0]
+    assert json.loads((tmp_path / "call-001/response.json").read_text()) == responses[1]
+
+    # Old cached placeholders must not bypass validation when resuming a prior run.
+    (tmp_path / "parsed.json").write_text(json.dumps(outputs[0]))
+    with pytest.raises(ValueError):
+        runner.judgment(model, prompt, {}, tmp_path, 100_000, None)
 
 
 def test_synthesis_records_all_applicable_reviews_without_model_copied_ids(tmp_path, monkeypatch):

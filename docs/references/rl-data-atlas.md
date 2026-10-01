@@ -288,6 +288,9 @@ and synthesizes the opinions. Each Harbor attempt uses a distinct session name.
 Add `--resume` to the first command to reuse completed task outcomes, judge outputs, and syntheses with matching inputs,
 configuration, and native code. The publisher validates the collection and
 uploads its cited evidence into the applet schema using Marina authentication.
+Judgments need a substantive summary or finding. Placeholder-only responses remain
+incomplete with their raw calls retained; cached reviews and publication receive the
+same content check.
 Imported Task Trove dashboard notes and task audits remain separate historical collections; this publisher creates new collections from actual task attempts.
 
 Opening the [authenticated page](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/) checks the MarinSkyRL registry repository and Task Trove release

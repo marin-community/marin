@@ -311,13 +311,25 @@ def opinion_schema() -> dict:
     }
 
 
+def validate_opinion_content(opinion: dict) -> None:
+    summary_has_content = any(character.isalnum() for character in opinion["summary"])
+    findings_have_content = any(
+        any(character.isalnum() for character in finding["text"]) for finding in opinion["findings"]
+    )
+    if not summary_has_content and not findings_have_content:
+        raise ValueError("Judge/coalescer returned an empty opinion; raw response retained")
+
+
 def judgment(model: dict, system: str, payload: dict, directory: Path, limit: int, api_key: str | None) -> dict:
     serialized = json_text(payload)
     if len(serialized.encode()) > limit:
         raise ValueError("Judge/coalescer input exceeds --max-evidence-bytes; nothing was silently truncated")
     parsed_path = directory / "parsed.json"
     if parsed_path.exists():
-        return json.loads(parsed_path.read_text())
+        output = json.loads(parsed_path.read_text())
+        for opinion in output["syntheses"] if system == COALESCE_PROMPT else [output]:
+            validate_opinion_content(opinion)
+        return output
     index = len(list(directory.glob("call-*"))) if directory.exists() else 0
     response_schema = opinion_schema()
     if system == COALESCE_PROMPT:
@@ -348,6 +360,8 @@ def judgment(model: dict, system: str, payload: dict, directory: Path, limit: in
         raise ValueError("Judge/coalescer output was truncated; raw response saved, stage remains incomplete")
     output = json.loads(result["choices"][0]["message"]["content"])
     Draft202012Validator(response_schema).validate(output)
+    for opinion in output["syntheses"] if system == COALESCE_PROMPT else [output]:
+        validate_opinion_content(opinion)
     write_json(parsed_path, output)
     return output
 
@@ -543,6 +557,8 @@ def validate_collection(collection: dict, root: Path, schema: dict) -> None:
         raise ValueError("Duplicate subject/review identity")
     findings = {finding["id"] for review in reviews.values() for finding in review["findings"]}
     for review in reviews.values():
+        if review["method"] in {"model_judgment", "synthesis"}:
+            validate_opinion_content(review)
         if review["subject_id"] not in subjects or not set(review["derived_from_review_ids"]) <= reviews.keys():
             raise ValueError("Unresolved review reference")
         for item in review["evidence"]:
