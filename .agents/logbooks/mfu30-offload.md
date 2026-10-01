@@ -219,3 +219,19 @@ match B's attention-backward nondeterminism, and a one-signed difference within 
 chaotic but unbiased divergence looks like: once weights differ, consecutive steps share the offset.
 Verdict waits on the same-code repeat `m30-ctl-s0-r2`. If its |dloss| vs s0 is of the same order (max
 ~4e-4), H-A4 is clean.
+
+## M30A-013 Memory settings for D-containing arms (2026-10-01)
+
+Model, fitted to hmo-02: pool `P = fraction x 184.3`; scheduler/remat limit `L = (P - 35.09) x slop/100`
+(87.66 GiB logged = (138.22 - 35.09) x 0.85). Remat's view counts the 18.9 GiB of collective-memory (S(1))
+buffers (post-remat 87.45 GiB = arena 68.47 + 18.9); the LHS view excludes S(1) and entry params. So remat
+caps the arena at `L - 18.9`, and the worst-case pool use is `35.6 + L - 18.9`. hmo-02's remat peak is the
+backward phase (main live ~38.8 + backward body 48.89 = ~89.9 GiB); D adds ~18 GiB live across the
+backward, minus ~1.4 from unfilled buffers, giving ~104-106 GiB, so D needs `L >= ~112`.
+
+Recommended pair: fraction 0.78, slop 105. P 143.76, L 114.1 (8-10 GiB above D's view), arena cap 95.2,
+worst-case pool use 130.8 (13 under), expected peak ~123, outside reserve 40.5 vs 28.5 needed. Passing
+alternatives: (0.80, 100) L 112.4, outside 8.4 GiB free; (0.75, 110) worst case 130.1 vs 138.2. D arms pair
+only with stack arms at the same pair. Verification per arm: remat count in `jit_train_step`, `Peak memory
+for main`, `memory/peak_gib` < ~139, `memory/limit_gib` = 143.76. Fallback if D's view exceeds ~125:
+(0.80, 110), else D's output to pinned host (~0.2 s of C2C, eats most of D's gain).
