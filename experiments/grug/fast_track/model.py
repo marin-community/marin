@@ -186,6 +186,20 @@ class AttnResLayerBackward(StrEnum):
     Same math as RECOMPUTE; needs the memory to hold every layer's residuals."""
 
 
+class KdaHeadPairing(StrEnum):
+    """Cross-head KDA (modded-nanogpt's paired-head attention, record 58, carried to the delta rule): heads
+    ``2j`` and ``2j+1`` run as one head over the interleaved sequence ``A_0 B_0 A_1 B_1 ...``, so each pair shares
+    one ``h x h`` state that both heads write to and read from. Head A's token-t query sees B's writes up to
+    token t-1, B's sees A's up to token t. Flops match unpaired KDA; the state per layer halves."""
+
+    NONE = "none"
+    HALF_DECAY = "half_decay"
+    """Each sub-step applies half its head's log-decay, so the pair's state decays per token at about one
+    head's rate (exact at init, where both heads' decays are equal)."""
+    FULL_DECAY = "full_decay"
+    """Each sub-step applies its head's full log-decay: the pair's state decays twice per token."""
+
+
 class ExpertVisitBias(StrEnum):
     """Whether, and how, each routed expert a token visits writes its own learned vector into the residual."""
 
@@ -927,6 +941,8 @@ class GrugModelConfig:
     ``e = b * k`` and writes along ``k``, ``S_t = (I - beta k e^T) D_t S_{t-1} + beta k v^T``, with a
     channel-wise ``b = 2 sigmoid(x W_b)`` (``W_b`` zero-init, so exactly KDA at init; ``beta * b`` spans
     the paper's (0, 2) negative-eigenvalue range). Runs through the KDA kernels' erase-key path."""
+    kda_head_pairing: KdaHeadPairing = KdaHeadPairing.NONE
+    """Share one KDA state between adjacent heads (``KdaHeadPairing``); every KDA layer."""
     kda_beta_negative: bool = False
     """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
     can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
@@ -1246,6 +1262,11 @@ class GrugModelConfig:
                 raise ValueError("kda_dd_rope rotates channel pairs and needs an even head_dim")
             if self.kda_push_buckets:
                 raise ValueError("kda_dd_rope needs pair-tied decays; kda_push_buckets' per-channel decays are not")
+        if self.kda_head_pairing != KdaHeadPairing.NONE:
+            if self.local_mixer != LocalMixer.KDA or self.num_heads % 2:
+                raise ValueError("kda_head_pairing needs local_mixer=kda and an even num_heads")
+            if self.kda_dd_rope or self.kda_push_buckets:
+                raise ValueError("kda_head_pairing does not support kda_dd_rope or kda_push_buckets")
         if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
             raise ValueError("moe_drop_renorm needs moe_implementation=fixed_pooled_wave_all_to_all")
         if self.router_token_bias_rank and not self.attn_res:
@@ -2229,6 +2250,33 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_st
     return jnp.swapaxes(out, 1, 2)
 
 
+def _pair_heads(t: jax.Array) -> jax.Array:
+    """``[B, S, N, ...] -> [B, 2S, N/2, ...]``: head ``2j`` at position ``2s``, head ``2j+1`` at ``2s+1``."""
+    b, s, n, *rest = t.shape
+    t = jnp.moveaxis(t.reshape(b, s, n // 2, 2, *rest), 3, 2)
+    return t.reshape(b, 2 * s, n // 2, *rest)
+
+
+def _unpair_heads(t: jax.Array) -> jax.Array:
+    """Inverse of ``_pair_heads``."""
+    b, s2, half, *rest = t.shape
+    t = jnp.moveaxis(t.reshape(b, s2 // 2, 2, half, *rest), 2, 3)
+    return t.reshape(b, s2 // 2, 2 * half, *rest)
+
+
+def _kda_kernel_paired(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool):
+    """``_kda_kernel`` with adjacent (shard-local) heads sharing one state (``KdaHeadPairing``)."""
+    if q.shape[2] % 2:
+        raise ValueError(f"kda_head_pairing needs an even number of heads per shard, got {q.shape[2]}")
+    paired_extras = {}
+    if "segment_ids" in extras:
+        paired_extras["segment_ids"] = jnp.repeat(extras["segment_ids"], 2, axis=1)
+    if "erase" in extras:
+        paired_extras["erase"] = _pair_heads(extras["erase"])
+    out = _kda_kernel(*(_pair_heads(t) for t in (q, k, v, g, beta)), paired_extras, save_chunk_states=save_chunk_states)
+    return _unpair_heads(out)
+
+
 class KimiDeltaAttention(eqx.Module):
     """KDA linear-attention token mixer for the local layers, following Kimi K3's KDA layer.
 
@@ -2428,6 +2476,8 @@ class KimiDeltaAttention(eqx.Module):
             g = jnp.zeros_like(g)
         if no_beta:
             beta = jnp.ones_like(beta)
+        if cfg.kda_head_pairing == KdaHeadPairing.HALF_DECAY:
+            g = 0.5 * g
 
         stats: dict[str, jax.Array] = {}
         spec4 = P(_BATCH_AXES, None, "model", None)
@@ -2458,7 +2508,12 @@ class KimiDeltaAttention(eqx.Module):
         if segment_ids is not None:
             extras["segment_ids"] = reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None))
             extra_specs["segment_ids"] = P(_BATCH_AXES, None)
-        kernel_fn = _kda_kernel_rotating if "rot_rate" in extras else _kda_kernel
+        if "rot_rate" in extras:
+            kernel_fn = _kda_kernel_rotating
+        elif cfg.kda_head_pairing != KdaHeadPairing.NONE:
+            kernel_fn = _kda_kernel_paired
+        else:
+            kernel_fn = _kda_kernel
         run = functools.partial(kernel_fn, save_chunk_states=cfg.kda_save_chunk_states)
         args = (q, k, v, g, beta, extras)
         in_specs = (spec4,) * 4 + (spec3, extra_specs)
