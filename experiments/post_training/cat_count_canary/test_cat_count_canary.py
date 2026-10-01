@@ -71,7 +71,7 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
         data_config = data_step.build_config(StepContext.for_fingerprint(data_step.runtime_args, data_step.deps))
         train, validation = cat_count_rows(data_config)
         assert len(validation) == 23
-        assert len(train) >= (50 if lane == "async" else 25) * 64 + (128 if lane == "async" else 0)
+        assert len(train) >= (70 if lane == "async" else 35) * 64 + (128 if lane == "async" else 0)
 
         launch = launches[lane]
         assert launch["skyrl"]["trainer"]["eval_batch_size"] == len(validation)

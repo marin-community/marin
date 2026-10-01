@@ -72,9 +72,6 @@ submit_canary atqamar-cat-count-async-20260930 \
 
 submit_canary atqamar-cat-count-sync-20260930 \
   --version 2026.09.30.3 --preset gate --lane sync
-
-submit_canary atqamar-cat-count-filter-20260930 \
-  --version 2026.09.30.4 --preset gate-filter --lane async
 ```
 
 The coordinator builds model and data dependencies, submits the training
@@ -101,8 +98,8 @@ baseline is the resumed evaluation, rather than the original step-0 policy.
 | --- | ---: | ---: | --- |
 | `dry` | 1 | 1 | Initial evaluation and one training step. |
 | `calibrate` | 30 | 30 | Exploratory training without a default early stop. |
-| `gate` | 50 | 25 | Stops at a greedy training evaluation gain of 0.2. |
-| `gate-filter` | 50 | 25 | Applies the same learning check with zero-variance groups discarded and replaced. |
+| `gate` | 70 | 35 | Stops at a greedy training evaluation gain of 0.2. |
+| `gate-filter` | 70 | 35 | Experimental filtering of zero-variance groups; no calibrated learning spec. |
 | `on-policy` | 30 | 30 | Sets async staleness to zero and uses one update epoch. |
 
 Evaluation runs at step 0 and every five completed steps; `dry` evaluates
@@ -169,12 +166,8 @@ uv run --frozen python -m ci.marin_nightly.gate \
 ```
 
 The checker verdict determines success. A process exit alone does not prove
-learning. `gate-filter` uses
-`ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async-filter.json`.
-It requires a positive `async/dynamic_sampling/discarded_rate` and zero
-`reward/zero_std_group_fraction` among admitted groups. The ordinary async
-spec requires an admitted zero-variance group; filtering tests a different
-admission path.
+learning. `gate-filter` is an experimental setting without a calibrated
+learning spec; the async and sync `gate` presets are the validated lanes.
 
 A pass demonstrates task learning through Iris launch, model staging,
 Megatron DP=2, separate-host vLLM, NCCL weight synchronization, Gym rollout
@@ -188,8 +181,9 @@ clipping, probability, template or partial weight-sync errors can still learn.
 ## Calibration results
 
 The selected configuration uses learning rate 2e-6. Four seeds in each lane
-reached a gain of 0.2 with evaluation every five steps. The cap is the worst
-first crossing plus five steps; each run stops at its first crossing.
+reached a gain of 0.2 with evaluation every five steps. The caps are 70 async
+and 35 sync, about 1.5× the worst first crossing across four seeds, rounded to the evaluation interval. Each
+run stops at its first crossing.
 
 | Lane | Seed | First crossing | Peak and final eval | Ordinary step median |
 | --- | ---: | ---: | ---: | ---: |

@@ -98,8 +98,8 @@ PRESETS = MappingProxyType(
     {
         "dry": Preset(1, 1, None),
         "calibrate": Preset(30, 30, None),
-        "gate": Preset(50, 25, 0.2),
-        "gate-filter": Preset(50, 25, 0.2),
+        "gate": Preset(70, 35, 0.2),
+        "gate-filter": Preset(70, 35, 0.2),
         "on-policy": Preset(30, 30, None),
     }
 )
