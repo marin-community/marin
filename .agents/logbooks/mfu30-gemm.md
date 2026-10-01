@@ -233,3 +233,21 @@ diagnosis"):
 
 Decision: no single-component screen now. Revisit the fused norm (kernel only, no flag) as an add-on arm on the
 final stack program. Its trace has to pass `stack/carry_stall.py`.
+
+## M30C-009 Close-out (2026-10-01)
+
+Goal met with the stack. The final program (`research/mcwitt/mfu30-final-seq` @ `d4234c88e7`) confirmed at
+30.218 / 30.206 / 30.206 MFU on seeds 0/1/2 against main's 28.260 / 28.235 / 28.266. The record is in
+`research/mcwitt/mfu30-stack`, `.agents/logbooks/mfu30-stack.md`.
+
+This direction's findings:
+- The hero GEMMs are power-bound under the 1200 W cap (M30C-003). Faster GEMM kernels or tiles cannot raise
+  MFU much.
+- The fused RMSNorm + GatedNorm kernel is correct and slightly faster in isolation (M30C-006). In situ it
+  regressed through two side effects (M30C-008), so it is not in the final program.
+  - `--xla_gpu_enable_triton_gemm=false` reorders the optimizer phase and hoists the 10 GiB momentum H2D.
+  - The forward carry D2H stall is a stream-assignment lottery. The custom PJRT wheel's host-transfer
+    streams later removed it.
+- The fused norm is still an untested add-on on top of the final program. If someone tries it, the trace must
+  pass `stack/carry_stall.py` and `stack/copy_schedule.py`.
+- CE/lm_head tiles and a raw-Triton norm are closed (M30C-007).
