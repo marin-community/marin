@@ -15,8 +15,21 @@ from taskcompendium.grading import Outcome
 from taskcompendium.importers.tasktrove.convert import read_archive
 from taskcompendium.importers.tasktrove.mathematical import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
-from taskcompendium.models import AnswerType, ConversationTrace, TextMessage, VerifierKind
-from taskcompendium.submission import GradingAttempt, PlainText
+from taskcompendium.models import (
+    AnswerType,
+    AssistantToolCalls,
+    ConversationToolCall,
+    ConversationTrace,
+    TextMessage,
+    VerifierKind,
+)
+from taskcompendium.submission import (
+    AnswerCall,
+    GradingAttempt,
+    JsonAnswer,
+    PlainText,
+    render_instruction,
+)
 from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
@@ -111,7 +124,7 @@ def test_import_math_removes_only_file_submission_scaffolding():
     assert prompt == "Compute $\\sqrt{2}$ subject to x > 0.\nReturn the exact radical."
 
 
-def test_import_openmath_instruction_preserves_boxed_format_without_file_protocol():
+def test_import_openmath_removes_transport_formatting_without_changing_the_problem():
     archive = _archive()
     archive.files["task.toml"] = archive.files["task.toml"].replace(b"math-template-1", b"5ee94cf985a9")
     archive.files["instruction.md"] = (
@@ -130,7 +143,8 @@ def test_import_openmath_instruction_preserves_boxed_format_without_file_protoco
     assert "Evaluate one third." in prompt
     assert "answer file" not in prompt
     assert "/app/" not in prompt and "answer.txt" not in prompt
-    assert "Format requirement: put your final answer in `\\boxed{...}`." in prompt
+    assert "\\boxed" not in prompt
+    assert "verifier" not in prompt.lower() and "grader" not in prompt.lower()
     assert result.specification.verifier.kind is VerifierKind.MATHEMATICAL_ANSWER
 
 
@@ -148,7 +162,7 @@ def test_import_sankalp_file_named_instruction_preserves_the_math_question():
 
     assert prompt.startswith("Evaluate the exact value of one third.")
     assert "/app/" not in prompt and "answer.txt" not in prompt
-    assert "\\boxed{...}" in prompt
+    assert "\\boxed" not in prompt
     assert result.tags == ("math", "nemotron", "source tag")
     assert result.specification.verifier.kind is VerifierKind.MATHEMATICAL_ANSWER
 
@@ -188,12 +202,13 @@ def test_import_nemotron_v5_removes_terminal_submission_block():
     prompt = result.specification.context.events[0].content
 
     assert "Solve the stated problem." in prompt
-    assert "Present the final answer in `\\boxed{...}`." in prompt
     assert "/app/" not in prompt and "answer.txt" not in prompt
     assert "RUNNING A SHELL COMMAND" not in prompt
+    assert "graded" not in prompt.lower() and "grader" not in prompt.lower()
+    assert "\\boxed" not in prompt
 
 
-def test_import_all_puzzles_preserves_answer_constraints_and_removes_file_protocol():
+def test_import_all_puzzles_preserves_math_answer_shape_without_transport_instruction():
     archive = _archive(expected="(-5.167, 4.693)")
     archive.files["task.toml"] = archive.files["task.toml"].replace(b"nemotron_math", b"all_puzzles")
     archive.files["instruction.md"] = (
@@ -211,9 +226,76 @@ def test_import_all_puzzles_preserves_answer_constraints_and_removes_file_protoc
     prompt = specification.context.events[0].content
 
     assert "answer.txt" not in prompt
-    assert "on one line, without explanation" in prompt
     assert "coordinates as (x, y) rounded to 3 decimals" in prompt
-    assert "Find the orthocenter. Return only the coordinates." in prompt
+    assert "Find the orthocenter." in prompt
+    assert "Return only the coordinates." not in prompt
+
+
+def test_import_preserves_boxed_notation_when_it_is_part_of_the_math_problem():
+    archive = _archive()
+    archive.files["instruction.md"] = b"Simplify the expression \\boxed{x} + 1."
+
+    prompt = import_task(archive).specification.context.events[0].content
+
+    assert prompt == r"Simplify the expression \boxed{x} + 1."
+
+
+@pytest.mark.parametrize(
+    ("expected", "math_type", "answer_type", "correct", "incorrect"),
+    [
+        (r"\frac{1}{3}", "scalar", AnswerType.NUMBER, "0.3333333333333333", "2/3"),
+        ("[1/2, x+1]", "list", AnswerType.TEXT, "0.5, 1+x", "0.5, 1-x"),
+    ],
+    ids=("finite-scalar", "symbolic-list"),
+)
+@pytest.mark.parametrize("answer_format", ["plain", "json", "answer-call"])
+async def test_imported_math_uses_selected_submission_convention(
+    expected: str,
+    math_type: str,
+    answer_type: AnswerType,
+    correct: str,
+    incorrect: str,
+    answer_format: str,
+):
+    archive = _archive(expected, math_type)
+    archive.files["instruction.md"] = b"Synthetic task: simplify the given expression."
+    specification = import_task(archive).specification
+    convention = {
+        "plain": PlainText(id="plain"),
+        "json": JsonAnswer(id="json"),
+        "answer-call": AnswerCall(id="answer-call"),
+    }[answer_format]
+    expected_fragments_by_format = {
+        "plain": ("plain text",),
+        "json": ("JSON object", '"answer" field'),
+        "answer-call": ("submit_answer", '"answer" string'),
+    }[answer_format]
+    prompt = render_instruction(specification, convention)
+    rendered_submission = prompt.rpartition("\n\n")[2]
+
+    assert specification.answer_type is answer_type
+    assert all(fragment in rendered_submission for fragment in expected_fragments_by_format)
+    assert rendered_submission.endswith("\n")
+    assert "/app/" not in prompt and "answer.txt" not in prompt
+    assert "grader" not in prompt.lower() and "verifier" not in prompt.lower()
+    assert r"\boxed" not in prompt
+
+    def attempt(candidate: str) -> GradingAttempt:
+        if isinstance(convention, AnswerCall):
+            final = AssistantToolCalls(
+                calls=(ConversationToolCall(call_id="answer", name="submit_answer", arguments={"answer": candidate}),)
+            )
+        elif isinstance(convention, JsonAnswer):
+            final = TextMessage(role="assistant", content=json.dumps({"answer": candidate}))
+        else:
+            final = TextMessage(role="assistant", content=candidate)
+        return GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
+
+    positive = await grade_answer(specification, convention, attempt(correct))
+    negative = await grade_answer(specification, convention, attempt(incorrect))
+
+    assert (positive.status, positive.reward) == (Outcome.GRADED, 1.0)
+    assert (negative.status, negative.reward) == (Outcome.GRADED, 0.0)
 
 
 @pytest.mark.parametrize(
