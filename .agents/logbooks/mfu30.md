@@ -416,3 +416,20 @@ PGLE's latency model. Any program change, PGLE included, re-draws the assignment
 backward). A is making the stall structurally impossible (stream pinning or keeping slices off the memcpy
 streams). The fused-norm kernel may return as a post-lineage add-on if its trace passes both checks.
 Stack trace arms `-03` (no triton_gemm flag, no fused norm): pipelined @ fcb44f6920, sequential @ a1f483afed.
+
+## M30-022 Stream-collision root cause and XLA patch (agent A, 2026-10-01)
+
+XLA at 708c3a4ec79c: `DynamicSliceCopyFusionAsyncWrapper` makes every dynamic-slice/DUS copy fusion
+async, covering both the per-layer stacked-weight slices and the carry DUS-to-host / DS-from-host. Its only
+off switch (`xla_gpu_experimental_dynamic_slice_fusion_verify_offsets`) de-asyncs everything and adds runtime
+checks. `ExecutionStreamAssignment` round-robins every compute-scope async start over a constant 4
+(`kDefaultNumComputeStreams`; `xla_gpu_executable_num_compute_streams` changes allocation, not the
+modulus), so a body's stream sharing is post-order position mod 4 and any body change redraws it.
+`_xla_stream_annotation` cannot be attached from JAX, because the async wrapper does not copy frontend
+attributes. Patch (branch `mcwitt/adhoc-host-transfer-streams`, 283d5b6d98, +74 lines in
+`execution_stream_assignment.cc`): with `XLA_GPU_HOST_TRANSFER_STREAMS=1`, async starts touching S(5) go
+to dedicated streams (H2D -> 4, D2H -> 5). Zero runtime cost, ordering unchanged, bit-identical when unset.
+Approved: branch push to marin-community/xla (no PR or release), wheel built on the cluster with
+`pjrt_build_job.sh` and the lock's cuDNN headers (not `marin-pjrt.yaml`, which creates a prerelease). A/B on
+the same wheel with the env var on vs off; gate `carry_stall.py` < 10 ms/step. JAX-only fallback (an
+integer-zero dependency from slices to carry, ~25 ms/step always paid) is held.
