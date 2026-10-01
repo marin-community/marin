@@ -595,3 +595,7 @@ streams on). Each is paired with the main control of the same seed and data (mhe
 m30-ctl-s0-r2). Goal met iff every seed's median MFU over 180011-180099 is >= 30.0 and its loss divergence vs
 its same-seed control is within the same-code band (max |d| <= ~1e-3, |late mean| <= ~2e-4, no growth
 over the window) with drops in family. If a seed fails, report per-seed values; do not cherry-pick.
+Confirmation arms queued (f1-seq program, d4234c88e7, custom wheel, streams on, H-A4 at 0.78/105, sconv,
+unprofiled, 180000 -> 180100): `m30-conf-seq-s0` / `-s1` / `-s2` (seeds 0/1/2; ports 33020-33022), paired
+against mhep-ctx4k-s0 / s1 / s2. If f1-noqb screens clearly higher with clean checks, it gets its own
+confirmation set.
