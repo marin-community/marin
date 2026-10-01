@@ -666,3 +666,28 @@ the runs are identical (loss, all metrics, 35/36 gradient leaves); across the tw
 relative, layer-0 margin_max at 6e-5, and qb_beta by 2.6% (0.2837 vs 0.2762, several histogram bins). Pending: the
 same comparison with autotuning off, and a same-code repeat across jobs, to separate the barrier's numerics from
 cross-job GEMM autotuning.
+
+## M30B-028 noqb trace and the QB value check
+
+`m30-f1-noqb-01` (final-seq with QB-after-MLP reverted): 30.127% / 13.029 s vs F1-seq-02 30.219% / 12.990 s
+(orchestrator). Profiled steps 1 and 3: span 13.034 vs 12.977 s.
+- QB-after-MLP is what put the shared experts after the MoE: with it reverted, the shared-expert forward GEMMs are back
+  inside the MoE section, under dispatch c1 and return c0 (as in sonic-02). But return c1 stays bare (0.214 vs
+  0.186): the sequential chunks' expert GEMMs would have covered dispatch c1 and return c0 anyway, and the shared
+  GEMMs are spent there. Forward dispatch c0 is a little better covered (0.131 vs 0.192). Ragged total -0.037.
+- What makes noqb slower: the QB statistics' compute and collectives are back before the MoE (`other:jvp` forward
+  compute +0.055, a `moe_dispatch` forward all-gather exposed +0.057), and the shared GEMMs, now under transports, are
+  slower (+0.071) while the expert GEMMs are faster (-0.072).
+- Covering return c1 needs compute that only becomes available at the end of the MoE: e.g. one shared expert held
+  back until the last chunk's MLP output exists, so the scheduler has nothing else to run beside return c1. A
+  JAX-level split of the shared experts with a barrier on the last chunk's MLP output would do it; not built.
+
+QB value check (`b/qb_values.py`, model smoke, reference attention, 3 runs per job; all 3 runs identical in every
+job):
+- Same code, two jobs (`final-02` vs `final-04`, autotuning on): loss 7.657164574 vs 7.657171249, 40/88 metrics and
+  35/36 gradient leaves differ, qb_beta 0.2837 vs 0.2769. XLA's GEMM autotuning picks different algorithms per job,
+  so same-code runs are not bitwise across jobs.
+- Autotuning off (`--xla_gpu_autotune_level=0`), final-seq vs noqb: loss equal, qb_beta, margins and router bias
+  equal; only the logged router z-loss (layer 0 and total) and layer 2's load-balancing loss differ, at 1 fp32 ulp,
+  and two gradient leaves (`output_proj`, `token_embed`) differ bitwise. The QB statistics are unchanged by the move;
+  the residuals are reduction-order effects of the barrier, inside the rounding ruling.
