@@ -691,3 +691,26 @@ job):
   equal; only the logged router z-loss (layer 0 and total) and layer 2's load-balancing loss differ, at 1 fp32 ulp,
   and two gradient leaves (`output_proj`, `token_embed`) differ bitwise. The QB statistics are unchanged by the move;
   the residuals are reduction-order effects of the barrier, inside the rounding ruling.
+
+## M30B-029 Shared-expert holdback (`research/mcwitt/mfu30-final-seq-holdback` @ ab78bbe3ad)
+
+Off by default; `--held-back-shared-experts 1`. The routed MoE releases a gradient-free copy of `mlp_in` only after
+an `optimization_barrier` on the last expert chunk's MLP residuals (inside `_routed_experts`, through
+`moe_mlp_with_holdback` / `MoEExpertMlp.call_with_holdback`); `Block` gates the last shared expert's input on that
+release with `_forward_barrier`, so its GEMMs become ready beside the last chunk's down projection and return. Tied
+to the residuals, not the down-projection output, so the recompute (which produces the residuals anyway) gains no
+GEMM. Parameters unchanged; `moe_mlp` untouched.
+
+Checks: `b/recompute_deps.py held_back_shared_experts=1`: backward body 8 ragged all-to-alls and 16
+`ragged_dot_general`, as without it (4 barriers vs 2); no new collectives. Gate `m30b-holdback-gate-02` (GB200x4):
+module `moe_mlp` vs `moe_mlp_with_holdback` bitwise in out, drops, dx, dS, dW13, dW2 on small skewed+drops, small
+padded and hero-shape skewed+padded; model smoke (0 vs 1 in one process): parameters, loss and all router metrics
+bitwise, 4 of 36 gradient leaves differ (`shared[1].w_gate/w_up`, `token_embed`, `attn.w_q`); pytest 80 passed plus
+the 3 GPU-only failures main has. The first version passed the held-back expert's cotangent back through the MoE
+(31 leaves differed, bf16 cotangent summation order); the gradient-free token fixed that.
+
+`m30b-holdback-diff-01` (`b/holdback_diff.py`): without the holdback XLA merges the two shared experts' gate/up GEMMs
+with the latent down projection into one GEMM on `mlp_in` (output [2048, 2560] in the smoke); with it the held-back
+expert's GEMMs are separate. Differing leaves: `shared[1].w_gate` max_rel 4.2e-3, `w_up` 4.0e-3 (about 1 bf16 ulp,
+0.05% of elements), `token_embed` 8.3e-3 (2.6% of elements); medians 0. fp32 reassociation from the GEMM split,
+inside the rounding ruling; the orchestrator accepted it.
