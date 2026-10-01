@@ -206,7 +206,7 @@ def _logged_hardware() -> dict:
         for prompt, (tokens, rows) in enumerate(((300, 304), (700, 700)))
         for repetition in range(2)
     }
-    kernel = {"launch": {"kwargs": {"R0_BLOCK": 2048, "XBLOCK": 1}}, "source": "autotuner", "best_config_agrees": True}
+    kernels = {"launches": {"rms_norm": {"kwargs": {"R0_BLOCK": 2048, "XBLOCK": 1}}}, "gate_columns": [24, 20]}
     return {
         "vllm_reread": {
             "engine": 0,
@@ -214,10 +214,9 @@ def _logged_hardware() -> dict:
             "step_logs": {
                 "vllm.rescore@0": [[{"steps": [{}] * 4, "dummy_steps": 0}], [{"steps": [], "dummy_steps": 4}]]
             },
-            "kernel_configs": {"rms_norm": kernel["launch"]},
-            "kernel_choices": {"rms_norm": kernel},
+            "kernels": kernels,
         },
-        "prefill_reference": {"archive": "here", "dp_ranks": [0] * 4, "steps": steps, "kernel_configs": {}},
+        "prefill_reference": {"archive": "here", "dp_ranks": [0] * 4, "steps": steps, "kernels": kernels},
     }
 
 
@@ -241,6 +240,7 @@ def test_report_splits_byte_equality_by_the_step_kind_of_the_logged_reread(tmp_p
     }
     markdown = render_markdown(report)
     assert "| steps | 100.00% | 4 | 50.00% | 4 |" in markdown
+    assert "each decoder layer: `[24, 20]`" in markdown
 
 
 def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, monkeypatch):

@@ -495,12 +495,13 @@ VLLM_MAX_CUDA_GRAPH_TOKENS = 512
 
 
 def _logged_reread(manifest: ManifestRow) -> dict:
-    """The probe's logged vLLM re-reads: each prefix's step, and the launch config of each vendored vLLM kernel."""
+    """The probe's logged vLLM re-reads: each prefix's step, and the vendored vLLM kernels the re-read engine launched
+    (each one's launch config, each decoder layer's head-gate width)."""
     hardware = json.loads(manifest.hardware_json)
     reread, reference = hardware.get("vllm_reread"), hardware.get("prefill_reference")
     if reread is None:
         return {}
-    summary = {"engine": reread["engine"], "kernel_configs": reread["kernel_choices"], "updates": {}}
+    summary = {"engine": reread["engine"], "kernels": reread["kernels"], "updates": {}}
     for update, steps in reread["steps"].items():
         tokens = np.asarray([step["tokens"] for step in steps.values()])
         rows = np.asarray([step["rows"] for step in steps.values()])
@@ -1005,12 +1006,19 @@ def render_markdown(report: dict) -> str:
                 f"| {update} | {item['prefixes']} | {item['cuda_graph_steps']} | {item['padded_rows']} | "
                 f"{item['max_tokens']} |"
             )
-        lines.extend(["", "| Kernel | launch config | read from | .best_config agrees |", "|---|---|---|---|"])
-        for role, choice in sorted(logged["kernel_configs"].items()):
-            lines.append(
-                f"| {role} | `{json.dumps(choice['launch'], sort_keys=True)}` | {choice['source']} | "
-                f"{choice['best_config_agrees']} |"
-            )
+        kernels = logged["kernels"] or {"launches": {}, "gate_columns": []}
+        lines.extend(
+            [
+                "",
+                "Head-gate GEMM width the re-read engine's compiled forward ran at each decoder layer: "
+                f"`{kernels['gate_columns'] or 'none recorded'}`.",
+                "",
+                "| Kernel | launch config |",
+                "|---|---|",
+            ]
+        )
+        for role, launch in sorted(kernels["launches"].items()):
+            lines.append(f"| {role} | `{json.dumps(launch, sort_keys=True)}` |")
         lines.append("")
     if report.get("byte_equal_by_step"):
         lines.extend(
