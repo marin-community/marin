@@ -5,6 +5,7 @@
 
 import asyncio
 import os
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -138,6 +139,28 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
             await machine.close()
         assert client.deleted
         assert client.closed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode, exit_code", [(0o755, 0), (0o640, 126)])
+def test_daytona_upload_preserves_script_permissions(tmp_path: Path, mode: int, exit_code: int) -> None:
+    async def scenario() -> None:
+        source = tmp_path / "grader.sh"
+        source.write_text("#!/bin/sh\nprintf '1.0\\n'\n")
+        source.chmod(mode)
+        target = tmp_path / "remote" / "private grader.sh"
+        machine = await DaytonaMachineFactory(LocalDaytona).create(
+            MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(target.parent))
+        )
+        try:
+            await machine.upload(source, str(target))
+            assert stat.S_IMODE(target.stat().st_mode) == mode
+            result = await machine.run(Command((str(target),)))
+            assert result.exit_code == exit_code
+            assert result.stdout == (b"1.0\n" if exit_code == 0 else b"")
+        finally:
+            await machine.close()
 
     asyncio.run(scenario())
 

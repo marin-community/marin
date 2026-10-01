@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import shlex
+import stat
 import tarfile
 import tempfile
 import uuid
@@ -184,7 +185,8 @@ class DaytonaMachine:
             if result.exit_code:
                 raise RuntimeError(f"Failed to create {parent}: {result.result}")
             await self.sandbox.fs.upload_file_stream(source.read_bytes(), target)
-            return
+            mode = stat.S_IMODE(source.stat().st_mode)
+            result = await self.sandbox.process.exec(f"chmod {mode:o} {shlex.quote(target)}")
         if result.exit_code:
             raise RuntimeError(f"Failed to upload {source}: {result.result}")
 
