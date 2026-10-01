@@ -3,7 +3,7 @@
 
 """Mode reasoning-gym: score the answer file with the reasoning-gym dataset's own scorer.
 
-The task ships the generated entry (its gold answer and metadata) as JSON under tests/; the spec
+The task ships the generated entry (its reference answer or null, plus metadata) as JSON under tests/; the spec
 names the dataset it came from. ``score_answer`` returns a float in [0, 1], which becomes the
 reward directly -- several reasoning-gym datasets award partial credit. A dataset name the library
 does not know, or an entry file that is missing or not an entry, is a task defect.
