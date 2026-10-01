@@ -292,3 +292,36 @@ My part:
 - Build the plain and D2H-patched PGLE profiles from the winning F1 trace and hand over the profile commit.
 
 Note that F1 against -03 measures the wheel, the transfer streams and the forward order together.
+
+### m30c-stackpipe-trace-03 (2026-09-30 21:30 PT)
+
+Score: 29.768 MFU and 13.186 s/step, +1.507 against s0 and -0.017 against `m30b-sonic-02` (29.783, 13.179).
+Peak 123.20 GiB. Loss max |d| 6.8e-4 against s0 and 4.4e-4 against sonic-02, mean +6.8e-5.
+
+Trace checks:
+- Carry stall: 146.9 ms/step exposed (3.0 ms per copy), so it lost the stream draw. sonic-02 shows 2.8.
+- `copy-start.44` sits after the backward.
+- Zero XLA remat.
+
+Profiled step 180022 took 14.33 s, so the trace's mean span (13.59 s) overstates the scored step.
+
+Against sonic-02, compute busy is 10.80 vs 11.19 s, but exposed collectives are 1.86 vs 1.34 s:
+- ragged all-to-all 0.97 vs 0.74;
+- backward weight all-gathers (`remat_carry` scope) 0.43 vs 0.11.
+
+Forward body order: in sonic-02 the shared-expert GEMMs sit between the ragged all-to-all starts and dones.
+In stackpipe-03 every shared-expert GEMM comes after the last all-to-all done, so the transports run bare.
+
+B's attribution (M30B-025), relayed by the orchestrator:
+- compute -0.39 s;
+- exposed ragged all-to-all +0.21 s from pipelining;
+- carry stall +0.15 s;
+- re-gather about neutral.
+
+Orchestrator decision: sequential lineage, no re-gather. F1 pipe/seq-01 are cancelled. Queued from
+`research/mcwitt/mfu30-final-seq` @ `d4234c88e7` (short conv on, H-A4 at 0.78/105, no re-gather):
+- `m30-f1-seq-02`: custom wheel, `XLA_GPU_HOST_TRANSFER_STREAMS=1`, traced;
+- `m30-f0-seq-01`: same wheel, env off, traced.
+
+stackseq-03's trace settles whether pipelining or #9481's model commits moved the shared-expert GEMMs after
+the MoE.
