@@ -333,6 +333,52 @@ def _gsm8k_step(version: str, resources: ResourceConfig) -> ArtifactStep[Artifac
     )
 
 
+def iceball_rl_spec(
+    sft: ArtifactStep[LevanterCheckpoint], gsm8k: ArtifactStep[Artifact], *, version: str | None = None
+) -> SkyRLSpec:
+    """Build Iceball's Megatron recipe from its model and GSM8K artifacts."""
+    rl_base_name = f"checkpoints/{ICEBALL_MODEL_NAME}-rl"
+    rl_name = user_owned_name(rl_base_name)
+    return SkyRLSpec(
+        name=rl_name,
+        version=version or resolve_version(rl_base_name, None),
+        config_yaml=ICEBALL_RL_CONFIG,
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        model=ArtifactHfModel(
+            step=sft,
+            tokenizer_uri=QWEN_TOKENIZER,
+            tokenizer_revision=QWEN_TOKENIZER_REVISION,
+        ),
+        train_data=(ArtifactDataSource(gsm8k, relative_path=GSM8K_TRAIN_FILENAME),),
+        validation_data=(ArtifactDataSource(gsm8k, relative_path=GSM8K_VALIDATION_FILENAME),),
+        topology=SkyRLTopology(
+            num_nodes=2,
+            gpus_per_node=ICEBALL_RL_GPUS_PER_NODE,
+            gpu_variant=ICEBALL_GPU_VARIANT,
+            role_plan=ICEBALL_RL_ROLE_PLAN,
+        ),
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+        seed=17,
+    )
+
+
+def iceball_rl_execution() -> IrisSkyRLExecution:
+    """Return the Iris execution settings for Iceball's RL stage."""
+    return IrisSkyRLExecution(
+        cluster=ICEBALL_CLUSTER,
+        cluster_config=ICEBALL_CLUSTER_CONFIG,
+        cpu=16,
+        memory="256GB",
+        disk="4TB",
+        priority="interactive",
+        max_retries=3,
+        target_cluster=ICEBALL_CLUSTER,
+        parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+        coordinator_timeout_hours=24,
+        wandb_entity="marin-community",
+    )
+
+
 def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     """Compose every iceball-micro stage as one inspectable artifact graph."""
     data_resources = ResourceConfig.with_cpu(cpu=4, ram="32g", disk="32g")
@@ -409,45 +455,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     sft = sft_step(sft_spec, resources_from_accelerator(ICEBALL_TRAIN_ACCELERATOR))
 
     gsm8k = _gsm8k_step(version or resolve_version(GSM8K_ARTIFACT_NAME, None), data_resources)
-    rl_base_name = f"checkpoints/{ICEBALL_MODEL_NAME}-rl"
-    rl_name = user_owned_name(rl_base_name)
-    rl = skyrl_step(
-        SkyRLSpec(
-            name=rl_name,
-            version=version or resolve_version(rl_base_name, None),
-            config_yaml=ICEBALL_RL_CONFIG,
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-            model=ArtifactHfModel(
-                step=sft,
-                tokenizer_uri=QWEN_TOKENIZER,
-                tokenizer_revision=QWEN_TOKENIZER_REVISION,
-            ),
-            train_data=(ArtifactDataSource(gsm8k, relative_path=GSM8K_TRAIN_FILENAME),),
-            validation_data=(ArtifactDataSource(gsm8k, relative_path=GSM8K_VALIDATION_FILENAME),),
-            topology=SkyRLTopology(
-                num_nodes=2,
-                gpus_per_node=ICEBALL_RL_GPUS_PER_NODE,
-                gpu_variant=ICEBALL_GPU_VARIANT,
-                role_plan=ICEBALL_RL_ROLE_PLAN,
-            ),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
-            seed=17,
-        ),
-        IrisSkyRLExecution(
-            cluster=ICEBALL_CLUSTER,
-            cluster_config=ICEBALL_CLUSTER_CONFIG,
-            cpu=16,
-            memory="256GB",
-            disk="4TB",
-            priority="interactive",
-            max_retries=3,
-            target_cluster=ICEBALL_CLUSTER,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=24,
-            wandb_entity="marin-community",
-        ),
-        export_hf=True,
-    )
+    rl = skyrl_step(iceball_rl_spec(sft, gsm8k, version=version), iceball_rl_execution(), export_hf=True)
 
     evaluation_name = f"evals/{ICEBALL_MODEL_NAME}/{ICEBALL_EVALS}"
     evaluation_version = version or resolve_version(evaluation_name, None)
