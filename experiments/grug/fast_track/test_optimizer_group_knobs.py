@@ -283,3 +283,28 @@ def test_power_cool_is_flat_then_a_power_cooldown():
     np.testing.assert_allclose(float(schedule(100)), 0.0, atol=1e-7)
     with pytest.raises(ValueError):
         GrugMoeMuonHConfig(muonh_power_cool=(0.2, 1.2), muonh_decay_power=0.7).build(10)
+
+
+def test_adam_beta1_overrides_relabel_only_their_category():
+    mesh, model = t._model(**_BIGRAM)
+    params = eqx.filter(model, eqx.is_inexact_array)
+    labels = jax.tree.leaves(GrugMoeMuonHConfig().create_mask(params))
+    mask = GrugMoeMuonHConfig(adam_norm_beta1=0.9).create_mask(params)
+    stack = mask.kda_blocks.stacked
+    assert stack.rms_attn.weight == "adam_norm"
+    assert mask.token_embed == "adam"
+    assert stack.attn.w_q == "muonh"
+    # Only Adam leaves moved: the label multiset outside the adam groups is unchanged.
+    moved = jax.tree.leaves(mask)
+    assert [lab for lab in labels if not lab.startswith("adam")] == [lab for lab in moved if not lab.startswith("adam")]
+    embed_mask = GrugMoeMuonHConfig(adam_embed_beta1=0.9).create_mask(params)
+    assert embed_mask.token_embed == "adam_embed" and embed_mask.kda_blocks.stacked.rms_attn.weight == "adam"
+    with jax.set_mesh(mesh):
+        base = _two_steps(GrugMoeMuonHConfig(), params)
+        slow = _two_steps(GrugMoeMuonHConfig(adam_norm_beta1=0.99), params)
+    assert not np.allclose(
+        np.asarray(slow.kda_blocks.stacked.rms_attn.weight), np.asarray(base.kda_blocks.stacked.rms_attn.weight)
+    )
+    np.testing.assert_allclose(
+        np.asarray(slow.kda_blocks.stacked.attn.w_q), np.asarray(base.kda_blocks.stacked.attn.w_q), rtol=1e-6
+    )

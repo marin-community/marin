@@ -1386,6 +1386,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """SAMuon-lite: remove this fraction of the top singular direction from the MuonH direction (``1 - 1/gamma``)."""
     muon_precond_beta2: float | None = None
     """Muon2: Adam second-moment preconditioning of the MuonH momentum before Newton-Schulz (None: off)."""
+    adam_norm_beta1: float | None = None
+    """Adam beta1 for the norm gains, SConv kernels and other ``.weight`` leaves (None: ``beta1``)."""
+    adam_embed_beta1: float | None = None
+    """Adam beta1 for the token embedding (None: ``beta1``)."""
+    adam_router_beta1: float | None = None
+    """Adam beta1 for the router weights and biases on Adam (None: ``beta1``)."""
+    lm_head_beta1: float | None = None
+    """AdamH beta1 for the lm_head (``lm_head_group="adamh"``; None: ``beta1``)."""
     muonh_power_cool: tuple[float, float] | None = None
     """``(flat_frac, power)``: the MuonH LR follows PowerCool (``_power_cool_schedule``) instead of the decay shape
     below. Exclusive with ``muonh_decay_power``."""
@@ -1558,11 +1566,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
-            def adamh_transform_at(lr):
+            def adamh_transform_at(lr, beta1=None):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+                components.append(scale_by_adamh(self.beta1 if beta1 is None else beta1, self.beta2, self.epsilon, lr))
                 return optax.chain(*components)
 
             def adam_core(beta1, beta2):
@@ -1593,11 +1601,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 )
                 return ademamix
 
-            def adam_transform_at(lr):
+            def adam_transform_at(lr, beta1=None):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                adam = adam_core(self.beta1, self.beta2)
+                adam = adam_core(self.beta1 if beta1 is None else beta1, self.beta2)
                 if self.gate_router_weight_decay > 0.0 or self.gain_weight_decay > 0.0:
                     adam = _scale_by_adam_decoupled_decay(
                         adam,
@@ -1641,8 +1649,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
             transforms = {
                 "muonh": muonh_transform_at(learning_rate, 0),
-                "adamh": adamh_transform_at(learning_rate),
+                "adamh": adamh_transform_at(learning_rate, self.lm_head_beta1),
                 "adam": adam_transform_at(adam_lr),
+                **{
+                    f"adam_{category}": adam_transform_at(adam_lr, beta1)
+                    for category, beta1 in self._adam_category_beta1().items()
+                },
                 "attn_res_query": plain_adam_at(adam_lr * self.attn_res_query_lr_scale),
                 "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult, 1),
                 "okls": optax.chain(
@@ -1786,6 +1798,20 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         return optax.inject_hyperparams(optimizer)(**schedules)
 
+    def _adam_category_beta1(self) -> dict[str, float]:
+        """The Adam leaf categories with their own beta1 (each becomes the group ``adam_<category>``)."""
+        overrides = {"norm": self.adam_norm_beta1, "embed": self.adam_embed_beta1, "router": self.adam_router_beta1}
+        return {category: beta1 for category, beta1 in overrides.items() if beta1 is not None}
+
+    def _adam_category(self, param, path_lower: str) -> str | None:
+        if _is_router_weight(path_lower) or "router_bias" in path_lower:
+            return "router"
+        if "token_embed" in path_lower and not re.search(r"token_embed(2|3|_ple)", path_lower):
+            return "embed"
+        if path_lower.endswith(".weight") or not hasattr(param, "ndim") or param.ndim <= 1:
+            return "norm"
+        return None
+
     def _base_rails(self) -> BiMaxwellRails:
         return dataclasses.replace(DEFAULT_RAILS, slow_from_start=self.bimaxwell_slow_from_start)
 
@@ -1848,6 +1874,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
         def mask_fn(param, path):
             group = _base_group(param, path)
+            if group == "adam" and self._adam_category_beta1():
+                path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+                category = self._adam_category(param, path_lower)
+                if category in self._adam_category_beta1():
+                    return f"adam_{category}"
+                return group
             if group == "muonh":
                 path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
                 if self.muon_truncate_family is not None and _TRUNCATE_FAMILIES[self.muon_truncate_family].search(
