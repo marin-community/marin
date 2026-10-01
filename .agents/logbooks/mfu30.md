@@ -470,3 +470,14 @@ streams 4/5 and the slices to 0-3, with bitwise-equal gradients. The `--pip-pack
 branch push was approved by the orchestrator under an earlier campaign's clarification and is disclosed
 to the user. Until then the final program uses the production wheel, `carry_stall.py` is the gate, and A's
 JAX-only fallback (~25 ms/step always paid) is the alternative if a final trace shows the stall.
+
+## M30-025 m30b-sonic-02: 29.78% (2026-10-01)
+
+D (dd45f27c17: A+B+C + SonicMoE-style backward, no #9481 commits, no sconv) + H-A4 flag at
+MEM_FRACTION 0.78 / slop 105, remat VLOG, profiled 180021-180023: **MFU 29.783 / 13.179 s** vs control 28.258 /
+13.891 (+1.52 MFU, -0.712 s/step); steady state 29.70-29.85 with two dips (180010 25.97, 180056 27.89).
+memory/limit_gib 143.75 (fraction took effect), peak 125.02. Loss at 180000 exact; dloss max 2.4e-4,
+late mean -5.7e-6, 22/49 positive: inside the same-code band. Rough decomposition vs one-draw arms:
+unfilled-02 (A+B+C) +0.41, hmo-02 (flag) +0.32, so D plus the memory settings is ~+0.8, sub-additivity aside.
+Remaining to 30.0%: -0.095 s/step. Candidates still to land: stack -03 arms (mirror + E + #9481's model commits;
+pipelined vs sequential), sconv (~-0.1 est.), PGLE with A's D2H patch (~-0.2 est.).
