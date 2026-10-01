@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Import answer-only TaskTrove Clean tasks graded by exact mode."""
+"""Import TaskTrove all_puzzles choices and ordered lists."""
 
 from tasktrove_verify.spec import ExactSpec, parse_spec
 
@@ -25,7 +25,7 @@ def _clean_instruction(instruction: str) -> str:
 
 
 def import_task(archive: TaskArchive) -> TaskSpec:
-    """Import a source exact-mode puzzle as a private text-answer task."""
+    """Import an all_puzzles choice or ordered list as a private text-answer task."""
     try:
         metadata = import_metadata(archive)
         if metadata.family != FAMILY or metadata.converter != CONVERTER or metadata.mode != "exact":
