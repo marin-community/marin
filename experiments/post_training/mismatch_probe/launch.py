@@ -150,8 +150,12 @@ def tiny_grug_recipe(
     trainer_modes: tuple[str, ...] = REPLAY_MODES,
     capture_layers: tuple[int, ...] = (),
     timing_modes: tuple[str, ...] = (),
+    pipeline_parallel: int = 1,
 ) -> str:
-    """Render one role-independent training recipe for the selected arm."""
+    """Render one role-independent training recipe for the selected arm.
+
+    ``pipeline_parallel`` splits the policy's layers over that many of the node's GPUs (the rest data parallel).
+    """
     config = {
         "entrypoint": "standard",
         "context_budget": {"request_window_tokens": 128, "max_new_tokens_per_turn": 8, "max_turns": 1},
@@ -177,7 +181,7 @@ def tiny_grug_recipe(
                 "optimizer_config": {"lr": 0.02, "max_grad_norm": 0.0},
                 "megatron_config": {
                     "tensor_model_parallel_size": 1,
-                    "pipeline_model_parallel_size": 1,
+                    "pipeline_model_parallel_size": pipeline_parallel,
                     "context_parallel_size": 1,
                     "expert_model_parallel_size": 1,
                 },
@@ -211,6 +215,7 @@ def build_arms(
     capture_layers: tuple[int, ...] = (),
     timing_modes: tuple[str, ...] = (),
     cluster: str = TINY_GRUG_POLICY.cluster,
+    pipeline_parallel: int = 1,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     """Build separate training artifacts for arms sharing model and data inputs."""
     model = ArtifactStep.adopt(
@@ -264,6 +269,7 @@ def build_arms(
                     trainer_modes=trainer_modes,
                     capture_layers=capture_layers,
                     timing_modes=timing_modes,
+                    pipeline_parallel=pipeline_parallel,
                 ),
                 runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
                 model=ArtifactHfModel(
@@ -302,6 +308,13 @@ def build_arms(
 @click.option("--capture-layer", "capture_layers", multiple=True, type=int)
 @click.option("--timing-mode", "timing_modes", multiple=True)
 @click.option("--cluster", type=click.Choice(("cw-us-east-02a", "cw-rno2a")), default=TINY_GRUG_POLICY.cluster)
+@click.option(
+    "--pipeline-parallel",
+    type=click.Choice(("1", "2")),
+    default="1",
+    show_default=True,
+    help="Pipeline stages of the policy on the node's two GPUs.",
+)
 @rl_build_options
 def main(
     arm_names: tuple[str, ...],
@@ -321,6 +334,7 @@ def main(
     capture_layers: tuple[int, ...],
     timing_modes: tuple[str, ...],
     cluster: str,
+    pipeline_parallel: str,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     settings = ProbeSettings(
         seed=seed,
@@ -343,6 +357,7 @@ def main(
         capture_layers=capture_layers,
         timing_modes=timing_modes,
         cluster=cluster,
+        pipeline_parallel=int(pipeline_parallel),
     )
 
 
