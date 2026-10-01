@@ -48,7 +48,8 @@ from taskcompendium.models import (
 ARTIFACTS_PATH = "/logs/artifacts"
 REWARD_PATH = "/logs/verifier"
 AGENT_LOG_PATH = "/logs/agent"
-GRADER_PATH = "/tests/test.sh"
+GRADER_DIRECTORY = "/tests"
+GRADER_PATH = f"{GRADER_DIRECTORY}/test.sh"
 
 
 def _directory_files(directory: Path, target: str) -> tuple[EnvironmentFile, ...]:
@@ -121,8 +122,8 @@ def _healthcheck(config: HealthcheckConfig, user: str | None) -> HealthcheckSpec
 def _shell_verifier(config: TaskConfig, directory: Path, tests: Path) -> VerifierSpec:
     setup_files = _directory_files(directory / "setup_files", "/setup_files")
     verifier_environment = None
-    private_by_path = {file.path: file for file in _directory_files(directory / "tests", "/tests")}
-    private_by_path.update({file.path: file for file in _directory_files(tests, "/tests")})
+    private_by_path = {file.path: file for file in _directory_files(directory / "tests", GRADER_DIRECTORY)}
+    private_by_path.update({file.path: file for file in _directory_files(tests, GRADER_DIRECTORY)})
     private_files = tuple(private_by_path.values())
     separate = (
         config.verifier.environment_mode == VerifierEnvironmentMode.SEPARATE or config.verifier.environment is not None
