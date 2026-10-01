@@ -44,6 +44,7 @@ from experiments.post_training.cat_count_canary.data import (
     VALIDATION_FILENAME,
     cat_count_data_source,
     cat_count_data_step,
+    cat_count_eval_ns,
 )
 
 EXPERIMENT_NAME = "cat-count-canary"
@@ -91,17 +92,16 @@ MODELS = MappingProxyType(
 
 @dataclass(frozen=True)
 class Preset:
-    async_steps: int
-    sync_steps: int
+    max_steps: int
     minimum_score: float | None
 
 
 PRESETS = MappingProxyType(
     {
-        "dry": Preset(1, 1, None),
-        "calibrate": Preset(30, 30, None),
-        "gate": Preset(30, 30, 0.65),
-        "on-policy": Preset(30, 30, None),
+        "dry": Preset(1, None),
+        "calibrate": Preset(30, None),
+        "gate": Preset(30, 0.65),
+        "on-policy": Preset(30, None),
     }
 )
 
@@ -224,7 +224,7 @@ def training_config(
     choice = MODELS[model]
     plan = role_plan(batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size)
     preset_config = PRESETS[preset]
-    max_steps = preset_config.async_steps if lane == "async" else preset_config.sync_steps
+    max_steps = preset_config.max_steps
     if eval_minimum_score is None:
         eval_minimum_score = preset_config.minimum_score
     geometry = {
@@ -251,7 +251,7 @@ def training_config(
             "max_steps": max_steps,
             "update_epochs_per_batch": 1 if preset == "on-policy" else 2,
             "micro_forward_batch_size_per_gpu": micro_train_batch_size,
-            "eval_batch_size": len(train_ns) + len(HELDOUT_NS) + len(EXTRAPOLATION_NS),
+            "eval_batch_size": len(cat_count_eval_ns(train_ns)),
             "eval_interval": 1 if preset == "dry" else 5,
             "hf_save_interval": max_steps,
             "resume_mode": "latest" if checkpoint else "none",
@@ -328,7 +328,7 @@ def training_config(
     if eval_minimum_score is not None and (
         not math.isfinite(eval_minimum_score) or eval_minimum_score <= 0 or trainer["eval_interval"] <= 0
     ):
-        raise ValueError("evaluation reward rise requires a finite positive margin and periodic evaluation")
+        raise ValueError("evaluation stopping requires a finite positive minimum score and periodic evaluation")
     trainer["callbacks"] = [
         {
             "type": "evaluation",

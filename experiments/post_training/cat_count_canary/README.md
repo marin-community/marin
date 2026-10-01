@@ -169,32 +169,32 @@ uv run --frozen python -m ci.marin_nightly.gate \
 ```
 
 The checker verdict determines success. A process exit alone does not prove
-learning. `gate-filter` is an experimental setting without a calibrated
-learning spec; the async and sync `gate` presets are the validated lanes.
+learning. The async gate checks sampled reward and the required training
+metrics; synchronous runs are available for manual comparisons.
 
 A pass demonstrates task learning through Iris launch, model staging,
 Megatron DP=2, separate-host vLLM, NCCL weight synchronization, Gym rollout
-workers, the policy objective, two-epoch reuse, evaluation, checkpoints and
-export. The two lanes share a loop, so their evidence is partly shared.
-The canary does not establish loss-scale parity, DP parameter equality,
-exported-output equivalence, GPU checkpoint-resume correctness, or coverage
-of TP/PP/CP/EP, MoE, multi-turn tools, Harbor, LoRA or long contexts. Subtle
-clipping, probability, template or partial weight-sync errors can still learn.
+workers, the policy objective, two-epoch reuse and evaluation. Parameter
+checksum comparisons detect reported differences between training ranks.
+The canary does not establish loss-scale parity, exported-output equivalence,
+GPU checkpoint-resume correctness, or coverage of TP/PP/CP/EP, MoE, multi-turn
+tools, Harbor, LoRA or long contexts. Subtle clipping, probability, template
+or partial weight-sync errors can still learn.
 
 ## Calibration results
 
-The canary uses seed17 and learning rate2e-6. Native historical replay at the
+The canary uses seed 17 and learning rate 2e-6. Native historical replay at the
 0.65 sampled-score threshold passes six healthy async runs. Their smallest
-peak margin by step30 is+0.0953. Sign reversal, rollout-probability corruption
-and learning rates5e-6/1e-5 fail; the closest control margin is−0.1153.
-Historical replay checks existing metric rows; the new post-step checksum and
-artifact-free20-minute deadline require current GPU validation.
+peak margin by step 30 is +0.0953. Sign reversal, rollout-probability corruption
+and learning rates 5e-6/1e-5 fail; the closest control margin is −0.1153.
+Historical replay checks existing metric rows; the post-step checksum and
+artifact-free 20-minute deadline require current GPU validation.
 
 Model staging, Ray and vLLM startup happen once per invocation. The dry
 step's measured 72 seconds included 5.7 seconds of policy training and
 49 seconds of checkpoint work. Checkpoint work recurs at save intervals;
 it is not an ordinary-step cost. Evaluation also recurs every five steps.
-HF export runs after training.
+HF export runs after training when `--export` is set.
 
 Sampled policy-GPU memory maxima in seven completed runs ranged from 17.1
 to 30.5 GiB per device. These are node telemetry samples, not CUDA allocation

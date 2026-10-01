@@ -112,12 +112,7 @@ def test_model_pins_and_distinct_artifact_identities():
     assert any(dep.name == MODELS["qwen2.5-0.5b-instruct"].step.name for dep in async_run.deps)
 
 
-def test_downloaded_model_root_resolves_as_the_hf_snapshot(tmp_path: Path, monkeypatch):
-    model_step = MODELS["qwen2.5-0.5b-instruct"].step
-    model_root = Path(model_step.path(str(tmp_path)))
-    model_root.mkdir(parents=True)
-    (model_root / "config.json").write_text("{}")
-    (model_root / "tokenizer_config.json").write_text("{}")
+def test_upstream_model_uri_resolves_as_the_hf_snapshot(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("marin.rl.skyrl.skyrl_temporary_run_path", lambda *_args, **_kwargs: str(tmp_path / "scratch"))
 
     run = build_run(version="2026.09.26", preset="dry", job_timeout_seconds=1800)
