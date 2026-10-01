@@ -186,7 +186,7 @@ def _spectral_sphere_updates(params, direction_updates, learning_rate, state: Sp
 # output-gate matrices and the random-init ``kda_dd_rope`` angle projections (w_rot_down/w_rot_up) take the
 # MuonH catch-all, the ShortConv kernels and output-norm scale are ``.weight`` leaves (Adam), and the zero-init
 # angle amplitude ``rot_scale`` is on the generic Adam list.
-_KDA_ATTN_LEAF = re.compile(r"kda_blocks\.stacked\.attn\.(\w+)")
+_KDA_ATTN_LEAF = re.compile(r"kda_blocks(?:_tail)?\.stacked\.attn\.(\w+)")
 # Low-rank forget gate, per-head A_log, per-channel dt_bias and the zero-init push / erase-gate
 # projections (MuonH cannot move a zero matrix): Adam (no weight decay).
 _KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias", "push_decay", "w_push", "w_erase"})
@@ -199,33 +199,33 @@ _KDA_BETA_MLP_LEAVES = frozenset({"w_beta_down", "w_beta_up"})
 # Matrix families that ``okls_targets`` can move from MuonH to the OKLS direction.
 # Matrix types for ``muon_truncate_family`` (the attention families split by layer kind).
 _TRUNCATE_FAMILIES: dict[str, re.Pattern] = {
-    "kda": re.compile(r"kda_blocks\.stacked\.attn\.w_\w+$"),
-    "mla": re.compile(r"(?<!kda_blocks\.)stacked_blocks\.stacked\.attn\.w_\w+$"),
+    "kda": re.compile(r"kda_blocks(_tail)?\.stacked\.attn\.w_\w+$"),
+    "mla": re.compile(r"stacked_blocks(_tail)?\.stacked\.attn\.w_\w+$"),
     "latent": re.compile(r"\.mlp\.w_latent_(down|up)$"),
     "shared": re.compile(r"\.shared\.\d+\.w_(gate|up|down)$"),
     "routed": re.compile(r"\.mlp\.expert_mlp\.w_(gate|up|down)$"),
 }
 
 _OKLS_FAMILIES: dict[str, re.Pattern] = {
-    "attn": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(q|k|v|o|g|dkv|uk|uv|q2|uk2)$"),
+    "attn": re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_(q|k|v|o|g|dkv|uk|uv|q2|uk2)$"),
     "routed": re.compile(r"\.mlp\.expert_mlp\.w_(gate|up|down)$"),
     "shared": re.compile(r"\.shared\.\d+\.w_(gate|up|down)$"),
     "latent": re.compile(r"\.mlp\.w_latent_(down|up)$"),
     "gated_norm": re.compile(r"gated_norm\.w_(down|up)$"),
     # Per-projection subsets of "attn" (KDA and MLA together).
-    "attn_q": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_q2?$"),
-    "attn_k": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(k|uk|uk2)$"),
-    "attn_v": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(v|uv)$"),
-    "attn_o": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_o$"),
-    "attn_other": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(g|dkv)$"),
+    "attn_q": re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_q2?$"),
+    "attn_k": re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_(k|uk|uk2)$"),
+    "attn_v": re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_(v|uv)$"),
+    "attn_o": re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_o$"),
+    "attn_other": re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_(g|dkv)$"),
     # The softmax (MLA) layers' q and k: KDA L2-normalizes q and k, so their scale is inert there.
-    "mla_qk": re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|uk|q2|uk2)$"),
+    "mla_qk": re.compile(r"stacked_blocks(_tail)?\.stacked\.attn\.w_(q|uk|q2|uk2)$"),
 }
 # Softmax-attention (``stacked_blocks``) query and key projections: GQA ``w_q``/``w_k``, MLA ``w_q``/``w_uk`` (and
 # the DIFF pair). MLA's ``w_dkv`` is left out: it feeds the values as well.
 _SOFTMAX_QK = re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|k|uk|q2|uk2)$")
 # Query/key projections of every attention layer: KDA ``w_q`` / ``w_k`` and MLA ``w_q`` / ``w_uk``.
-_QK_PROJECTIONS = re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(q|k|uk)$")
+_QK_PROJECTIONS = re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_(q|k|uk)$")
 
 
 _MEMORY_VALUES = re.compile(r"memory\.\d+\.values")

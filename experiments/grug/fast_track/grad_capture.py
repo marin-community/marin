@@ -61,6 +61,8 @@ def _mlp_sites(layer: int, stack, index: int) -> dict:
 def capture_matrices(tree) -> dict[str, jax.Array]:
     """The captured matrices of a Transformer-shaped tree (parameters, gradients or updates), each replicated so
     every process holds a full copy. Call under ``jax.jit``."""
+    if tree.stacked_blocks_tail is not None or tree.kda_blocks_tail is not None:
+        raise ValueError("capture sites assume the two-stack layout (no latent_out_full_layers)")
     kda = tree.kda_blocks.stacked
     mla = tree.stacked_blocks.stacked
     sites: dict[str, jax.Array] = {}
