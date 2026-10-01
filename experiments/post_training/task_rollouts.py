@@ -27,12 +27,12 @@ from marin.rl.skyrl import (
 )
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
-from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
+from experiments.models import qwen3_4b
 
 TASK_COUNT = 8
 TASK_FILENAME = "tasks.parquet"
-MODEL_VERSION = "2026.08.29"
+MODEL = "Qwen/Qwen3-4B"
+MODEL_REVISION = "1cfa9a7"
 CLUSTER = "cw-rno2a"
 GPUS_PER_NODE = 8
 ROLE_PLAN = SkyRLRolePlan(
@@ -219,10 +219,10 @@ def main() -> ArtifactStep[SkyRLRun]:
             config_yaml=CONFIG_YAML,
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
-                step=model_step(MODEL_VERSION),
-                tokenizer_uri=QWEN3_MODEL,
-                tokenizer_revision=QWEN3_REVISION,
-                relative_path=HF_EXPORT_SUBDIR,
+                step=qwen3_4b,
+                tokenizer_uri=MODEL,
+                tokenizer_revision=MODEL_REVISION,
+                relative_path="",
             ),
             train_data=(ArtifactDataSource(tasks, relative_path=TASK_FILENAME),),
             validation_data=(),

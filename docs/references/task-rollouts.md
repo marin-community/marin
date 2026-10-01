@@ -416,7 +416,7 @@ Run the preflight with a fresh version, then add `--run` to submit it:
 uv run python -m experiments.post_training.task_rollouts --version YYYY.MM.DD.N
 ```
 
-The smoke uses Qwen3-0.6B with eight H100 policy GPUs and eight H100 inference GPUs.
+The smoke uses Qwen3-4B with eight H100 policy GPUs and eight H100 inference GPUs.
 It uses reward-weighted advantages because each task has one sample. Score the
 trainer's `WANDB_MIRROR` log with the companion SkyRL `ci/marin_nightly/gate.py`
 and `specs/task-rollouts.json`. Measure elapsed time from artifact submission until
