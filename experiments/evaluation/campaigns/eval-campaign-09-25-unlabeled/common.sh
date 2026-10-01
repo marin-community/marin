@@ -68,7 +68,7 @@ import sys
 from pathlib import Path
 
 lock = Path(sys.argv[1]).read_text()
-for name in ("harbor", "harbor-tau3-bench-adapter"):
+for name in ("harbor",):
     block = re.search(rf'\[\[package\]\]\nname = "{re.escape(name)}"\n(.*?)(?=\n\[\[package\]\]|\Z)', lock, re.DOTALL)
     if block is None:
         raise SystemExit(f"missing Harbor runtime package in lock: {name}")
@@ -78,7 +78,7 @@ for name in ("harbor", "harbor-tau3-bench-adapter"):
     print(f"HARBOR_LOCK={match.group(1)}")
 PY
   )
-  [ "$(grep -cx "HARBOR_LOCK=$CAMPAIGN_SHA_HARBOR" <<<"$pins")" = 2 ] \
+  [ "$(grep -cx "HARBOR_LOCK=$CAMPAIGN_SHA_HARBOR" <<<"$pins")" = 1 ] \
     || die "locked Harbor runtimes differ from $CAMPAIGN_SHA_HARBOR"
 
   local unexpected
