@@ -69,6 +69,8 @@ def probe_block(settings: ProbeSettings) -> dict:
             },
         },
     }
+    if settings.updates == 0:
+        block["trainer"].update(ckpt_interval=-1, hf_save_interval=-1)
     if settings.extra_trainer_modes:
         block["trainer"]["policy"] = {"megatron_config": {"moe_router_replay": True}}
         block["generator"]["engine_init_kwargs"]["enable_return_routed_experts"] = True
