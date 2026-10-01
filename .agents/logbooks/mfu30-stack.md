@@ -442,3 +442,36 @@ So F0's carry copies sitting off the compute streams is F1's patched layout. The
 removes the stall" above is wrong; F0 is a repeat of F1's executable. stackseq-03 shows the production layout:
 the carry shares a stream with ~720 slice copies. Any future env-only control needs
 `--env JAX_ENABLE_COMPILATION_CACHE=false`. PGLE arms recompile, since the profile path is an XLA flag.
+
+## Close-out (2026-10-01)
+
+Goal met. The final program, `research/mcwitt/mfu30-final-seq` @ `d4234c88e7`, was confirmed by the
+orchestrator's pre-registered runs (seeds 0/1/2, 100 steps, unprofiled). It scored 30.218 / 30.206 / 30.206
+MFU against main's 28.260 / 28.235 / 28.266, with loss divergence inside the same-code range.
+
+Final program: this branch's sequential stack, which carries:
+- B's D + mirror + E;
+- #9481's model commits, with QB-after-MLP kept;
+- B's forward-order backward;
+- A's `--pip-package` plumbing;
+- the custom PJRT wheel `0.11.1+marin.283d5b6d98cd` with `XLA_GPU_HOST_TRANSFER_STREAMS=1`;
+- `--sconv-implementation triton_gpu`;
+- H-A4 (`--xla_gpu_enable_host_memory_offloading=true`) at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78` and
+  `--xla_gpu_memory_limit_slop_factor=105`.
+
+The Triton-GEMM flag, the fused gated norm and the re-gather are left out.
+
+Untested lever: PGLE. Profiles built from f1-seq-02's trace (plain and D2H-patched) sit on
+`research/mcwitt/mfu30-final-pgle` @ `883faa103f`. Flags and match rate are under "PGLE profiles from
+m30-f1-seq-02". The PGLE arms were cancelled unrun because they go beyond the goal. When they do run,
+check them with `stack/trace_checks.sh`, the accuracy-checker log lines, peak memory, and a full loss
+comparison (an earlier PGLE variant drifted +1e-3, one-signed).
+
+Tooling in `autoresearch/loop-260930-mfu30/stack/`:
+- `trace_checks.sh <run>`: pulls the xplane, then runs `carry_stall.py` (forward carry D2H exposure, the
+  stream-collision gate), `copy_schedule.py` (main-level placement of the 10 GiB momentum copies),
+  exposed memcpy and XLA remat.
+- `pgle_build.sh`: builds the plain and D2H-patched profiles.
+- `score.py`: scores runs against a control.
+- `arm.sh`: submits rack arms.
+- `gate.sh` and `model_smoke.py`: GB200x4 gates.
