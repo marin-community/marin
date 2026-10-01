@@ -38,9 +38,6 @@ HELDOUT_DATA_URI = (
     "1.0.0-candidate1/batteries/e9-heldout-v1/snowball"
 )
 HELDOUT_FILENAME = "heldout-math-l345.parquet"
-# Parity-harness layers: the first layer, the first full-attention layer, and the first layer of
-# pipeline stage two.
-CAPTURE_LAYERS = (0, 3, 13)
 
 
 # A Snowball export cut to its first layers runs on this many GPUs of one node: two pipeline stages that the colocated
@@ -78,7 +75,7 @@ def snowball_recipe(
     routing: Routing,
     request_window_tokens: int,
     response_tokens: int,
-    capture: bool = False,
+    capture_layers: tuple[int, ...] = (),
     timing_modes: tuple[str, ...] = (),
     extra_modes: tuple[str, ...] = (),
     train_numerics: str | None = None,
@@ -100,7 +97,7 @@ def snowball_recipe(
         settings,
         router_replay=replay,
         trainer_modes=modes,
-        capture_layers=CAPTURE_LAYERS if capture else (),
+        capture_layers=capture_layers,
         timing_modes=timing_modes,
         train_numerics=train_numerics,
     )
@@ -188,7 +185,7 @@ def build_spec(
     batch_size: int,
     request_window_tokens: int,
     response_tokens: int,
-    capture: bool = False,
+    capture_layers: tuple[int, ...] = (),
     timing_modes: tuple[str, ...] = (),
     extra_modes: tuple[str, ...] = (),
     train_numerics: str | None = None,
@@ -226,7 +223,7 @@ def build_spec(
                 routing=routing,
                 request_window_tokens=request_window_tokens,
                 response_tokens=response_tokens,
-                capture=capture,
+                capture_layers=capture_layers,
                 timing_modes=timing_modes,
                 extra_modes=extra_modes,
                 train_numerics=train_numerics,
@@ -297,7 +294,13 @@ def build_run(**kwargs) -> ArtifactStep[SkyRLRun]:
 @click.option("--keep-fraction", type=click.FloatRange(min=0, max=1), default=0.5, show_default=True)
 @click.option("--rescore-prefix-cache", "cache_mode", type=click.Choice(("off", "on", "both")), default="off")
 @click.option("--reuse-probe")
-@click.option("--capture/--no-capture", default=False, help="Record trainer regions at the capture layers.")
+@click.option(
+    "--capture-layer",
+    "capture_layers",
+    multiple=True,
+    type=click.IntRange(min=0),
+    help="Record this decoder layer's regions on the trainer, and its attention inputs in the first re-read prefix.",
+)
 @click.option("--timing-mode", "timing_modes", multiple=True, help="Time forward + backward for this mode.")
 @click.option("--extra-mode", "extra_modes", multiple=True, help="Score this trainer mode as well (a candidate).")
 @click.option("--train-numerics", help="MarinSkyRL numerics set the policy trains and scores under by default.")
@@ -324,7 +327,7 @@ def main(
     keep_fraction: float,
     cache_mode: str,
     reuse_probe: str | None,
-    capture: bool,
+    capture_layers: tuple[int, ...],
     timing_modes: tuple[str, ...],
     extra_modes: tuple[str, ...],
     train_numerics: str | None,
@@ -357,7 +360,7 @@ def main(
         batch_size=batch_size,
         request_window_tokens=request_window_tokens,
         response_tokens=response_tokens,
-        capture=capture,
+        capture_layers=capture_layers,
         timing_modes=timing_modes,
         extra_modes=extra_modes,
         train_numerics=train_numerics,
