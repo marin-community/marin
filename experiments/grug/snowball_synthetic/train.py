@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Levanter Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Train Snowball on synthetic tokens through the Levanter trainer and report step throughput.
 
 A single-process, one-node harness (for example one Slurm job) that measures Snowball's real training
@@ -21,7 +18,7 @@ fails in the next-token loss (see ``main``).
 
 Example, 8 GPUs, full 67B shape, one 4096-token sequence per GPU, profile of steps 10-12::
 
-    RAGGED_DOT_IMPL=xla python lib/levanter/scripts/train_snowball_synthetic.py \\
+    RAGGED_DOT_IMPL=xla python experiments/grug/snowball_synthetic/train.py \\
         --size full --steps 20 --profile-steps 3
 """
 
@@ -35,10 +32,9 @@ from pathlib import Path
 import jax
 import jax.random as jrandom
 import jmp
+import levanter.trainer
 import numpy as np
 from haliax import Axis
-
-import levanter.trainer
 from levanter import callbacks
 from levanter.callbacks._metrics import aggregate_device_flops, compute_instant_throughput
 from levanter.callbacks.profiler import ProfilerConfig, XprofUploadConfig
@@ -54,7 +50,7 @@ from levanter.trainer import StepInfo, Trainer, TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.mesh import MeshConfig
 
-logger = logging.getLogger("train_snowball_synthetic")
+logger = logging.getLogger("snowball_synthetic")
 
 TINY = SnowballConfig(
     vocab_size=128,
@@ -210,9 +206,7 @@ def log_throughput_summary(
 def main() -> None:
     args = parse_args()
     preset = PRESETS[args.size]
-    model_cfg = dataclasses.replace(
-        preset.model, attention_implementation="reference", moe_implementation=args.moe_impl
-    )
+    model_cfg = dataclasses.replace(preset.model, attention_implementation="reference", moe_implementation=args.moe_impl)
     if args.layers is not None:
         model_cfg = dataclasses.replace(model_cfg, num_layers=args.layers)
     seq_len = preset.seq_len if args.seq_len is None else args.seq_len
