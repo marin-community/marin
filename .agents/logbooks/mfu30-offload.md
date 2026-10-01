@@ -415,3 +415,26 @@ Exposed copies, s/step (`copy_exposure.py`):
 
 What is left: the end-of-step D2H tail (0.26; target of `pgle_patch_d2h.py` under PGLE), the backward carry
 reload (0.22; arm2 carry prefetch), and the first momentum and embedding H2D (0.10; PGLE hoists it).
+
+## M30A-023 F0 (m30-f0-seq-02) reused F1's cached executable; not a valid env-off control (2026-10-01)
+
+Per-step `stream_check.py`: in F0 the carry copies sit alone on two direction-split streams, sharing only
+with optimizer-state copies, and there are six async memcpy streams. That is exactly F1's patched layout.
+stackseq-03 (production wheel, stalled) shows carry D2H and H2D sharing one stream with ~720 slice copies in
+every step. The GB200x1 smoke on the same wheel with the env unset produced the production layout (four
+streams, collision). So F0 did not win a draw; it ran the patched assignment.
+
+Why: F0 never compiled `jit_train_step`. With the remat VLOG on, F0 logged 20,992 `hlo_rematerialization`
+lines for other modules but zero `Rematerialized ... in module jit_train_step` lines; F1 logged 64 (one
+per process). F0 loaded F1's executable from the persistent compilation cache. The cache key covers the
+program, compile options and XLA flags, but not the `XLA_GPU_HOST_TRANSFER_STREAMS` env var, and stream
+assignment is fixed at compile time.
+
+Consequences:
+- F0 is not a control. "The wheel alone removes the stall" is unsupported; the smoke says the wheel without
+  the env behaves like production.
+- The env-gated switch is cache-unsafe both ways: whichever setting compiles a program first is what every
+  later run of the same program and flags gets. Any env-on/off pair needs a forced compile, e.g.
+  `JAX_ENABLE_COMPILATION_CACHE=false` (forwarded `JAX_` prefix), or a flag difference in the key.
+- For deployment, set the env on every run and never mix settings within a cache, or turn the switch into
+  a DebugOptions flag (part of the key) or default-on in a promoted wheel.
