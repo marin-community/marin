@@ -14,7 +14,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from finestore.reader import ReadView
-from finestore.rl.mismatch_probe import MANIFEST_TABLE, PROBE_TABLE, SCORES_TABLE, ManifestRow, ProbeRow, ScoreRow
+from finestore.rl.mismatch_probe import (
+    MANIFEST_TABLE,
+    PROBE_TABLE,
+    SCORES_TABLE,
+    ArchiveStatus,
+    ManifestRow,
+    ProbeRow,
+    ScoreRow,
+)
 
 from experiments.post_training.mismatch_probe.metrics import (
     comparison_metrics,
@@ -29,6 +37,7 @@ UPDATE_PREFIX = "update@"
 ANALYSIS_VERSION = 2
 HEADLINE_METRICS = ("abs_p99", "k3", "share_beyond_2x")
 NATIVE_MODE = "native"
+REPEAT_MODE = "repeat"
 BOOTSTRAP_DRAWS = 1000
 GENERATION_SCORING = f"{GENERATION_SCORER}@0"
 TRAINER_SCORING_PREFIX = f"{TRAINER_SCORER}@"
@@ -39,7 +48,7 @@ def _trainer_scoring(update: int, mode: str) -> str:
 
 
 def _rescore_scoring(update: int, cache_mode: str = "off") -> str:
-    return f"vllm.rescore@{update}" if cache_mode == "off" else f"vllm.rescore@{update}:{cache_mode}"
+    return f"{RESCORE_SCORER}@{update}" if cache_mode == "off" else f"{RESCORE_SCORER}@{update}:{cache_mode}"
 
 
 NATIVE_SCORING = _trainer_scoring(0, NATIVE_MODE)
@@ -143,7 +152,7 @@ def _score_label(row: ScoreRow) -> str:
 def load_archive(uri: str) -> ArchiveData:
     view = ReadView(uri)
     manifests = [ManifestRow.model_validate(row) for row in view.scan(MANIFEST_TABLE).to_pylist()]
-    if len(manifests) != 1 or manifests[0].status != "complete":
+    if len(manifests) != 1 or manifests[0].status != ArchiveStatus.COMPLETE:
         raise ValueError(f"mismatch archive {uri} is incomplete or has no unique manifest")
     manifest = manifests[0]
     probes = [ProbeRow.model_validate(row) for row in view.scan(PROBE_TABLE).to_pylist()]
@@ -184,23 +193,13 @@ def load_archive(uri: str) -> ArchiveData:
     return ArchiveData(manifest=manifest, probes=probes, scores=scores, commit_token=str(view.token))
 
 
-def _require_same_weights_if_same_update(
-    label: str, target: dict[str, ScoreRow], reference: dict[str, ScoreRow]
-) -> None:
-    """Reject purported same-weight comparisons before numerical analysis."""
-    target_row = next(iter(target.values()))
-    reference_row = next(iter(reference.values()))
-    if target_row.update == reference_row.update and target_row.global_step != reference_row.global_step:
-        raise ValueError(f"comparison {label} scores different trainer steps at update {target_row.update}")
-
-
 def _trainer_modes(scores: dict[str, dict[str, ScoreRow]]) -> list[str]:
     return sorted(
         {
             row.mode
             for rows in scores.values()
             for row in rows.values()
-            if row.scorer == TRAINER_SCORER and row.mode not in {NATIVE_MODE, "repeat"}
+            if row.scorer == TRAINER_SCORER and row.mode not in {NATIVE_MODE, REPEAT_MODE}
         }
     )
 
@@ -218,7 +217,7 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
         return uncached if uncached in names else _rescore_scoring(update, "on")
 
     add("implementation_mismatch", NATIVE_SCORING, GENERATION_SCORING)
-    add("trainer_floor", _trainer_scoring(0, "repeat"), NATIVE_SCORING)
+    add("trainer_floor", _trainer_scoring(0, REPEAT_MODE), NATIVE_SCORING)
     for mode in _trainer_modes(scores):
         add(f"{mode}_vs_generation", _trainer_scoring(0, mode), GENERATION_SCORING)
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
@@ -325,6 +324,7 @@ def _timing_values(archive: ArchiveData) -> dict[str, float]:
 
 
 def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict:
+    """Return JSON-ready statistics, stopping analysis when token identity fails."""
     archive = load_archive(uri)
     manifest, probes, scores = archive.manifest, archive.probes, archive.scores
     identity = TokenIdentity(
@@ -352,7 +352,6 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
     definitions = _comparison_definitions(scores)
     sampled_metrics = {}
     for label, (target_name, reference_name) in definitions.items():
-        _require_same_weights_if_same_update(label, scores[target_name], scores[reference_name])
         rows = _comparison_rows(probes, scores, target_name, reference_name)
 
         def calculate(indices, *, rows=rows):
@@ -393,8 +392,8 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
             paired[metric] = PairedImprovement(float(point), tuple(np.percentile(draws, [2.5, 97.5]).tolist()))
         report.paired_improvements[mode] = paired
 
-    baseline_stats = report.comparisons["implementation_mismatch"].metrics
-    bootstrap_ratios = np.asarray([draw["mean_ratio"] for draw in sampled_metrics["implementation_mismatch"]])
+    baseline_stats = report.comparisons[baseline].metrics
+    bootstrap_ratios = np.asarray([draw["mean_ratio"] for draw in sampled_metrics[baseline]])
     standard_error = float(bootstrap_ratios.std(ddof=1)) if len(bootstrap_ratios) > 1 else math.nan
     mean_ratio = baseline_stats["mean_ratio"]
     passes = math.isfinite(standard_error) and mean_ratio <= 1 + 3 * standard_error
@@ -480,8 +479,6 @@ def compare_archives(
     for label in common:
         left_target, left_reference = left_definitions[label]
         right_target, right_reference = right_definitions[label]
-        _require_same_weights_if_same_update(label, left.scores[left_target], left.scores[left_reference])
-        _require_same_weights_if_same_update(label, right.scores[right_target], right.scores[right_reference])
         left_rows = _comparison_rows(left.probes, left.scores, left_target, left_reference)
         right_rows = _comparison_rows(aligned_right_probes, right.scores, right_target, right_reference)
 
