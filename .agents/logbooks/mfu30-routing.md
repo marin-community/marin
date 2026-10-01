@@ -714,3 +714,25 @@ with the latent down projection into one GEMM on `mlp_in` (output [2048, 2560] i
 expert's GEMMs are separate. Differing leaves: `shared[1].w_gate` max_rel 4.2e-3, `w_up` 4.0e-3 (about 1 bf16 ulp,
 0.05% of elements), `token_embed` 8.3e-3 (2.6% of elements); medians 0. fp32 reassociation from the GEMM split,
 inside the rounding ruling; the orchestrator accepted it.
+
+## M30B-030 Off-rack bias test (`b/bias_test.py`, `m30b-bias-02`)
+
+C's model smoke (EP4 GB200x4: d1024, 4 layers, 16 experts top-4, 2 shared, short convs, QB hist, FA4, carry-offload
+remat) trained 300 steps with the hero's train step, MuonH heuristic, mixed precision and z-loss, from one
+initialization per seed on a fixed synthetic Markov-chain stream (loss 7.66 -> ~2.73). 8 seeds; per seed, identical
+batches for main x2, final (D dS + mirror + forward order + E + Triton short conv), e_off (final without E), d_only
+(main + D's dS). The two main runs share an executable and differ only by FA4 backward nondeterminism (same-code
+noise). Statistic: per-seed variant minus mean of the two main runs (main_b: minus main_a), across seeds:
+
+| variant | late-window (last third) mean +- SE (t, positive) | held-out mean +- SE (t, positive) |
+|---|---|---|
+| main_b (same code) | -4.5e-6 +- 5.5e-6 (-0.81, 3/8) | -2.8e-6 +- 1.9e-5 (-0.15, 4/8) |
+| final | -1.1e-6 +- 5.7e-6 (-0.19, 3/8) | +2.3e-6 +- 1.4e-5 (0.16, 6/8) |
+| e_off | +5.7e-6 +- 4.0e-6 (1.43, 4/8) | +1.6e-5 +- 9.8e-6 (1.58, 6/8) |
+| d_only | -1.2e-6 +- 5.7e-6 (-0.22, 4/8) | +2.0e-6 +- 1.3e-5 (0.16, 4/8) |
+
+No variant shows a consistent sign: final, d_only and the same-code pair are all within 1 SE of zero, e_off within
+1.6 SE. At this scale a bias above ~1.4e-5 absolute (2.5 SE; 5e-6 relative to the loss of ~2.81) would have shown.
+The hero's seed-1 drift (+2.65e-4 at loss 1.26, 2e-4 relative) is ~40x larger in relative terms. Limits: a
+from-scratch d1024 model over 300 steps on synthetic data; a bias that only appears at hero scale or in late training
+would not show here.
