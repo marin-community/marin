@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adapt TaskTrove's existing judge rubric to TaskCompendium submissions."""
+"""Adapt TaskTrove's judge rubric to submissions; see adjacent judge.md for the contract."""
 
 import asyncio
-import tempfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,7 +16,6 @@ from tasktrove_verify.spec import (
     RUBRICS,
     JudgeRuntimeConfig,
     JudgeSpec,
-    Spec,
     parse_spec,
     render_spec,
 )
@@ -74,30 +72,19 @@ def judge_answer(spec: JudgeSpec, *, context: str | None = None) -> VerifierSpec
 
 def _grade(verifier: JudgeVerifier, submission: TextSubmission, runtime: JudgeRuntimeConfig | None) -> GradeResult:
     # The judge module imports the optional OpenAI client, so load it only for judge tasks.
-    from tasktrove_verify.modes.grade_judge import JudgeInfrastructureError  # noqa: PLC0415
-    from tasktrove_verify.modes.grade_judge import grade as grade_judge  # noqa: PLC0415
+    from tasktrove_verify.modes.grade_judge import (  # noqa: PLC0415 - optional judge dependency
+        JudgeInfrastructureError,
+        grade_candidate,
+    )
 
     spec = parse_spec(verifier.verifier_toml)
     assert isinstance(spec, JudgeSpec)
-    with tempfile.TemporaryDirectory(prefix="taskcompendium-judge-") as temporary_directory:
-        root = Path(temporary_directory)
-        tests_dir = root / "tests"
-        tests_dir.mkdir()
-        workspace = root / "workspace"
-        workspace.mkdir()
-        if spec.context:
-            context_path = tests_dir / spec.context
-            context_path.parent.mkdir(parents=True, exist_ok=True)
-            context_path.write_text(verifier.context or "")
-        output = workspace / "answer.txt"
-        output.write_text(submission.value)
-        attempt_spec: Spec = replace(spec, output=str(output))
-        try:
-            reward: Reward = grade_judge(attempt_spec, tests_dir, workspace, runtime)
-        except JudgeInfrastructureError as error:
-            return GradeResult(Outcome.INFRA_ERROR, None, str(error), error.evidence)
-        except Exception as error:
-            return GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
+    try:
+        reward: Reward = grade_candidate(spec, submission.value, context=verifier.context or "", runtime=runtime)
+    except JudgeInfrastructureError as error:
+        return GradeResult(Outcome.INFRA_ERROR, None, str(error), error.evidence)
+    except Exception as error:
+        return GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
     if reward.status is Status.SCORED:
         return GradeResult(Outcome.GRADED, reward.reward, evidence=reward.detail)
     return GradeResult(Outcome.INFRA_ERROR, None, str(reward.detail.get("error", reward.status.value)), reward.detail)

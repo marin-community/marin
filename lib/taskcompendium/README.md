@@ -121,7 +121,7 @@ The TaskTrove MCQA importer reads archives from a cleaned release. See the [publ
 
 ### TaskTrove judge tasks
 
-The judge importer maps supported TaskTrove rubrics into the shared `judge` verifier. A `JudgeRuntimeConfig` is supplied by the runner; its endpoint and credentials stay outside the task specification. Provider, timeout, quota, transport, and malformed-score failures produce an infrastructure error without reward. The complete rubric and gold remain in the grading specification, while Harbor keeps them out of the model-visible prompt.
+See [judge support](src/taskcompendium/verifiers/judge.md) for the grading contract and validation boundary. The judge importer maps supported TaskTrove rubrics into the shared `judge` verifier. A `JudgeRuntimeConfig` is supplied by the runner; its endpoint and credentials stay outside the task specification. Provider, timeout, quota, transport, and malformed-score failures produce an infrastructure error without reward. The complete rubric and gold remain in the grading specification, while Harbor keeps them out of the model-visible prompt.
 
 ### NeMo predicted function calls
 

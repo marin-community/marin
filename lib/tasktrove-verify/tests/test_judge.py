@@ -3,6 +3,7 @@
 
 import json
 import threading
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -147,14 +148,13 @@ def test_unparseable_reply_is_retried_once_then_raises_infrastructure_error(tmp_
     assert len(fake_judge.prompts) == 2
 
 
-@pytest.mark.parametrize("reply", ["SCORE: 1e6", "SCORE: 1.0.2"])
-def test_malformed_numeric_score_token_is_infrastructure_error(tmp_path, fake_judge, reply):
+@pytest.mark.parametrize("reply, expected", [("Result: SCORE: 1.0", 1.0), ("SCORE = **0.75**", 0.75)])
+def test_reference_accepts_existing_score_syntax(tmp_path, fake_judge, reply, expected):
     fake_judge.replies = [reply]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    with pytest.raises(grade_judge.JudgeInfrastructureError, match="no parseable score") as error:
-        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "something else"))
-    assert [attempt["response"] for attempt in error.value.evidence["attempts"]] == [reply, reply]
-    assert len(fake_judge.prompts) == 2
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "something else"))
+    assert (reward.reward, reward.status) == (expected, Status.SCORED)
+    assert len(fake_judge.prompts) == 1
 
 
 def test_second_attempt_is_accepted(tmp_path, fake_judge):
@@ -199,15 +199,13 @@ def test_checklist_scores_the_fraction_of_criteria_the_judge_passes(tmp_path, fa
     assert CRITERIA[1] in fake_judge.prompts[1] and CRITERIA[0] not in fake_judge.prompts[1]
 
 
-def test_checklist_rejects_partial_scores_as_infrastructure_error(tmp_path, fake_judge):
+def test_checklist_partial_score_counts_as_failed_criterion(tmp_path, fake_judge):
     fake_judge.replies = ["Partly meets it.\nSCORE: 0.5"]
     spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],))
-    with pytest.raises(grade_judge.JudgeInfrastructureError, match="no parseable score") as error:
-        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "two steps"))
-    assert [attempt["response"] for attempt in error.value.evidence["attempts"]] == [
-        "Partly meets it.\nSCORE: 0.5",
-        "Partly meets it.\nSCORE: 0.5",
-    ]
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "two steps"))
+    assert (reward.reward, reward.status) == (0.0, Status.SCORED)
+    assert reward.detail["criteria"][0]["passed"] is False
+    assert len(fake_judge.prompts) == 1
 
 
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
@@ -271,3 +269,28 @@ def test_constraint_exception_is_infrastructure_error_not_zero_reward(tmp_path, 
 def test_checklist_without_criteria_is_an_invalid_task(tmp_path, unconfigured_judge):
     with pytest.raises(grade_judge.InvalidTask):
         grade_judge.grade(JudgeSpec(rubric="checklist"), tmp_path, _workspace(tmp_path, "text"))
+
+
+@pytest.mark.parametrize(
+    "spec, candidate, reply, expected",
+    [
+        (JudgeSpec(references=("Mars",)), "Mars", "SCORE: 0", 1.0),
+        (JudgeSpec(references=("Mars",)), "the red planet", "SCORE: 0.75", 0.75),
+        (JudgeSpec(rubric="checklist", criteria=("Names Mars",)), "Mars", "SCORE: 1", 1.0),
+        (JudgeSpec(references=("Mars",)), " \n", "SCORE: 1", 0.0),
+        (
+            JudgeSpec(references=("Mars",), constraints=(Constraint("startend:end_checker", {"end_phrase": "."}),)),
+            "Mars",
+            "SCORE: 1",
+            0.0,
+        ),
+    ],
+)
+def test_in_memory_and_file_grading_match(tmp_path, fake_judge, spec, candidate, reply, expected):
+    fake_judge.replies = [reply]
+    memory_reward = grade_judge.grade_candidate(spec, candidate, context="Private setting")
+    (tmp_path / "context.txt").write_text("Private setting")
+    file_reward = grade_judge.grade(replace(spec, context="context.txt"), tmp_path, _workspace(tmp_path, candidate))
+    assert memory_reward == file_reward
+    assert (memory_reward.reward, memory_reward.status) == (expected, Status.SCORED)
+    assert all("Private setting" in prompt for prompt in fake_judge.prompts)

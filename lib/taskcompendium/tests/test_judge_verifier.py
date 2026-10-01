@@ -159,21 +159,19 @@ async def test_malformed_judge_response_is_infra_error_without_reward(tmp_path, 
     assert len(judge_endpoint.requests) == 2
 
 
-async def test_fractional_checklist_score_is_infra_error_without_reward(tmp_path, judge_endpoint):
-    judge_endpoint.replies.extend(("Partly.\nSCORE: 0.5", "Still partly.\nSCORE: 0.5"))
+async def test_fractional_checklist_score_counts_as_unmet_criterion(tmp_path, judge_endpoint):
+    judge_endpoint.replies.append("Partly.\nSCORE: 0.5")
     verifier = judge_answer(
         JudgeSpec(criteria=("Names Mars.",), rubric=RUBRIC_CHECKLIST, model="fixture-judge", exact_gate=False)
     )
     result, _ = await _run(tmp_path, judge_endpoint, _task(verifier), "Mars", "fractional")
 
     outcome = json.loads((tmp_path / "trials/fractional/verifier/taskcompendium-result.json").read_text())
-    assert outcome["status"] == Outcome.INFRA_ERROR
-    assert outcome["reward"] is None
-    assert result.verifier_result is None
-    assert [item["response"] for item in outcome["evidence"]["attempts"]] == [
-        "Partly.\nSCORE: 0.5",
-        "Still partly.\nSCORE: 0.5",
-    ]
+    assert result.exception_info is None
+    assert outcome["status"] == Outcome.GRADED
+    assert outcome["reward"] == 0.0
+    assert outcome["evidence"]["criteria"][0]["passed"] is False
+    assert len(judge_endpoint.requests) == 1
 
 
 async def test_malformed_reply_retry_counts_against_request_budget(tmp_path, judge_endpoint):

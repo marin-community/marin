@@ -80,7 +80,7 @@ Give at most 25 words of reasoning, then end with a final line of exactly this f
 SCORE: <0|1>
 """
 
-SCORE_PATTERN = re.compile(r"(?im)^\s*score\s*[:=]\s*\**\s*(0(?:\.5)?|1)\s*\**\s*$")
+SCORE_PATTERN = re.compile(r"score\s*[:=]\s*\**\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,17 @@ class _ChecklistResult:
 
 def grade(spec: Spec, tests_dir: Path, workspace: Path, runtime: JudgeRuntimeConfig | None = None) -> Reward:
     assert isinstance(spec, JudgeSpec)
+    return grade_candidate(spec, read_output(spec, workspace) or "", context=_context(spec, tests_dir), runtime=runtime)
+
+
+def grade_candidate(
+    spec: JudgeSpec, candidate: str, *, context: str = "", runtime: JudgeRuntimeConfig | None = None
+) -> Reward:
+    """Grade candidate text with decoded context, without reading or writing files.
+
+    The caller supplies the contents of any context file named by the spec.
+    Empty candidate text scores zero, as it does through the file-based API.
+    """
     if spec.rubric not in RUBRICS:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
     references = tuple(reference for reference in spec.references if reference.strip())
@@ -164,10 +175,9 @@ def grade(spec: Spec, tests_dir: Path, workspace: Path, runtime: JudgeRuntimeCon
     if spec.rubric == RUBRIC_CHECKLIST and not criteria:
         raise InvalidTask("judge rubric 'checklist' needs non-empty criteria")
     checks = resolve_checks(spec.constraints) if spec.constraints else []
-    context = _context(spec, tests_dir)
+    context = context[:JUDGE_CONTEXT_LIMIT]
 
-    candidate = read_output(spec, workspace)
-    if candidate is None:
+    if not candidate.strip():
         return scored(0.0, reason="no_output")
 
     failed = [constraint.name for constraint, check in checks if not _passes(check, candidate, constraint.params)]
@@ -269,7 +279,7 @@ def _judge_reference(
     )
     budget = _CallBudget(runtime.max_requests) if runtime is not None else None
     try:
-        answer = _ask(judge.client, judge.model, prompt, judge.timeout, budget, spec.rubric)
+        answer = _ask(judge.client, judge.model, prompt, judge.timeout, budget)
     except Exception as error:
         evidence = error.evidence if isinstance(error, JudgeInfrastructureError) else {}
         raise JudgeInfrastructureError(
@@ -301,7 +311,7 @@ def _judge_checklist(
             context=context_block, question=_question(spec), candidate=candidate.strip(), criterion=criterion.strip()
         )
         try:
-            answer = _ask(judge.client, judge.model, prompt, judge.timeout, budget, spec.rubric)
+            answer = _ask(judge.client, judge.model, prompt, judge.timeout, budget)
         except Exception as error:
             evidence = error.evidence if isinstance(error, JudgeInfrastructureError) else {}
             raise JudgeInfrastructureError(
@@ -333,9 +343,7 @@ def _judge_checklist(
     )
 
 
-def _ask(
-    client: openai.OpenAI, model: str, prompt: str, timeout: float, budget: _CallBudget | None, rubric: str
-) -> _JudgeAnswer:
+def _ask(client: openai.OpenAI, model: str, prompt: str, timeout: float, budget: _CallBudget | None) -> _JudgeAnswer:
     """The parsed score and raw reply, retrying once when the model leaves out the SCORE line."""
     attempts: list[_JudgeAttempt] = []
     for attempt in range(1, ATTEMPTS + 1):
@@ -354,7 +362,7 @@ def _ask(
                 f"judge endpoint request failed: {error}", {"attempts": [item.evidence() for item in attempts]}
             ) from error
         attempts[-1] = _JudgeAttempt(number=attempt, response=reply)
-        score = _score(reply, rubric)
+        score = _score(reply)
         if score is not None:
             return _JudgeAnswer(score=score, response=reply, attempts=tuple(attempts))
         logger.warning("judge %s returned no SCORE line on attempt %d", model, attempt)
@@ -373,14 +381,13 @@ def _complete(client: openai.OpenAI, model: str, prompt: str, timeout: float) ->
     return response.choices[0].message.content or ""
 
 
-def _score(reply: str, rubric: str) -> float | None:
-    """The last ``SCORE: <value>`` in the reply, when it is a value the rubric allows."""
+def _score(reply: str) -> float | None:
+    """The last ``SCORE: <value>`` in the reply, when it is between zero and one."""
     matches = SCORE_PATTERN.findall(reply)
     if not matches:
         return None
     score = float(matches[-1])
-    valid_scores = {0.0, 1.0} if rubric == RUBRIC_CHECKLIST else {0.0, 0.5, 1.0}
-    return score if score in valid_scores else None
+    return score if 0.0 <= score <= 1.0 else None
 
 
 def _reasoning(reply: str) -> str:
