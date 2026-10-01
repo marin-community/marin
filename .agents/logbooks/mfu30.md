@@ -663,3 +663,19 @@ program, opposite-signed drift, so the one-signed drifts seen in single pairs ar
 Holdback (B): gate-02 at ab78bbe3ad has a bitwise forward but 4/36 gradient leaves differ (likely GEMM merging
 of the two shared experts' gate/up changing wgrad accumulation order; reassociation-level, within the ruling).
 A diff job is pending.
+
+## M30-039 CORRECTION: F0 reused F1's executable from the compilation cache (agent A, M30A-023)
+
+`m30-f0-seq-02` never compiled `jit_train_step`. Its remat VLOG printed no `Rematerialized ... in module
+jit_train_step` line (F1 printed 64), and per-step `stream_check.py` shows F1's patched layout (carry
+D2H/H2D alone on two streams). The persistent compilation cache key covers program, compile options and
+XLA flags, but not the `XLA_GPU_HOST_TRANSFER_STREAMS` env var, and stream assignment is fixed at compile time.
+So M30-038's "wheel build is neutral / F0 drew a good assignment" is **withdrawn**: F0 measured nothing about
+the fix. The fix's value stands on f1-seq-02 vs stackseq-03 (carry D2H exposed 0.141 -> 0.004 s/step;
+stackseq-03 shares one stream between carry and ~720 slice copies per step). The drift conclusion becomes
+**stronger**: F0 and F1 ran the identical executable and drifted in opposite directions, so single-pair
+one-signed drift is run-to-run noise. Hazard: the env switch is cache-unsafe in both directions (whichever
+setting compiles first wins). All campaign arms on this wheel set it ON; a real env-off control would need
+`JAX_ENABLE_COMPILATION_CACHE=false`. For landing, the switch belongs in DebugOptions (part of the cache key)
+or default-on in a promoted wheel. Confirmation arms (env ON, same program) reuse F1's cached executable,
+which is consistent.
