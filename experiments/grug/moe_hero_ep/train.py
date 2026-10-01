@@ -96,6 +96,7 @@ HERO_EP_RUNTIME_ENV = {
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
+XLA_HOST_MEMORY_OFFLOADING_FLAG = "--xla_gpu_enable_host_memory_offloading"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
@@ -230,6 +231,11 @@ def _apply_hero_ep_runtime_defaults(
         "--xla_gpu_memory_limit_slop_factor=85",
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
+    if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
+        # Post-schedule `HloRematerialization` charges pinned-host buffers against the device
+        # limit unless this is set, so the 36 GiB offloaded carry stack makes it recompute
+        # ~10 GiB of the backward per step that already fits in HBM.
+        flag_defaults += (f"{XLA_HOST_MEMORY_OFFLOADING_FLAG}=true",)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
