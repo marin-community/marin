@@ -433,3 +433,24 @@ Approved: branch push to marin-community/xla (no PR or release), wheel built on 
 `pjrt_build_job.sh` and the lock's cuDNN headers (not `marin-pjrt.yaml`, which creates a prerelease). A/B on
 the same wheel with the env var on vs off; gate `carry_stall.py` < 10 ms/step. JAX-only fallback (an
 integer-zero dependency from slices to carry, ~25 ms/step always paid) is held.
+
+## M30-023 Same-code repeat: noise and loss band (2026-10-01)
+
+`m30-ctl-s0-r2` (main, same flags and seed as `mhep-ctx4k-s0`): MFU 28.235 vs 28.261 over 180011-180059
+(28.241 over 180011-180099), duration 13.902 vs 13.889, peak 103.09, loss at 180000 identical. Same-code
+loss divergence (attention-backward nondeterminism): first steps 0, -3.6e-6, -1.3e-5, +6.4e-6; max |d|
+3.3e-4; late mean -3.9e-5; 35/89 positive (balanced).
+
+| arm vs s0 | max abs d | late mean d | late positive |
+|---|---|---|---|
+| m30-ctl-s0-r2 (same code) | 3.3e-4 | -3.9e-5 | 35/89 |
+| m30c-grnflag-01 (rounding changes) | 3.0e-4 | -3.4e-5 | 15/43 |
+| m30a-hmo-02 (remat placement only) | 4.4e-4 | +1.6e-4 | 48/49 |
+| m30b-unfilled-02 (bitwise forward, reorganized backward) | 9.6e-4 | +1.8e-4 | 34/49 |
+
+The two bitwise-forward arms drift one-signed (~+1.7e-4), and unfilled-02's max is ~3x the same-code
+max. Neither change alters the math, so a systematic bias is implausible: within one pair, chaotic
+divergence shares its sign across consecutive steps (prior hero cutovers showed the same relaunch
+signature). One pair per arm cannot separate the two. The final program therefore gets a longer
+replicated loss check: >= 2 paired runs of >= 100 steps vs same-code controls, judged against the C-C
+spread.
