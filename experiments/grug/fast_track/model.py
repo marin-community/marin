@@ -200,6 +200,16 @@ class KdaHeadPairing(StrEnum):
     """Each sub-step applies its head's full log-decay: the pair's state decays twice per token."""
 
 
+class UngatedExpertActivation(StrEnum):
+    """The activation of the ungated (single ``W_up``) experts."""
+
+    RELU2 = "relu2"
+    """``leaky_relu(u, expert_leaky_slope)^2``."""
+    POLYNORM = "polynorm"
+    """PolyNorm (Motif 2.6B / Motif 3, arXiv 2608.09119): ``sum_{n=1..3} (1/3) u^n / RMS(u^n)``, each power
+    RMS-normalized per token over the expert's hidden units. Fixed coefficients (Motif learns them per expert)."""
+
+
 class ExpertVisitBias(StrEnum):
     """Whether, and how, each routed expert a token visits writes its own learned vector into the residual."""
 
@@ -222,6 +232,16 @@ class RouterCombine(StrEnum):
     no renormalization: a token's total expert weight can vary."""
     SQRT_SOFTPLUS_RENORM = "sqrt_softplus_renorm"
     """``sqrt(softplus(logit))`` (DeepSeek-V4's SqrtSoftplus gate), renormalized to sum to ``routing_renorm_sum``."""
+
+
+class AttnResTokenQuery(StrEnum):
+    """A per-token AttnRes query: each gate scores source ``n`` with ``(q_g + q_e[token]) . rms_norm(source_n)``."""
+
+    NONE = "none"
+    SHARED = "shared"
+    """One ``[V, D]`` table (zero-init) shared by every gate."""
+    PER_GATE = "per_gate"
+    """One ``[V, D]`` table per gate, as each gate has its own static query."""
 
 
 class ValueEmbeds(StrEnum):
@@ -692,6 +712,10 @@ class GrugModelConfig:
     expert_visit_bias: ExpertVisitBias = ExpertVisitBias.NONE
     """A per-layer ``[E, D]`` table (init 0, Adam) whose rows for the token's selected experts are added to the
     routed output, so later layers can condition on which experts a token visited."""
+    moe_ungated_activation: UngatedExpertActivation = UngatedExpertActivation.RELU2
+    """Activation of the ungated routed experts (``moe_ungated_relu2``)."""
+    shared_ungated_activation: UngatedExpertActivation = UngatedExpertActivation.RELU2
+    """Activation of the ungated shared experts (``shared_ungated_relu2``)."""
     simbal_loss_weight: float = 0.0
     """SimBal (arXiv 2506.14038): adds ``weight * sum_l ||R_l^T R_l - I||_1`` over the real-expert router
     columns ``R_l`` [D, E] to the training loss (unnormalized, as in the paper; it uses 0.1). 0: off."""
@@ -885,6 +909,12 @@ class GrugModelConfig:
     mla_key_offset: bool = False
     """modded-nanogpt partial key offset (record #49): on the MLA layers, the first half of each head's key
     channels come from the previous token (within documents), enabling one-layer induction."""
+    mla_grouped_diff: int = 0
+    """Grouped differential attention (Motif 3's GDLA, arXiv 2608.09119) on the MLA layers, with this group ratio
+    ``g``: ``num_heads / g`` noise maps (their own query and key up-projections), each shared by ``g`` signal
+    heads, give ``D = H_signal - lambda * H_noise`` over the same values, with a token-dependent
+    ``lambda = sigmoid(x W_lambda)`` per head (``W_lambda`` zero-init, so lambda starts at 0.5). The sigmoid keeps
+    the subtraction a subtraction (the unconstrained DIFF lambda turned negative, batch 77). 0: off."""
     mla_diff_attn: bool = False
     """Differential attention (DIFF Transformer, arXiv 2410.05258) on the MLA layers:
     ``(softmax(q1 k1^T) - lambda softmax(q2 k2^T)) v`` with a second q projection and key up-projection
@@ -903,6 +933,9 @@ class GrugModelConfig:
     attn_res_dynamic_rank: int = 0
     """MUDD-style dynamic AttnRes: each gate adds a per-token logit delta ``GELU(rms_norm(stream) @ W1) @ W2``
     over its sources (this hidden width, ``W2`` zero-init) to the static-query logits. 0: off."""
+    attn_res_token_query: AttnResTokenQuery = AttnResTokenQuery.NONE
+    """Token-embedding AttnRes queries (``AttnResTokenQuery``): between the data-independent query and a full
+    hidden-state projection (the AttnRes paper's Table 4, arXiv 2603.15031). Single-head AttnRes only."""
     xsa_mode: str = "fixed"
     """MLA Exclusive Self Attention strength: ``fixed`` subtracts the full self-value projection,
     ``learned`` scales it by a per-head scalar (init 1), ``gated`` by ``2 * sigmoid(x @ W_xsa)`` per token and
@@ -1262,6 +1295,16 @@ class GrugModelConfig:
                 raise ValueError("kda_dd_rope rotates channel pairs and needs an even head_dim")
             if self.kda_push_buckets:
                 raise ValueError("kda_dd_rope needs pair-tied decays; kda_push_buckets' per-channel decays are not")
+        if self.mla_grouped_diff:
+            if self.mla_diff_attn or self.num_heads % self.mla_grouped_diff:
+                raise ValueError("mla_grouped_diff needs num_heads divisible by it and no mla_diff_attn")
+        poly = UngatedExpertActivation.POLYNORM
+        if self.moe_ungated_activation == poly and (
+            not self.moe_ungated_relu2 or self.expert_leaky_slope or self.moe_fused_relu2
+        ):
+            raise ValueError("moe_ungated_activation=polynorm needs moe_ungated_relu2, no leaky slope, no fused ReLU^2")
+        if self.shared_ungated_activation == poly and (not self.shared_ungated_relu2 or self.expert_leaky_slope):
+            raise ValueError("shared_ungated_activation=polynorm needs shared_ungated_relu2 and no leaky slope")
         if self.kda_head_pairing != KdaHeadPairing.NONE:
             if self.local_mixer != LocalMixer.KDA or self.num_heads % 2:
                 raise ValueError("kda_head_pairing needs local_mixer=kda and an even num_heads")
@@ -1566,6 +1609,9 @@ class CausalSelfAttention(eqx.Module):
     w_uk2: Float[Array, "L NH"] | None  # second key up-projection from the KV latent (cfg.mla_diff_attn)
     diff_lambda: Float[Array, "4 H"] | None  # [lq1, lk1, lq2, lk2] of the DIFF lambda reparameterization
     diff_lambda_init: Float[Array, ""] | None  # constant lambda_init of this layer (never trained)
+    w_qn: Float[Array, "D MH"] | None  # noise-map query projection, M = N / g heads (cfg.mla_grouped_diff)
+    w_ukn: Float[Array, "L MH"] | None  # noise-map key up-projection from the KV latent (cfg.mla_grouped_diff)
+    gda_lambda: Float[Array, "D N"] | None  # token-dependent lambda logits per signal head (cfg.mla_grouped_diff)
     vres_lambda: Float[Array, " 2"] | None  # (l1 on v, l2 on the first layer's v): cfg.value_residual_layers
     bias_q: Float[Array, " NH"] | None
     bias_dkv: Float[Array, " L"] | None
@@ -1592,6 +1638,8 @@ class CausalSelfAttention(eqx.Module):
             kvl = cfg.mla_kv_latent_dim
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
             diff = cfg.mla_diff_attn
+            group = cfg.mla_grouped_diff
+            k_qn, k_ukn = random.split(random.fold_in(key, 2))
             return CausalSelfAttention(
                 w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
                 w_k=None,
@@ -1624,6 +1672,9 @@ class CausalSelfAttention(eqx.Module):
                 w_uk2=reshard(_init_weight(k_uk2, (kvl, n * h), std), P(None, "model")) if diff else None,
                 diff_lambda=0.1 * random.normal(k_lam, (4, h), jnp.float32) if diff else None,
                 diff_lambda_init=((0.8 - 0.6 * jnp.exp(-0.3 * jnp.asarray(layer_index, jnp.float32))) if diff else None),
+                w_qn=(reshard(_init_weight(k_qn, (d, n // group * h), std), P(_FSDP_AXES, None)) if group else None),
+                w_ukn=reshard(_init_weight(k_ukn, (kvl, n // group * h), std), P(None, None)) if group else None,
+                gda_lambda=reshard(jnp.zeros((d, n)), P(None, None)) if group else None,
                 vres_lambda=_vres_lambda_init(cfg),
                 bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
@@ -1637,8 +1688,8 @@ class CausalSelfAttention(eqx.Module):
             )
         if "qkv" in cfg.proj_biases:
             raise ValueError("proj_biases 'qkv' is implemented for MLA and KDA only")
-        if cfg.mla_diff_attn:
-            raise ValueError("mla_diff_attn needs mla")
+        if cfg.mla_diff_attn or cfg.mla_grouped_diff:
+            raise ValueError("mla_diff_attn and mla_grouped_diff need mla")
         if cfg.value_residual_layers:
             raise ValueError("value_residual_layers is implemented for MLA and KDA only")
         if cfg.mla_v_filter:
@@ -1675,6 +1726,9 @@ class CausalSelfAttention(eqx.Module):
             w_uk2=None,
             diff_lambda=None,
             diff_lambda_init=None,
+            w_qn=None,
+            w_ukn=None,
+            gda_lambda=None,
             vres_lambda=None,
             bias_q=None,
             bias_dkv=None,
@@ -1744,6 +1798,16 @@ class CausalSelfAttention(eqx.Module):
         second_qk = None
         if self.w_q2 is not None and self.w_uk2 is not None:
             second_qk = (project_q(self.w_q2), project_k(self.w_uk2))
+        if self.w_qn is not None and self.w_ukn is not None:
+            # Each noise map's projection columns repeated for its g signal heads, so the per-head transforms
+            # (SConvs, norms, qk_mult) apply unchanged.
+            group = self.cfg.mla_grouped_diff
+
+            def tiled(w: jax.Array) -> jax.Array:
+                w = rearrange(w, "i (m d) -> i m d", d=head_dim)
+                return rearrange(jnp.repeat(w, group, axis=1), "i n d -> i (n d)")
+
+            second_qk = (project_q(tiled(self.w_qn)), project_k(tiled(self.w_ukn)))
         v = rearrange(jnp.einsum("bsl,ld->bsd", v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         if self.value_embed is not None:
             assert self.ve_lambda is not None and token_ids is not None
@@ -1932,7 +1996,12 @@ class CausalSelfAttention(eqx.Module):
             return attention(qh, kh, vh, mask, implementation=attn_impl, rel_bias=rel_bias)[..., :head_dim]
 
         attn_out = _attend(q, k)
-        if second_qk is not None:
+        if second_qk is not None and self.gda_lambda is not None:
+            # Grouped differential attention: the shared noise map's read, scaled per token and head.
+            attn_noise = _attend(*_transform_qk(*second_qk))
+            lam = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.gda_lambda).astype(jnp.float32))[..., None]
+            attn_out = (attn_out.astype(jnp.float32) - lam * attn_noise.astype(jnp.float32)).astype(attn_out.dtype)
+        elif second_qk is not None:
             # Differential attention: subtract lambda times a second softmax map over the same values, then
             # RMS-normalize each head and scale by (1 - lambda_init).
             assert self.diff_lambda is not None and self.diff_lambda_init is not None
@@ -3453,7 +3522,10 @@ def _shared_experts_tail(
         hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
     else:
         slope = cfg.expert_leaky_slope
-        hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+        if cfg.shared_ungated_activation == UngatedExpertActivation.POLYNORM:
+            hidden = jnp.concatenate([polynorm(u) for u in ups], axis=1)
+        else:
+            hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
     shared_out = jnp.einsum("tm,md->td", hidden, w_down, out_sharding=out_sharding)
     if shared_gate is not None:
         gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), shared_gate)
@@ -4557,8 +4629,33 @@ def _drop_renorm_factor(
     return factor, stats
 
 
+_POLYNORM_POWERS = 3
+
+
+def _power_rms_terms(u: jax.Array) -> list[tuple[jax.Array, jax.Array]]:
+    """``(u^n, RMS(u^n))`` for n = 1..3 in float32, the RMS over the last (hidden-unit) axis per token."""
+    z = u.astype(jnp.float32)
+    powers = [z, z * z, z * z * z]
+    return [(p, jnp.sqrt(jnp.mean(jnp.square(p), axis=-1, keepdims=True) + 1e-6)) for p in powers]
+
+
+def polynorm(u: jax.Array) -> jax.Array:
+    """PolyNorm with equal fixed coefficients (``UngatedExpertActivation.POLYNORM``)."""
+    return (sum(p / rms for p, rms in _power_rms_terms(u)) / _POLYNORM_POWERS).astype(u.dtype)
+
+
+def polynorm_over_input(u: jax.Array) -> jax.Array:
+    """``polynorm(u) / u``, defined at 0 (no bias term): the gate activation for backends that tie the gate to
+    ``W_up`` and compute ``act(u) * u``."""
+    (_, rms1), (_, rms2), (_, rms3) = _power_rms_terms(u)
+    z = u.astype(jnp.float32)
+    return ((1.0 / rms1 + z / rms2 + z * z / rms3) / _POLYNORM_POWERS).astype(u.dtype)
+
+
 def _ungated_expert_activation(cfg: "GrugModelConfig"):
-    """Activation of the ungated experts: ``leaky_relu(u, slope)^2`` (plain ReLU^2 at slope 0)."""
+    """Activation of the ungated experts: ``leaky_relu(u, slope)^2`` (plain ReLU^2 at slope 0), or PolyNorm."""
+    if cfg.moe_ungated_activation == UngatedExpertActivation.POLYNORM:
+        return polynorm
     if cfg.expert_leaky_slope:
         if cfg.moe_fused_relu2:
             raise ValueError("moe_fused_relu2 implements plain ReLU^2 only; set expert_leaky_slope=0")
@@ -4569,6 +4666,8 @@ def _ungated_expert_activation(cfg: "GrugModelConfig"):
 
 def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):
     """``act`` with ``act(u) * u == leaky_relu(u, slope)^2`` for backends that take the gate tied to ``W_up``."""
+    if cfg.moe_ungated_relu2 and cfg.moe_ungated_activation == UngatedExpertActivation.POLYNORM:
+        return polynorm_over_input
     if cfg.moe_ungated_relu2 and cfg.expert_leaky_slope:
         slope_sq = cfg.expert_leaky_slope**2
         return lambda u: jax.nn.leaky_relu(u, slope_sq)
@@ -4651,6 +4750,13 @@ def _attn_res_source_logits(
         return dots * inv_rms[None, ..., None]
     dots = jnp.einsum("bsd,gd->gbs", source, queries.astype(source.dtype), preferred_element_type=jnp.float32)
     return dots * inv_rms[None]
+
+
+def _token_query_logit(source: Float[Array, "B S D"], rows: Float[Array, "B S D"], eps: float) -> Float[Array, "B S"]:
+    """``rows . rms_norm(source)`` per token, in float32 (``attn_res_token_query``)."""
+    inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(source.astype(jnp.float32)), axis=-1) + eps)
+    dots = jnp.einsum("bsd,bsd->bs", source, rows.astype(source.dtype), preferred_element_type=jnp.float32)
+    return dots * inv_rms
 
 
 def _block_logit(block_logits: jax.Array, queries: jax.Array, gate_index: int) -> jax.Array:
@@ -4773,6 +4879,11 @@ def _bias_gate_logits(
         hid = jax.nn.gelu(jnp.einsum("bsd,dr->bsr", rms_norm(total, eps), dyn_w1[gate_index]))
         delta = jnp.einsum("bsr,rn->bsn", hid, extras["dyn_w2"][gate_index])
         logits = [logit + delta[..., c] for logit, c in zip(logits, columns, strict=True)]
+    token_query = extras.get("token_query")
+    if token_query is not None:
+        # The token's query row against each source's normed key; the static query's part is already in logits.
+        row = _embedding_gather(token_query[gate_index % token_query.shape[0]], extras["token_ids"])
+        logits = [logit + _token_query_logit(src, row, eps) for logit, src in zip(logits, sources, strict=True)]
     for name in ("bias", "mask"):
         table = extras.get(name)
         if table is not None:
@@ -5302,6 +5413,8 @@ class Transformer(eqx.Module):
     """Per-gate pull projection for the embedding logit (``attn_res_pull_embed``)."""
     attn_res_query_dyn1: Float[Array, "G D R"] | None
     attn_res_query_dyn2: Float[Array, "G R N"] | None
+    attn_res_query_token: Float[Array, "T V D"] | None
+    """Token-embedding queries (``attn_res_token_query``): one table, or one per gate."""
     """``attn_res_dynamic_rank`` MLP per gate, in query-stack order (``dyn2`` zero-init)."""
     attn_res_query_backout: Float[Array, " N"] | None
     """Signed per-source correction of the final AttnRes gate (``attn_res_final_signed``), zero-init."""
@@ -5625,6 +5738,22 @@ class Transformer(eqx.Module):
                     jnp.float32,
                 )
                 if cfg.attn_res_dynamic_rank > 0
+                else None
+            ),
+            attn_res_query_token=(
+                jnp.zeros(
+                    (
+                        (
+                            _attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate)
+                            if cfg.attn_res_token_query == AttnResTokenQuery.PER_GATE
+                            else 1
+                        ),
+                        cfg.vocab_size,
+                        cfg.hidden_dim,
+                    ),
+                    jnp.float32,
+                )
+                if cfg.attn_res_token_query != AttnResTokenQuery.NONE
                 else None
             ),
             attn_res_query_dyn2=(
@@ -6087,6 +6216,10 @@ class Transformer(eqx.Module):
                 assert self.attn_res_query_sub is not None
                 queries = queries_flat[:, None, :] + _full_width_sub_queries(self.attn_res_query_sub, cfg)
         logit_bias = _gate_extras(self, queries.shape[0])
+        if self.attn_res_query_token is not None:
+            if cfg.attn_res_heads > 1:
+                raise ValueError("attn_res_token_query needs single-head AttnRes (attn_res_heads=1)")
+            logit_bias = {**(logit_bias or {}), "token_ids": token_ids}
         if self.router_tok_a is not None:
             # router_token_bias_rank: every MoE layer reads the tokens' rows of the shared table.
             logit_bias = {**(logit_bias or {}), "router_tok": _embedding_gather(self.router_tok_a, token_ids)}
@@ -6927,6 +7060,7 @@ def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | 
         "temperature": _temperature_rows(model),
         "dyn_w1": model.attn_res_query_dyn1,
         "dyn_w2": model.attn_res_query_dyn2,
+        "token_query": model.attn_res_query_token,
     }
     return extras if any(v is not None for v in extras.values()) else None
 
