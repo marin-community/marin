@@ -9,14 +9,15 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useApi } from '@/composables/useApi'
+import { apiGet, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { isPartialCoverage } from '@/utils/panel'
+import { cohortWarning, isPartialCoverage } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
 
 const route = useRoute()
@@ -39,6 +40,19 @@ const { data, error, refresh } = useApi<Comparison>(() => {
   return `api/compare?${params.toString()}`
 })
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
+const comparabilityWarning = computed(() => {
+  if (!meta.value) return null
+  const raw = route.query.cohort
+  const selected = (Array.isArray(raw) ? raw[0] : raw) || meta.value.default_cohort
+  return cohortWarning(selected, meta.value)
+})
+
+async function goToModel(model: string) {
+  const raw = route.query.cohort
+  const selected = Array.isArray(raw) ? raw[0] : raw
+  const cohort = selected || (meta.value ?? await apiGet<Meta>('api/meta')).default_cohort
+  await router.push({ path: `/models/${encodeURIComponent(model)}`, query: { cohort } })
+}
 
 function fromQuery(): string[] {
   const raw = route.query.models
@@ -128,11 +142,12 @@ const chartSeries = computed(() =>
 <template>
   <section>
     <div class="mb-4">
-      <h2 class="text-lg font-semibold">Compare</h2>
+      <h2 class="text-lg font-semibold">Compare{{ comparabilityWarning ? '*' : '' }}</h2>
       <p class="text-xs text-text-muted mt-0.5">
         Pick 2–{{ MAX_COMPARE }} models. The ranking scores them on their shared benchmarks only, and every gap comes
         with an interval, so neither a coverage difference nor sampling noise reads as a lead.
       </p>
+      <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
     </div>
 
     <!-- model picker -->
@@ -170,6 +185,7 @@ const chartSeries = computed(() =>
     <EmptyState v-if="!comparing" icon="⚖" message="Pick at least two models to compare." />
 
     <div v-else-if="data" class="space-y-6">
+      <PolicyRejections :rejections="data.policy_rejections" scope="this comparison" />
       <!-- shared-benchmark ranking -->
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
@@ -195,7 +211,7 @@ const chartSeries = computed(() =>
               <span class="font-mono text-text-muted tabular-nums w-5">{{ i + 1 }}</span>
               <button
                 class="font-mono text-[13px] font-semibold text-accent hover:underline"
-                @click="router.push(`/models/${encodeURIComponent(entry.model)}`)"
+                @click="goToModel(entry.model)"
               >
                 {{ entry.model }}
               </button>

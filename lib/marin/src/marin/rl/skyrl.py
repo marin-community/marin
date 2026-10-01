@@ -719,6 +719,13 @@ def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunc
     )
 
 
+def _launch_data_source(source: ResolvedDataSource) -> dict:
+    value = asdict(source)
+    if isinstance(source, ResolvedTaskTroveDataSource):
+        value["selection"]["tag_match"] = source.selection.tag_match.value
+    return value
+
+
 def _launch_config_yaml(
     spec: SkyRLSpec,
     execution: IrisSkyRLExecution,
@@ -806,8 +813,8 @@ def _launch_config_yaml(
                 if _declared_config_value(recipe, "data.kind") is not _MISSING_CONFIG_VALUE
                 else "tasks"
             ),
-            "train_data": [asdict(source) for source in train_data],
-            "validation_data": [asdict(source) for source in validation_data],
+            "train_data": [_launch_data_source(source) for source in train_data],
+            "validation_data": [_launch_data_source(source) for source in validation_data],
         },
         "skyrl": recipe,
     }
