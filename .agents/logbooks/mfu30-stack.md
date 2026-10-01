@@ -152,3 +152,24 @@ wins), with its own trace arm, since PGLE matches instruction names; (3) `pgle_b
 `--gated-norm-implementation pallas_gpu --sconv-implementation triton_gpu`. B reports the attention backward
 is run-to-run nondeterministic (~1e-5 rel-rms), so same-code runs are not bitwise; the fidelity reference is
 the rounding-perturbation band from `m30c-grnflag-01`.
+
+### Trace arms resubmitted with A's memory settings (2026-09-30 18:40 PT)
+
+The `-01` pair was cancelled before starting: D's ~18 GiB saved routed output would push XLA's remat limit
+((pool - persistent) x slop = 87.66 GiB at fraction 0.75 / slop 85) into cutting D's gain. A's pair for D
+arms: `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78`, `--xla_gpu_memory_limit_slop_factor=105` (remat limit ~114 GiB).
+#9481's attention re-gather is now a switch, `--regather-attention-weights` (default off; A found it
+redundant with the host-offloading flag). This pair keeps it on and folds in the Triton short conv, so the
+trace is the final-program candidate for PGLE:
+
+- `m30c-stackpipe-trace-02` (`/mwittmann/m30c-stackpipe-trace-02-coord`, port 33304) from
+  `research/mcwitt/mfu30-stack-pipelined` @ `fcb44f6920`.
+- `m30c-stackseq-trace-02` (`/mwittmann/m30c-stackseq-trace-02-coord`, port 33305) from
+  `research/mcwitt/mfu30-stack` @ `7e9e2aa52c`.
+
+Both: `--xla "--xla_gpu_enable_host_memory_offloading=true --xla_gpu_memory_limit_slop_factor=105
+--xla_gpu_enable_triton_gemm=false"`, env `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78 TF_CPP_MIN_LOG_LEVEL=0
+TF_CPP_VMODULE=hlo_rematerialization=1`, CLI `--gated-norm-implementation pallas_gpu --sconv-implementation
+triton_gpu --regather-attention-weights`, seed 0, 180000-180060, profiled 180021-180023. Checks per arm:
+"Rematerialized N instructions" N <= ~10; "Peak memory for main" <= ~110 GiB (else slop 110);
+memory/limit_gib ~143.76; memory/peak_gib < ~139; loss against the grnflag-01 band.
