@@ -38,6 +38,7 @@ from experiments.post_training.tasktrove.mcqa_routing_pipeline import (
     routing_step,
 )
 from experiments.post_training.tasktrove.publish import publish_release
+from experiments.post_training.tasktrove.task_format import VERIFYIT_REVISION
 from experiments.post_training.tasktrove.task_templates import build_template_index, summarize_templates
 from experiments.post_training.tasktrove.verify import filter_tasks
 
@@ -69,7 +70,7 @@ def launch_commit() -> str:
     return provenance.base_commit
 
 
-def build_workflow(tool_ref: str) -> TaskTroveWorkflow:
+def build_workflow(marin_revision: str, tool_ref: str) -> TaskTroveWorkflow:
     coordinator = ResourceConfig.with_cpu(cpu=4, ram="16g")
     raw = hf_download(
         "raw/tasktrove", hf_id=TASKTROVE_HF_ID, revision=TASKTROVE_REVISION, version=RAW_VERSION, urls_glob=(TASKS_GLOB,)
@@ -108,7 +109,7 @@ def build_workflow(tool_ref: str) -> TaskTroveWorkflow:
     )
     routing = routing_step(
         input_path=DEFAULT_INPUT,
-        git_revision=tool_ref,
+        git_revision=marin_revision,
         sample_size=DEFAULT_SAMPLE_SIZE,
         sample_seed=DEFAULT_SAMPLE_SEED,
     )
@@ -137,7 +138,7 @@ def build_workflow(tool_ref: str) -> TaskTroveWorkflow:
 @click.option("--run", "do_run", is_flag=True, help="Build the selected stage; the default prints its plan.")
 @click.option("--max-concurrent", type=int, default=8, show_default=True)
 def main(stage: str, do_run: bool, max_concurrent: int) -> None:
-    target = getattr(build_workflow(launch_commit()), stage)
+    target = getattr(build_workflow(launch_commit(), VERIFYIT_REVISION), stage)
     if do_run:
         run(target, max_concurrent=max_concurrent)
     else:

@@ -11,8 +11,16 @@ from pydantic import ValidationError
 from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, NumericAnswerVerifier, Verifier
 from taskcompendium.models import ConversationTrace, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention
+from taskcompendium.verifiers.arc_injection import ArcGridVerifier, ArcTransformVerifier, IndirectInjectionVerifier
+from taskcompendium.verifiers.atlas_answers import AbstentionAnswersVerifier, MathAnswerVerifier
+from taskcompendium.verifiers.constraints import IfevalVerifier, JsonSchemaVerifier
+from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
+from taskcompendium.verifiers.reasoning import PuzzleAnswerVerifier, ReasoningGymVerifier
+from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
+from taskcompendium.verifiers.runtime import CalendarStateVerifier, CaptureOutputVerifier
+from taskcompendium.verifiers.schedule import ScheduleAnswerVerifier
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
@@ -20,6 +28,20 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
         VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
         VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
+        VerifierKind.CAPTURE_OUTPUT: CaptureOutputVerifier,
+        VerifierKind.CALENDAR_STATE: CalendarStateVerifier,
+        VerifierKind.IFEVAL: IfevalVerifier,
+        VerifierKind.JSON_SCHEMA: JsonSchemaVerifier,
+        VerifierKind.TASKTROVE_EXECUTABLE: TaskTroveExecutableVerifier,
+        VerifierKind.REASONING_GYM: ReasoningGymVerifier,
+        VerifierKind.PUZZLE_ANSWER: PuzzleAnswerVerifier,
+        VerifierKind.SCHEDULE_ANSWER: ScheduleAnswerVerifier,
+        VerifierKind.REFERENCE_ANSWERS: ReferenceAnswersVerifier,
+        VerifierKind.MATH_ANSWER: MathAnswerVerifier,
+        VerifierKind.ABSTENTION_ANSWERS: AbstentionAnswersVerifier,
+        VerifierKind.ARC_GRID: ArcGridVerifier,
+        VerifierKind.ARC_TRANSFORM: ArcTransformVerifier,
+        VerifierKind.INDIRECT_INJECTION: IndirectInjectionVerifier,
     }
 )
 

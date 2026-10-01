@@ -12,7 +12,7 @@ scoring the mean. That is ``judge`` mode with the ``checklist`` rubric: the ques
 import re
 import tomllib
 
-from tasktrove_verify.spec import RUBRIC_CHECKLIST, JudgeSpec
+from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

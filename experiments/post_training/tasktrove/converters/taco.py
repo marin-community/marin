@@ -19,7 +19,7 @@ converted.
 import re
 import warnings
 
-from tasktrove_verify.spec import Compare, StdioSpec
+from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

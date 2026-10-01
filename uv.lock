@@ -5946,7 +5946,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
-    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -5978,7 +5978,7 @@ test = [
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
 ]
 
 [package.metadata]
@@ -6081,7 +6081,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
-    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
+    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -6113,7 +6113,7 @@ test = [
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
+    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b" },
 ]
 
 [[package]]
@@ -7139,7 +7139,7 @@ dependencies = [
     { name = "marin-zephyr" },
     { name = "seaborn" },
     { name = "sqlalchemy" },
-    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "watchdog" },
 ]
 
@@ -7184,7 +7184,7 @@ requires-dist = [
     { name = "quack-kernels", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==0.6.1" },
     { name = "seaborn", specifier = ">=0.13" },
     { name = "sqlalchemy", specifier = ">=2" },
-    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
+    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==2.11.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-root", extra = "pipeline" } },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = ">=3.6.0,<3.7" },
     { name = "watchdog" },
@@ -12992,6 +12992,27 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/15/c0/0be24758891ef825f2065cd5db8741aaddabe3e248ee6acc5e8a80f04005/uvloop-0.22.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0530a5fbad9c9e4ee3f2b33b148c6a64d47bbad8000ea63704fa8260f4cf728e", size = 4366890, upload-time = "2025-10-16T22:16:40.547Z" },
     { url = "https://files.pythonhosted.org/packages/d2/53/8369e5219a5855869bcee5f4d317f6da0e2c669aecf0ef7d371e3d084449/uvloop-0.22.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:bc5ef13bbc10b5335792360623cc378d52d7e62c2de64660616478c32cd0598e", size = 4119472, upload-time = "2025-10-16T22:16:41.694Z" },
     { url = "https://files.pythonhosted.org/packages/f8/ba/d69adbe699b768f6b29a5eec7b47dd610bd17a69de51b251126a801369ea/uvloop-0.22.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:1f38ec5e3f18c8a10ded09742f7fb8de0108796eb673f30ce7762ce1b8550cad", size = 4239051, upload-time = "2025-10-16T22:16:43.224Z" },
+]
+
+[[package]]
+name = "verifyit"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b#a398c65d851941ce8e39e2986993c6108dd2e10b" }
+dependencies = [
+    { name = "tomlkit" },
+]
+
+[package.optional-dependencies]
+answer = [
+    { name = "math-verify" },
+    { name = "sympy" },
+]
+reasoning-gym = [
+    { name = "reasoning-gym" },
+]
+schema = [
+    { name = "jsonschema" },
+    { name = "pyyaml" },
 ]
 
 [[package]]

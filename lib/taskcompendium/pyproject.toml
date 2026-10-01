@@ -7,10 +7,11 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Semantic answer tasks and Harbor direct-chat lowerings"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.0", "tasktrove-verify"]
+dependencies = ["pyarrow>=15.0", "pydantic>=2.0", "verifyit[answer,judge,reasoning-gym,schema]", "marin-shellbox"]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
+pipeline = ["datasets>=3.1.0,<5.0.0"]
 
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
@@ -19,7 +20,8 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 
 [tool.uv.sources]
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
-tasktrove-verify = { path = "../tasktrove-verify", editable = true }
+verifyit = { git = "https://github.com/marin-community/verifyit.git", rev = "a398c65d851941ce8e39e2986993c6108dd2e10b" }
+marin-shellbox = { path = "../shellbox", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
@@ -46,6 +48,7 @@ known-first-party = ["taskcompendium"]
 
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
-project-includes = ["src"]
+use-ignore-files = false
+project-includes = ["src/**/*.py"]
 search-path = ["src"]
 python-interpreter = ".venv/bin/python"

@@ -10,8 +10,8 @@ order-insensitive multiset of "records" (one per output line): ANSI codes, a lea
 ``/workspace/`` or ``./`` path prefix, and a trailing size unit are stripped, and every expected
 record must appear in the actual output, with no extra record that looks like an error. That is
 not a plain normalized string match (records are compared as a multiset, extra non-error output
-is tolerated), so this maps onto :class:`ScriptSpec`: a new, self-contained checker under
-``tests/`` reimplements the same comparison without importing the old grader.
+is tolerated), so this maps onto :class:`ScriptSpec`: a checker under ``tests/`` calls
+the shared comparison in verifyit. NUL-delimited captures are compared as records too.
 
 Every task in this source also ships a root ``setup_files/`` directory instruction.md tells the
 agent to run (``bash /setup_files/setup_seeds.sh``) before starting, mirrored under
@@ -20,7 +20,7 @@ agent to run (``bash /setup_files/setup_seeds.sh``) before starting, mirrored un
 
 import json
 
-from tasktrove_verify.spec import ScriptSpec
+from verifyit.spec import ScriptSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
@@ -51,64 +51,34 @@ _CHECKER_TEMPLATE = '''\
 """Score a captured shell session's output against one task's oracle output.
 
 Reads the expected output from __DATA_NAME__ beside this script (under
-``$TASKTROVE_TESTS_DIR``), compares it against the capture file named by its one argument,
-and reports the reward through ``$TASKTROVE_LOGS_DIR/reward.json``. The comparison is a
+``$VERIFYIT_TESTS_DIR``), compares it against the capture file named by its one argument,
+and reports the reward through ``$VERIFYIT_LOGS_DIR/reward.json``. The comparison is a
 normalized, order-insensitive multiset of "records" (one per output line; ANSI codes, a leading
 ``/workspace/`` or ``./`` prefix, a trailing size unit, and repeated whitespace are stripped):
 every expected record must appear in the actual output, and no extra record may look like an
-error. Self-contained: it does not import the original dataset's grader.
+error. It uses verifyit rather than the original dataset's grader.
 """
 
-import collections
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
+from verifyit.modes.grade_nl2bash import score_capture
+
 OUTPUT = Path(sys.argv[1])
-ANSI = re.compile(r"\\x1b\\[[0-?]*[ -/]*[@-~]")
-ERROR = re.compile(r"(?i)\\b(?:error|failed|failure|no such file|not found|permission denied|traceback)\\b")
-UNIT = re.compile(r"(?i)\\s+(?:bytes?|kb|kib|mb|mib|gb|gib)\\s*$")
-
-
-def _record(line):
-    value = ANSI.sub("", line).strip()
-    value = re.sub(r"(?<!\\S)/workspace/", "", value)
-    value = re.sub(r"(?<!\\S)\\./", "", value)
-    value = UNIT.sub("", value)
-    return re.sub(r"\\s+", " ", value).strip()
-
-
-def _records(text):
-    return [record for line in text.splitlines() if (record := _record(line))]
-
-
-def _score(actual, expected):
-    expected_records = collections.Counter(_records(expected))
-    actual_records = collections.Counter(_records(actual))
-    if not expected_records:
-        return (1, []) if not actual_records else (0, ["expected empty output"])
-    missing = expected_records - actual_records
-    if missing:
-        return 0, [f"missing expected records: {dict(missing)}"]
-    extras = actual_records - expected_records
-    for record in extras:
-        if ERROR.search(record):
-            return 0, [f"unexpected error record: {record}"]
-    return 1, []
 
 
 def main():
-    tests_dir = Path(os.environ["TASKTROVE_TESTS_DIR"])
-    logs_dir = Path(os.environ["TASKTROVE_LOGS_DIR"])
+    tests_dir = Path(os.environ["VERIFYIT_TESTS_DIR"])
+    logs_dir = Path(os.environ["VERIFYIT_LOGS_DIR"])
     data = json.loads((tests_dir / "__DATA_NAME__").read_text())
     expected = data["expected_output"]
 
     if not OUTPUT.exists():
         reward, errors = 0, [f"missing output: {OUTPUT}"]
     else:
-        reward, errors = _score(OUTPUT.read_text(errors="replace"), expected)
+        reward, errors = score_capture(OUTPUT.read_text(errors="replace"), expected)
 
     for error in errors:
         print(error, file=sys.stderr)

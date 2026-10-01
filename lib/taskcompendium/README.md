@@ -1,10 +1,25 @@
 # TaskCompendium
 
+The bounded [task curation pipeline](../../docs/references/task-curation.md)
+normalizes pinned HF, generated and snapshot samples, exercises shared graders, applies
+dataset-specific review rubrics, and records filtering evidence. Runs
+write `audit.parquet` with every input and its reasons, review evidence and cleanup
+history, then export the accepted subset to `accepted.parquet`. Dataset recipes
+live in `src/taskcompendium/pipeline/datasets/`; the Marin launcher supplies the
+existing GLM bulk transport without adding a Marin dependency to this package.
+The ten-source exercise reuses TaskTrove converters for executable tasks and
+adds actual scheduling, puzzle, Reasoning Gym and open QA contracts. Native
+Parquet columns retain normalization edits, sample partitions and source locators.
+Filtering ends in keep/reject. Confidence and grader readiness are retained
+separately; an unbound open-QA judge does not block static quality assessment.
+The next ten sources have individual recipe/rubric files with shared code,
+math/QA and ARC/injection normalization helpers.
+
 ## What problem does it solve?
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through a private verifier registry. The task model also names file and state results, but this slice has no Harbor environment configuration or submission convention for those result types.
+The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through a private verifier registry. The curation pipeline runs file and state tasks through Shellbox and calendar episodes. Harbor export still supports only direct chat; executable episodes use the separate TaskCompendium runtime.
 
 ## What does it contain?
 
@@ -36,6 +51,10 @@ flowchart LR
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | Capabilities or action interfaces needed from the execution environment. |
 | `final_tools` | Functions advertised at the decision point, tool choice, and the parallel-call setting. These definitions do not bind functions to an implementation. |
+| `interaction_tools` | Executable functions exposed during an episode. |
+| `fixture` | Semantic interface revision and initial state, reset for each episode. |
+| `resources` | Embedded, hashed files with agent, verifier or control visibility. |
+| `output_paths` | Files to capture as grading evidence at episode end. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
@@ -67,13 +86,13 @@ With the `answer_call` convention, the chat agent advertises only `submit_answer
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. The schema includes these result types, but exporting and running them requires environment configurations, submission conventions, and verifiers that are not implemented in this slice. `environment_requirements` declares capabilities and action interfaces; it does not yet describe resource files or tool implementations.
+`answer_type=file` names a file result. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. The curation runtime executes `interaction_tools` against a fresh fixture and grades captured files or final state. Shell tasks use Shellbox machines and the shared TaskTrove capture comparator; calendar tasks use an in-memory tool backend and a postcondition verifier that accepts multiple valid schedules. A final assistant text message completes the episode. Backend selection and execution budgets remain outside TaskSpec. See the [executable-task pilot](../../docs/references/task-curation.md#exercise-executable-tasks) for binding and commands. Harbor export has no executable lowering yet.
 
 ## What can we import?
 
 ### TaskTrove MCQA
 
-The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq_answer` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes still need private resources and an isolated verifier runtime.
+The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq_answer` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `verifyit` MCQ scorer after extracting the submission. This importer supports only MCQ mode. The agentic curation pilot adapts one nl2bash archive through the existing cleanup converter into public files, private control files and Shellbox episodes. The curation recipes also bind stdin/stdout and Python unit-test tasks to isolated grading through the pinned [verifyit repository](https://github.com/marin-community/verifyit).
 
 ### NeMo predicted function calls
 
@@ -85,7 +104,7 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The submission convention extracts a candidate answer, then the verifier grades it. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
-The current kinds are `exact_answer` for normalized text, `numeric_answer` for numbers with explicit absolute and relative tolerances, `mcq_answer` for a single option letter, and `predicted_action` for final function calls. The expected answer and grading settings stay out of the model-visible instruction.
+The current kinds are `exact_answer` for normalized text, `numeric_answer` for numbers with explicit absolute and relative tolerances, `mcq_answer` for a single option letter, `predicted_action` for final function calls, `capture_output` for shell output records, and `calendar_state` for scheduling postconditions. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 
@@ -168,3 +187,9 @@ uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskc
 cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
+
+Instruction-following and structured-output snapshot recipes reuse TaskTrove checks.
+Quality review can filter bad content before full verification is available.
+A separate literal-edit rewriter preserves original tasks and candidate lineage;
+protected contracts, schemas, comparison reviews and grader controls gate acceptance.
+See [task curation](../../docs/references/task-curation.md) for the recipe and pilot APIs.

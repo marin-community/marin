@@ -1,0 +1,129 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Fresh positive, negative, alternate and reset controls for executable tasks."""
+
+import asyncio
+from dataclasses import dataclass, replace
+
+from taskcompendium.grading import GradingAttempt, Outcome
+from taskcompendium.models import (
+    AssistantMessage,
+    AssistantToolCalls,
+    ConversationToolCall,
+    ResourceVisibility,
+    TaskSpec,
+)
+from taskcompendium.pipeline.datasets.shell_files import CONTROL_PATH, OUTPUT_PATH
+from taskcompendium.pipeline.models import CheckResult, CheckStatus, CheckSuite, VerificationReport
+from taskcompendium.pipeline.verification import PLAIN
+from taskcompendium.runtime.episode import ScriptedActor, run_episode
+from taskcompendium.runtime.models import EnvironmentFactory, Termination
+from taskcompendium.runtime.shell import ShellFactory
+from taskcompendium.verifier_registry import resolve_verifier
+from taskcompendium.verifiers.runtime import CalendarStateVerifier, CaptureOutputVerifier
+
+
+@dataclass(frozen=True)
+class Control:
+    name: str
+    responses: tuple[AssistantMessage, ...]
+    expected_reward: float
+
+
+def tool_turn(name: str, arguments: dict) -> AssistantToolCalls:
+    return AssistantToolCalls(calls=(ConversationToolCall(call_id=f"control-{name}", name=name, arguments=arguments),))
+
+
+def calendar_controls(verifier: CalendarStateVerifier) -> tuple[Control, ...]:
+    slots = []
+    for start in range(verifier.earliest, verifier.latest - verifier.duration + 1):
+        if all(
+            not set(verifier.participants).intersection(event.participants)
+            or start >= event.end
+            or event.start >= start + verifier.duration
+            for event in verifier.original_events
+        ):
+            slots.append(start)
+    if not slots:
+        raise ValueError("Calendar task has no feasible slot")
+
+    def schedule(start: int) -> AssistantToolCalls:
+        return tool_turn(
+            "create_event",
+            {
+                "title": verifier.title,
+                "participants": list(verifier.participants),
+                "start": start,
+                "end": start + verifier.duration,
+            },
+        )
+
+    return (
+        Control("noop", (), 0.0),
+        Control("reference", (schedule(slots[0]),), 1.0),
+        Control("perturbed", (schedule(verifier.latest),), 0.0),
+        Control("alternate", (schedule(slots[-1]),), 1.0),
+        Control("reset", (schedule(slots[0]),), 1.0),
+    )
+
+
+async def check_episodes(task: TaskSpec, factory: EnvironmentFactory, *, max_steps: int) -> VerificationReport:
+    verifier = resolve_verifier(task.verifier)
+    if isinstance(verifier, CalendarStateVerifier):
+        controls = calendar_controls(verifier)
+    elif isinstance(verifier, CaptureOutputVerifier) and isinstance(factory, ShellFactory):
+        wrong = (
+            "__incorrect_record__"
+            if verifier.expected_output.strip() != "__incorrect_record__"
+            else "__another_record__"
+        )
+        controls = (
+            Control("noop", (), 0.0),
+            Control("reference", (tool_turn("Bash", {"command": f"bash {CONTROL_PATH}"}),), 1.0),
+            Control("perturbed", (tool_turn("Bash", {"command": f"printf '%s\\n' '{wrong}' > {OUTPUT_PATH}"}),), 0.0),
+            Control("reset", (tool_turn("Bash", {"command": f"bash {CONTROL_PATH}"}),), 1.0),
+        )
+    else:
+        raise ValueError("No episode controls for this verifier and runtime")
+    results, rollouts = [], []
+    for control in controls:
+        # The scripted oracle alone gets the private witness files.
+        bound_factory = factory
+        if isinstance(factory, ShellFactory) and control.name in {"reference", "reset"}:
+            bound_factory = replace(factory, visibility=(ResourceVisibility.AGENT, ResourceVisibility.CONTROL))
+        rollout = await run_episode(
+            task, ScriptedActor(control.responses), bound_factory, max_steps=max_steps, control=control.name
+        )
+        rollouts.append(rollout)
+        if rollout.termination == Termination.INFRA_ERROR:
+            results.append(CheckResult(check=control.name, status=CheckStatus.INFRA_ERROR, detail=rollout.detail))
+            continue
+        grade = verifier.grade(GradingAttempt(PLAIN, rollout.events, rollout.evidence()))
+        passed = (
+            rollout.termination == Termination.FINAL_MESSAGE
+            and grade.status == Outcome.GRADED
+            and grade.reward == control.expected_reward
+        )
+        status = (
+            CheckStatus.INFRA_ERROR
+            if grade.status == Outcome.INFRA_ERROR
+            else CheckStatus.PASS if passed else CheckStatus.FAIL
+        )
+        results.append(
+            CheckResult(
+                check=control.name,
+                status=status,
+                detail=f"{rollout.termination}; {grade.status}: reward={grade.reward}; {grade.error or ''}",
+            )
+        )
+    return VerificationReport(results, tuple(rollouts))
+
+
+def episode_suite(factory: EnvironmentFactory, *, max_steps: int) -> CheckSuite:
+    return CheckSuite(
+        id="episode-controls",
+        revision="1",
+        parameters={"runtime": factory.identity, "max_steps": max_steps},
+        run=lambda task: asyncio.run(check_episodes(task, factory, max_steps=max_steps)),
+    )

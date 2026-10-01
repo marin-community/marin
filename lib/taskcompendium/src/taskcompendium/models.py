@@ -3,14 +3,18 @@
 
 """Private semantics for one deterministic task and its final submission."""
 
+import base64
+import hashlib
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
+from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.9"
+SCHEMA_VERSION = "0.10"
 
 
 class AnswerType(StrEnum):
@@ -30,6 +34,20 @@ class VerifierKind(StrEnum):
     PREDICTED_ACTION = "predicted_action"
     NUMERIC_ANSWER = "numeric_answer"
     MCQ_ANSWER = "mcq_answer"
+    CAPTURE_OUTPUT = "capture_output"
+    CALENDAR_STATE = "calendar_state"
+    IFEVAL = "ifeval"
+    JSON_SCHEMA = "json_schema"
+    TASKTROVE_EXECUTABLE = "tasktrove_executable"
+    REASONING_GYM = "reasoning_gym"
+    PUZZLE_ANSWER = "puzzle_answer"
+    SCHEDULE_ANSWER = "schedule_answer"
+    REFERENCE_ANSWERS = "reference_answers"
+    MATH_ANSWER = "math_answer"
+    ABSTENTION_ANSWERS = "abstention_answers"
+    ARC_GRID = "arc_grid"
+    ARC_TRANSFORM = "arc_transform"
+    INDIRECT_INJECTION = "indirect_injection"
 
 
 class Source(BaseModel):
@@ -257,8 +275,60 @@ class EnvironmentRequirements(BaseModel):
     action_interfaces: tuple[str, ...] = ()
 
 
+class ResourceVisibility(StrEnum):
+    AGENT = "agent"
+    VERIFIER = "verifier"
+    CONTROL = "control"
+
+
+class TaskResource(BaseModel):
+    """A bounded inline fixture with an absolute runtime path and content digest."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    path: str
+    data_base64: str = Field(repr=False)
+    sha256: str
+    visibility: ResourceVisibility
+
+    @model_validator(mode="after")
+    def validate_resource(self) -> "TaskResource":
+        path = PurePosixPath(self.path)
+        if not path.is_absolute() or ".." in path.parts or str(path) != self.path:
+            raise ValueError("Resource paths must be normalized absolute paths")
+        if hashlib.sha256(self.data()).hexdigest() != self.sha256:
+            raise ValueError("Resource content does not match its digest")
+        return self
+
+    def data(self) -> bytes:
+        return base64.b64decode(self.data_base64, validate=True)
+
+
+def task_resource(path: str, data: bytes, visibility: ResourceVisibility) -> TaskResource:
+    return TaskResource(
+        path=path,
+        data_base64=base64.b64encode(data).decode(),
+        sha256=hashlib.sha256(data).hexdigest(),
+        visibility=visibility,
+    )
+
+
+class EnvironmentFixture(BaseModel):
+    """Pinned semantic interface and initial state, independent of the backend."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    interface: str
+    revision: str
+    initial_state_json: str
+
+    @model_validator(mode="after")
+    def validate_fixture(self) -> "EnvironmentFixture":
+        if not self.interface or not self.revision or not isinstance(json.loads(self.initial_state_json), dict):
+            raise ValueError("A fixture requires an interface, revision, and JSON object state")
+        return self
+
+
 class TaskSpec(BaseModel):
-    """The private definition of one deterministic answer task."""
+    """Private task semantics, including optional executable episode fixtures."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -266,6 +336,10 @@ class TaskSpec(BaseModel):
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
     final_tools: FinalTools = Field(default_factory=FinalTools)
+    interaction_tools: tuple[FunctionDefinition, ...] = ()
+    fixture: EnvironmentFixture | None = None
+    resources: tuple[TaskResource, ...] = ()
+    output_paths: tuple[str, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
@@ -279,4 +353,10 @@ class TaskSpec(BaseModel):
             raise ValueError("A task id is required")
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools.functions:
             raise ValueError("Native-action tasks require advertised functions")
+        if len({resource.path for resource in self.resources}) != len(self.resources):
+            raise ValueError("Task resource paths must be unique")
+        if self.interaction_tools and self.fixture is None:
+            raise ValueError("Executable tools require an environment fixture")
+        if self.fixture is not None and self.fixture.interface not in self.environment_requirements.action_interfaces:
+            raise ValueError("The fixture interface must be declared in environment requirements")
         return self

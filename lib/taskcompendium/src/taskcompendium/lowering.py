@@ -59,7 +59,12 @@ def compatible_lowerings(
     environment_configs: Sequence[HarborEnvironmentConfig],
 ) -> tuple[LoweringCandidate, ...]:
     """Enumerate conventions and environments that preserve this task's contract."""
-    if specification.environment_requirements.capabilities or specification.environment_requirements.action_interfaces:
+    if (
+        specification.environment_requirements.capabilities
+        or specification.environment_requirements.action_interfaces
+        or specification.resources
+        or specification.fixture
+    ):
         return ()
     return tuple(
         LoweringCandidate(convention, environment_config)
@@ -103,7 +108,12 @@ def validate_environment_config(specification: TaskSpec, environment_config: Har
     """Require direct chat to satisfy every declared semantic operation."""
     if environment_config != HarborEnvironmentConfig():
         raise ValueError("Only direct-chat environment configuration is supported")
-    if specification.environment_requirements.capabilities or specification.environment_requirements.action_interfaces:
+    if (
+        specification.environment_requirements.capabilities
+        or specification.environment_requirements.action_interfaces
+        or specification.resources
+        or specification.fixture
+    ):
         raise ValueError("Direct chat cannot satisfy capability or action-interface requirements")
 
 

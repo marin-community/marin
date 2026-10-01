@@ -4,13 +4,14 @@
 """Convert a sample of one source and run its graders in Docker, the way Harbor would.
 
     uv run python -m experiments.post_training.tasktrove.docker_audit \\
-        --source laion__nemotron-gym-knowledge-mcqa-v2 --count 20 --out /tmp/sample
+        --source laion__nemotron-gym-knowledge-mcqa-v2 --count 20 --out /tmp/sample \\
+        --verifyit-checkout /path/to/verifyit
 
 For every converted task the empty check runs the shim in a fresh workspace and must score 0.
 When the task ships an oracle solution, the oracle check runs ``solution/solve.sh`` in the
-workspace first and must score 1. The tool is installed from the local checkout rather than the
-git ref in the Dockerfile, so a converter can be checked before its branch is pushed. Converter
-Authors run this while writing a converter and store the printed report with the dataset run.
+workspace first and must score 1. The tool is installed from the explicitly supplied verifyit
+checkout so changes to the external grader can be checked before publication. Converter authors
+store the printed report with the dataset run.
 """
 
 import collections
@@ -24,8 +25,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import click
-from tasktrove_verify.grade import DEFAULT_LOGS_DIR, VERDICT_JSON
-from tasktrove_verify.spec import DEFAULT_WORKSPACE
+from verifyit.grade import DEFAULT_LOGS_DIR, VERDICT_JSON
+from verifyit.spec import DEFAULT_WORKSPACE
 from zephyr.readers import load_parquet
 
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
@@ -38,9 +39,8 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task
 logger = logging.getLogger(__name__)
 
 LOCAL_TOOL_REF = "local"
-_TOOL_DIR = Path(__file__).parents[3] / "lib" / "tasktrove-verify"
 _INSTALL_LINE = re.compile(
-    r'^RUN (UV_TOOL_BIN_DIR=\S+ )?uv tool install (--python "[^"]+" )?"tasktrove-verify(\[[^\]]*\])? @ [^"]+"$',
+    r'^RUN (UV_TOOL_BIN_DIR=\S+ )?uv tool install (--python "[^"]+" )?"verifyit(\[[^\]]*\])? @ [^"]+"$',
     re.MULTILINE,
 )
 _WORKDIR_LINE = re.compile(r"^WORKDIR\s+(\S+)", re.MULTILINE | re.IGNORECASE)
@@ -81,8 +81,8 @@ def local_dockerfile(dockerfile: str) -> str:
         raise ValueError("Dockerfile has no tool install block")
     replaced, count = _INSTALL_LINE.subn(
         lambda m: (
-            "COPY tasktrove-verify /opt/tasktrove-verify\n"
-            f'RUN {m.group(1) or ""}uv tool install {m.group(2) or ""}"/opt/tasktrove-verify{m.group(3) or ""}"'
+            "COPY verifyit /opt/verifyit\n"
+            f'RUN {m.group(1) or ""}uv tool install {m.group(2) or ""}"/opt/verifyit{m.group(3) or ""}"'
         ),
         dockerfile,
     )
@@ -91,11 +91,9 @@ def local_dockerfile(dockerfile: str) -> str:
     return replaced
 
 
-def build_image(dockerfile: str, tag: str) -> None:
+def build_image(dockerfile: str, tag: str, tool_dir: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="tasktrove-build-") as context:
-        shutil.copytree(
-            _TOOL_DIR, Path(context) / "tasktrove-verify", ignore=shutil.ignore_patterns(".venv", "__pycache__")
-        )
+        shutil.copytree(tool_dir, Path(context) / "verifyit", ignore=shutil.ignore_patterns(".venv", "__pycache__"))
         (Path(context) / "Dockerfile").write_text(local_dockerfile(dockerfile))
         subprocess.run(["docker", "build", "-q", "-t", tag, context], check=True, capture_output=True, text=True)
 
@@ -137,7 +135,9 @@ def write_task_dir(record: ConvertedRecord, root: Path) -> Path:
     return task_dir
 
 
-def sample_source(source: str, parquet: Path, count: int, out: Path, timeout: float, network: str) -> SampleReport:
+def sample_source(
+    source: str, parquet: Path, count: int, out: Path, timeout: float, network: str, tool_dir: Path
+) -> SampleReport:
     info = load_source_verdicts()[source]
     index = converter_index()
     statuses: collections.Counter = collections.Counter()
@@ -157,7 +157,7 @@ def sample_source(source: str, parquet: Path, count: int, out: Path, timeout: fl
         if tag is None:
             tag = f"tasktrove-sample:{record.dockerfile_id}"
             logger.info("building %s", tag)
-            build_image(read_task_binary(record.task_binary).text(DOCKERFILE), tag)
+            build_image(read_task_binary(record.task_binary).text(DOCKERFILE), tag, tool_dir)
             images[record.dockerfile_id] = tag
         checks.append(run_check(tag, task_dir, "empty", timeout, network))
         if record.solution_binary is not None:
@@ -176,6 +176,7 @@ def sample_source(source: str, parquet: Path, count: int, out: Path, timeout: fl
 )
 @click.option("--count", type=int, default=20)
 @click.option("--out", type=click.Path(path_type=Path), required=True)
+@click.option("--verifyit-checkout", type=click.Path(path_type=Path, exists=True, file_okay=False), required=True)
 @click.option("--timeout", type=float, default=600.0, help="seconds per container run")
 @click.option(
     "--network",
@@ -183,10 +184,12 @@ def sample_source(source: str, parquet: Path, count: int, out: Path, timeout: fl
     show_default=True,
     help="docker network for the checks; SWE oracles clone their repository and need 'bridge'",
 )
-def main(source: str, parquet: Path | None, count: int, out: Path, timeout: float, network: str) -> None:
+def main(
+    source: str, parquet: Path | None, count: int, out: Path, verifyit_checkout: Path, timeout: float, network: str
+) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parquet = parquet or Path.home() / "data" / "tasktrove" / "repo" / source / "tasks.parquet"
-    report = sample_source(source, parquet, count, out, timeout, network)
+    report = sample_source(source, parquet, count, out, timeout, network, verifyit_checkout)
     print(json.dumps(asdict(report), indent=1))
     print(f"{report.sampled} tasks, {report.images} images, {len(report.checks)} checks, ok={report.ok}")
     raise SystemExit(0 if report.ok else 1)
