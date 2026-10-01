@@ -481,3 +481,20 @@ late mean -5.7e-6, 22/49 positive: inside the same-code band. Rough decompositio
 unfilled-02 (A+B+C) +0.41, hmo-02 (flag) +0.32, so D plus the memory settings is ~+0.8, sub-additivity aside.
 Remaining to 30.0%: -0.095 s/step. Candidates still to land: stack -03 arms (mirror + E + #9481's model commits;
 pipelined vs sequential), sconv (~-0.1 est.), PGLE with A's D2H patch (~-0.2 est.).
+
+## M30-026 sonic-02 trace (agent B, M30B-023)
+
+"Rematerialized 0 instructions" on all 64 processes; main peaks at 105.08 GiB vs the 114.1 limit (9 GiB
+headroom, both logged values offset by 73.64 GiB of host-space buffers). Rank 0, 180021-180023:
+span 13.229 (unfilled-02 13.762), compute 11.188 (11.533), exposed collectives 1.336 (1.516), of which
+ragged a2a 0.736 (0.838), exposed copies 0.622, idle 0.084. Compute: D removes the recomputed down GEMM
+(-0.263) and the recomputed return/combine (-0.093); the flag removes the XLA remat clones (norms -0.083,
+attention elementwise -0.087, shared-MLP recompute -0.120); D's expert-side backward adds ~+0.16; attention
+is +0.08 in every phase (unexplained). Remaining ragged exposure per step: forward dispatch c0 0.144
+(the only exposed forward transport); recomputed dispatch c0 0.254 (0.111 of it rank-skew wait); recomputed
+dispatch c1 0.169 (held behind the c0 recompute by the chunk barrier); reverse return of dy c1 0.149 (issued
+with nothing on the compute stream). Row-dot all-to-alls and dy c0's reverse return are covered.
+`carry_stall.py` 2.8 ms/step (healthy; unfilled-02 15.6); `copy_schedule.py` healthy. Exposed copies
+0.62 (carry reloads 0.219, optimizer D2H 0.211, H2D 44 0.064). Levers: pipelining (forward c0 + recompute
+c1, <= ~0.31), backward reorder of dy-c1's reverse return (~0.15), PGLE for FSDP gathers (~0.27) and the
+optimizer D2H (A's patch, ~0.2). Skew waits (~0.41) are not schedulable.
