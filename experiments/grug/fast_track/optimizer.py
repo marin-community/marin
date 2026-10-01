@@ -61,13 +61,15 @@ def _pin_sharding(x, ref):
 
 
 def _scale_invariant_hyperball_updates(
-    params, direction_updates, learning_rate, per_expert: bool = False, lr_mults=None
+    params, direction_updates, learning_rate, per_expert: bool = False, lr_mults=None, cautious_wd: float = 0.0
 ):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
     parameter's Frobenius sphere (scale-invariant update). Stacked leaves take one sphere per layer, and
     with ``per_expert`` the 4-D expert stacks ``[L, E, in, out]`` take one sphere per (layer, expert).
     ``lr_mults`` (a tree like ``params``, leaves broadcastable per sphere, or None) scales each step's
-    learning rate; a zero multiplier leaves that sphere where it is."""
+    learning rate; a zero multiplier leaves that sphere where it is. ``cautious_wd`` > 0 adds cautious weight decay
+    inside the sphere (arXiv 2510.12402): the coordinates whose update agrees in sign with the weight shrink by
+    ``lr * cautious_wd`` before the re-projection, which reshapes the matrix at a fixed norm."""
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
     if lr_mults is None:
         lr_mults = jax.tree.map(lambda _: None, params)
@@ -84,6 +86,8 @@ def _scale_invariant_hyperball_updates(
             param_norm = jnp.sqrt(jnp.sum(jnp.square(param.astype(jnp.float32))))
             update_norm = jnp.sqrt(jnp.sum(jnp.square(update.astype(jnp.float32))))
             new_param = param - lr * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            if cautious_wd:
+                new_param = new_param - lr * cautious_wd * jnp.where(update * param > 0, param, 0)
             new_param = _pin_sharding(new_param, param)
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
@@ -92,6 +96,8 @@ def _scale_invariant_hyperball_updates(
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
         new_param = param - lr * update * param_norm / jnp.maximum(update_norm, 1e-10)
+        if cautious_wd:
+            new_param = new_param - lr * cautious_wd * jnp.where(update * param > 0, param, 0)
         new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
         new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
         return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
@@ -724,6 +730,7 @@ def scale_with_grug_muonh(
     head_dim: int | None = None,
     neuron_norm_beta2: float | None = None,
     hyperball_per_expert: bool = False,
+    cautious_wd: float = 0.0,
     pre_norm: str = "none",
     top_shrink: float = 0.0,
     precond_beta2: float | None = None,
@@ -801,7 +808,7 @@ def scale_with_grug_muonh(
     def retract(params, directions, lr_mults, sphere):
         if sphere is None:
             updates = _scale_invariant_hyperball_updates(
-                params, directions, learning_rate, hyperball_per_expert, lr_mults
+                params, directions, learning_rate, hyperball_per_expert, lr_mults, cautious_wd
             )
             return updates, None
         return _spectral_sphere_updates(params, directions, learning_rate, sphere, lr_mults)
@@ -1378,6 +1385,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Matrix families (keys of ``_OKLS_FAMILIES``, e.g. ``attn_q``, ``attn_k``) that drop the hyperball:
     MuonH's step size with a free norm and ``muon_free_weight_decay`` (``scale_with_grug_muon_free``)."""
     muon_free_weight_decay: float = 0.0
+    muonh_cautious_wd: float = 0.0
+    """Cautious weight decay inside the MuonH hyperball (``_scale_invariant_hyperball_updates``): the norm stays
+    pinned, so it only reshapes each matrix toward the update's sign-agreeing coordinates being smaller."""
     hyperball_per_expert: bool = False
     """One MuonH hyperball (Frobenius sphere) per routed expert instead of per layer's expert stack."""
     neuron_norm_beta2: float | None = None
@@ -1553,6 +1563,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         head_dim=self.muon_head_dim,
                         neuron_norm_beta2=self.neuron_norm_beta2,
                         hyperball_per_expert=self.hyperball_per_expert,
+                        cautious_wd=self.muonh_cautious_wd,
                         pre_norm=self.muon_pre_norm,
                         top_shrink=self.muon_top_shrink,
                         precond_beta2=self.muon_precond_beta2,

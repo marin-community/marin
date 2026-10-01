@@ -658,6 +658,9 @@ class GrugModelConfig:
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
     attention forward per layer; needed for memory at d1280."""
     value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
+    kda_value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
+    """``value_embeds`` for the KDA layers: each gets its own ``[V, N*h]`` table mixed into its delta-rule values,
+    ``v = lambda1 * v + w * value_embed[token]`` (same modes as the MLA layers' ``value_embeds``)."""
     """Per-MLA-layer value-embedding table added to v (see ``ValueEmbeds``)."""
     sublayer_scales: bool = False
     """A learnable scalar (init 1) on every attention and MLP sublayer output, before it enters the
@@ -2408,6 +2411,9 @@ class KimiDeltaAttention(eqx.Module):
     """``kda_dd_rope`` per-pair angle amplitude ``gamma`` (zero-init: no rotation at init)."""
     comba_d: Float[Array, " N"] | None
     """Per-head Comba output-correction scalar ``d`` (``kda_out_correction``)."""
+    value_embed: Float[Array, "V NH"] | None
+    ve_lambda: Float[Array, " 2"] | None
+    ve_gate: Float[Array, "D N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -2485,6 +2491,13 @@ class KimiDeltaAttention(eqx.Module):
             ),
             rot_scale=jnp.zeros((n, h // 2)) if cfg.kda_dd_rope else None,
             comba_d=jnp.full((n,), cfg.kda_out_correction_init, jnp.float32) if cfg.kda_out_correction else None,
+            value_embed=(
+                reshard(_init_weight(random.fold_in(k_v, 11), (cfg.vocab_size, n * h), std), P(None, None))
+                if cfg.kda_value_embeds != ValueEmbeds.NONE
+                else None
+            ),
+            ve_lambda=jnp.array([1.0, 0.0]) if cfg.kda_value_embeds != ValueEmbeds.NONE else None,
+            ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.kda_value_embeds == ValueEmbeds.GATED else None),
             cfg=cfg,
         )
 
@@ -2499,6 +2512,7 @@ class KimiDeltaAttention(eqx.Module):
         kv_share: dict[str, jax.Array] | None = None,
         value_residual: bool = False,
         kv_input: Float[Array, "B S W"] | None = None,
+        token_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``kv_input`` (``kv_stream_dim``) is the normed KV side stream that the ``k`` / ``v`` projections
         (and their SConvs) read instead of ``x``; the erase / write gates, beta and decay stay on ``x``.
@@ -2523,6 +2537,18 @@ class KimiDeltaAttention(eqx.Module):
         q = project(self.w_q, self.sconv_q, 0, "q")
         k = project(self.w_k, self.sconv_k, 1, "k")
         v = project(self.w_v, self.sconv_v, 2, "v")
+        if self.value_embed is not None:
+            # As in the MLA layers: the token's own value-embedding row, per-head gated, added to the values.
+            assert self.ve_lambda is not None and token_ids is not None
+            ve = rearrange(
+                _embedding_gather(self.value_embed.astype(x.dtype), token_ids), "... (n d) -> ... n d", d=head_dim
+            )
+            lam = self.ve_lambda.astype(x.dtype)
+            if self.ve_gate is not None:
+                ve_weight = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.ve_gate.astype(x.dtype)))[..., None]
+            else:
+                ve_weight = lam[1]
+            v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
         if self.comba_d is not None:
             # Comba output correction on the L2-normalized q / k; the kernel re-normalizes q - d k.
             def unit(t: jax.Array) -> jax.Array:
@@ -4129,6 +4155,7 @@ class Block(eqx.Module):
                 kv_share=kv_share,
                 value_residual=value_residual,
                 kv_input=kv_input,
+                token_ids=token_ids,
             )
         else:
             out, stats = self.attn(
