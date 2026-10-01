@@ -20,7 +20,7 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
     shutil.copytree(contexts[0], contexts[1])
     builds = []
 
-    def run(args, **kwargs):
+    def run(args, **_kwargs):
         if args[:2] == ("docker", "build"):
             builds.append((Path(args[-1]) / "payload").read_bytes())
         elif args[0] == "skopeo":
