@@ -23,7 +23,7 @@ import json
 from enum import StrEnum
 
 from jsonschema.validators import validator_for
-from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, Spec, XmlElementsSpec, mode_of
+from tasktrove_verify.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, Spec, XmlElementsSpec, mode_of
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

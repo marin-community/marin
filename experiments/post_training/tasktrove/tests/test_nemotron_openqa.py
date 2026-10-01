@@ -6,7 +6,7 @@
 import json
 from pathlib import Path
 
-from verifyit.spec import JudgeSpec, parse_spec
+from tasktrove_verify.spec import JudgeSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
@@ -62,7 +62,7 @@ def test_exemplar_drops_old_grader_files_and_dependency():
     dockerfile = task.text(DOCKERFILE)
     assert "rewardkit" not in dockerfile.lower()
     assert "litellm" not in dockerfile.lower()
-    assert "verifyit[judge]" in dockerfile
+    assert "tasktrove-verify[judge]" in dockerfile
 
 
 def test_second_registered_key_routes_to_the_same_converter():

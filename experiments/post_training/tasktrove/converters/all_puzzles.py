@@ -17,7 +17,7 @@ appears in the source but is handled identically to ``choice``.
 import json
 import re
 
-from verifyit.spec import ExactSpec, MathSpec, MathType
+from tasktrove_verify.spec import ExactSpec, MathSpec, MathType
 
 from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
 from experiments.post_training.tasktrove.converters.converted_task import (

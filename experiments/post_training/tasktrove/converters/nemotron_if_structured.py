@@ -14,7 +14,7 @@ Two sources share this template but ship different ``tests/verifier_data.json`` 
 
 import json
 
-from verifyit.spec import JsonSchemaSpec, SchemaFormat
+from tasktrove_verify.spec import JsonSchemaSpec, SchemaFormat
 
 from experiments.post_training.tasktrove.converters.agent_calendar import convert_agent_calendar
 from experiments.post_training.tasktrove.converters.converted_task import (

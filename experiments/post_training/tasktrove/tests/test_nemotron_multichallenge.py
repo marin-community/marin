@@ -5,7 +5,7 @@
 
 from pathlib import Path
 
-from verifyit.spec import JudgeSpec, parse_spec
+from tasktrove_verify.spec import JudgeSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus

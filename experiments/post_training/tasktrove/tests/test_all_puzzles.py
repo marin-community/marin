@@ -7,8 +7,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from verifyit.grade import grade
-from verifyit.spec import ExactSpec, MathSpec, MathType, parse_spec
+from tasktrove_verify.grade import grade
+from tasktrove_verify.spec import ExactSpec, MathSpec, MathType, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus

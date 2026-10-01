@@ -42,7 +42,6 @@ from marin.rl.skyrl import (
 from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
 from experiments.post_training.tasktrove.pipeline import build_workflow, launch_commit
-from experiments.post_training.tasktrove.task_format import VERIFYIT_REVISION
 
 RL_ARTIFACT_NAME = "checkpoints/tasktrove-rl-smoke"
 # The curriculum experiment's mirrored Qwen3-0.6B snapshot; reused rather than mirrored again.
@@ -245,7 +244,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
 @click.command(help=__doc__)
 @rl_build_options
 def main() -> ArtifactStep:
-    release = build_workflow(launch_commit(), VERIFYIT_REVISION).release
+    release = build_workflow(launch_commit()).release
     return smoke_step(release)
 
 

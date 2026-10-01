@@ -3,10 +3,12 @@
 
 """Curation contracts exercised through persisted outputs and a fake batch API."""
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import fsspec
 import pyarrow.parquet as pq
 import pytest
 
@@ -25,10 +27,19 @@ from taskcompendium.pipeline.models import (
     ReviewRecord,
     ReviewStatus,
     ReviewVerdict,
+    SnapshotSource,
 )
 from taskcompendium.pipeline.review import BatchReviewer, review_records
 from taskcompendium.pipeline.runner import run_pipeline
 from taskcompendium.pipeline.verification import verify_task, verify_witness
+from taskcompendium.pipeline.zephyr import (
+    AuditExecution,
+    ReviewConfig,
+    SourceAcquisition,
+    acquire_source,
+    audit_source,
+    filter_source,
+)
 
 
 @dataclass(frozen=True)
@@ -181,17 +192,86 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
     assert audit[4]["normalization_detail"]
 
 
-def test_pipeline_resumes_acknowledged_batch_and_refilters_without_new_requests(tmp_path, apple_row):
-    service = BatchService(confidence="medium", interrupted=True)
+def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, apple_row):
+    conflicting = {**apple_row, "Body": "Aya has some apples."}
+    rows = [apple_row] * 1001 + [{**conflicting, "Answer": "1"}, {**conflicting, "Answer": "2"}]
+    snapshot = tmp_path / "sample.jsonl"
+    snapshot.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    source = SnapshotSource("fixture", "a" * 40, "default", "train", str(snapshot))
+    acquisition = SourceAcquisition(source, len(rows), hashlib.sha256(snapshot.read_bytes()).hexdigest())
+    root = f"memory://curation-{tmp_path.name}"
+    acquire_source(acquisition, f"{root}/acquired")
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
+    audit_source(
+        f"{root}/acquired",
+        f"{root}/audited",
+        svamp.recipe,
+        ReviewConfig(reviewer.model, reviewer.model_revision, reviewer.max_prompt_characters, reviewer.max_tokens),
+        AuditExecution(max_workers=2, review_batch_size=1, reviewer=reviewer),
+    )
+    manifest = filter_source(f"{root}/audited", f"{root}/filtered", FilterPolicy())
+    filesystem, pattern = fsspec.core.url_to_fs(f"{root}/filtered/audit/*.parquet")
+    audit = []
+    for file in filesystem.glob(pattern):
+        with filesystem.open(file, "rb") as stream:
+            audit.extend(pq.read_table(stream).to_pylist())
+    by_index = {int(row["source_row"].rsplit(":", 1)[1]): row for row in audit}
+    assert manifest["dispositions"] == {"keep": 1, "reject": 1002}
+    assert by_index[1000]["duplicate_of"] == by_index[0]["task_id"]
+    assert all(by_index[index]["filter_reasons"] == ["conflicting_references"] for index in (1001, 1002))
+    assert sum(len(requests) for requests in service.batches.values()) == 1
+    assert len(audit) == len(rows)
+    assert all(row["raw_json"] and row["task_json"] for row in audit)
+
+
+def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_path, apple_row):
+    rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(201)]
+    snapshot = tmp_path / "sample.jsonl"
+    snapshot.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    source = SnapshotSource("fixture", "a" * 40, "default", "train", str(snapshot))
+    acquire_source(SourceAcquisition(source, len(rows)), str(tmp_path / "acquired"))
+    initial = BatchService()
+    reviewer = BatchReviewer(initial, "fixture", "revision")
+    config = ReviewConfig(reviewer.model, reviewer.model_revision, reviewer.max_prompt_characters, reviewer.max_tokens)
+    audit_source(
+        str(tmp_path / "acquired"),
+        str(tmp_path / "audited"),
+        svamp.recipe,
+        config,
+        AuditExecution(max_workers=1, reviewer=reviewer),
+    )
+    completed = sorted((tmp_path / "audited/audit").glob("*.parquet"))
+    missing = completed.pop()
+    missing_ids = {row["task_id"] for row in pq.read_table(missing).to_pylist()}
+    preserved = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in completed}
+    missing.unlink()
+    (tmp_path / "audited/manifest.json").unlink()
+    resumed = BatchService(quality="bad")
+    audit_source(
+        str(tmp_path / "acquired"),
+        str(tmp_path / "audited"),
+        svamp.recipe,
+        config,
+        AuditExecution(max_workers=3, reviewer=BatchReviewer(resumed, "fixture", "revision")),
+    )
+    reviewed = [request["custom_id"] for requests in resumed.batches.values() for request in requests]
+    assert set(reviewed) == missing_ids and len(reviewed) == len(missing_ids)
+    assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest for path, digest in preserved.items())
+    manifest = filter_source(str(tmp_path / "audited"), str(tmp_path / "filtered"), FilterPolicy())
+    assert manifest["input_rows"] == len(rows)
+    assert manifest["dispositions"] == {"keep": len(rows) - len(missing_ids), "reject": len(missing_ids)}
+
+
+def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, apple_row):
+    service = BatchService(confidence="medium")
     reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
     strict_policy = FilterPolicy(id="high-confidence", minimum_confidence=Confidence.HIGH)
-    with pytest.raises(TimeoutError):
-        run_pipeline(svamp.recipe, [apple_row], output_path=tmp_path, limit=1, reviewer=reviewer, policy=strict_policy)
-
-    assert json.loads((tmp_path / "review/batch-state.json").read_text())["batch_id"] == "batch-0"
     resumed = run_pipeline(
-        svamp.recipe, iter(()), output_path=tmp_path, limit=1, reviewer=reviewer, policy=strict_policy
+        svamp.recipe, [apple_row], output_path=tmp_path, limit=1, reviewer=reviewer, policy=strict_policy
     )
+    review_path = next((tmp_path / "audited/evidence").glob("*/review"))
+    assert json.loads((review_path / "batch-state.json").read_text())["batch_id"] == "batch-0"
     assert resumed["dispositions"] == {"reject": 1}
     pending_audit = pq.read_table(tmp_path / "audit.parquet").to_pylist()[0]
     accepted = run_pipeline(
@@ -219,8 +299,9 @@ def test_pipeline_retries_invalid_model_reply_and_preserves_both_attempts(tmp_pa
     assert manifest["dispositions"] == {"keep": 1}
     assert manifest["reviewed_rows"] == 1
     task_id = read_jsonl(tmp_path / "raw.jsonl")[0]["task_id"]
-    initial = review_records((tmp_path / "review/raw-output.jsonl").read_text(), [task_id])
-    retry = review_records((tmp_path / "review/retry-1/raw-output.jsonl").read_text(), [task_id])
+    review_path = next((tmp_path / "audited/evidence").glob("*/review"))
+    initial = review_records((review_path / "raw-output.jsonl").read_text(), [task_id])
+    retry = review_records((review_path / "retry-1/raw-output.jsonl").read_text(), [task_id])
     assert initial[0].status == ReviewStatus.INVALID
     assert retry[0].status == ReviewStatus.REVIEWED
     run_pipeline(svamp.recipe, iter(()), output_path=tmp_path, limit=1, reviewer=reviewer)

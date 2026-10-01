@@ -7,8 +7,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from verifyit.grade import Status, grade
-from verifyit.spec import ScriptSpec, parse_spec
+from tasktrove_verify.grade import Status, grade
+from tasktrove_verify.spec import ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.agent_calendar import CHECKER_NAME, DATA_NAME

@@ -11,20 +11,19 @@ Each retained task contains:
 
 - `instruction.md` and `task.toml`;
 - `environment/Dockerfile` with the pinned verifier installed;
-- `tests/test.sh`, which invokes `verifyit`;
+- `tests/test.sh`, which invokes `tasktrove-verify`;
 - `tests/verifier.toml`, which declares one grader mode; and
 - mode-specific hidden data under `tests/`.
 
-`task_format.py` defines this layout. [`verifyit`](https://github.com/marin-community/verifyit)
+`task_format.py` defines this layout. [`tasktrove-verify`](../../../lib/tasktrove-verify/README.md)
 defines and executes the grader contract.
 
 ## Run
 
-The release version and TaskTrove revision are constants in `pipeline.py`.
-`VERIFYIT_REVISION` in `task_format.py` pins the separate verification repository.
-Marin launch provenance identifies converter and routing code independently.
-Commit and push converter changes before starting a release; publish the pinned
-verifier commit in its own repository. The pipeline rejects a dirty Marin launch.
+The release version and TaskTrove revision are constants in `pipeline.py`. The verifier commit
+comes from Marin launch provenance. Commit and push converter and verifier changes before starting
+a release; the pipeline rejects a dirty launch because task Dockerfiles fetch that commit from
+GitHub.
 
 ```bash
 # Print the pinned build plan.
@@ -39,8 +38,7 @@ uv run python -m experiments.post_training.tasktrove.pipeline --stage templates 
 
 Update `PIPELINE_VERSION` for a new conversion release. Update `TASKTROVE_REVISION` and
 `RAW_VERSION` together when the input revision changes. The generated Dockerfiles and release
-manifest record the pinned external verifier commit. Routing records the clean
-Marin launch commit.
+manifest record the clean launch commit used to build the pipeline.
 
 ## Pipeline
 
@@ -68,7 +66,7 @@ columns before reading the packed task payloads.
 | `family` | broad conversion family assigned by `source_verdicts.json` |
 | `template_id` | normalized source template identity |
 | `converter` | converter that produced the task |
-| `mode` | declared `verifyit` grader mode |
+| `mode` | declared `tasktrove-verify` grader mode |
 | `dockerfile_id` | normalized environment/Dockerfile identity |
 | `language` | task language when the converter can determine it |
 | `tags` | list of selection labels preserved or added during conversion |
@@ -140,16 +138,13 @@ row and archive schemas, loading example, audit files, and the complete generate
    ```bash
    uv run python -m experiments.post_training.tasktrove.docker_audit \
      --source <source> --parquet /local/path/to/tasks.parquet \
-     --verifyit-checkout /local/path/to/verifyit \
      --count 20 --out /tmp/tasktrove-audit
    ```
 
 Download the selected source's `tasks.parquet` from the pinned Hugging Face revision or copy that
 single file from the `raw` artifact before running the audit. The optional `solution_binary`
 contains `solution/solve.sh`; the audit applies it and requires the resulting workspace to score
-one. Check out the pinned `VERIFYIT_REVISION` in the verification repository;
-the Docker audit copies that explicit checkout into its local image. An empty
-workspace must score zero. SWE solutions that install dependencies require
+one. An empty workspace must score zero. SWE solutions that install dependencies require
 `--network bridge`.
 
 Rows confirmed broken after release sampling belong in `reviewed_defects.json`, with a reason that
@@ -161,7 +156,7 @@ states a numeric error tolerance.
 ## Validate and inspect
 
 ```bash
-uv run pytest experiments/post_training/tasktrove/tests
+uv run pytest experiments/post_training/tasktrove/tests lib/tasktrove-verify/tests
 ./infra/pre-commit.py --changed-files --fix
 
 # Export one Parquet row as a Harbor task directory.

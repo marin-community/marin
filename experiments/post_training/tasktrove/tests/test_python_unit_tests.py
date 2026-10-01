@@ -3,8 +3,8 @@
 
 import sys
 
-from verifyit.modes import grade_pytest
-from verifyit.spec import PytestSpec, parse_spec
+from tasktrove_verify.modes import grade_pytest
+from tasktrove_verify.spec import PytestSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus

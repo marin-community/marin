@@ -5946,7 +5946,8 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
-    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "taskcompendium", extra = ["pipeline"] },
+    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -5978,7 +5979,8 @@ test = [
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "taskcompendium", extra = ["pipeline"] },
+    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
 ]
 
 [package.metadata]
@@ -6081,7 +6083,8 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
-    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b" },
+    { name = "taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
+    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -6113,7 +6116,8 @@ test = [
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b" },
+    { name = "taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
+    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
 ]
 
 [[package]]
@@ -7139,7 +7143,7 @@ dependencies = [
     { name = "marin-zephyr" },
     { name = "seaborn" },
     { name = "sqlalchemy" },
-    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "watchdog" },
 ]
 
@@ -7184,12 +7188,34 @@ requires-dist = [
     { name = "quack-kernels", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==0.6.1" },
     { name = "seaborn", specifier = ">=0.13" },
     { name = "sqlalchemy", specifier = ">=2" },
-    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b" },
+    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==2.11.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-root", extra = "pipeline" } },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = ">=3.6.0,<3.7" },
     { name = "watchdog" },
 ]
 provides-extras = ["pipeline"]
+
+[[package]]
+name = "marin-shellbox"
+version = "0.1.0"
+source = { editable = "lib/shellbox" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "daytona", marker = "extra == 'daytona'", specifier = "==0.200.2" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "marin-iris", marker = "extra == 'iris'", specifier = ">=0.2.0" },
+    { name = "marin-rigging", marker = "extra == 'shellsim'", specifier = ">=0.2.0" },
+    { name = "quicksand-qemu", marker = "extra == 'qemu'", specifier = ">=0.5.12,<0.6" },
+    { name = "shellsim", marker = "extra == 'shellsim'", specifier = ">=0.1.20,<0.2" },
+]
+provides-extras = ["qemu", "shellsim", "gvisor", "daytona", "iris"]
+
+[package.metadata.requires-dev]
+test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "marin-zephyr"
@@ -11579,6 +11605,42 @@ wheels = [
 ]
 
 [[package]]
+name = "taskcompendium"
+version = "0.1.0"
+source = { editable = "lib/taskcompendium" }
+dependencies = [
+    { name = "marin-shellbox" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
+]
+
+[package.optional-dependencies]
+pipeline = [
+    { name = "datasets" },
+    { name = "marin-zephyr" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
+    { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
+    { name = "marin-shellbox", editable = "lib/shellbox" },
+    { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "lib/zephyr" },
+    { name = "pyarrow", specifier = ">=15.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "verifyit", extras = ["answer", "judge", "reasoning-gym", "schema"], git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b" },
+]
+provides-extras = ["harbor", "pipeline"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "tasktrove-verify"
 version = "0.1.0"
 source = { editable = "lib/tasktrove-verify" }
@@ -13006,6 +13068,9 @@ dependencies = [
 answer = [
     { name = "math-verify" },
     { name = "sympy" },
+]
+judge = [
+    { name = "openai" },
 ]
 reasoning-gym = [
     { name = "reasoning-gym" },

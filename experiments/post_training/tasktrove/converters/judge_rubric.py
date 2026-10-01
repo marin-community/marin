@@ -17,7 +17,7 @@ group.
 
 import re
 
-from verifyit.spec import RUBRIC_CHECKLIST, JudgeSpec
+from tasktrove_verify.spec import RUBRIC_CHECKLIST, JudgeSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

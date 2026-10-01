@@ -32,8 +32,8 @@ from marin.inference.structured_output import StructuredTool
 from math_verify import parse, verify
 from pydantic import Field, ValidationError
 from rigging.filesystem.storage_path import StoragePath
+from tasktrove_verify.modes.extract import extract_boxed, strip_math_delimiters
 from transformers import AutoTokenizer
-from verifyit.modes.extract import extract_boxed, strip_math_delimiters
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 

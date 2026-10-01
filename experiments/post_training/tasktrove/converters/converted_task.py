@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from verifyit.spec import Spec
+from tasktrove_verify.spec import Spec
 
 from experiments.post_training.tasktrove.taskbinary import TaskFiles
 

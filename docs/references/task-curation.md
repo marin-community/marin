@@ -1,11 +1,88 @@
 # Task curation pipeline
 
-TaskCompendium's bounded curation runner loads a pinned Hugging Face (HF) or local sample, normalizes rows,
-checks graders, reviews tasks through an injected model service, and writes
-accepted tasks plus a complete decision ledger. Recipes support numeric, exact,
+TaskCompendium curates pinned Hugging Face (HF) sources and local snapshots through
+per-source acquisition, audit and filter artifacts, followed by merged audit and
+accepted views. Zephyr normalizes rows, groups duplicates and conflicting references,
+checks graders, and preserves model-review evidence. Every completed filter artifact
+assigns each input `keep` or `reject`, while retaining its reasons. Recipes support numeric, exact,
 multiple-choice, predicted-action, IFEval, JSON Schema, puzzle, Reasoning Gym,
 calendar, open QA and executable submissions. Source-specific checks bind the
 grader and its controls; model quality review remains separate from grading.
+
+## Build the artifact graph
+
+`experiments.post_training.task_curation_pipeline` is the artifact-graph entrypoint.
+The default prints the plan without acquiring sources or calling GLM:
+
+```bash
+MARIN_PREFIX=/tmp/task-curation-artifacts \
+uv run --package marin-core --group test python -m \
+  experiments.post_training.task_curation_pipeline \
+  --recipe taskcompendium.pipeline.datasets.svamp \
+  --recipe taskcompendium.pipeline.datasets.aime24 \
+  --limit 10 --model-revision <serving-job-or-weights-identity>
+```
+
+Add `--run --base-url <reachable-GLM-batch-endpoint>` to execute the graph.
+Set `GLM_BULK_TOKEN` in the caller's environment. For module recipes, `--limit`
+counts acquired rows per source, including rows that later reject. Sources selected
+through `--sources-dir` use their saved sample-manifest counts. Acquisition fails if the source
+yields fewer than the requested count. The entrypoint uses the existing inference
+endpoint; it does not start or restart a serving job.
+
+`MARIN_PREFIX` selects the artifact storage location. It can name local storage,
+S3 or GCS according to Marin's configured filesystem access. The acquisition
+builder's name, `download_to_s3`, does not force an S3 destination. Credentials
+and transport clients stay outside persisted artifact configurations.
+
+Each source has an independent branch:
+
+```mermaid
+flowchart LR
+    A[Acquire raw shards] --> B[Audit with Zephyr]
+    B --> C[Filter: audit and accepted]
+    C --> D[Merge audit views]
+    C --> E[Merge accepted views]
+```
+
+| Stage | Retained output and boundary |
+| --- | --- |
+| Acquire | `raw/part-*.jsonl` and a source manifest; copies the pinned bounded sample into artifact storage. |
+| Audit | `audit/part-*.parquet`, source-wide duplicate/conflict decisions, verifier observations and `evidence/<batch-id>/` model records. |
+| Filter | Final `audit/part-*.parquet` for every input and `accepted/part-*.parquet` for kept tasks, plus policy and count metadata. |
+| Merge | Separate audit and accepted artifacts, each with `data/part-*.parquet` and input-source metadata. |
+
+Merge reshards each view into `ceil(rows / 100000)` partitions, with at least
+one partition, before writing Parquet.
+
+Deduplication groups all acquired shards within one source. Exact copies retain
+the first source row and mark later rows with `duplicate_of`; differing private
+references for the same public task reject every member. Merging preserves source
+results without deduplicating across sources. Cross-source overlap remains a
+separate follow-up.
+
+Filter identity includes the policy and audited artifact identity. A policy-only
+change rebuilds filtering and merging while reusing acquisition, controls and
+model responses. Recipe code, rubric, check configuration or model identity
+changes invalidate the audit stage. Acquisition has its own source and sample
+identity, so unchanged source inputs can remain cached. Worker and batch settings
+are execution parameters. Restart reuse follows the completed-shard behavior
+described below and permits a different worker count.
+
+Modules supplied through `--recipe` export a pinned `DatasetRecipe` named `recipe`.
+Use `--snapshot-recipe MODULE PATH SHA256` for a module exporting a
+`recipe(snapshot)` factory. A static snapshot recipe supplied through `--recipe`
+also needs `--sample-sha256 SOURCE SHA256`, where `SOURCE` is its recipe name.
+For other constructor arguments, build a `SourceBinding` in an experiment and
+call `build_workflow`. Snapshot bindings pin their file digest in
+`SourceAcquisition.sample_sha256`.
+
+The earlier [1,000-task exercise](https://gist.github.com/rjpower/eebecc1ec4035014e2080b3d1da0c057#file-report-md)
+kept 595 and rejected 405 tasks. Those results precede this artifact graph and
+the standalone verifier migration; their frozen inputs, code and inference
+records remain the historical evidence. Reusing saved observations to test
+filtering or merging does not establish a fresh end-to-end graph run or new
+quality estimates.
 
 ## Run a pilot
 
@@ -97,8 +174,8 @@ controls and quality review.
 A final assistant text message ends an executable episode. Tool calls execute
 and append observations; `--max-steps` limits assistant turns, including the final
 message. Budget exhaustion and infrastructure errors are recorded separately.
-This prototype has no persistent interactive shell, parallel scheduler or Harbor
-lowering for executable tasks.
+The solver pilot executes turns sequentially and has no persistent interactive
+shell or Harbor lowering for executable tasks.
 
 ### TaskSpec and runtime binding
 
@@ -139,7 +216,7 @@ revision, rather than only a new source binding.
 
 ## Exercise ten real sources
 
-The ten-source launcher binds decoded snapshots to these recipes:
+The graph's source bindings map decoded snapshots to these recipes:
 
 | Source | Recipe factory | Grading controls |
 | --- | --- | --- |
@@ -168,13 +245,16 @@ uv run --no-sync --with fastparquet python -m \
   --count 100 --seed 6101 --nemo-shard train.jsonl \
   --output /tmp/task-curation-ten/sources
 
-uv run --no-sync --with './lib/taskcompendium[pipeline]' python -m \
-  experiments.post_training.task_curation_ten \
-  --sources /tmp/task-curation-ten/sources \
-  --output /tmp/task-curation-ten/run \
+MARIN_PREFIX=/tmp/task-curation-ten/artifacts \
+uv run --package marin-core --group test python -m \
+  experiments.post_training.task_curation_pipeline \
+  --sources-dir /tmp/task-curation-ten/sources \
+  --source nl2bash --source taco --source codeforces --source unitsyn \
+  --source calendar --source reasoning_gym --source all_puzzles \
+  --source nemo_actions --source knowledge_openqa --source science_openqa \
   --base-url http://127.0.0.1:18020/v1 \
   --model-revision <verified-serving-job-identity> \
-  --image <immutable-local-docker-image-id>
+  --image <immutable-local-docker-image-id> --run
 ```
 
 The sample reads selected Parquet row groups, with a 64 MiB decoded-data budget
@@ -186,12 +266,17 @@ produce bounded exercises with recorded selection bias, rather than population
 quality estimates. Archived snapshots, rather than a new sample, are the replay
 input for a completed exercise.
 
-The launcher freezes sample manifests and rubrics before GLM review. It writes
-per-source and combined `audit.parquet` and `accepted.parquet`. `--source` selects
-a subset. Executable controls use four concurrent workers by default, with fresh
+The graph pins saved sample manifests and records rubric identity before GLM
+review. Final per-source artifacts contain `audit/part-*.parquet` and
+`accepted/part-*.parquet`; the two merged views contain `data/part-*.parquet`.
+Their artifact paths are printed in the plan and recorded by Marin.
+`MARIN_PREFIX` can also name an accessible `gs://` or `s3://` prefix. `--source`
+selects a subset; omitting it selects every registered source name, so include
+the desired names when the directory contains only one cohort. Executable
+audit stages use four workers by default, with fresh
 network-disabled containers, a 512 MB memory limit and 120-second command limits.
-The supplied image must contain Bash, GNU utilities, Python, the current
-the pinned `verifyit` package, pytest with JSON reporting, and a C++ compiler when needed.
+The supplied image must contain Bash, GNU utilities, Python, the pinned
+`verifyit` package, pytest with JSON reporting, and a C++ compiler when needed.
 Its immutable ID is recorded. Using a common image substitutes for each source
 Dockerfile; a passing oracle does not establish full environment equivalence.
 Source-oracle controls exercise the grader; this launcher does not run an
@@ -204,13 +289,18 @@ adjudication in its report artifacts. That separate analysis adds
 `adjudication_status`, `adjudication_reason`, `post_audit_status` and
 `post_audit_reasons` to the combined audit. Its `accepted_after_audit.parquet`
 selects `post_audit_status = keep`. These annotations and the additional export
-are historical analysis outputs outside the launcher; its `accepted.parquet`
+are historical analysis outputs outside the graph; that exercise's `accepted.parquet`
 selects `filter_status = keep`. Current production filtering always ends in
 `keep` or `reject`, with independent audits used to calibrate the rubric and policy.
 
 Existing cleanup converters run at the Marin experiment boundary. Library recipes
 consume their converted instructions, grader specs and resource maps, keeping
-the package independent of Marin. For example:
+the package independent of Marin. Legacy TaskTrove converters, release tooling
+and existing consumers retain their original verifier dependency. The new curation
+wrapper serializes their baseline spec types and normalizes emitted checker
+environment references to `VERIFYIT_*`. Its `normalization_changes` retain the
+original and replacement resource bytes and a reason; original source files stay
+unchanged. Migrating the legacy cleanup is deferred. For example:
 
 ```python
 from dataclasses import replace
@@ -228,7 +318,8 @@ recipe = replace(recipe, rubric=replace(
 ))
 ```
 
-Use a new output directory after changing a rubric. GLM reviews receive readable
+The graph changes audit identity when a rubric changes. The bounded local helper
+requires a new output directory for that change. GLM reviews receive readable
 UTF-8 resource previews, visibility, hashes and truncation markers: 8,192
 characters per resource and 32,768 total. Full bytes remain in the audit.
 At most 256 files are previewed, prioritizing public inputs and control scripts;
@@ -265,20 +356,22 @@ uv run --no-sync --with fastparquet python -m \
   --source knowledge_mcqa --source arc_transductive \
   --output /tmp/task-curation-next/sources
 
-uv run --no-sync --with './lib/taskcompendium[pipeline]' python -m \
-  experiments.post_training.task_curation_next_ten \
-  --sources /tmp/task-curation-next/sources \
+MARIN_PREFIX=/tmp/task-curation-next/artifacts \
+uv run --package marin-core --group test python -m \
+  experiments.post_training.task_curation_pipeline \
+  --sources-dir /tmp/task-curation-next/sources \
   --source knowledge_mcqa --source arc_transductive \
-  --output /tmp/task-curation-next/run \
   --base-url http://127.0.0.1:18020/v1 \
   --model-revision <verified-serving-job-identity> \
-  --image <immutable-local-docker-image-id>
+  --run
 ```
 
-The image argument is recorded for reproducibility; these two selected recipes
-do not execute containers. Omitting `--source` from the next-ten launcher selects
-all ten sources in the table. The sampler's default selection remains the first
-ten-source cohort, so specify each next-round source when sampling.
+These two selected recipes do not execute containers and need no `--image`.
+Coding-source selections require an immutable grading image. The sampler's
+default selection remains the first ten-source cohort, so specify each next-round
+source when sampling and running the graph. Existing historical
+`frozen-plan.json`, flat Parquet files and bulk-run records remain evidence from
+the earlier runner; the graph emits the stage directories described above.
 
 For example, extend a source's rubric without changing its shared option parser:
 
@@ -419,11 +512,12 @@ to candidates and records unavailable verification as unverified grader readines
 ## Specify a converter and rubric
 
 A Python module exports a `DatasetRecipe` named `recipe`. Its `normalize` function
-receives `RawRow(id, source, data)` and returns a `TaskSpec` or `ImportRejection`.
+receives `RawRow(id, source, data)` and returns a `TaskSpec`, a `NormalizedTask`
+carrying the task and normalization edits, or an `ImportRejection`.
 It must retain the supplied identity and provenance. Known malformed source
 shapes should return a rejection with a reason and detail; unexpected exceptions
 fail the run. The runner records the recipe version and hashes the recipe module,
-TaskCompendium source, and shared TaskTrove scorer source.
+TaskCompendium source, and pinned standalone verifyit scorer source.
 
 The [SVAMP recipe](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/datasets/svamp.py)
 joins `Body` and `Question`, parses its numeric `Answer`, and selects the shared
@@ -494,17 +588,18 @@ New execution or grading semantics require a shared verifier/check implementatio
 The controls reuse TaskCompendium's shared
 [verifyit scorers](https://github.com/marin-community/verifyit)
 and numeric negative-candidate generator. They exercise the actual answer grader on an empty submission, its
-stored reference, and a wrong candidate. Numeric perturbations reuse TaskTrove's
-control generator. An extraction error is a valid empty negative control and is
+stored reference, and a wrong candidate. An extraction error is a valid empty negative control and is
 recorded explicitly. These checks establish grading behavior, not mathematical
 correctness of the stored answer. The default answer controls do not execute containers or solve tasks. A recipe
 with `check_suite` supplies executable controls and records their rollout evidence.
 
 GLM receives the task context and private verifier configuration and returns
 quality, confidence, reference consistency, defect codes and brief evidence.
-This review sees the key and is advisory. It does not establish independent
-reference agreement or measure difficulty. Requests default to 2,048 response
-tokens and a 32,000-character cap. The cap is not an exact tokenizer bound.
+This review sees the key and supplies evidence for the final policy decision.
+It does not establish independent reference agreement or measure difficulty.
+`BatchReviewer` defaults to 2,048 response tokens and a 32,000-character cap;
+the artifact-graph launcher sets 4,096 tokens and 128,000 characters by default.
+The character cap is not an exact tokenizer bound.
 
 The binary policy keeps tasks with `quality=good`, at least medium confidence,
 no defect codes and no reference conflict. An unknown reference assessment does
@@ -517,7 +612,8 @@ Grader readiness is separate from static quality. Passing all declared controls
 records `grader_readiness=ready`; a failed control records `failed` and rejects
 the task. Missing controls, oracles, unbound judges or infrastructure errors
 record `unverified` and do not block a favorable quality decision. Quality review
-runs for every normalized nonduplicate task, including tasks with failed controls,
+runs for every normalized nonduplicate task without a conflicting-reference
+decision, including tasks with failed controls,
 so the audit retains content findings alongside mechanical rejection reasons.
 Acceptance is a curation decision, not a claim that an unverified grader is ready
 for RL execution.
@@ -533,10 +629,12 @@ Exact semantic duplicates match `TaskSpec` fields except `id`, `source` and
 control resources, including the private verifier. They select the first source
 row; later duplicates are rejected with `duplicate_of` lineage. Tasks with the
 same public semantics but different private verifier data form a conflict group;
-every member is rejected. This prototype performs
-deduplication within each sample; it does not remove overlap across datasets.
+every member is rejected. Grouping spans all acquired shards within a source;
+the current merge does not remove overlap across datasets.
 
-Each dataset directory contains:
+The bounded local helper, `run_pipeline`, invokes the same acquisition, audit
+and filter Zephyr stages. It also writes flat ledgers for pilots and rewrite
+exercises. Each local dataset directory contains:
 
 | File | Contents |
 | --- | --- |
@@ -545,7 +643,7 @@ Each dataset directory contains:
 | `normalized.jsonl` | Private semantic task specifications. |
 | `checks.jsonl` | Per-task grading controls, task digests and executable rollout evidence. |
 | `rollouts.jsonl` | Flat executable rollout records with observations and captured artifacts. |
-| `review/` | Requests, acknowledged batch ID, provider output/errors and result. |
+| `audited/evidence/<batch-id>/review/` | Requests, acknowledged batch ID, provider output/errors and result. |
 | `reviews.jsonl` | Parsed review findings or unavailable/invalid states. |
 | `decisions.jsonl` | Exactly one decision per input row, including duplicate lineage. |
 | `audit.parquet` | Every input row, task payload and filtering/cleanup annotations, including rejected tasks. |
@@ -555,19 +653,23 @@ Each dataset directory contains:
 These artifacts contain private reference material, and GPQA artifacts retain
 gated source content. They are local run outputs, not public dataset releases.
 
-The runner writes `audit.parquet` before filtering the final export. Its native
-columns include `filter_status`, `filter_reasons`, `duplicate_of`, normalization
+The audit stage writes observation shards before final filtering. The filter
+stage adds decisions and writes both complete audit and accepted shards; the
+bounded helper then exports its flat Parquet files. Their native columns include
+`filter_status`, `filter_reasons`, `duplicate_of`, normalization
 failure reason/detail, review status/quality/confidence/defects/evidence, and a
 list of check results with explanations. `grader_readiness` is independent of
 `filter_status`. Sampled runs also expose
 `sample_partition`, `sample_group`, `source_sample_index` and `source_byte_offset`.
 `normalization_changes` records instruction replacements with original text,
-replacement text and reason. Source conversion annotations take precedence;
+replacement text and reason, plus annotated checker-resource replacements as
+base64 bytes. Source conversion annotations take precedence;
 otherwise a changed single-message instruction records its delivery adjustment.
 Rewrite outputs use the same schema,
 adding `parent_id`, `cleanup_action`, `cleanup_reason`, `cleanup_edits` and status.
-A null filter status appears only in the intermediate proposal audit. Final
-cleanup outputs contain a keep or reject decision for every input.
+A null filter status can appear in intermediate audit observations or rewrite
+proposals. Every completed filter or cleanup output contains a keep or reject
+decision for every input.
 Skipped reviews are distinct from model approval. Policy changes regenerate the
 decision columns from retained evidence without new inference.
 
@@ -590,18 +692,28 @@ tasks = [TaskSpec.model_validate_json(value) for value in accepted["task_json"].
 
 ## Resume and change policy
 
-Repeat a run with the same directory to reuse its source sample, verification
-records, parsed reviews, and acknowledged batch submission. An interruption
-after the server accepts a batch but before its ID is saved can still require a
-new submission. After the bounded retries, unavailable or invalid reviews yield
+Audit groups public task keys across all acquired source shards into
+`ceil(input_rows / 100)` partitions, independently of `max_workers`, then forms
+review windows within each partition. Zephyr atomically writes audit observation shards
+with `write_parquet(skip_existing=True)`. On restart, its existing writer skips
+completed shards before upstream grader or model work, including eager mappers.
+Normalization and grouping may recompute. An incomplete partition repeats its
+grader and model work and may resubmit in-flight calls; saved transport files
+remain evidence. There is no per-task cache shared across sources.
+
+Repeat a bounded local run with the same directory to reuse its source sample
+and completed audit. After bounded retries, unavailable or invalid reviews yield
 rejection. Use a new output directory to run a different model attempt.
 
-`run_pipeline` accepts a `FilterPolicy`; changing only this policy recalculates
-decisions without new source reads, verifier calls, or model requests. Changing
+`run_pipeline` accepts a `FilterPolicy`; changing only this policy reuses the
+entire completed audit artifact and recalculates decisions without new source
+reads, verifier calls, or model requests. Changing
 the code, source, converter, rubric or model configuration requires a new
 directory. Model identity currently names a serving job, not immutable weights;
-restrict reuse to the same local pilot and an unchanged serving job. The runner
-has no distributed scheduler or full-corpus release gate.
+restrict reuse to the same local pilot and an unchanged serving job. Use the
+artifact graph above for independently cached source stages and merged outputs.
+The bounded helper preserves flat local ledgers; neither path establishes a
+full-corpus release gate.
 
 With the original `recipe`, `reviewer` and dataset directory:
 
@@ -627,6 +739,6 @@ run_pipeline(
 Run package tests with:
 
 ```bash
-uv run --project lib/taskcompendium --extra harbor --group test \
+uv run --project lib/taskcompendium --extra pipeline --extra harbor --group test \
   pytest lib/taskcompendium/tests -q
 ```

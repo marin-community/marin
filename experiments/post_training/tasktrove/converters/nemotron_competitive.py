@@ -3,7 +3,7 @@
 
 """Nemotron competitive coding stdin/stdout tasks."""
 
-from verifyit.spec import Compare, StdioSpec
+from tasktrove_verify.spec import Compare, StdioSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

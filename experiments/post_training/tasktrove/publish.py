@@ -119,7 +119,7 @@ configs:
 """
 
 _TASKTROVE_CODE_URL = "https://github.com/marin-community/marin/tree/main/experiments/post_training/tasktrove"
-_VERIFIER_CODE_URL = "https://github.com/marin-community/verifyit"
+_VERIFIER_CODE_URL = "https://github.com/marin-community/marin/tree/main/lib/tasktrove-verify"
 
 
 class HuggingFaceApi(Protocol):
@@ -334,7 +334,7 @@ The [conversion pipeline]({_TASKTROVE_CODE_URL}) applies these stages:
 2. Keep sources with recoverable task contracts and record every source decision.
 3. Convert each retained row to the common Harbor layout and replace its source grader with a
    typed `tests/verifier.toml` contract executed by
-   [`verifyit`]({_VERIFIER_CODE_URL}).
+   [`tasktrove-verify`]({_VERIFIER_CODE_URL}).
 4. Deduplicate exact instructions within each source.
 5. Reject tasks with a malformed contract, missing verifier files, legacy grader dependencies,
    exposed solutions or long gold answers, or an invalid mode-specific shape.
@@ -458,7 +458,7 @@ def render_report(manifest: dict) -> str:
         "# TaskTrove release",
         "",
         f"{manifest['clean_tasks']} of {manifest['input_tasks']} tasks from {manifest['tasktrove']['hf_id']}"
-        f" @ {manifest['tasktrove']['revision']}, graded by verifyit @ {manifest['verify_tool_ref']}:"
+        f" @ {manifest['tasktrove']['revision']}, graded by tasktrove-verify @ {manifest['verify_tool_ref']}:"
         f" {len(kept)} of {len(kept) + len(dropped)} sources, {len(manifest['by_converter'])} converters,"
         f" {len(manifest['by_mode'])} modes, {len(manifest['dockerfiles'])} distinct Dockerfiles.",
         "",

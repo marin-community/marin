@@ -17,8 +17,8 @@ from dataclasses import asdict, dataclass
 
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
-from verifyit.modes.extract import collapse_whitespace
-from verifyit.spec import mode_of, render_spec
+from tasktrove_verify.modes.extract import collapse_whitespace
+from tasktrove_verify.spec import mode_of, render_spec
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.tasktrove.converters.converted_task import (

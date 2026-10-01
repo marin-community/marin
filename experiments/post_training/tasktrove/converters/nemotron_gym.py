@@ -9,7 +9,7 @@ file, map its fields onto one spec, pass the instruction and Dockerfile through,
 
 import re
 
-from verifyit.spec import MathSpec, MathType, McqSpec
+from tasktrove_verify.spec import MathSpec, MathType, McqSpec
 
 from experiments.post_training.tasktrove.converters.answer_solution import answer_solution
 from experiments.post_training.tasktrove.converters.converted_task import (

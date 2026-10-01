@@ -7,9 +7,9 @@ import json
 from collections.abc import Iterator
 from importlib import import_module
 from itertools import islice
-from pathlib import Path
 from typing import Any, Protocol, cast
 
+import fsspec
 from datasets import load_dataset
 
 from taskcompendium.pipeline.models import GeneratedSource, HFSource, SnapshotSource
@@ -25,7 +25,7 @@ def source_rows(source: HFSource | GeneratedSource | SnapshotSource, limit: int)
         yield from islice(cast(GeneratorModule, import_module(source.module)).generate_rows(limit), limit)
         return
     if isinstance(source, SnapshotSource):
-        with Path(source.path).open() as stream:
+        with fsspec.open(source.path, "rt") as stream:
             yield from islice((json.loads(line) for line in stream if line.strip()), limit)
         return
     if len(source.revision) != 40 or any(character not in "0123456789abcdef" for character in source.revision):

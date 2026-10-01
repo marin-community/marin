@@ -13,8 +13,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from verifyit.grade import grade
-from verifyit.spec import ExactSpec, ReasoningGymSpec, ScriptSpec, parse_spec
+from tasktrove_verify.grade import grade
+from tasktrove_verify.spec import ExactSpec, ReasoningGymSpec, ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
@@ -128,7 +128,7 @@ def test_grid_transform_shape_converts_to_script_mode_and_grades_the_held_out_ca
     for old_grader_file in ("tests/verifier.py", "tests/validate_verifier_data.py", "tests/verifier_data.json"):
         assert old_grader_file not in task.files, "old grader code must not ship"
 
-    # ScriptSpec has no probe in verifyit.grade, so verify_task cannot exercise the real
+    # ScriptSpec has no probe in tasktrove_verify.grade, so verify_task cannot exercise the real
     # grader; check_grading only skips it, so we run it ourselves the way check_grading would.
     assert verify_task(record.task_binary) is None
     with tempfile.TemporaryDirectory() as tmp:

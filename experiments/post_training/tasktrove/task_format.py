@@ -3,7 +3,7 @@
 
 """What a converted task looks like on disk.
 
-The verifier spec (``verifyit.spec``) lives at ``tests/verifier.toml``: Harbor copies only
+The verifier spec (``tasktrove_verify.spec``) lives at ``tests/verifier.toml``: Harbor copies only
 ``tests/`` into the container, and only at verify time, so the expected answer never reaches the
 agent. ``tests/test.sh`` is the same three lines for every task. ``task.toml`` keeps Harbor's own
 tables plus a ``[metadata]`` block with the selection tags. The task's own Dockerfile is kept and
@@ -14,7 +14,7 @@ import hashlib
 import re
 
 import tomlkit
-from verifyit.spec import Mode
+from tasktrove_verify.spec import Mode
 
 VERIFIER_TOML = "tests/verifier.toml"
 TESTS_MOUNT = "/tests"
@@ -23,14 +23,13 @@ RESPONSE_OUTPUT = "/app/response.txt"
 
 VERIFY_TEST_SH = f"""#!/bin/bash
 set -euo pipefail
-exec verifyit {TESTS_MOUNT}/verifier.toml
+exec tasktrove-verify {TESTS_MOUNT}/verifier.toml
 """
 
-VERIFY_TOOL_URL = "git+https://github.com/marin-community/verifyit.git@{ref}"
-VERIFYIT_REVISION = "a398c65d851941ce8e39e2986993c6108dd2e10b"
+VERIFY_TOOL_URL = "git+https://github.com/marin-community/marin@{ref}#subdirectory=lib/tasktrove-verify"
 TOOL_PYTHON = ">=3.11"
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
-INSTALL_MARKER = "# --- verifyit ---"
+INSTALL_MARKER = "# --- tasktrove-verify ---"
 OLD_GRADER_LINE = re.compile(r"rewardkit|litellm", re.IGNORECASE)
 """A Dockerfile line installing the old judge graders; converters strip it and the filter stage
 rejects a task that still carries one."""
@@ -55,7 +54,7 @@ _BLANK_RUN = re.compile(r"\n{3,}")
 
 def tool_install_block(tool_ref: str, extras: tuple[str, ...]) -> str:
     """Return Dockerfile lines that install the pinned verifier and requested mode extras."""
-    package = "verifyit" + (f"[{','.join(extras)}]" if extras else "")
+    package = "tasktrove-verify" + (f"[{','.join(extras)}]" if extras else "")
     url = VERIFY_TOOL_URL.format(ref=tool_ref)
     return (
         f"{INSTALL_MARKER}\n"

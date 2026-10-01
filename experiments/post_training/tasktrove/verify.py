@@ -25,10 +25,10 @@ from enum import StrEnum
 from pathlib import Path
 
 from rigging.filesystem.storage_path import StoragePath
-from verifyit.grade import Status, grade, local_output_path, negative_candidate, positive_candidate
-from verifyit.modes.extract import collapse_whitespace
-from verifyit.modes.ifeval import CONSTRAINTS
-from verifyit.spec import (
+from tasktrove_verify.grade import Status, grade, local_output_path, negative_candidate, positive_candidate
+from tasktrove_verify.modes.extract import collapse_whitespace
+from tasktrove_verify.modes.ifeval import CONSTRAINTS
+from tasktrove_verify.spec import (
     RUBRIC_CHECKLIST,
     RUBRIC_REFERENCE,
     RUBRICS,
@@ -235,7 +235,7 @@ def check_grading(task: TaskFiles, spec: Spec) -> Rejection | None:
     if positive is None:
         return None
     negative = negative_candidate(spec)
-    with tempfile.TemporaryDirectory(prefix="verifyit-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="tasktrove-verify-") as tmp:
         root = Path(tmp)
         tests_dir = _materialize(task, root)
         workspace = root / "app"

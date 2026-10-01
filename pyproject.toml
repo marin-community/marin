@@ -20,7 +20,7 @@ dependencies = [
     # cloud credentials and reads the key from a projected Secret instead.
     "marin-rigging[secrets]",
     "marin-zephyr",
-    "verifyit[answer,reasoning-gym,schema]",
+    "tasktrove-verify[answer,reasoning-gym,schema]",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
@@ -215,7 +215,6 @@ members = [
 exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
 
 [tool.uv.sources]
-verifyit = { git = "https://github.com/marin-community/verifyit.git", rev = "a398c65d851941ce8e39e2986993c6108dd2e10b" }
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
@@ -229,6 +228,7 @@ marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
 tasktrove-verify = { workspace = true }
+taskcompendium = { path = "lib/taskcompendium", editable = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }

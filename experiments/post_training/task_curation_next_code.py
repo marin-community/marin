@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from verifyit.spec import Compare, StdioSpec
+from tasktrove_verify.spec import Compare, StdioSpec
 
 from experiments.post_training.task_curation_executable import convert_snapshot as convert_executable_snapshot
 from experiments.post_training.tasktrove.converters.code_contests import convert_code_contests

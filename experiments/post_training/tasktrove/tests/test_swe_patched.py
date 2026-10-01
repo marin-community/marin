@@ -8,8 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from verifyit.modes import grade_pytest
-from verifyit.spec import PytestSpec, ScriptSpec, parse_spec
+from tasktrove_verify.modes import grade_pytest
+from tasktrove_verify.spec import PytestSpec, ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove import verify
 from experiments.post_training.tasktrove.convert import convert_one
@@ -105,7 +105,7 @@ def test_non_python_language_uses_fail_closed_script_fallback():
 
     legacy_test = task.text("tests/legacy_test.sh")
     assert "/opt/tasktrove-legacy-grader/bin/python -m pytest" in legacy_test
-    assert '"$VERIFYIT_LOGS_DIR/reward.txt"' in legacy_test
+    assert '"$TASKTROVE_LOGS_DIR/reward.txt"' in legacy_test
     assert "/logs/verifier/test_output.log" in legacy_test
     assert "uv init --python 3.12" not in legacy_test
 

@@ -5,9 +5,9 @@
 
 from pathlib import Path
 
-from verifyit.grade import Status
-from verifyit.modes import grade_stdio
-from verifyit.spec import Compare, StdioSpec, parse_spec
+from tasktrove_verify.grade import Status
+from tasktrove_verify.modes import grade_stdio
+from tasktrove_verify.spec import Compare, StdioSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.codeforces import (

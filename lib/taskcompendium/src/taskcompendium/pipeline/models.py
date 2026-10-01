@@ -65,12 +65,26 @@ class IntendedUse(StrEnum):
     EVAL = "eval"
 
 
+class NormalizationChange(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    field: str
+    reason: str
+    original: str
+    replacement: str
+
+
+@dataclass(frozen=True)
+class NormalizedTask:
+    task: TaskSpec
+    changes: tuple[NormalizationChange, ...]
+
+
 @dataclass(frozen=True)
 class DatasetRecipe:
     name: str
     version: str
     source: HFSource | GeneratedSource | SnapshotSource
-    normalize: Callable[[RawRow], TaskSpec | ImportRejection]
+    normalize: Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
     rubric: ReviewRubric
     intended_use: IntendedUse
     check_suite: "CheckSuite | None" = None
@@ -232,3 +246,4 @@ class TaskAudit(BaseModel):
     original: TaskSpec | None = None
     cleanup: RewriteRecord | None = None
     lineage: dict[str, Any] | None = None
+    normalization_changes: tuple[NormalizationChange, ...] = ()

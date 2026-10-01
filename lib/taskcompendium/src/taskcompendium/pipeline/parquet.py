@@ -77,7 +77,9 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
     proposal = cleanup.proposal if cleanup is not None else None
     rejection = audit.normalization_rejection
     data = audit.raw.get("data", {}) if audit.raw is not None else {}
-    changes = data.get("converted", {}).get("normalization_changes", [])
+    changes = [change.model_dump(mode="json") for change in audit.normalization_changes]
+    if not changes:
+        changes = data.get("converted", {}).get("normalization_changes", [])
     if not changes and audit.normalized is not None and isinstance(data.get("instruction"), str):
         events = audit.normalized.context.events
         if len(events) == 1 and isinstance(events[0], TextMessage) and events[0].content != data["instruction"]:

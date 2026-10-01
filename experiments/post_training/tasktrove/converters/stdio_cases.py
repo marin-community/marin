@@ -5,8 +5,8 @@
 
 import re
 
-from verifyit.modes.extract import collapse_whitespace
-from verifyit.spec import Compare
+from tasktrove_verify.modes.extract import collapse_whitespace
+from tasktrove_verify.spec import Compare
 
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus, Rejected
 from experiments.post_training.tasktrove.taskbinary import TaskFiles

@@ -17,14 +17,13 @@ def _provenance(*, dirty: bool) -> Provenance:
     )
 
 
-def test_pipeline_plan_pins_the_external_verifier_commit(monkeypatch) -> None:
+def test_pipeline_plan_pins_the_clean_launch_commit(monkeypatch) -> None:
     monkeypatch.setattr(pipeline, "launch_provenance", lambda: _provenance(dirty=False))
-    monkeypatch.setattr(pipeline, "VERIFYIT_REVISION", "verifier5678")
 
     result = CliRunner().invoke(pipeline.main, ["--stage", "converted"])
 
     assert result.exit_code == 0
-    assert '"tool_ref": "verifier5678"' in result.output
+    assert '"tool_ref": "commit1234"' in result.output
 
 
 def test_pipeline_plan_rejects_a_dirty_launch(monkeypatch) -> None:
