@@ -363,7 +363,6 @@ def iceball_rl_spec(
 
 
 def iceball_rl_execution() -> IrisSkyRLExecution:
-    """Return the Iris execution settings for Iceball's RL stage."""
     return IrisSkyRLExecution(
         cluster=ICEBALL_CLUSTER,
         cluster_config=ICEBALL_CLUSTER_CONFIG,
