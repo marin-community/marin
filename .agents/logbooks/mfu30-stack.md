@@ -246,3 +246,25 @@ weight slices off the memcpy streams.
   `m30c-stackseq-trace-03`.
 - Every landed trace (including sonic-02 and ctl-r2 when profiled) gets `stack/trace_checks.sh <run>`. It
   pulls the xplane and runs the carry-stall, copy-schedule, exposed-memcpy and XLA-remat checks.
+
+### Same-code repeat and the endgame plan (orchestrator, 2026-09-30 19:40 PT)
+
+`m30-ctl-s0-r2` (same code as `mhep-ctx4k-s0`, not profiled) scored 28.232 MFU on my score.py (28.235 on the
+orchestrator's), 13.903 s/step, peak 103.09 GiB. Against s0: first-step loss identical, max |dloss| 3.3e-4,
+late mean -3.9e-5, 35/89 steps positive. This is the fidelity band for every arm. grnflag-01 (max 3.0e-4) sits
+inside it.
+
+Plan:
+1. Score both -03 arms, run `trace_checks.sh` on each, and pick the lineage.
+2. The final program runs on the production wheel: the winner at 0.78/105 with H-A4. Its trace feeds
+   `pgle_build.sh` (plain, and A's D2H patch as an option). Then a scored PGLE run, and repeats for the
+   loss check.
+3. Add-ons each get a paired comparison against the final program, never bundled blind: the short-conv
+   switch, A's carry-prefetch flag, and the fused norm alone.
+
+A's stream-collision fix (custom PJRT wheel) waits on the user's approval and is not part of any arm. Until
+then `carry_stall.py` is the gate.
+
+Open point: the -03 arms also carry `--sconv-implementation triton_gpu` and `--regather-attention-weights`.
+So the -03 trace is the final program's trace only if both flags stay in the final program. Otherwise the
+PGLE build needs a new trace arm of the final program.
