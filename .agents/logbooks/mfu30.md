@@ -521,3 +521,11 @@ H-A4 + slop 105, MEM_FRACTION 0.78, `XLA_GPU_HOST_TRANSFER_STREAMS=1`, `--sconv-
 --regather-attention-weights`, wheel via `--pip-package`): `m30-f1-pipe-01` (33010), `m30-f1-seq-01` (33011).
 The -03 lineage pick decides which F1 runs (the other is cancelled if it has not started); then F0 (same
 wheel, env off) on the winner, the PGLE build from the winning F1 trace (C), and PGLE-scored runs (orchestrator).
+
+## M30-029 Stacked pipelined arm: no net gain over D (2026-10-01)
+
+`m30c-stackpipe-trace-03` (D + mirror + E + #9481 model commits incl. re-gather + Triton sconv + pipelined chunks;
+H-A4 at 0.78/105; production wheel): **29.768 / 13.186 s** vs sonic-02 29.783 / 13.179, so net ~0 for
+everything added on top of D. Peak 123.20 (vs 125.02). Loss at 180000 exact; dloss max 6.8e-4, late mean
++7.7e-5, 38/49 positive (above the same-code max 3.3e-4). B is attributing the delta from the two traces:
+which added component eats the expected E (~-0.13) and sconv (~-0.1) gains.
