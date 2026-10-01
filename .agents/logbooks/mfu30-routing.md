@@ -417,3 +417,46 @@ flag) resolved against `research/mcwitt/mfu30-stack` @ 8eff7b8ec4; it also appli
 `gated_norm_implementation`; both are kept. Short-conv and hero-model CPU tests pass on the result. Arm flag:
 `--sconv-implementation triton_gpu`. Not done: the three-addend summation in the conv load (skipped per the
 orchestrator).
+
+## M30B-022 Exposure of `m30b-unfilled-02` (A+B+C), and `m30b-sonic-02` submitted
+
+Score (orchestrator): 28.668% / 13.692 s vs control 28.258% / 13.891 s (+0.41 MFU, -0.199 s/step), peak 103.75 GiB,
+loss at 180000 exact (1.2614134550); later steps drift by up to 9.6e-4 (attention-backward nondeterminism, see
+M30B-021; same-code repeat m30-ctl-s0-r2 queued to calibrate).
+
+Profile: rank 0, steps 180021-180023 (`b/exposure.py`, `anatomy.py`, `exposed_detail.py`). Compared with the Sep 24
+main profile (M30B-018) and A's `m30a-hmo-02` (current main + host-offloading flag); there is no profile of the
+Sep 30 control.
+
+| s/step | Sep 24 main | hmo-02 | unfilled-02 |
+|---|---|---|---|
+| span (profiled steps) | 14.439 | 13.766 | 13.762 |
+| compute | 11.793 | 11.627 | 11.533 |
+| exposed collectives | 1.681 | 1.443 | 1.516 |
+| exposed copies | 0.619 | 0.618 | 0.631 |
+| idle (tail) | 0.346 (0.323) | 0.077 (0.055) | 0.082 (0.055) |
+
+- Routing marshal compute fell 0.37 s/step against Sep 24 (0.42 against hmo-02): `moe_expert_elementwise`
+  0.372 -> 0.136 (backward -0.23), `moe_ep_other` 0.046 -> 0, `moe_combine` 0.150 -> 0.116, `moe_dispatch`
+  0.194 -> 0.173, unmapped 0.066 -> 0.035. Against hmo-02 it pays ~0.23 s more remat compute (norms, attention
+  elementwise, shared MLP in the recompute), which the flag removes; the two arms land at the same profiled span,
+  so D + flag (sonic-02) is where they stack.
+- Ragged a2a exposure is unchanged (0.838 vs 0.804): chunk 0's four transports are still bare (0.66 s; `.1.1` 0.199,
+  `.9.1` 0.158, `.8.1` 0.151, `.13` 0.151). D removes the remat return; the pipelined variant targets the rest.
+- The rank-skew wait moved, as M30B-018 predicted: the u32 drop-count all-reduce (0.241) is gone and the latent
+  projection's backward reduce-scatter `reduce-scatter.18` now waits (exposed 0.058 -> 0.305, median 0.18 -> 1.58 ms
+  per instance, 0.327 above the fastest instance). hmo-02 shows the same move (0.255), so it is a property of the
+  current main, not of A+B+C.
+- XLA remat-clone all-gathers (`all-gather.127.remat`, 0.227 on Sep 24) are gone in both current-main profiles
+  (0.021 / 0.001).
+- Exposed copies (0.63, unchanged, A's area): backward reloads of the offloaded carry (H2D `dynamic_slice` 0.218)
+  and D2H `copy-start.97/98/99` (0.21), 0.37 of it in the last tenth of the step.
+
+`m30b-sonic-02` submitted 2026-10-01 01:41 UTC (`/mwittmann/m30b-sonic-02-coord`, port 33210) from
+`~/projects/marin.mfu30-routing-arm` at dd45f27c17 (D, unchanged from sonic-01, which the orchestrator cancelled
+before it started). Env: `XLA_FLAGS=--xla_gpu_enable_host_memory_offloading=true
+--xla_gpu_memory_limit_slop_factor=105`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78` (A's pair), `TF_CPP_MIN_LOG_LEVEL=0`,
+`TF_CPP_VMODULE=hlo_rematerialization=1`; seed 0, `--num-steps 180060`, profile 180021-180023, no timeout. Checks:
+rank-0 "Rematerialized N instructions in module jit_train_step" N <~ 10, "Peak memory for main" (> ~110 -> try slop
+110), W&B memory/limit_gib ~143.76, memory/peak_gib < ~139, loss at 180000 == 1.2614134550. The delta to
+unfilled-02 is D + memory settings.
