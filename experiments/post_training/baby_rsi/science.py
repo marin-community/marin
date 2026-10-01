@@ -33,7 +33,7 @@ from pydantic import Field, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.modes.extract import extract_boxed
 
-from experiments.post_training.curriculum_sft.generation import (
+from experiments.post_training.baby_rsi.generation import (
     MANIFEST_FILENAME,
     PROBLEMS_FILENAME,
     RAW_RESPONSES_FILENAME,

@@ -13,7 +13,7 @@ dependencies = [
     "marin-shellbox",
     "harbor-config",
     "pyarrow>=17",
-    "marin-rigging>=0.2.123.dev35633925924",
+    "marin-rigging",
 ]
 
 [project.optional-dependencies]

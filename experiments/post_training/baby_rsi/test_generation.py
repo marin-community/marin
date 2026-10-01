@@ -6,7 +6,7 @@ import json
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from transformers.utils.chat_template_utils import render_jinja_template
 
-from experiments.post_training.curriculum_sft.generation import (
+from experiments.post_training.baby_rsi.generation import (
     GenerateProblemsConfig,
     SolveProblemsConfig,
     parse_problem_batch,

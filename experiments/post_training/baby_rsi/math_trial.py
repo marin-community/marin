@@ -15,13 +15,13 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.post_training.curriculum_sft.generation import (
+from experiments.post_training.baby_rsi.generation import (
     CHAT_FILENAME,
     generate_curriculum_problems,
     solve_curriculum_problems,
 )
-from experiments.post_training.curriculum_sft.self_distill import SELF_CHAT_FILENAME, AnswerCheck, self_distill_step
-from experiments.post_training.curriculum_sft.trial import (
+from experiments.post_training.baby_rsi.self_distill import SELF_CHAT_FILENAME, AnswerCheck, self_distill_step
+from experiments.post_training.baby_rsi.trial import (
     CONTEXT_LENGTH,
     HF_MODEL,
     HF_REVISION,

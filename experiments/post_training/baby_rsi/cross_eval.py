@@ -9,7 +9,7 @@ The trained checkpoints are reused from their trials, so this only runs evaluati
 
     uv run iris --cluster=cw-rno2a job run --no-wait --job-name curriculum-cross-eval-<date> \\
       -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924 \\
-      -- uv run python experiments/post_training/curriculum_sft/cross_eval.py --version <version> --run
+      -- uv run python experiments/post_training/baby_rsi/cross_eval.py --version <version> --run
 """
 
 import click
@@ -17,12 +17,12 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 
-from experiments.post_training.curriculum_sft.code_trial import build_code_trial
-from experiments.post_training.curriculum_sft.finance_trial import build_finance_trial
-from experiments.post_training.curriculum_sft.instruction_following_trial import build_instruction_following_trial
-from experiments.post_training.curriculum_sft.math_trial import build_math_trial
-from experiments.post_training.curriculum_sft.science_trial import build_science_trial
-from experiments.post_training.curriculum_sft.trial import trained_eval
+from experiments.post_training.baby_rsi.code_trial import build_code_trial
+from experiments.post_training.baby_rsi.finance_trial import build_finance_trial
+from experiments.post_training.baby_rsi.instruction_following_trial import build_instruction_following_trial
+from experiments.post_training.baby_rsi.math_trial import build_math_trial
+from experiments.post_training.baby_rsi.science_trial import build_science_trial
+from experiments.post_training.baby_rsi.trial import trained_eval
 
 TRANSFER_EVALS = "math500,humanevalplus,mbppplus"
 # The trial versions, learning rate, and warmup that produced each self-distilled checkpoint.

@@ -6,8 +6,8 @@ import random
 
 import pytest
 
-from experiments.post_training.curriculum_sft.finance import WORKING_CAPITAL, finance_problem
-from experiments.post_training.curriculum_sft.instruction_following import (
+from experiments.post_training.baby_rsi.finance import WORKING_CAPITAL, finance_problem
+from experiments.post_training.baby_rsi.instruction_following import (
     CONFLICTS,
     ConstraintKind,
     follows_constraints,
