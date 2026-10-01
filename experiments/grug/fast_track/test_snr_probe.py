@@ -114,3 +114,14 @@ def test_probe_scores_every_candidate_on_a_quadratic(tmp_path, monkeypatch):
     for cand in sp.CANDIDATES:
         # Every candidate is a descent direction on this quadratic, so a step lowers the loss.
         assert np.all(out[f"loss/kda/{cand}/x1"] < base)
+
+
+def test_agreement_term_boosts_confirmed_directions_and_damps_contradicted_ones():
+    muon = np.eye(3)
+    grad = np.diag([2.0, 0.0, -1.0])
+    term = sp.muon_agreement_term(muon, grad)
+    np.testing.assert_allclose(np.linalg.norm(term), np.linalg.norm(muon))
+    np.testing.assert_allclose(term, np.diag([2.0, 0.0, -1.0]) * np.sqrt(3) / np.sqrt(5), atol=1e-12)
+    # Added to Muon's all-ones weights: the confirmed direction grows, the contradicted one shrinks.
+    weights = np.diag(muon + 0.5 * term)
+    assert weights[0] > 1.0 > weights[2] and weights[1] == 1.0

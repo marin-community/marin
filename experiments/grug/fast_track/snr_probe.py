@@ -46,7 +46,19 @@ HELDOUT_BATCHES = 64
 EVAL_BATCHES = 16
 STEP_SCALES = (1.0, 4.0)
 PROBE_FILE = "snr_probe_step{step}.npz"
-CANDIDATES = ("momentum", "muon", "adam_snr", "eig_snr", "svd_snr", "svd_snr_diag")
+# Momentum/gradient agreement: Muon's direction plus a multiple of ``P sym(Pᵀ g)``, with ``P = NS(M)`` and ``g`` the
+# newest gradient. For ``P = U Vᵀ`` that term is ``U sym(Uᵀ g V) Vᵀ``: it boosts the momentum's singular directions
+# the current gradient confirms and damps those it contradicts, with no SVD. Scaled to ``alpha ‖P‖``.
+AGREEMENT_ALPHAS = (0.25, 0.5, 1.0)
+CANDIDATES = (
+    "momentum",
+    "muon",
+    "adam_snr",
+    "eig_snr",
+    "svd_snr",
+    "svd_snr_diag",
+    *(f"muon_agree{alpha:g}" for alpha in AGREEMENT_ALPHAS),
+)
 # Families whose matrices train with MuonH in the probed recipe (the routers train with Adam).
 FAMILIES = {
     "kda": r"\.kda\.",
@@ -88,14 +100,25 @@ def candidate_directions(
     u, _, vt = np.linalg.svd(momentum, full_matrices=False)
     projected = u.T @ g @ vt.T
     snr = _snr(projected, w)
+    muon = ns(momentum)
+    agree = muon_agreement_term(muon, g[-1])
     return {
+        **{f"muon_agree{alpha:g}": muon + alpha * agree for alpha in AGREEMENT_ALPHAS},
         "momentum": momentum,
-        "muon": ns(momentum),
+        "muon": muon,
         "adam_snr": _snr(g, w),
         "eig_snr": eig_snr,
         "svd_snr": u @ snr @ vt,
         "svd_snr_diag": (u * np.diag(snr)) @ vt,
     }
+
+
+def muon_agreement_term(muon: np.ndarray, grad: np.ndarray) -> np.ndarray:
+    """``P sym(Pᵀ g)`` rescaled to ``‖P‖`` (zero when ``g`` is), for Muon's direction ``P`` and a gradient ``g``."""
+    pg = muon.T @ grad
+    term = muon @ (0.5 * (pg + pg.T))
+    norm = np.linalg.norm(term)
+    return term * (np.linalg.norm(muon) / norm) if norm > _EPS else term
 
 
 def sphere_step(param: np.ndarray, direction: np.ndarray, relative_step: float) -> np.ndarray:
