@@ -251,3 +251,24 @@ def test_rails_blend_follows_the_configured_rates():
     for v in (1.0, 2.0, 3.0):
         slow = slow + 0.1 * (v - slow)
     np.testing.assert_allclose(np.asarray(out), slow, rtol=1e-6)
+
+
+def test_slow_rail_from_start_keeps_its_history_through_the_switch():
+    rails = BiMaxwellRails(fast_rate=0.5, slow_rate=0.1, slow_weight=1.0, slow_from_start=True)
+    opt = scale_by_muon_momentum(lambda _: 1.0, nesterov=False, switch_step=3, rails=rails)
+    values = (1.0, 2.0, 3.0, 4.0, 5.0)
+    state = opt.init(jnp.zeros((2, 2)))
+    for v in values:
+        out, state = opt.update(jnp.full((2, 2), v), state)
+    # A zero-init EMA over every step: the rails engage at step 4 without restarting the slow rail.
+    slow = 0.0
+    for v in values:
+        slow = slow + 0.1 * (v - slow)
+    np.testing.assert_allclose(np.asarray(out), slow, rtol=1e-6)
+    restarted = scale_by_muon_momentum(
+        lambda _: 1.0, nesterov=False, switch_step=3, rails=dataclasses.replace(rails, slow_from_start=False)
+    )
+    state = restarted.init(jnp.zeros((2, 2)))
+    for v in values:
+        out_restarted, state = restarted.update(jnp.full((2, 2), v), state)
+    assert not np.allclose(np.asarray(out_restarted), slow)

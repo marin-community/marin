@@ -506,6 +506,9 @@ class BiMaxwellRails:
     fast_rate: float = 0.15
     slow_rate: float = 0.02
     slow_weight: float = 0.5615
+    slow_from_start: bool = False
+    """ANVIL II's slow rail: a zero-init EMA accumulating from step 0, kept (not restarted) when the rails engage.
+    Off: both rails start from the Nesterov buffer at the switch step."""
 
 
 DEFAULT_RAILS = BiMaxwellRails()
@@ -558,6 +561,8 @@ def scale_by_muon_momentum(
         def early(args):
             g_tree, buf_tree, fast_tree, slow_tree = args
             new_buf = jax.tree.map(lambda g, b: (momentum * b + g).astype(b.dtype), g_tree, buf_tree)
+            if rails.slow_from_start and slow_tree is not None:
+                slow_tree = jax.tree.map(lambda g, s: (s + rails.slow_rate * (g - s)).astype(s.dtype), g_tree, slow_tree)
             if not nesterov:
                 return new_buf, new_buf, fast_tree, slow_tree
             out = jax.tree.map(lambda g, b: momentum * b + g, g_tree, new_buf)
@@ -575,7 +580,8 @@ def scale_by_muon_momentum(
             def leaf(g, buf, fast, slow):
                 start = (1.0 - momentum) * buf
                 fast = jnp.where(first, start, fast)
-                slow = jnp.where(first, start, slow)
+                if not rails.slow_from_start:
+                    slow = jnp.where(first, start, slow)
                 fast = fast + rails.fast_rate * (g - fast)
                 slow = slow + rails.slow_rate * (g - slow)
                 mix = (1.0 - rails.slow_weight) * fast + rails.slow_weight * slow
@@ -1285,6 +1291,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     eig_factor_beta: float = 0.95
     eig_refresh_every: int = 10
     eig_whiten_power: float = 0.25
+    bimaxwell_slow_from_start: bool = False
+    """Every MuonH group's Bi-Maxwell slow rail accumulates from step 0 (``BiMaxwellRails.slow_from_start``)."""
     muonh_routed_slow_rate: float | None = None
     """The routed experts' Bi-Maxwell slow-rail EMA rate (None: ``BiMaxwellRails``'s default, 0.02)."""
     muonh_routed_slow_weight: float | None = None
@@ -1479,12 +1487,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 lr,
                 magma_seed: int,
                 momentum: float | None = None,
-                rails: BiMaxwellRails = DEFAULT_RAILS,
+                rails: BiMaxwellRails | None = None,
                 switch_step: int | None = None,
                 truncate_frac: float = 0.0,
             ):
                 momentum = self.momentum if momentum is None else momentum
                 switch_step = default_switch if switch_step is None else switch_step
+                rails = self._base_rails() if rails is None else rails
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
@@ -1747,8 +1756,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         return optax.inject_hyperparams(optimizer)(**schedules)
 
+    def _base_rails(self) -> BiMaxwellRails:
+        return dataclasses.replace(DEFAULT_RAILS, slow_from_start=self.bimaxwell_slow_from_start)
+
     def _routed_rails(self) -> BiMaxwellRails:
-        rails = DEFAULT_RAILS
+        rails = self._base_rails()
         if self.muonh_routed_slow_rate is not None:
             rails = dataclasses.replace(rails, slow_rate=self.muonh_routed_slow_rate)
         if self.muonh_routed_slow_weight is not None:
