@@ -386,6 +386,7 @@ async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_p
         await composite.upload_dir(tmp_path / "source", "/workspace")
 
     assert result.stdout == "/app\n"
+    await composite.stop(False)
 
 
 async def test_composite_cleans_started_providers_after_start_failure(tmp_path):
