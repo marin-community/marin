@@ -58,12 +58,13 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     saved_specification = json.loads((task / "specification.json").read_text())
     assert set(saved_specification["context"]) == {"events"}
     assert saved_specification["answer_type"] == "native_action"
-    assert saved_specification["tools"]["functions"]
-    assert saved_specification["requirements"] == {"capabilities": [], "action_interfaces": []}
+    assert saved_specification["final_tools"]["functions"]
+    assert saved_specification["environment_requirements"] == {"capabilities": [], "action_interfaces": []}
+    assert saved_specification["schema_version"] == "0.9"
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
     assert "Okay, let me figure out how to handle this user's query" not in public
-    assert "authenticate_user" in {function.name for function in specification.tools.functions}
+    assert "authenticate_user" in {function.name for function in specification.final_tools.functions}
     assert not (task / "tests").exists()
     with pytest.raises(ValueError, match="pinned canonical hash"):
         import_row(row, "0" * 64)
@@ -256,7 +257,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     assert result.exception_info is None, result.exception_info
     assert result.verifier_result.rewards == {"reward": 1.0}
     request, authorization = requests[0]
-    native_request = specification.tools
+    native_request = specification.final_tools
     assert [tool["function"]["name"] for tool in request["tools"]] == [
         function.name for function in native_request.functions
     ]
