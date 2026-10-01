@@ -117,9 +117,64 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 ### TaskTrove Clean
 
-The TaskTrove Clean importers read archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Their caller passes archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest, computes the immutable archive SHA256, and retains the release URI and revision supplied by the caller. The MCQA importer checks the source answer-line template before replacing it with a one-letter instruction. Its private `mcq` verifier stores the expected letter and option count and calls the shared `tasktrove-verify` scorer.
+The TaskTrove Clean importers read archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Their caller passes archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks subset and path against the archive manifest, computes the immutable archive SHA256, and retains the caller-supplied release URI and revision. Importers preserve ordered source tags and source-row identity. Submission conventions supply answer delivery instructions.
 
-`taskcompendium.importers.tasktrove.reasoning_gym.import_task` accepts the reviewed `nemotron_reasoning`/`reasoning-gym` archive form. It removes the answer-file preamble, retains the generated Reasoning Gym entry in private verifier parameters, and uses `reasoning_gym.get_score_answer_fn` for grading. Install `taskcompendium[reasoning-gym]` to use this verifier. The exported task needs only direct chat and a text answer; it does not require a workspace or Docker. Both importers preserve source tags and source-row identity. Other TaskTrove modes require their own reviewed runtime contract.
+This dependency graph supports these TaskTrove subsets for the archive templates described below:
+
+- `laion__nemotron-gym-knowledge-mcqa-v2` : `taskcompendium.importers.tasktrove.mcqa.import_task`
+- `laion__nemotron-gym-reasoning-gym-v2` : `taskcompendium.importers.tasktrove.reasoning_gym.import_task`
+
+The MCQA importer checks the source answer-line template and uses the shared `tasktrove-verify` MCQ scorer. The Reasoning Gym importer removes the recognized harness preamble and retains only the generated question in model-visible context. Its grading routes are described below. These are importer contracts; they do not establish how many source archives pass conversion.
+
+Reasoning Gym grading is audited against `reasoning-gym==0.1.25`. `ab` and `self_reference` use case-sensitive shared exact match without internal whitespace normalization; padded reference answers are rejected. `path_star` uses case-sensitive shared exact match with whitespace normalization. Other reviewed evaluators use the source-independent private `script` verifier from [#9552](https://github.com/marin-community/marin/pull/9552). The caller must supply both `runtime_image` as a digest-pinned image and `timeout_seconds` for script routes. Exact routes require neither setting.
+
+The verifier image must contain the shared `tasktrove-verify` candidate API and `reasoning-gym==0.1.25`. Private scripts call the shared scorer with the upstream default dataset configuration, preserving TaskTrove's initialization contract. The generated entry, scorer version, and adapter remain private; the agent needs only direct chat. Partial rewards and source-specific parsing are preserved. In particular, `letter_jumble` awards positional word credit, and the base scorer awards substring length-ratio credit. Scorer failures produce an unscored error. `arc_agi` and `rearc` are rejected because JSON entries lose their scorer's tuple representation; `composite` needs unavailable component configuration. Unknown evaluators are rejected for review.
+
+The following retained TaskTrove subsets are not covered by this dependency graph:
+
+- `DCAgent2__nl2bash-tasks-cleaned-oracle-v2`
+- `DCAgent__code-contests-noblock`
+- `DCAgent__exp_rpt_curriculum-easy`
+- `DCAgent__exp_rpt_curriculum-medium-v2`
+- `DCAgent__exp_rpt_e2egit-large`
+- `DCAgent__exp_rpt_e2egit-v2`
+- `DCAgent__exp_rpt_multifile-v3`
+- `DCAgent__exp_rpt_pymethods2test-large-v2`
+- `DCAgent__exp_rpt_pymethods2test-v3`
+- `DCAgent__exp_rpt_stack-pytest-v2`
+- `DCAgent__exp_rpt_unitsyn-python-large-v2`
+- `DCAgent__exp_rpt_unitsyn-python-v4`
+- `DCAgent__swe_rebench_v2_patched_oracle-v2`
+- `SankalpKJ__nemotron-math-oracle-filtered-v2`
+- `laion__all-puzzles-v2`
+- `laion__codeforces-v3`
+- `laion__exp_rpt_taco-v2`
+- `laion__glaive-code-assistant-sandboxes-verified-v2`
+- `laion__nemo-prism-math-v3`
+- `laion__nemotron-gym-agent-calendar-v2`
+- `laion__nemotron-gym-arc-agi-python-inductive-v2`
+- `laion__nemotron-gym-arc-agi-transductive-v3`
+- `laion__nemotron-gym-competitive-coding-v2`
+- `laion__nemotron-gym-instruction-following-calendar-v3`
+- `laion__nemotron-gym-instruction-following-structured-v3`
+- `laion__nemotron-gym-instruction-following-v3`
+- `laion__nemotron-gym-knowledge-openqa-v4`
+- `laion__nemotron-gym-math-openmathreasoning-v2`
+- `laion__nemotron-gym-math-stack-overflow-v3`
+- `laion__nemotron-gym-math-v5`
+- `laion__nemotron-gym-multichallenge-advanced-v4`
+- `laion__nemotron-gym-safety-v3`
+- `laion__nemotron-gym-science-so-openq-v3`
+- `laion__nemotron-gym-structured-outputs-v4`
+- `laion__stackexchange-codereview-sandboxes-verified-v2`
+- `laion__stackexchange-overflow-sandboxes-verified-v2`
+- `laion__stackexchange-superuser-sandboxes-verified-v2`
+- `laion__stackexchange-tezos-sandboxes-verified-v2`
+- `laion__stackexchange-unix-sandboxes-verified-v2`
+- `laion__swesmith-oracle-filtered-v2`
+- `laion__wizardlm-orca-v4`
+
+Companion PRs add mathematical importers ([#9587](https://github.com/marin-community/marin/pull/9587)), puzzle-choice and ordered-list importers ([#9591](https://github.com/marin-community/marin/pull/9591)), IFEval and structured-output importers ([#9590](https://github.com/marin-community/marin/pull/9590)), judge-rubric importers ([#9589](https://github.com/marin-community/marin/pull/9589)), and calendar importers ([#9595](https://github.com/marin-community/marin/pull/9595)). They are separate branches and are not available here. Subsets deliberately excluded by the cleaned-release policy are recorded in [`source_verdicts.json`](../../experiments/post_training/tasktrove/source_verdicts.json).
 
 ### NeMo predicted function calls
 
@@ -131,7 +186,7 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The submission convention identifies the final answer, function call, file, or workspace state; the verifier grades that evidence. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
-The serialized kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `math` for symbolic expressions, `mcq` for a single option letter, `reasoning_gym` for generated Reasoning Gym entries, `structured_exact` for JSON values with strict type and array-order comparison, and `predicted_action` for final function calls. The Python enum and constructors keep their descriptive names. Schema 0.16 stores ordered metadata tags. The expected answer and grading settings stay out of the model-visible instruction.
+The serialized kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `math` for symbolic expressions, `mcq` for a single option letter, `structured_exact` for JSON values with strict type and array-order comparison, `predicted_action` for final function calls, and `script` for isolated executable graders. The Python enum and constructors keep their descriptive names. Schema 0.16 stores ordered metadata tags. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 

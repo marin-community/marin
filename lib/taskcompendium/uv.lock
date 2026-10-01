@@ -2725,15 +2725,13 @@ harbor = [
 math = [
     { name = "tasktrove-verify", extra = ["answer"] },
 ]
-reasoning-gym = [
-    { name = "tasktrove-verify", extra = ["reasoning-gym"] },
-]
 
 [package.dev-dependencies]
 test = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "reasoning-gym" },
 ]
 
 [package.metadata]
@@ -2742,15 +2740,15 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tasktrove-verify", editable = "../tasktrove-verify" },
     { name = "tasktrove-verify", extras = ["answer"], marker = "extra == 'math'", editable = "../tasktrove-verify" },
-    { name = "tasktrove-verify", extras = ["reasoning-gym"], marker = "extra == 'reasoning-gym'", editable = "../tasktrove-verify" },
 ]
-provides-extras = ["harbor", "math", "reasoning-gym"]
+provides-extras = ["harbor", "math"]
 
 [package.metadata.requires-dev]
 test = [
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "reasoning-gym", specifier = "==0.1.25" },
 ]
 
 [[package]]
@@ -2765,9 +2763,6 @@ dependencies = [
 answer = [
     { name = "math-verify" },
     { name = "sympy" },
-]
-reasoning-gym = [
-    { name = "reasoning-gym" },
 ]
 
 [package.metadata]

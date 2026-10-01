@@ -4,7 +4,7 @@
 import json
 
 import pytest
-from tasktrove_verify.grade import InvalidTask, Status
+from tasktrove_verify.grade import InvalidTask, Status, run
 from tasktrove_verify.modes import grade_reasoning_gym
 from tasktrove_verify.spec import ReasoningGymSpec
 
@@ -73,6 +73,32 @@ def test_partial_credit_from_the_scorer_is_passed_through(tmp_path, workspace):
     assert 0.0 < reward.reward < 1.0
     answer(workspace, "42")
     assert grade(tests_dir, workspace, dataset="simple_equations").reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "candidate,expected",
+    [("ALPHA BETA", 1.0), ("alpha wrong", 0.5), ("alpha beta extra", 1.0), ("wrong wrong", 0.0)],
+)
+def test_extracted_letter_jumble_preserves_word_partial_credit(candidate, expected):
+    entry = {"answer": "alpha beta", "metadata": {"source_dataset": "letter_jumble"}}
+    result = grade_reasoning_gym.grade_reasoning_gym_candidate(
+        ReasoningGymSpec(dataset="letter_jumble"), entry, candidate
+    )
+    assert (result.reward, result.status) == (expected, Status.SCORED)
+
+
+def test_scorer_failure_is_an_unscored_infrastructure_error(tests_dir, workspace):
+    # A missing field required by the selected evaluator is a grader failure,
+    # not evidence that the candidate is incorrect.
+    (tests_dir / "entry.json").write_text(
+        json.dumps({"answer": "alpha, beta", "metadata": {"source_dataset": "word_sorting"}})
+    )
+    spec_path = tests_dir / "verifier.toml"
+    spec_path.write_text('mode = "reasoning-gym"\ndataset = "word_sorting"\n')
+    answer(workspace, "alpha, beta")
+    result = run(spec_path, workspace)
+    assert result.status is Status.INFRA_ERROR
+    assert "KeyError" in result.detail["error"]
 
 
 @pytest.mark.parametrize("text", [None, "", "   \n"])

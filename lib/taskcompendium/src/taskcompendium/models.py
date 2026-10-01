@@ -33,7 +33,6 @@ class VerifierKind(StrEnum):
     NUMERIC_ANSWER = "numeric"
     MATHEMATICAL_ANSWER = "math"
     MCQ_ANSWER = "mcq"
-    REASONING_GYM_ANSWER = "reasoning_gym"
     SCRIPT = "script"
 
 

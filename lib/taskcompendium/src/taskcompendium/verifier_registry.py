@@ -25,7 +25,6 @@ from taskcompendium.submission import (
 from taskcompendium.verifiers.mathematical import MathematicalAnswerVerifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
-from taskcompendium.verifiers.reasoning_gym import ReasoningGymAnswerVerifier
 from taskcompendium.verifiers.script import ScriptVerifier
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
@@ -36,7 +35,6 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
         VerifierKind.MATHEMATICAL_ANSWER: MathematicalAnswerVerifier,
         VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
-        VerifierKind.REASONING_GYM_ANSWER: ReasoningGymAnswerVerifier,
     }
 )
 
