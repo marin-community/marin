@@ -561,3 +561,14 @@ isolated by compile on GB200x4). (2) Carry stall hit again: 141 ms/step (product
 beats pipelined by 0.109 s of ragged exposure. (4) Compute matches stackpipe-03 (E -0.15, sconv -0.11).
 (5) Re-gather nets ~+0.1 s/step (dropped in F1). If QB-after-MLP is confirmed, the final program drops it too
 (variant `research/mcwitt/mfu30-final-seq-noqb`).
+
+## M30-032 QB-after-MLP: rack A/B queued (2026-10-01)
+
+B's GB200x4 compile (`m30b-sched-{final,noqb}-01`) could not isolate it: at EP4 both branches put the
+shared-expert GEMMs under both returns, unlike the EP64 rack placement (shared GEMMs after the MoE, among the
+QB collectives). B's value check is pending (`m30b-qbvalues-*-02`; the model smoke is not run-to-run
+deterministic, so it uses spreads). Rack queue (all custom wheel, traced, H-A4 at 0.78/105, sconv on,
+re-gather off): `m30-f1-seq-02` (final-seq d4234c88e7, streams on), `m30-f1-noqb-01`
+(final-seq-noqb 3b88a218cc = d4234c88e7 + revert of #9481's QB-after-MLP 0b6113396b, streams on),
+`m30-f0-seq-02` (final-seq, streams off). F1-seq vs F1-noqb tests the ~0.16 s forward return c1 exposure.
+The winner's trace feeds the PGLE build.
