@@ -8,12 +8,12 @@ import json
 import tomllib
 from pathlib import PurePosixPath
 
-from tasktrove_verify.spec import JudgeSpec, parse_spec
+from tasktrove_verify.spec import JUDGE_CONTEXT_LIMIT, JudgeSpec, parse_spec
 
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.verifiers.judge import MAX_CONTEXT_CHARS, judge_answer
+from taskcompendium.verifiers.judge import judge_answer
 
 IMPORTER_REVISION = "taskcompendium-tasktrove-judge-v0.1"
 SUPPORTED_TEMPLATES = frozenset({("qa-short-answer", "nemotron_openqa"), ("llm-judge-freeform", "judge_rubric")})
@@ -68,6 +68,6 @@ def _context(archive: TaskArchive, spec: JudgeSpec) -> str | None:
     if content is None:
         raise ValueError(f"TaskTrove judge context file is missing: {context_path}")
     context = content.decode()
-    if len(context) > MAX_CONTEXT_CHARS:
-        raise ValueError(f"TaskTrove judge context exceeds {MAX_CONTEXT_CHARS} characters")
+    if len(context) > JUDGE_CONTEXT_LIMIT:
+        raise ValueError(f"TaskTrove judge context exceeds {JUDGE_CONTEXT_LIMIT} characters")
     return context

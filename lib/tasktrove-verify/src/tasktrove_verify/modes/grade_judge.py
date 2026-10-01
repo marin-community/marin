@@ -30,6 +30,7 @@ from tasktrove_verify.modes.extract import extract_boxed
 from tasktrove_verify.modes.grade_ifeval import resolve_checks
 from tasktrove_verify.modes.ifeval import Check
 from tasktrove_verify.spec import (
+    JUDGE_CONTEXT_LIMIT,
     RUBRIC_CHECKLIST,
     RUBRIC_REFERENCE,
     RUBRICS,
@@ -44,7 +45,6 @@ MODEL_ENV = "TASKTROVE_JUDGE_MODEL"
 
 ATTEMPTS = 2
 REASONING_LIMIT = 400
-CONTEXT_LIMIT = 60_000
 
 REFERENCE_PROMPT = """You are an impartial grader for open-ended short-answer questions. Compare the \
 candidate response with the reference answer(s) below. Judge the substantive answer only: ignore \
@@ -186,7 +186,7 @@ def _context(spec: JudgeSpec, tests_dir: Path) -> str:
     path = tests_dir / spec.context
     if not path.is_file():
         raise InvalidTask(f"judge context {spec.context!r} is not in the tests directory")
-    return path.read_text(errors="replace")[:CONTEXT_LIMIT]
+    return path.read_text(errors="replace")[:JUDGE_CONTEXT_LIMIT]
 
 
 def _passes(check: Check, candidate: str, params: dict) -> bool:

@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import Field, model_validator
 from tasktrove_verify.grade import Reward, Status
 from tasktrove_verify.spec import (
+    JUDGE_CONTEXT_LIMIT,
     RUBRIC_CHECKLIST,
     RUBRIC_REFERENCE,
     RUBRICS,
@@ -24,8 +25,6 @@ from tasktrove_verify.spec import (
 from taskcompendium.grading import GradeResult, Outcome, Verifier
 from taskcompendium.models import VerifierKind, VerifierSpec
 from taskcompendium.submission import GradingAttempt, Submission, TextSubmission
-
-MAX_CONTEXT_CHARS = 60_000
 
 
 class JudgeVerifier(Verifier):
@@ -47,8 +46,8 @@ class JudgeVerifier(Verifier):
             raise ValueError("Checklist judge rubric requires at least one non-empty criterion")
         if spec.context and self.context is None:
             raise ValueError("Judge verifier context file must be embedded as private context")
-        if self.context is not None and len(self.context) > MAX_CONTEXT_CHARS:
-            raise ValueError(f"Judge context exceeds {MAX_CONTEXT_CHARS} characters")
+        if self.context is not None and len(self.context) > JUDGE_CONTEXT_LIMIT:
+            raise ValueError(f"Judge context exceeds {JUDGE_CONTEXT_LIMIT} characters")
         if spec.context:
             path = Path(spec.context)
             if path.is_absolute() or ".." in path.parts:

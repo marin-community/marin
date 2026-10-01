@@ -18,6 +18,7 @@ import tomlkit
 
 DEFAULT_OUTPUT = "/app/answer.txt"
 DEFAULT_WORKSPACE = "/app"
+JUDGE_CONTEXT_LIMIT = 60_000
 
 
 class Mode(StrEnum):
