@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,28 +27,27 @@ import functools
 import logging
 import math
 from collections.abc import Callable
-from enum import auto, IntEnum
+from enum import IntEnum, auto
 from typing import NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, Int
-
 from haliax.nn.ragged_dot import ragged_dot
+from jaxtyping import Array, Bool, Float, Int
 from levanter.grug._moe.common import (
+    CapacityDrops,
     _assignment_validity,
     _interleave_gate_up,
     _invert_permutation,
     _scaled_capacity,
-    CapacityDrops,
 )
-from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available, unwritten_buffer
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     _sort_activations,
 )
+from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available, unwritten_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -521,12 +523,7 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
     )  # [TK, 1]
     moe_w13_cotangents = []
     moe_w2_cotangents = []
-    # Chunks run in forward order, the order the recompute for the backward produces their
-    # residuals in: chunk 0's backward needs only chunk 0's recompute, so it can run while chunk 1's
-    # dispatch is in flight, and chunk 1's recompute while chunk 0's cotangents travel back. The
-    # chunks write disjoint rows and separate weight-gradient slices, so the order does not change
-    # any value.
-    for chunk_index in range(layout.chunks):
+    for chunk_index in reversed(range(layout.chunks)):
         plan, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             out_dispatch_init = _transport_buffer(
@@ -561,14 +558,14 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
         # d/dw of w * <dout, y> is <dout, y> = <dy, y> / w. Dropped and padding assignments carry
         # no weight and get a zero gradient without the division.
         divisible = routing.accepted & (weights_f32 != 0)
-        weights_cotangent = jnp.where(
-            divisible, assignment_output_dot / jnp.where(divisible, weights_f32, 1), 0
-        ).astype(weights.dtype)
+        weights_cotangent = jnp.where(divisible, assignment_output_dot / jnp.where(divisible, weights_f32, 1), 0).astype(
+            weights.dtype
+        )
     return (
         dispatch_cotangent,
         weights_cotangent,
-        jnp.concatenate(moe_w13_cotangents, axis=0),
-        jnp.concatenate(moe_w2_cotangents, axis=0),
+        jnp.concatenate(moe_w13_cotangents[::-1], axis=0),
+        jnp.concatenate(moe_w2_cotangents[::-1], axis=0),
         None,
     )
 
@@ -591,9 +588,7 @@ def _moe_mlp_ep_ragged_a2a_local(
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
-        raise ValueError(
-            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
-        )
+        raise ValueError(f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode")
 
     shard_id = jax.lax.axis_index("expert")
     ep_size = num_experts // local_experts

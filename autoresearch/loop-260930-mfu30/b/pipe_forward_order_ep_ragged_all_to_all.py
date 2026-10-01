@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,28 +27,27 @@ import functools
 import logging
 import math
 from collections.abc import Callable
-from enum import auto, IntEnum
+from enum import IntEnum, auto
 from typing import NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, Int
-
 from haliax.nn.ragged_dot import ragged_dot
+from jaxtyping import Array, Bool, Float, Int
 from levanter.grug._moe.common import (
+    CapacityDrops,
     _assignment_validity,
     _interleave_gate_up,
     _invert_permutation,
     _scaled_capacity,
-    CapacityDrops,
 )
-from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available, unwritten_buffer
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     _sort_activations,
 )
+from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available, unwritten_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -425,20 +427,22 @@ def _routed_experts_forward(
     returned = _transport_buffer(
         assignments, hidden_dim, sorted_x.dtype, routing.group_sizes, site=_TransportBufferSite.RETURN_OUTPUT
     )  # [TK, H]
+    # The chunks run as a two-stage pipeline: chunk c+1's dispatch is in flight during chunk c's
+    # expert MLP, and chunk c's return during chunk c+1's MLP. Two barriers bound it. The next
+    # dispatch starts only once this chunk's dispatch has landed, so at most two receiver buffers
+    # are live. This chunk's return starts only once the next dispatch has landed, so one
+    # transport is in flight at a time. The second barrier holds only the return's input: the
+    # next chunk's received rows flow on unbarriered, so a recompute for the backward, which needs
+    # no return, can drop the return and the down projection feeding it.
+    with jax.named_scope("moe_chunk_0"):
+        x_dispatch = _dispatch_chunk(sorted_x, plans[0], layout)  # [C, H]
     chunk_residuals = []
     for chunk_index, plan in enumerate(plans):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            source = sorted_x
-            if chunk_residuals:
-                # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
-                # of every chunk at the same time, and the chunk buffers are all live at once,
-                # which is the memory the chunks exist to save. The barrier waits for the previous
-                # chunk's backward inputs rather than its return transport: the backward does not
-                # need the return, so a recompute for the backward drops it and must not be held
-                # to it. (Dispatching chunk c+1 during chunk c's MLP, as PR #9481 does, measured
-                # 3 ms per layer slower in a rematted four-GPU layer scan.)
-                source, _ = jax.lax.optimization_barrier((sorted_x, chunk_residuals[-1].expert_mlp))
-            x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+            next_x_dispatch = None
+            if chunk_index + 1 < len(plans):
+                next_source, _ = jax.lax.optimization_barrier((sorted_x, x_dispatch))
+                next_x_dispatch = _dispatch_chunk(next_source, plans[chunk_index + 1], layout)  # [C, H]
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
                 x_dispatch,
@@ -447,11 +451,14 @@ def _routed_experts_forward(
                 plan.physical_group_sizes,
                 plan.active_group_sizes,
             )
+            if next_x_dispatch is not None:
+                out_dispatch, _ = jax.lax.optimization_barrier((out_dispatch, next_x_dispatch))
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
             # no expansion step.
             returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
             chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
+            x_dispatch = next_x_dispatch
 
     with jax.named_scope("combine"):
         out = _unpermute_from_global_expert(
@@ -561,9 +568,9 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
         # d/dw of w * <dout, y> is <dout, y> = <dy, y> / w. Dropped and padding assignments carry
         # no weight and get a zero gradient without the division.
         divisible = routing.accepted & (weights_f32 != 0)
-        weights_cotangent = jnp.where(
-            divisible, assignment_output_dot / jnp.where(divisible, weights_f32, 1), 0
-        ).astype(weights.dtype)
+        weights_cotangent = jnp.where(divisible, assignment_output_dot / jnp.where(divisible, weights_f32, 1), 0).astype(
+            weights.dtype
+        )
     return (
         dispatch_cotangent,
         weights_cotangent,
@@ -591,9 +598,7 @@ def _moe_mlp_ep_ragged_a2a_local(
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
-        raise ValueError(
-            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
-        )
+        raise ValueError(f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode")
 
     shard_id = jax.lax.axis_index("expert")
     ep_size = num_experts // local_experts
