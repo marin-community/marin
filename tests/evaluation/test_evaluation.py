@@ -1801,7 +1801,6 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "seed": 1234,
             "extra_gen_kwargs": {},
             "extra_model_args": {},
-            "chat_template_kwargs": {},
         },
     }
 

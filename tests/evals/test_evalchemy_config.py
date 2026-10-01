@@ -50,12 +50,16 @@ def _payload(config: EvalchemyRunConfig | None = None) -> dict:
     return json.loads(_run_config_json(_MODEL, config or _config(), "gs://bucket/evals/qwen3/core"))
 
 
-def test_chat_route_carries_chat_template_kwargs_in_model_args():
-    config = _payload(_config(chat_template_kwargs={"enable_thinking": False}))
-
-    model_args = build_model_args(config, use_chat=True, max_length=None)
-
-    assert 'chat_template_kwargs={"enable_thinking":false}' in model_args.split(",")
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"enable_thinking": False}, {"enable_thinking": False, "strict_format": False}, {"reasoning_effort": "low"}],
+)
+def test_chat_route_preserves_template_kwargs_across_comma_delimited_model_args(kwargs):
+    config = _payload(_config(chat_template_kwargs=kwargs))
+    model_args = dict(pair.split("=", 1) for pair in build_model_args(config, use_chat=True, max_length=None).split(","))
+    encoding, payload = model_args["chat_template_kwargs"].split(":", 1)
+    assert encoding == "base64"
+    assert json.loads(base64.urlsafe_b64decode(payload)) == kwargs
 
 
 def test_chat_route_can_load_the_served_tokenizer_for_context_preflight():
@@ -76,13 +80,6 @@ def test_completion_route_omits_chat_template_kwargs():
     model_args = build_model_args(config, use_chat=False, max_length=None)
 
     assert "chat_template_kwargs=" not in model_args
-
-
-def test_chat_route_rejects_multiple_chat_template_kwargs():
-    config = _payload(_config(chat_template_kwargs={"enable_thinking": False, "strict_format": False}))
-
-    with pytest.raises(ValueError, match="must hold one key"):
-        build_model_args(config, use_chat=True, max_length=None)
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():
