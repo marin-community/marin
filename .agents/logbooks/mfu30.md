@@ -375,3 +375,16 @@ under the pool); outside the pool 40.5 GiB vs ~28.5 needed (0.83 is the document
 Verify per arm: "Rematerialized N instructions" <~ 10, "Peak memory for main" <= ~110 (else slop 110),
 memory/limit_gib 143.76, memory/peak_gib < ~139. D arms compare only against arms at the same settings;
 the goal comparison is the full stack (settings included) vs main at defaults.
+
+## M30-019 Exposure on the current-main arms (agent B, 2026-10-01)
+
+Rank 0, steps 180021-180023 (s/step): span / compute / exposed collectives / exposed copies / idle =
+Sep 24 main 14.439 / 11.793 / 1.681 / 0.619 / 0.346; hmo-02 13.766 / 11.627 / 1.443 / 0.618 / 0.077;
+unfilled-02 13.762 / 11.533 / 1.516 / 0.631 / 0.082. unfilled-02's gain is routing marshal compute
+(-0.37 vs Sep 24; `moe_expert_elementwise` 0.372 -> 0.136, backward -0.23). Ragged a2a exposure is unchanged
+(0.838 vs 0.804); the four chunk-0 transports still expose 0.66. In both current-main arms the u32
+drop-count all-reduce wait moved to the latent backward `reduce-scatter.18` (0.058 -> 0.305 exposed;
+per-instance median 0.18 -> 1.58 ms): ~0.3 s of cross-rank skew. Exposed copies are flat at ~0.63
+(carry reload H2D 0.218; end-of-step optimizer-state D2H ~0.21; ~0.37 in the last tenth of the step).
+`m30b-sonic-02` (D + H-A4 at 0.78/105) is queued; A is pricing an ordering/split of the optimizer update
+that would hide the end-of-step D2H without holding state on device.
