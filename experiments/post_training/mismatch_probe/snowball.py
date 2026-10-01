@@ -3,7 +3,7 @@
 
 """Compare pretrained Snowball routing and measure fixed-weight RL step time."""
 
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
 import click
@@ -25,6 +25,7 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     skyrl_step,
 )
+from marin.training.training import LevanterCheckpoint
 from mergedeep import merge
 
 from experiments.post_training.async_rl import GPUS_PER_NODE, SNOWBALL_RECIPE
@@ -40,6 +41,21 @@ HELDOUT_FILENAME = "heldout-math-l345.parquet"
 # Parity-harness layers: the first layer, the first full-attention layer, and the first layer of
 # pipeline stage two.
 CAPTURE_LAYERS = (0, 3, 13)
+
+
+# A Snowball export cut to its first layers runs on this many GPUs of one node: two pipeline stages that the colocated
+# vLLM engines share as two data-parallel ranks with expert parallelism across them.
+SLICE_GPUS = 2
+SLICE_HOST_MEMORY = "256GB"
+SLICE_GPU_MEMORY_UTILIZATION = 0.35
+
+
+@dataclass(frozen=True)
+class SnowballSlice:
+    """A Snowball export that keeps the first decoder layers (same layer shapes), with its artifact version."""
+
+    model_uri: str
+    version: str
 
 
 class Campaign(StrEnum):
@@ -67,8 +83,13 @@ def snowball_recipe(
     extra_modes: tuple[str, ...] = (),
     train_numerics: str | None = None,
     batch_invariant: bool = False,
+    model_slice: bool = False,
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
+    # A slice keeps each layer's experts on its pipeline stage (no expert parallelism) and shares its GPUs with vLLM.
+    megatron = (
+        replace(SNOWBALL_RECIPE.megatron, expert_model_parallel_size=1) if model_slice else SNOWBALL_RECIPE.megatron
+    )
     if campaign is Campaign.MISMATCH:
         modes = (*NUMERICS_MODES, *extra_modes)
     elif campaign is Campaign.DRIFT:
@@ -125,11 +146,11 @@ def snowball_recipe(
                     "max_grad_norm": SNOWBALL_RECIPE.max_grad_norm,
                 },
                 "megatron_config": {
-                    **asdict(SNOWBALL_RECIPE.megatron),
+                    **asdict(megatron),
                     "moe_router_replay_keep_fraction": settings.keep_fraction if routing is Routing.FILTERED else None,
                 },
             },
-            "ref": {"megatron_config": asdict(SNOWBALL_RECIPE.megatron)},
+            "ref": {"megatron_config": asdict(megatron)},
         },
         "generator": {
             "backend": "vllm",
@@ -137,7 +158,7 @@ def snowball_recipe(
             "vllm_attention_backend": "FLASH_ATTN",
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "gpu_memory_utilization": 0.75,
+            "gpu_memory_utilization": SLICE_GPU_MEMORY_UTILIZATION if model_slice else 0.75,
             "chat_template": {
                 "source": "file",
                 "name_or_path": f"{SNOWBALL_SFT_EXPORT_URI.rstrip('/')}/chat_template.jinja",
@@ -172,12 +193,29 @@ def build_spec(
     extra_modes: tuple[str, ...] = (),
     train_numerics: str | None = None,
     batch_invariant: bool = False,
+    model_slice: SnowballSlice | None = None,
 ) -> tuple[SkyRLSpec, IrisSkyRLExecution]:
+    """``model_slice`` runs a Snowball export cut to its first layers on ``SLICE_GPUS`` GPUs of one node."""
     if campaign is Campaign.MISMATCH and (settings.updates != (0,) or routing is not Routing.NATIVE):
         raise ValueError("the mismatch campaign scores starting weights in all modes without training updates")
     plan = replace(SNOWBALL_RECIPE.role_plan, train_batch_size=batch_size, policy_mini_batch_size=batch_size)
+    model, num_nodes, gpus_per_node, host_memory = SNOWBALL_MODEL, SNOWBALL_RECIPE.num_nodes, GPUS_PER_NODE, None
+    if model_slice is not None:
+        model = ArtifactStep.adopt(
+            "models/snowball-layer-slice", model_slice.version, model_slice.model_uri, kind=LevanterCheckpoint
+        )
+        plan = replace(
+            plan,
+            colocate_all=True,
+            policy_num_nodes=1,
+            policy_num_gpus_per_node=SLICE_GPUS,
+            inference_engine_data_parallel_size=SLICE_GPUS,
+            inference_engine_expert_parallel_size=SLICE_GPUS,
+        )
+        num_nodes, gpus_per_node, host_memory = 1, SLICE_GPUS, SLICE_HOST_MEMORY
     data: ArtifactStep[Artifact] = ArtifactStep.adopt("documents/mismatch-probe/snowball-inputs", data_version, data_uri)
-    name = user_owned_name(f"checkpoints/mismatch-probe/snowball/{campaign}/{routing}/seed-{settings.seed}")
+    model_name = "snowball" if model_slice is None else "snowball-slice"
+    name = user_owned_name(f"checkpoints/mismatch-probe/{model_name}/{campaign}/{routing}/seed-{settings.seed}")
     return (
         SkyRLSpec(
             name=name,
@@ -193,10 +231,11 @@ def build_spec(
                 extra_modes=extra_modes,
                 train_numerics=train_numerics,
                 batch_invariant=batch_invariant,
+                model_slice=model_slice is not None,
             ),
             runtime=SkyRLRuntime(profile=SNOWBALL_RECIPE.profile),
             model=ArtifactHfModel(
-                step=SNOWBALL_MODEL,
+                step=model,
                 tokenizer_uri=SNOWBALL_POLICY.tokenizer_uri,
                 tokenizer_revision=TOKENIZER_REVISION,
                 relative_path=SNOWBALL_POLICY.model_relative_path,
@@ -204,8 +243,8 @@ def build_spec(
             train_data=(ArtifactDataSource(data, relative_path=train_filename),),
             validation_data=(ArtifactDataSource(data, relative_path=validation_filename),),
             topology=SkyRLTopology(
-                num_nodes=SNOWBALL_RECIPE.num_nodes,
-                gpus_per_node=GPUS_PER_NODE,
+                num_nodes=num_nodes,
+                gpus_per_node=gpus_per_node,
                 gpu_variant="H100",
                 role_plan=plan,
             ),
@@ -216,7 +255,7 @@ def build_spec(
             cluster=cluster,
             cluster_config=f"lib/iris/config/{cluster}.yaml",
             cpu=16,
-            memory=SNOWBALL_RECIPE.host_memory,
+            memory=host_memory or SNOWBALL_RECIPE.host_memory,
             disk="2TB",
             priority="interactive",
             max_retries=0,
@@ -264,6 +303,8 @@ def build_run(**kwargs) -> ArtifactStep[SkyRLRun]:
 @click.option("--train-numerics", help="MarinSkyRL numerics set the policy trains and scores under by default.")
 @click.option("--batch-invariant/--no-batch-invariant", default=False, help="vLLM and trainer batch-invariant kernels.")
 @click.option("--drift-updates", type=click.IntRange(min=1), default=1, show_default=True, help="Drift updates scored.")
+@click.option("--slice-model-uri", help="A Snowball export cut to its first layers, run on two GPUs of one node.")
+@click.option("--slice-model-version", help="Artifact version of --slice-model-uri.")
 @rl_build_options
 def main(
     campaign: str,
@@ -289,8 +330,12 @@ def main(
     train_numerics: str | None,
     batch_invariant: bool,
     drift_updates: int,
+    slice_model_uri: str | None,
+    slice_model_version: str | None,
 ) -> ArtifactStep[SkyRLRun]:
     selected = Campaign(campaign)
+    if (slice_model_uri is None) != (slice_model_version is None):
+        raise click.UsageError("--slice-model-uri and --slice-model-version go together")
     return build_run(
         settings=ProbeSettings(
             seed,
@@ -317,6 +362,7 @@ def main(
         extra_modes=extra_modes,
         train_numerics=train_numerics,
         batch_invariant=batch_invariant,
+        model_slice=None if slice_model_uri is None else SnowballSlice(slice_model_uri, slice_model_version),
     )
 
 
