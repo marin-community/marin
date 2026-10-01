@@ -46,7 +46,11 @@ _NEMOTRON_BOXED_FILE_FORMAT = re.compile(
     r"last meaningful line\. The verifier extracts the last `\\boxed\{\.\.\.\}` it finds\.",
     re.IGNORECASE,
 )
-_NEMOTRON_BOXED_CHAT_FORMAT = "Format requirement: put your final answer in `\\boxed{...}`."
+_NEMOTRON_BOXED_ANSWER_INSTRUCTION = re.compile(
+    r"(?i)(?:put the answer \(and only the answer\) inside \\boxed\{\}|"
+    r"put the final expression in `?\\boxed\{\.\.\.\}`? when practical|"
+    r"remember to put your final answer inside \\boxed\{\})\.?"
+)
 _NEMOTRON_V5_TEMPLATE = "334fa3ab07c7"
 _NEMOTRON_V5_SUBMISSION_HEADING = re.compile(r"(?im)^## Submitting your answer \(IMPORTANT\)\s*\n")
 _NEMOTRON_V5_SUBMISSION_TEXT = "\n".join(
@@ -68,7 +72,6 @@ _NEMOTRON_V5_SUBMISSION_TEXT = "\n".join(
         "later computation consumes the remaining agent time.",
     )
 )
-_NEMOTRON_V5_CHAT_INSTRUCTION = "Present the final answer in `\\boxed{...}`. Show your work when it helps."
 _ALL_PUZZLES_DELIVERABLE = re.compile(
     r"## Deliverable \(REQUIRED\)\s*\n\s*"
     r"Write ONLY your final answer to \*\*`/app/answer\.txt`\*\* \(a single line, no\s*\n"
@@ -76,6 +79,7 @@ _ALL_PUZZLES_DELIVERABLE = re.compile(
     r"using the format described in the problem statement:\s*\n",
     re.IGNORECASE,
 )
+_ALL_PUZZLES_ONLY_COORDINATES = re.compile(r"(?i)\s*Return only (?:the )?coordinates\.")
 
 
 def _metadata(archive: TaskArchive) -> tuple[tuple[str, ...], TaskTroveSourceEvidence]:
@@ -109,25 +113,23 @@ def _instructions(archive: TaskArchive, converter: str, template_id: str) -> str
         instruction = _NEMOTRON_OUTPUT_PATH.sub("", instruction)
         if template_id in {"5ee94cf985a9", _NEMOTRON_V5_TEMPLATE}:
             instruction = _NEMOTRON_FILE_PREAMBLE.sub(".", instruction)
-            instruction = _NEMOTRON_BOXED_FILE_FORMAT.sub(lambda _: _NEMOTRON_BOXED_CHAT_FORMAT, instruction)
+            instruction = _NEMOTRON_BOXED_FILE_FORMAT.sub("", instruction)
         if template_id == _NEMOTRON_V5_TEMPLATE:
             match = _NEMOTRON_V5_SUBMISSION_HEADING.search(instruction)
             if match is None or " ".join(instruction[match.start() :].split()) != " ".join(
                 _NEMOTRON_V5_SUBMISSION_TEXT.split()
             ):
                 raise ValueError("Unsupported Nemotron math v5 submission section")
-            instruction = instruction[: match.start()] + _NEMOTRON_V5_CHAT_INSTRUCTION
+            instruction = instruction[: match.start()]
     elif converter == "all_puzzles":
         instruction = instruction.replace("<!-- laion v2 puzzles deliverable: answer.txt -->", "")
-        instruction, count = _ALL_PUZZLES_DELIVERABLE.subn(
-            "## Answer format\n\nWrite only your final answer on one line, without explanation. "
-            "Use the required answer format:\n",
-            instruction,
-        )
+        instruction, count = _ALL_PUZZLES_DELIVERABLE.subn("", instruction)
         if count != 1:
             raise ValueError("Unsupported all-puzzles answer-delivery template")
+        instruction = _ALL_PUZZLES_ONLY_COORDINATES.sub("", instruction)
     else:
         raise ValueError(f"Unsupported TaskTrove mathematical converter {converter!r}")
+    instruction = _NEMOTRON_BOXED_ANSWER_INSTRUCTION.sub("", instruction)
     if _TOOL_REQUIREMENT.search(instruction):
         raise ValueError("Mathematical task requires tool execution or an external resource")
     retained_lines = [line for line in instruction.splitlines() if not _FILE_SUBMISSION.fullmatch(line)]
