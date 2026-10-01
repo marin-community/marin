@@ -4,6 +4,7 @@
 import json
 
 import pytest
+import reasoning_gym
 from tasktrove_verify.grade import InvalidTask, Status, run
 from tasktrove_verify.modes import grade_reasoning_gym
 from tasktrove_verify.spec import ReasoningGymSpec
@@ -99,6 +100,33 @@ def test_scorer_failure_is_an_unscored_infrastructure_error(tests_dir, workspace
     result = run(spec_path, workspace)
     assert result.status is Status.INFRA_ERROR
     assert "KeyError" in result.detail["error"]
+
+
+@pytest.mark.parametrize("valid,expected", [(True, 1.0), (False, 0.01)])
+def test_generated_graph_coloring_with_null_gold_grades_candidate_and_file(tests_dir, workspace, valid, expected):
+    entry = reasoning_gym.create_dataset(
+        "graph_color", seed=231, size=1, min_num_vertices=4, max_num_vertices=4, num_colors=4, edge_probability=0.8
+    )[0]
+    assert entry["answer"] is None
+    coloring = (
+        entry["metadata"]["possible_answer"] if valid else dict.fromkeys(entry["metadata"]["puzzle"]["vertices"], 1)
+    )
+    candidate = json.dumps(coloring)
+    spec = ReasoningGymSpec(dataset="graph_color")
+    result = grade_reasoning_gym.grade_reasoning_gym_candidate(spec, entry, candidate)
+    assert (result.reward, result.status) == (expected, Status.SCORED)
+    (tests_dir / "entry.json").write_text(json.dumps(entry))
+    answer(workspace, candidate)
+    result = grade_reasoning_gym.grade(spec, tests_dir, workspace)
+    assert (result.reward, result.status) == (expected, Status.SCORED)
+    assert reasoning_gym.get_score_answer_fn("graph_color")(candidate, entry) == expected
+
+
+@pytest.mark.parametrize("answer_field", [{}, {"answer": [1, 2]}])
+def test_null_gold_support_preserves_malformed_entry_errors(answer_field):
+    entry = {**answer_field, "metadata": {"source_dataset": "graph_color"}}
+    with pytest.raises(InvalidTask, match="string or null answer field"):
+        grade_reasoning_gym.grade_reasoning_gym_candidate(ReasoningGymSpec(dataset="graph_color"), entry, "{}")
 
 
 @pytest.mark.parametrize("text", [None, "", "   \n"])

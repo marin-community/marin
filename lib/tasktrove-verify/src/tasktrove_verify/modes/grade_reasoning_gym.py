@@ -47,8 +47,8 @@ def grade_reasoning_gym_candidate(spec: ReasoningGymSpec, entry: dict, candidate
     metadata = entry.get("metadata")
     if not isinstance(metadata, dict) or metadata.get("source_dataset") != spec.dataset:
         raise InvalidTask("reasoning-gym entry dataset differs from its verifier")
-    if not isinstance(entry.get("answer"), str) or not entry["answer"].strip():
-        raise InvalidTask("reasoning-gym entry requires a nonempty answer")
+    if "answer" not in entry or (entry["answer"] is not None and not isinstance(entry["answer"], str)):
+        raise InvalidTask("reasoning-gym entry requires a string or null answer field")
     if candidate is None or not candidate.strip():
         return scored(0.0, reason="no_output")
     answer = candidate.strip()

@@ -18,7 +18,7 @@ from taskcompendium.verifiers.script import ScriptVerifier, embedded_resource, s
 
 FAMILY = "other"
 CONVERTER = "nemotron_reasoning"
-IMPORTER_REVISION = "taskcompendium-tasktrove-reasoning-gym-v0.2"
+IMPORTER_REVISION = "taskcompendium-tasktrove-reasoning-gym-v0.3"
 ANSWER_PATH = "/app/answer.txt"
 REASONING_GYM_VERSION = "0.1.25"
 _SCRIPT_ADAPTER = Path(__file__).with_name("reasoning_gym_adapter.py")
@@ -181,18 +181,20 @@ def import_task(
         if not isinstance(entry_metadata, dict) or entry_metadata.get("source_dataset") != contract.dataset:
             raise ValueError("Reasoning Gym entry dataset differs from its verifier")
         expected = entry.get("answer")
-        if not isinstance(expected, str) or not expected.strip():
-            raise ValueError("Reasoning Gym entry requires a nonempty answer")
+        if "answer" not in entry or (expected is not None and not isinstance(expected, str)):
+            raise ValueError("Reasoning Gym entry requires a string or null answer field")
         if contract.dataset in _UNSUPPORTED_DATASETS:
             raise ValueError(
                 f"Unsupported Reasoning Gym evaluator {contract.dataset!r}: {_UNSUPPORTED_DATASETS[contract.dataset]}"
             )
-        if contract.dataset in _CASE_SENSITIVE_EXACT:
-            if expected != expected.strip():
+        if contract.dataset in _CASE_SENSITIVE_EXACT | _WHITESPACE_EXACT:
+            if not isinstance(expected, str) or not expected.strip():
+                raise ValueError("Exact Reasoning Gym evaluator requires a nonempty string answer")
+            if contract.dataset in _CASE_SENSITIVE_EXACT and expected != expected.strip():
                 raise ValueError("Case-sensitive Reasoning Gym gold must not contain outer whitespace")
-            verifier = exact_answer(expected, ignore_case=False, collapse_whitespace=False)
-        elif contract.dataset in _WHITESPACE_EXACT:
-            verifier = exact_answer(expected, ignore_case=False, collapse_whitespace=True)
+            verifier = exact_answer(
+                expected, ignore_case=False, collapse_whitespace=contract.dataset in _WHITESPACE_EXACT
+            )
         elif contract.dataset in _SCRIPT_DATASETS:
             if runtime_image is None or timeout_seconds is None:
                 raise ValueError("This Reasoning Gym evaluator requires an explicit runtime_image and timeout_seconds")

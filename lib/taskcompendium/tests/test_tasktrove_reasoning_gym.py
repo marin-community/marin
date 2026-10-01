@@ -189,6 +189,42 @@ def test_private_script_failure_is_unscored(tmp_path):
     assert "reward" not in result
 
 
+@pytest.mark.parametrize("valid,expected", [(True, 1.0), (False, 0.01)])
+def test_generated_graph_coloring_with_null_gold_preserves_script_reward(tmp_path, valid, expected):
+    entry = reasoning_gym.create_dataset(
+        "graph_color", seed=231, size=1, min_num_vertices=4, max_num_vertices=4, num_colors=4, edge_probability=0.8
+    )[0]
+    assert entry["answer"] is None
+    coloring = (
+        entry["metadata"]["possible_answer"] if valid else dict.fromkeys(entry["metadata"]["puzzle"]["vertices"], 1)
+    )
+    candidate = json.dumps(coloring)
+    specification, entry = _imported("graph_color", entry)
+    assert _run_script(specification, candidate, tmp_path) == {"status": "scored", "reward": expected}
+    assert reasoning_gym.get_score_answer_fn("graph_color")(candidate, entry) == expected
+
+
+@pytest.mark.parametrize("dataset", ["ab", "self_reference", "path_star"])
+def test_exact_routes_reject_null_gold(dataset):
+    entry = _entry(dataset, "42")
+    entry["answer"] = None
+    data, _ = _archive_bytes(dataset, entry)
+    archive = read_archive(data, TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
+    with pytest.raises(ValueError, match="requires a nonempty string answer"):
+        import_task(archive)
+
+
+@pytest.mark.parametrize("answer_field", [{}, {"answer": [1, 2]}])
+def test_null_gold_support_preserves_malformed_archive_errors(answer_field):
+    entry = _entry("graph_color", "42")
+    del entry["answer"]
+    entry.update(answer_field)
+    data, _ = _archive_bytes("graph_color", entry)
+    archive = read_archive(data, TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
+    with pytest.raises(ValueError, match="string or null answer field"):
+        import_task(archive, runtime_image=RUNTIME_IMAGE, timeout_seconds=30.0)
+
+
 def test_private_script_missing_runtime_dependency_is_unscored(tmp_path):
     specification, _ = _imported()
     result = _run_script(specification, "True", tmp_path, isolated_python=True)
