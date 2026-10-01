@@ -526,7 +526,12 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
     )  # [TK, 1]
     moe_w13_cotangents = []
     moe_w2_cotangents = []
-    for chunk_index in reversed(range(layout.chunks)):
+    # Chunks run in forward order, the order the recompute for the backward produces their
+    # residuals in: chunk 0's backward needs only chunk 0's recompute, so it can run while chunk 1's
+    # dispatch is in flight, and chunk 1's recompute while chunk 0's cotangents travel back. The
+    # chunks write disjoint rows and separate weight-gradient slices, so the order does not change
+    # any value.
+    for chunk_index in range(layout.chunks):
         plan, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             out_dispatch_init = _transport_buffer(
@@ -567,8 +572,8 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
     return (
         dispatch_cotangent,
         weights_cotangent,
-        jnp.concatenate(moe_w13_cotangents[::-1], axis=0),
-        jnp.concatenate(moe_w2_cotangents[::-1], axis=0),
+        jnp.concatenate(moe_w13_cotangents, axis=0),
+        jnp.concatenate(moe_w2_cotangents, axis=0),
         None,
     )
 
