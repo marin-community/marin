@@ -20,6 +20,8 @@ from .catalog import (
     SKYRL_ORIGIN,
     TASKTROVE,
     TASKTROVE_CLASSIFICATION,
+    TASKTROVE_FAMILY_OVERRIDE_BASIS,
+    TASKTROVE_FAMILY_OVERRIDES,
     TASKTROVE_ORIGIN,
     Snapshot,
     annotate_source,
@@ -247,6 +249,18 @@ def migrate(connection: Connection) -> None:
         "review_verifier_revision TEXT",
     ):
         connection.execute(text(f"ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS {definition}"))
+    for source_name, family in TASKTROVE_FAMILY_OVERRIDES.items():
+        connection.execute(
+            text(
+                """UPDATE catalog_sources
+                SET payload = payload || CAST(:classification AS JSONB)
+                WHERE id = :source_id"""
+            ),
+            {
+                "source_id": f"{TASKTROVE_ORIGIN}:{source_name}",
+                "classification": json.dumps({"family": family, "family_basis": TASKTROVE_FAMILY_OVERRIDE_BASIS}),
+            },
+        )
     connection.execute(
         text(
             """

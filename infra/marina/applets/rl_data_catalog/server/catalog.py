@@ -76,6 +76,19 @@ TASKTROVE_CLASSIFICATION = {
     "turns": "Multi-turn",
     "classification_basis": "Task Trove tasks run as Agentic interactions in Harbor",
 }
+TASKTROVE_FAMILY_OVERRIDES = {
+    "laion__exp_rpt_crosscodeeval-csharp-v4": "code-completion",
+    "laion__exp_rpt_crosscodeeval-java-v3": "code-completion",
+    "laion__exp_rpt_crosscodeeval-python-v2": "code-completion",
+    "laion__exp_rpt_crosscodeeval-typescript-v2": "code-completion",
+    "laion__exp_rpt_ghactions-v3": "ci-workflow",
+    "laion__exp_rpt_scaffold-v3": "code-generation",
+    "laion__nemotron-gym-arc-agi-python-inductive-v2": "arc-agi",
+    "laion__nemotron-gym-arc-agi-transductive-v3": "arc-agi",
+    "laion__nemotron-gym-reasoning-gym-v2": "reasoning-gym",
+    "laion__nemotron-gym-structured-outputs-v4": "instruction-following",
+}
+TASKTROVE_FAMILY_OVERRIDE_BASIS = "Atlas audit of source task semantics"
 
 
 @dataclass(frozen=True)
@@ -377,7 +390,7 @@ def annotate_source(row: dict[str, Any]) -> None:
         row.update(
             count_precision="exact",
             count_url=row["provenance_url"],
-            family_basis="Task Trove release manifest source_verdicts.family",
+            family_basis=row.get("family_basis") or "Task Trove release manifest source_verdicts.family",
             family_url=row["provenance_url"],
         )
         row["canonical_source"] = row["display_name"]
@@ -715,7 +728,9 @@ def tasktrove_snapshot(manifest: dict[str, Any], info: dict[str, Any]) -> Snapsh
     for name, statuses in manifest["by_source"].items():
         details = manifest["source_details"].get(name, {})
         verdict = manifest["source_verdicts"][name]
-        family = verdict["family"]
+        family = TASKTROVE_FAMILY_OVERRIDES.get(name, verdict["family"])
+        if family == "other":
+            raise ValueError(f"Task Trove source requires a concrete family: {name}")
         modes = list(details.get("modes", {}))
         count = statuses.get("converted", 0)
         row = source_row(TASKTROVE_ORIGIN, name, info["sha"], info["lastModified"])
@@ -730,7 +745,11 @@ def tasktrove_snapshot(manifest: dict[str, Any], info: dict[str, Any]) -> Snapsh
             count_basis="Released Harbor tasks: manifest by_source.converted",
             count_precision="exact",
             family=family,
-            family_basis="Task Trove release manifest source_verdicts.family",
+            family_basis=(
+                TASKTROVE_FAMILY_OVERRIDE_BASIS
+                if name in TASKTROVE_FAMILY_OVERRIDES
+                else "Task Trove release manifest source_verdicts.family"
+            ),
             family_url=f"https://huggingface.co/datasets/{TASKTROVE}/blob/{info['sha']}/manifest.json",
             modes=modes,
             languages=list(details.get("languages", {})),

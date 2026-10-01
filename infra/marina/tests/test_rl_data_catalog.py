@@ -116,7 +116,7 @@ def trove_manifest(count: int = 3) -> dict:
         "source_details": {"org__math": {"modes": {"math": count}, "languages": {}}},
         "source_verdicts": {
             "org__math": {"family": "math-answer", "reason": "Verified", "verdict": "keep"},
-            "org__old": {"family": "other", "reason": "No verifier", "verdict": "drop"},
+            "org__old": {"family": "instruction-following", "reason": "No verifier", "verdict": "drop"},
         },
     }
 
@@ -129,6 +129,48 @@ def test_tasktrove_counts_only_released_tasks_and_retains_exclusion_reason() -> 
     assert kept["turns"] == "Multi-turn"
     assert [(row["environment"], row["type"]) for row in snapshot.rows] == [("Harbor", "Agentic"), ("Harbor", "Agentic")]
     assert "/blob/release1/manifest.json" in kept["provenance_url"]
+
+
+def test_tasktrove_assigns_concrete_families_to_ambiguous_sources() -> None:
+    manifest = trove_manifest()
+    sources = {
+        "laion__exp_rpt_crosscodeeval-python-v2": "code-completion",
+        "laion__exp_rpt_ghactions-v3": "ci-workflow",
+        "laion__exp_rpt_scaffold-v3": "code-generation",
+        "laion__nemotron-gym-arc-agi-python-inductive-v2": "arc-agi",
+        "laion__nemotron-gym-reasoning-gym-v2": "reasoning-gym",
+        "laion__nemotron-gym-structured-outputs-v4": "instruction-following",
+    }
+    manifest["clean_tasks"] += len(sources)
+    for name in sources:
+        manifest["by_source"][name] = {"converted": 1}
+        manifest["source_details"][name] = {"modes": {"native": 1}, "languages": {}}
+        manifest["source_verdicts"][name] = {"family": "other", "reason": "Needs an audited family", "verdict": "keep"}
+
+    snapshot = tasktrove_snapshot(manifest, {"sha": "release1", "lastModified": "2026-10-01"})
+    families = {row["name"]: row["family"] for row in snapshot.rows}
+    assert {name: families[name] for name in sources} == sources
+    assert "other" not in families.values()
+    assert all(
+        row["family_basis"] == "Atlas audit of source task semantics" for row in snapshot.rows if row["name"] in sources
+    )
+
+
+def test_migration_reclassifies_saved_ambiguous_tasktrove_family(catalog_connection: Connection) -> None:
+    row = {
+        "id": "Task Trove:laion__exp_rpt_crosscodeeval-python-v2",
+        "family": "other",
+        "family_basis": "Task Trove release manifest source_verdicts.family",
+    }
+    save_snapshot(catalog_connection, Snapshot("Task Trove", "release1", "2026-10-01", [row]))
+
+    migrate(catalog_connection)
+
+    payload = catalog_connection.execute(
+        text("SELECT payload FROM catalog_sources WHERE id = :id"), {"id": row["id"]}
+    ).scalar_one()
+    assert payload["family"] == "code-completion"
+    assert payload["family_basis"] == "Atlas audit of source task semantics"
 
 
 def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(catalog_connection: Connection) -> None:
