@@ -4,17 +4,20 @@
 """Submission conventions for semantic answer tasks."""
 
 import json
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import PurePosixPath
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationEvent,
     ConversationInput,
+    ConversationTrace,
     TaskSpec,
     TextMessage,
     format_conversation,
@@ -22,6 +25,7 @@ from taskcompendium.models import (
 
 ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
+WORKSPACE_ROOT = "/app"
 
 
 def answer_call_tool() -> dict[str, object]:
@@ -41,9 +45,6 @@ def answer_call_tool() -> dict[str, object]:
     }
 
 
-WORKSPACE_ROOT = "/app"
-
-
 class AnswerFormat(StrEnum):
     """The envelope used to deliver a result."""
 
@@ -55,57 +56,226 @@ class AnswerFormat(StrEnum):
     FINAL_ACTION = "final_action"
 
 
-class SubmissionConvention(BaseModel):
+@dataclass(frozen=True)
+class GradingAttempt:
+    """Trial evidence available to submission conventions and verifiers."""
+
+    conversation: ConversationTrace
+    workspace: object
+
+
+@dataclass(frozen=True)
+class TextSubmission:
+    value: str
+
+
+@dataclass(frozen=True)
+class ActionSubmission:
+    message: TextMessage | AssistantToolCalls
+
+
+@dataclass(frozen=True)
+class StateSubmission:
+    value: JsonValue
+
+
+@dataclass(frozen=True)
+class FileSubmission:
+    path: Path
+
+
+@dataclass(frozen=True)
+class WorkspaceSubmission:
+    path: Path
+
+
+type Submission = TextSubmission | ActionSubmission | StateSubmission | FileSubmission | WorkspaceSubmission
+
+
+class SubmissionFailure(ValueError):
+    """The agent ended the interaction without a valid submission."""
+
+
+class Convention(BaseModel, ABC):
     """How a result is requested, delivered, and extracted."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     answer_format: AnswerFormat
-    output_path: str | None = None
 
     @model_validator(mode="after")
-    def validate_convention(self) -> "SubmissionConvention":
+    def validate_convention(self) -> Self:
         if not self.id:
             raise ValueError("A submission convention id is required")
-        if self.answer_format == AnswerFormat.FILE:
-            path = self.output_path
-            if (
-                path is None
-                or path.startswith("/")
-                or "\\" in path
-                or ":" in path.split("/")[0]
-                or any(ord(character) < 32 for character in path)
-                or any(part in ("", ".", "..") for part in path.split("/"))
-            ):
-                raise ValueError("A file submission requires a normalized relative output path")
-            if PurePosixPath(path).as_posix() != path:
-                raise ValueError("A file submission requires a normalized relative output path")
-        elif self.output_path is not None:
-            raise ValueError("Only a file submission may specify an output path")
         return self
 
     def supports(self, answer_type: AnswerType) -> bool:
         """Whether this convention can carry the semantic result."""
-        if self.answer_format == AnswerFormat.FILE:
-            return answer_type == AnswerType.FILE
-        if self.answer_format == AnswerFormat.WORKSPACE:
-            return answer_type == AnswerType.WORKSPACE_STATE
         if self.answer_format == AnswerFormat.FINAL_ACTION:
             return answer_type == AnswerType.NATIVE_ACTION
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
+    @abstractmethod
+    async def extract(self, attempt: GradingAttempt) -> Submission:
+        """Read the agent's submission without access to expected values."""
 
-def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> bool:
+
+class PlainText(Convention):
+    answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
+
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        return TextSubmission(_text_answer(attempt.conversation.events[-1]))
+
+
+class JsonAnswer(Convention):
+    answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
+
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        try:
+            value = json.loads(_text_answer(attempt.conversation.events[-1]))
+        except json.JSONDecodeError as error:
+            raise SubmissionFailure("JSON submission is malformed") from error
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get(ANSWER_FIELD), str)
+            or not value[ANSWER_FIELD].strip()
+        ):
+            raise SubmissionFailure("JSON submission requires a nonempty string answer")
+        return TextSubmission(value[ANSWER_FIELD])
+
+
+class AnswerCall(Convention):
+    answer_format: Literal[AnswerFormat.ANSWER_CALL] = AnswerFormat.ANSWER_CALL
+
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        response = attempt.conversation.events[-1]
+        if (
+            not isinstance(response, AssistantToolCalls)
+            or len(response.calls) != 1
+            or response.calls[0].name != ANSWER_CALL_NAME
+        ):
+            raise SubmissionFailure(f"Answer call requires one {ANSWER_CALL_NAME} function call")
+        arguments = response.calls[0].arguments
+        if (
+            set(arguments) != {ANSWER_FIELD}
+            or not isinstance(arguments[ANSWER_FIELD], str)
+            or not arguments[ANSWER_FIELD].strip()
+        ):
+            raise SubmissionFailure("Answer call requires a nonempty string answer")
+        return TextSubmission(arguments[ANSWER_FIELD])
+
+
+class FinalAction(Convention):
+    answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
+
+    require_call: bool = False
+    max_calls: int | None = Field(default=None, gt=0)
+
+    async def extract(self, attempt: GradingAttempt) -> ActionSubmission:
+        final = attempt.conversation.events[-1]
+        if not isinstance(final, (TextMessage, AssistantToolCalls)):
+            raise SubmissionFailure("Final action requires an assistant message")
+        if self.require_call and not isinstance(final, AssistantToolCalls):
+            raise SubmissionFailure("Final action requires a function call")
+        if isinstance(final, AssistantToolCalls) and self.max_calls is not None and len(final.calls) > self.max_calls:
+            raise SubmissionFailure(f"Final action permits at most {self.max_calls} function calls")
+        return ActionSubmission(final)
+
+
+class FileAnswer(Convention):
+    """Extract one file from a validated final workspace snapshot."""
+
+    answer_format: Literal[AnswerFormat.FILE] = AnswerFormat.FILE
+    output_path: str
+
+    @model_validator(mode="after")
+    def validate_output_path(self) -> Self:
+        path = self.output_path
+        if (
+            not path
+            or path.startswith("/")
+            or "\\" in path
+            or ":" in path.split("/")[0]
+            or any(ord(character) < 32 for character in path)
+            or any(part in ("", ".", "..") for part in path.split("/"))
+            or PurePosixPath(path).as_posix() != path
+        ):
+            raise ValueError("A file submission requires a normalized relative output path")
+        return self
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type == AnswerType.FILE
+
+    async def extract(self, attempt: GradingAttempt) -> FileSubmission:
+        workspace = _workspace_snapshot(attempt)
+        path = workspace
+        for part in self.output_path.split("/"):
+            path = path / part
+            if path.is_symlink():
+                raise SubmissionFailure("File submission cannot contain symlinks")
+        if not path.is_file():
+            raise SubmissionFailure("Final file submission is missing")
+        return FileSubmission(path)
+
+
+class Workspace(Convention):
+    """Submit a validated final workspace snapshot."""
+
+    answer_format: Literal[AnswerFormat.WORKSPACE] = AnswerFormat.WORKSPACE
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type == AnswerType.WORKSPACE_STATE
+
+    async def extract(self, attempt: GradingAttempt) -> WorkspaceSubmission:
+        return WorkspaceSubmission(_workspace_snapshot(attempt))
+
+
+def _workspace_snapshot(attempt: GradingAttempt) -> Path:
+    if not isinstance(attempt.workspace, Path) or attempt.workspace.is_symlink() or not attempt.workspace.is_dir():
+        raise TypeError("Workspace extraction requires a validated directory snapshot")
+    return attempt.workspace
+
+
+SubmissionConvention = Annotated[
+    PlainText | JsonAnswer | AnswerCall | FinalAction | FileAnswer | Workspace, Field(discriminator="answer_format")
+]
+
+
+def _text_answer(response: ConversationEvent) -> str:
+    if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
+        raise SubmissionFailure("Text submission requires nonempty assistant content without tool calls")
+    return response.content
+
+
+@dataclass(frozen=True)
+class SubmissionCompatibility:
+    """Whether a convention preserves the task's result contract, with reasons when it does not."""
+
+    reasons: tuple[str, ...]
+
+    @property
+    def compatible(self) -> bool:
+        return not self.reasons
+
+
+def submission_compatibility(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
+    """Explain which parts of the task a submission convention cannot carry."""
     if not convention.supports(specification.answer_type):
-        return False
-    if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return bool(specification.final_tools.functions) and specification.final_tools.tool_choice != "none"
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        return specification.final_tools.tool_choice != "none" and all(
-            function.name != ANSWER_CALL_NAME for function in specification.final_tools.functions
+        return SubmissionCompatibility(
+            (f"{convention.answer_format.value} cannot carry {specification.answer_type.value}",)
         )
-    return specification.final_tools.tool_choice != "required"
+    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+        reasons = []
+        if not specification.final_tools:
+            reasons.append("final action requires at least one final tool")
+        return SubmissionCompatibility(tuple(reasons))
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        reasons = []
+        if any(function.name == ANSWER_CALL_NAME for function in specification.final_tools):
+            reasons.append("final tool name collides with submit_answer")
+        return SubmissionCompatibility(tuple(reasons))
+    return SubmissionCompatibility(())
 
 
 def submission_instruction(convention: SubmissionConvention) -> str:
@@ -116,9 +286,9 @@ def submission_instruction(convention: SubmissionConvention) -> str:
         return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
-    if convention.answer_format == AnswerFormat.FILE:
+    if isinstance(convention, FileAnswer):
         return f"Write your final file to {WORKSPACE_ROOT}/{convention.output_path}."
-    if convention.answer_format == AnswerFormat.WORKSPACE:
+    if isinstance(convention, Workspace):
         return f"Complete the requested changes in {WORKSPACE_ROOT}."
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
         return ""
@@ -128,10 +298,9 @@ def submission_instruction(convention: SubmissionConvention) -> str:
 def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
     """Return Harbor instruction text for the selected convention."""
     context = specification.context
-    if not submission_compatible(specification, convention):
-        raise ValueError(
-            f"Submission convention {convention.id!r} cannot carry {specification.answer_type.value!r} in this context"
-        )
+    compatibility = submission_compatibility(specification, convention)
+    if not compatibility.compatible:
+        raise ValueError(f"Submission convention {convention.id!r} is incompatible: {'; '.join(compatibility.reasons)}")
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
         return format_conversation(context.events)
     return f"{format_conversation(context.events)}\n\n{submission_instruction(convention)}\n"
@@ -168,8 +337,9 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
 
 def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
     """Prepare the conversation and tools for the selected submission convention."""
-    if not submission_compatible(specification, convention):
-        raise ValueError("Submission convention is incompatible with the task")
+    compatibility = submission_compatibility(specification, convention)
+    if not compatibility.compatible:
+        raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
     messages = conversation_messages(specification.context)
     instruction = submission_instruction(convention)
     if instruction:
@@ -177,59 +347,16 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     request: dict[str, Any] = {"messages": messages}
     tools: list[dict[str, object]] = [
         {"type": "function", "function": function.model_dump(exclude_none=True)}
-        for function in specification.final_tools.functions
+        for function in specification.final_tools
     ]
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         tools.append(answer_call_tool())
-        if not specification.final_tools.functions:
-            request.update(tool_choice="required", parallel_tool_calls=False)
+        request.update(tool_choice="required", parallel_tool_calls=False)
     if tools:
         request["tools"] = tools
-    if specification.final_tools.tool_choice is not None:
-        request["tool_choice"] = specification.final_tools.tool_choice
-    if specification.final_tools.parallel_tool_calls is not None:
-        request["parallel_tool_calls"] = specification.final_tools.parallel_tool_calls
+    if isinstance(convention, FinalAction):
+        if convention.require_call:
+            request["tool_choice"] = "required"
+        if convention.max_calls == 1:
+            request["parallel_tool_calls"] = False
     return request
-
-
-def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    """Reject ambiguous duplicate fields in a JSON answer envelope."""
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"Duplicate JSON field: {key}")
-        result[key] = value
-    return result
-
-
-def extract_answer(response: ConversationEvent, convention: SubmissionConvention) -> str:
-    """Extract semantic answer content from a typed assistant turn."""
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        if (
-            not isinstance(response, AssistantToolCalls)
-            or len(response.calls) != 1
-            or response.calls[0].name != ANSWER_CALL_NAME
-        ):
-            raise ValueError(f"Answer call requires one {ANSWER_CALL_NAME} function call")
-        arguments = response.calls[0].arguments
-        if (
-            set(arguments) != {ANSWER_FIELD}
-            or not isinstance(arguments[ANSWER_FIELD], str)
-            or not arguments[ANSWER_FIELD].strip()
-        ):
-            raise ValueError("Answer call requires a nonempty string answer")
-        return arguments[ANSWER_FIELD]
-    if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
-        raise ValueError("Text submission requires nonempty assistant content without tool calls")
-    if convention.answer_format == AnswerFormat.PLAIN:
-        return response.content
-    if convention.answer_format == AnswerFormat.JSON:
-        value = json.loads(response.content, object_pairs_hook=_object_with_unique_fields)
-        if (
-            not isinstance(value, dict)
-            or not isinstance(value.get(ANSWER_FIELD), str)
-            or not value[ANSWER_FIELD].strip()
-        ):
-            raise ValueError("JSON submission requires a nonempty string answer")
-        return value[ANSWER_FIELD]
-    raise ValueError(f"Unsupported answer format: {convention.answer_format}")

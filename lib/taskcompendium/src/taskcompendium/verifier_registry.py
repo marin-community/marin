@@ -8,9 +8,20 @@ from types import MappingProxyType
 
 from pydantic import ValidationError
 
-from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, NumericAnswerVerifier, Verifier
-from taskcompendium.models import ConversationTrace, TaskSpec, VerifierKind, VerifierSpec
-from taskcompendium.submission import SubmissionConvention
+from taskcompendium.grading import (
+    ExactAnswerVerifier,
+    GradeResult,
+    NumericAnswerVerifier,
+    Outcome,
+    StructuredExactVerifier,
+    Verifier,
+)
+from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.submission import (
+    GradingAttempt,
+    SubmissionConvention,
+    SubmissionFailure,
+)
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 from taskcompendium.verifiers.script import ScriptVerifier
@@ -18,6 +29,7 @@ from taskcompendium.verifiers.script import ScriptVerifier
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
         VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
+        VerifierKind.STRUCTURED_EXACT: StructuredExactVerifier,
         VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
         VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
@@ -40,10 +52,30 @@ def resolve_verifier(specification: VerifierSpec) -> Verifier | ScriptVerifier:
         raise ValueError(f"Invalid {specification.kind.value!r} verifier parameters: {error}") from error
 
 
-def grade_answer(
-    specification: TaskSpec, convention: SubmissionConvention, conversation: ConversationTrace, environment: object
+def validate_verifier(specification: VerifierSpec) -> None:
+    resolve_verifier(specification)
+
+
+def validate_launch_parallel_tool_calls(specification: VerifierSpec, parallel_tool_calls: bool | None) -> None:
+    """Reject a launch that cannot emit the task's expected final action."""
+    verifier = resolve_verifier(specification)
+    if (
+        parallel_tool_calls is False
+        and isinstance(verifier, PredictedActionVerifier)
+        and len(verifier.expected_calls) > 1
+    ):
+        raise ValueError("Launch disables parallel calls required by the task")
+
+
+async def grade_answer(
+    specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt
 ) -> GradeResult:
+    """Grade a task attempt, assigning zero reward to invalid agent submissions."""
     verifier = resolve_verifier(specification.verifier)
     if isinstance(verifier, ScriptVerifier):
         raise ValueError("Script verifiers require an isolated Harbor verifier runtime")
-    return verifier.grade(GradingAttempt(convention, conversation.events, environment))
+    try:
+        submission = await convention.extract(attempt)
+    except SubmissionFailure as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+    return await verifier.grade(submission, attempt=attempt)

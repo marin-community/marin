@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.9"
+SCHEMA_VERSION = "0.16"
 
 
 class AnswerType(StrEnum):
@@ -27,10 +27,11 @@ class AnswerType(StrEnum):
 class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
-    EXACT_ANSWER = "exact_answer"
+    EXACT_ANSWER = "exact"
+    STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
-    NUMERIC_ANSWER = "numeric_answer"
-    MCQ_ANSWER = "mcq_answer"
+    NUMERIC_ANSWER = "numeric"
+    MCQ_ANSWER = "mcq"
     SCRIPT = "script"
 
 
@@ -227,24 +228,6 @@ class ConversationTrace(BaseModel):
         return self
 
 
-class FinalTools(BaseModel):
-    """Functions and call policy advertised at the task's decision point."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    functions: tuple[FunctionDefinition, ...] = ()
-    tool_choice: str | None = None
-    parallel_tool_calls: bool | None = None
-
-    @model_validator(mode="after")
-    def validate_tools(self) -> "FinalTools":
-        if len({function.name for function in self.functions}) != len(self.functions):
-            raise ValueError("Advertised function names must be unique")
-        if self.tool_choice is not None and self.tool_choice not in {"auto", "none", "required"}:
-            raise ValueError("Unsupported native tool choice")
-        return self
-
-
 class EnvironmentRequirements(BaseModel):
     """Environment functionality required to run the task.
 
@@ -267,7 +250,7 @@ class TaskSpec(BaseModel):
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
-    final_tools: FinalTools = Field(default_factory=FinalTools)
+    final_tools: tuple[FunctionDefinition, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
@@ -279,6 +262,8 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
-        if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools.functions:
+        if len({function.name for function in self.final_tools}) != len(self.final_tools):
+            raise ValueError("Advertised function names must be unique")
+        if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:
             raise ValueError("Native-action tasks require advertised functions")
         return self

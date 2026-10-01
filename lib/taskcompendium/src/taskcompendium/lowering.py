@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
 from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
-from taskcompendium.submission import WORKSPACE_ROOT, SubmissionConvention, render_instruction, submission_compatible
+from taskcompendium.submission import WORKSPACE_ROOT, SubmissionConvention, render_instruction, submission_compatibility
 from taskcompendium.verifier_registry import resolve_verifier
 from taskcompendium.verifiers.script import (
     MAX_RESOURCE_BYTES,
@@ -81,7 +81,7 @@ def compatible_lowerings(
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
-        if submission_compatible(specification, convention)
+        if submission_compatibility(specification, convention).compatible
         for environment_config in environment_configs
         if _is_compatible(specification, environment_config)
     )
@@ -162,7 +162,7 @@ def read_environment_config(path: Path) -> HarborEnvironmentConfig:
 
 
 def read_submission_convention(path: Path) -> SubmissionConvention:
-    return SubmissionConvention.model_validate_json(path.read_text())
+    return TypeAdapter(SubmissionConvention).validate_json(path.read_text())
 
 
 def validate_exported_private_resources(specification: TaskSpec, task_dir: Path) -> None:

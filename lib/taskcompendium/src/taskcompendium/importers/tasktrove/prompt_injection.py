@@ -3,7 +3,6 @@
 
 """Import the cleaned TaskTrove prompt-injection task for direct chat grading."""
 
-import base64
 import hashlib
 import json
 import math
@@ -15,7 +14,7 @@ from tasktrove_verify.spec import DEFAULT_WORKSPACE, ScriptSpec, parse_spec
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.verifiers.script import NetworkPolicy, PrivateResource, ScriptVerifier, script_verifier
+from taskcompendium.verifiers.script import NetworkPolicy, ScriptVerifier, embedded_resource, script_verifier
 
 FAMILY = "prompt-injection"
 CONVERTER = "prompt_injection"
@@ -44,15 +43,6 @@ def _instructions(source: str) -> str:
     if "/app/answer.txt" in body:
         raise ValueError("Unsupported prompt-injection answer-file reference")
     return body.strip()
-
-
-def _resource(path: str, content: bytes, *, executable: bool = False) -> PrivateResource:
-    return PrivateResource(
-        path=path,
-        sha256=hashlib.sha256(content).hexdigest(),
-        embedded_base64=base64.b64encode(content).decode("ascii"),
-        executable=executable,
-    )
 
 
 def import_task(archive: TaskArchive, *, runtime_image: str) -> TaskSpec:
@@ -89,9 +79,9 @@ def import_task(archive: TaskArchive, *, runtime_image: str) -> TaskSpec:
         timeout_seconds=source_contract.timeout + RUNTIME_GRACE_SECONDS,
         runtime_image=runtime_image,
         resources=(
-            _resource("grade.py", _ADAPTER.read_bytes(), executable=True),
-            _resource("source_checker.py", checker),
-            _resource(DATA, archive.files[f"tests/{DATA}"]),
+            embedded_resource("grade.py", _ADAPTER.read_bytes(), executable=True),
+            embedded_resource("source_checker.py", checker),
+            embedded_resource(DATA, archive.files[f"tests/{DATA}"]),
         ),
         network_policy=NetworkPolicy.DISABLED,
     )
