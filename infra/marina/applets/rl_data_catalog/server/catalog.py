@@ -173,7 +173,6 @@ class SourceRow:
     revised_at: str
     difficulty: str | None = None
     quality: str | None = None
-    traces: int | None = None
     task_count: int | None = None
     is_benchmark: bool = False
     turns: str = "Unknown"

@@ -97,7 +97,6 @@ def child_row(parent: dict[str, Any], name: str, count: int | None) -> dict[str,
         task_count=count,
         difficulty=None,
         quality=None,
-        traces=None,
     )
     return row
 

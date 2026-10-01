@@ -136,9 +136,7 @@ def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(cata
     save_snapshot(connection, Snapshot("MarinSkyRL", "sky1", "2026-09-01", [{"id": "MarinSkyRL:math", "task_count": 7}]))
     old = tasktrove_snapshot(trove_manifest(), {"sha": "release1", "lastModified": "2026-09-01"})
     save_snapshot(connection, old)
-    connection.execute(
-        text("UPDATE catalog_sources SET difficulty = 'Hard', traces = 12 WHERE id = 'Task Trove:org__math'")
-    )
+    connection.execute(text("UPDATE catalog_sources SET difficulty = 'Hard' WHERE id = 'Task Trove:org__math'"))
 
     def upstream(request: httpx.Request) -> httpx.Response:
         if request.url.host == "api.github.com":
@@ -154,7 +152,7 @@ def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(cata
     }
     assert payloads["MarinSkyRL:math"]["payload"]["task_count"] == 7
     assert payloads["Task Trove:org__math"]["payload"]["task_count"] == 5
-    assert (payloads["Task Trove:org__math"]["difficulty"], payloads["Task Trove:org__math"]["traces"]) == ("Hard", 12)
+    assert payloads["Task Trove:org__math"]["difficulty"] == "Hard"
     status = {row["origin"]: row for row in connection.execute(text("SELECT * FROM catalog_refreshes")).mappings()}
     assert status["MarinSkyRL"]["revision"] == "sky1"
     assert status["MarinSkyRL"]["error"]
@@ -185,7 +183,6 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
             "payload": payload,
             "quality": "good",
             "difficulty": "32/32",
-            "traces": 3,
             "review_id": "review1",
             "review_date": "2026-09-28",
             "review_source_revision": "data1",
@@ -242,7 +239,6 @@ def test_verifyit_dependency_change_invalidates_quality_and_difficulty_only_on_a
                 "review_date": date,
                 "review_source_revision": "data1",
                 "review_verifier_revision": before[row["id"]],
-                "traces": 3,
                 "verifier_issues": [],
             }
         )
@@ -274,7 +270,6 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
             "quality": quality,
             "difficulty": "Legacy summary: Large 30/32",
             "difficulty_report": json.dumps(report),
-            "traces": None,
             "review_id": "review1",
             "review_date": "2026-09-28",
             "review_source_revision": "data1",
@@ -451,7 +446,6 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
             "quality": "good",
             "difficulty": "Small / Large / Hosted comparison",
             "difficulty_report": json.dumps(report),
-            "traces": None,
             "review_id": "review1",
             "review_date": "2026-09-29",
             "review_source_revision": "data1",
@@ -699,15 +693,15 @@ def test_migration_reclassifies_saved_tasktrove_without_losing_counts_or_curatio
             ],
         ),
     )
-    connection.execute(text("UPDATE catalog_sources SET quality = 'Reviewed', traces = 8 WHERE id = 'Task Trove:math'"))
+    connection.execute(text("UPDATE catalog_sources SET quality = 'Reviewed' WHERE id = 'Task Trove:math'"))
     migrate(connection)
-    rows = list(connection.execute(text("SELECT payload, quality, traces FROM catalog_sources ORDER BY id")).mappings())
+    rows = list(connection.execute(text("SELECT payload, quality FROM catalog_sources ORDER BY id")).mappings())
     assert [(row["payload"]["environment"], row["payload"]["type"]) for row in rows] == [
         ("Harbor", "Agentic"),
         ("Harbor", "Agentic"),
     ]
     assert [row["payload"]["task_count"] for row in rows] == [30, 0]
-    assert (rows[0]["quality"], rows[0]["traces"]) == ("Reviewed", 8)
+    assert rows[0]["quality"] == "Reviewed"
 
 
 @pytest.mark.parametrize(

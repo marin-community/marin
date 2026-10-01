@@ -209,23 +209,22 @@ and drawn differently. Three judges assess each attempt; their opinions are not
 additional solver attempts. Historical dataset releases and rollout settings remain
 separate from current measurements.
 
-The catalog's Difficulty column shows each measured model's solve rate as a bar
-with solved/verified counts. Longer bars mean more tasks solved. Current comparisons
+The catalog's Difficulty column shows each measured model's solve rate as a bar.
+The detail page reports the solve counts. Longer bars mean more tasks solved. Current comparisons
 use the same task sample for three fixed models:
 
 | Role | Model | Reasoning setting |
 | --- | --- | --- |
 | Small | Qwen/Qwen3-Coder-30B-A3B-Instruct | Non-thinking checkpoint |
-| Large | Qwen/Qwen3.5-122B-A10B | Thinking enabled |
+| Large | Qwen/Qwen3.5-122B-A10B | Thinking disabled |
 | Hosted | zai-org/GLM-5.3 on Together | Low reasoning effort |
 
-The `atlas-difficulty-v2-65k16k` protocol gives each model 65,536 total context
+The current matched protocols give each model 65,536 total context
 tokens, at most 49,152 input tokens, and at most 16,384 output tokens including
-reasoning. All three use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
-repetition penalty 1, and presence and frequency penalties 0. These explicit
-settings prevent checkpoint generation defaults from changing the comparison.
-Models retain their native reasoning controls; the shared token budget does not
-make those controls equivalent. Nemotron's learned verifiers use Hosted GLM-5.3
+reasoning. Small and Hosted use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
+repetition penalty 1, and presence and frequency penalties 0. Large uses the
+same settings with top-p 0.8 and presence penalty 1.5. These explicit settings
+prevent checkpoint generation defaults from changing the comparison. Nemotron's learned verifiers use Hosted GLM-5.3
 with Low reasoning effort across all three arms. Their native output budgets
 and saved critic requests and responses appear with the run evidence.
 

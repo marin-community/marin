@@ -191,17 +191,15 @@ def publish_review(root: Path, atlas_id: str) -> dict:
         {"id": review_id, "source": atlas_id, "collection": json.dumps(collection), "date": updated},
     )
     archive_evidence(publication, review_id)
-    native = [review for review in collection["reviews"] if review["method"] == "runtime_execution"]
     sql(
         """UPDATE catalog_sources SET quality=:quality,review_id=:review,review_date=:date,
-        review_source_revision=:revision,review_verifier_revision=:verifier,traces=:traces WHERE id=:source""",
+        review_source_revision=:revision,review_verifier_revision=:verifier WHERE id=:source""",
         {
             "quality": rating,
             "review": review_id,
             "date": updated,
             "revision": publication.subject["dataset_revision"],
             "verifier": payload.get("verifier_revision"),
-            "traces": len(native),
             "source": atlas_id,
         },
     )

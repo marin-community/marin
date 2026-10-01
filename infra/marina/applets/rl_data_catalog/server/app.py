@@ -55,7 +55,7 @@ DIFFICULTY_GENERATION = {
     "repetition_penalty": 1,
     "presence_penalty": 0,
     "frequency_penalty": 0,
-    "max_tokens": 16384,
+    "max_tokens": DIFFICULTY_LIMITS["max_output_tokens"],
 }
 
 
@@ -186,7 +186,6 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
             for key in (
                 "difficulty",
                 "quality",
-                "traces",
                 "review_date",
                 "review_id",
                 "review_source_revision",
@@ -235,7 +234,7 @@ def migrate(connection: Connection) -> None:
         CREATE TABLE IF NOT EXISTS catalog_sources (
             id TEXT PRIMARY KEY, origin TEXT NOT NULL, payload JSONB NOT NULL,
             active BOOLEAN NOT NULL DEFAULT TRUE,
-            difficulty TEXT, quality TEXT, traces BIGINT
+            difficulty TEXT, quality TEXT
         )
     """
         )

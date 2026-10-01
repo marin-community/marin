@@ -118,7 +118,7 @@ NATIVE_MODULE_PREFIXES = (
 )
 
 
-def native_module(name: str) -> bool:
+def is_native_module(name: str) -> bool:
     return name == "verifyit" or name.startswith(NATIVE_MODULE_PREFIXES)
 
 
@@ -148,7 +148,7 @@ def native_calls():
     def profile(frame, event, _argument):
         if event == "call":
             name = frame.f_globals.get("__name__", "")
-            if native_module(name):
+            if is_native_module(name):
                 called.add(name)
 
     sys.setprofile(profile)
@@ -167,7 +167,7 @@ def capture_native_sources(root: Path, called: set[str]) -> None:
         else None
     )
     for name, module in sorted(sys.modules.copy().items()):
-        if not native_module(name):
+        if not is_native_module(name):
             continue
         origin = getattr(module, "__file__", None)
         if origin is None or not origin.endswith(".py"):
