@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import equinox as eqx
@@ -13,8 +14,8 @@ import optax
 import pytest
 
 import levanter.tracker as tracker_mod
-from levanter.callbacks import eval_loss_loop
-from levanter.callbacks._metrics import compute_instant_throughput, log_step_info
+from levanter.callbacks import StepInfo, eval_loss_loop
+from levanter.callbacks._metrics import compute_instant_throughput, log_performance_stats, log_step_info
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -192,6 +193,21 @@ def test_compute_instant_throughput_zero_duration_is_empty():
     assert t.tokens_per_second is None
     assert t.model_flops_per_second is None
     assert t.mfu is None
+
+
+@pytest.mark.parametrize("completed_steps", [101, 125])
+def test_context_switch_flops_baseline_preserves_history_and_current_rates(monkeypatch, completed_steps):
+    # 100 old updates cost 32 GFLOPs each. The new shape costs 40 GFLOPs/update;
+    # a retry at update 125 must retain the same baseline as the initial handoff.
+    logged = {}
+    monkeypatch.setattr(tracker_mod, "log", lambda metrics, **kwargs: logged.update(metrics))
+    monkeypatch.setattr(tracker_mod, "log_summary", lambda metrics: None)
+    callback = log_performance_stats(16, 2, 20e9, flops_offset=100 * (32e9 - 40e9))
+    callback(StepInfo(SimpleNamespace(step=completed_steps), loss=1.0, step_duration=2.0))
+    assert logged["throughput/total_gflops"] == 3200 + (completed_steps - 100) * 40
+    assert logged["throughput/total_tokens"] == completed_steps * 32
+    assert logged["throughput/tokens_per_second"] == 16
+    assert logged["throughput/gflops_per_second"] == 20
 
 
 class SimpleModel(eqx.Module):

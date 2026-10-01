@@ -28,6 +28,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
+from levanter.data.dataset import ListAsyncDataset
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
@@ -1436,10 +1437,11 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
     assert metrics[MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC] == receiver_total
 
 
-def test_baseline_eval_hook_runs_once_after_the_first_step():
+@pytest.mark.parametrize("start_step", [0, 5000])
+def test_baseline_eval_hook_runs_once_after_the_first_step(start_step):
     # The baseline eval must fire on the first completed step and never again: it reshards the
     # params onto the expert-collapsed mesh, and that copy competes with the train step's temporary
-    # buffer. A resumed run starts above step 1 and must skip it.
+    # buffer. A resumed run needs the same early eval-to-train handoff check.
     fired = []
     runner = StateCallbackRunner[SimpleNamespace](
         step_getter=lambda s: s.step,
@@ -1447,7 +1449,7 @@ def test_baseline_eval_hook_runs_once_after_the_first_step():
         eval_model_getter=lambda s: s.params,
         opt_state_getter=lambda s: s.opt_state,
     )
-    runner.add_hook(train._first_step_only(lambda info: fired.append(info.step)), every=1)
+    runner.add_hook(train._first_step_only(lambda info: fired.append(info.step), start_step=start_step), every=1)
 
     def run_steps(next_steps):
         for next_step in next_steps:
@@ -1457,12 +1459,44 @@ def test_baseline_eval_hook_runs_once_after_the_first_step():
                 step_duration=0.0,
             )
 
-    run_steps([1, 2, 3, 3000])
-    assert fired == [0]  # StepInfo.step is next_step - 1, so the point lands at 0 on the curve
+    run_steps([start_step + 1, start_step + 2, start_step + 3, start_step + 3000])
+    assert fired == [start_step]
 
-    fired.clear()
-    run_steps([5001, 5002])  # a resumed run
-    assert fired == []
+    # The forced callback pass of a one-update diagnostic must not repeat its evaluation.
+    runner.run(
+        SimpleNamespace(step=jnp.int32(start_step + 1), params=None, opt_state=None),
+        loss=0.0,
+        step_duration=0.0,
+        force=True,
+    )
+    assert fired == [start_step]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("train_seq_len,eval_seq_len,expected_length", [(8, 4, 4), (16, 4, 4), (8, None, 8)])
+async def test_tagged_evaluator_keeps_packing_independent_of_training_context(
+    train_seq_len, eval_seq_len, expected_length
+):
+    # A local token source exposes the evaluator's actual packed examples without network I/O.
+    data_config = SimpleNamespace(
+        tagged_eval_sets=lambda pos: [(ListAsyncDataset([jnp.arange(pos.size, dtype=jnp.int32)]), ["held_out"])],
+    )
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    with set_mesh(mesh):
+        evaluator = train.build_tagged_evaluator(
+            data_config=data_config,
+            max_seq_len=train_seq_len,
+            mesh=mesh,
+            eval_cfg=train.GrugEvalConfig(eval_batch_size=1, max_seq_len=eval_seq_len, compute_bpb=False),
+            mp=jmp.get_policy("p=f32,c=f32,o=f32"),
+        )
+        assert evaluator is not None
+        examples = await evaluator.loader.data_store.get_batch([0])
+    np.testing.assert_array_equal(examples[0][0], np.arange(expected_length))
 
 
 def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
