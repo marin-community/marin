@@ -479,6 +479,21 @@ def _sphere_norm(x: jax.Array) -> jax.Array:
     return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=True))
 
 
+def _power_cool_schedule(peak: float, floor: float, warmup_steps: int, total_steps: int, flat_frac: float, power: float):
+    """PowerCool (modded-nanogpt optimization track): linear warmup, ``peak`` until ``flat_frac`` of training, then
+    ``floor + (peak - floor) * ((1 - p) / (1 - flat_frac)) ** power`` with ``p`` the training fraction."""
+
+    def schedule(step):
+        step = jnp.asarray(step, jnp.float32)
+        warm = peak * step / max(warmup_steps, 1)
+        p = jnp.clip(step / max(total_steps, 1), 0.0, 1.0)
+        remaining = jnp.clip((1.0 - p) / max(1.0 - flat_frac, 1e-6), 0.0, 1.0)
+        cooled = floor + (peak - floor) * remaining**power
+        return jnp.where(step < warmup_steps, warm, cooled)
+
+    return schedule
+
+
 def _power_decay_schedule(peak: float, floor: float, warmup_steps: int, total_steps: int, power: float):
     """Linear warmup to ``peak``, then ``floor + (peak - floor) * (1 - p**power)``, ``p`` = post-warmup progress."""
 
@@ -1371,6 +1386,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """SAMuon-lite: remove this fraction of the top singular direction from the MuonH direction (``1 - 1/gamma``)."""
     muon_precond_beta2: float | None = None
     """Muon2: Adam second-moment preconditioning of the MuonH momentum before Newton-Schulz (None: off)."""
+    muonh_power_cool: tuple[float, float] | None = None
+    """``(flat_frac, power)``: the MuonH LR follows PowerCool (``_power_cool_schedule``) instead of the decay shape
+    below. Exclusive with ``muonh_decay_power``."""
     muonh_decay_power: float | None = None
     """Decay shape of the MuonH LR after warmup: ``floor + (peak - floor) * (1 - p**power)`` over training
     progress ``p`` (modded-nanogpt MuonH records #345/#351). None keeps the shared schedule (linear = 1)."""
@@ -1462,6 +1480,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        if self.muonh_power_cool is not None:
+            if self.muonh_decay_power is not None:
+                raise ValueError("muonh_power_cool and muonh_decay_power both set the MuonH LR shape; pick one")
+            flat_frac, power = self.muonh_power_cool
+            learning_rate_schedule = _power_cool_schedule(
+                self.learning_rate,
+                self.learning_rate * self.min_lr_ratio,
+                _convert_frac_or_steps(self.warmup, num_train_steps),
+                num_train_steps,
+                flat_frac,
+                power,
+            )
         if self.muonh_decay_power is not None:
             learning_rate_schedule = _power_decay_schedule(
                 self.learning_rate,

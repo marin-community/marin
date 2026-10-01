@@ -17,6 +17,8 @@ with it (``GrugMoeMuonHConfig.eig_families``).
 - ``soap``: the same with a slower second moment (``beta2``): Adam in Shampoo's eigenbasis (SOAP, arXiv 2409.11321).
 - ``muon_weighted``: Muon's ``NS(M)``, each rotated coordinate scaled by ``|m'| / sqrt(v')``: Muon's geometry with
   inconsistent coordinates muted.
+- ``soap_muon``: ``NS(Q_L (m' / sqrt(v')) Q_Rᵀ)`` with the slower SOAP second moment (``beta2``): SOAP's direction
+  orthogonalized by Newton-Schulz (SOAP-Muon, the modded-nanogpt optimization track's largest single gain).
 - ``prewhiten``: ``NS(L^{-p} M)``, Shampoo's left (input-side) factor applied before Newton-Schulz. MuonEq's
   per-input-row normalization is the diagonal, history-free version of this.
 """
@@ -31,7 +33,7 @@ from jax.sharding import PartitionSpec, reshard
 from experiments.grug.fast_track.grugmuon_stacked import _target_named_sharding
 from experiments.grug.fast_track.stiefel import _msign
 
-EIG_MODES = ("muon", "snr", "soap", "muon_weighted", "prewhiten")
+EIG_MODES = ("muon", "snr", "soap", "muon_weighted", "prewhiten", "soap_muon")
 _EPS = 1e-30
 _RELATIVE_EPS = 1e-6
 
@@ -96,7 +98,7 @@ def scale_by_eig_direction(
     """The eigenbasis direction for each matrix leaf (see the module docstring); other leaves pass through."""
     if mode not in EIG_MODES:
         raise ValueError(f"mode must be one of {EIG_MODES}, got {mode!r}")
-    second_beta = beta2 if mode == "soap" else beta
+    second_beta = beta2 if mode in ("soap", "soap_muon") else beta
 
     def init_fn(params):
         def zeros_like_matrix(p, rows: int, cols: int):
@@ -171,6 +173,8 @@ def scale_by_eig_direction(
             snr = m_hat / jnp.sqrt(v_hat + floor + _EPS)
             if mode in ("snr", "soap"):
                 direction = q_left @ snr @ _swap(q_right)
+            elif mode == "soap_muon":
+                direction = _msign(q_left @ snr @ _swap(q_right), ns_steps)
             else:
                 if mode == "prewhiten":
                     scale = left_vals / jnp.mean(left_vals, axis=-1, keepdims=True)

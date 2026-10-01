@@ -19,6 +19,7 @@ import experiments.grug.fast_track.test_ngram_stat as t
 from experiments.grug.fast_track.optimizer import (
     BiMaxwellRails,
     GrugMoeMuonHConfig,
+    _power_cool_schedule,
     cautious_matrix_deltas,
     expert_consistency_metrics,
     retract_to_param_sphere,
@@ -272,3 +273,13 @@ def test_slow_rail_from_start_keeps_its_history_through_the_switch():
     for v in values:
         out_restarted, state = restarted.update(jnp.full((2, 2), v), state)
     assert not np.allclose(np.asarray(out_restarted), slow)
+
+
+def test_power_cool_is_flat_then_a_power_cooldown():
+    schedule = _power_cool_schedule(1.0, 0.0, warmup_steps=10, total_steps=100, flat_frac=0.2, power=1.2)
+    np.testing.assert_allclose(float(schedule(5)), 0.5)
+    np.testing.assert_allclose(float(schedule(20)), 1.0)
+    np.testing.assert_allclose(float(schedule(60)), (0.4 / 0.8) ** 1.2, rtol=1e-6)
+    np.testing.assert_allclose(float(schedule(100)), 0.0, atol=1e-7)
+    with pytest.raises(ValueError):
+        GrugMoeMuonHConfig(muonh_power_cool=(0.2, 1.2), muonh_decay_power=0.7).build(10)
