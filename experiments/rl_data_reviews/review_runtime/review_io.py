@@ -86,7 +86,7 @@ def model_completion(
     directory.mkdir(parents=True, exist_ok=True)
     payload = {**parameters, "model": model["name"], "messages": messages, "stream": False, "n": 1}
     write_json(directory / "request.json", payload)
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "User-Agent": "Marin-RL-Data-Atlas/1.0"}
     if api_key is not None:
         headers["Authorization"] = "Bearer " + api_key
     request = urllib.request.Request(

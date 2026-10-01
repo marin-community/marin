@@ -360,7 +360,10 @@ The task count was checked against Harbor's release membership on October 1,
 starts with no quality rating or difficulty measurement.
 
 Prepare a review sample in a Harbor environment that supports Hub package
-references. From the Marin repository root, this example fetches only metadata
+references and schema 1.3 network policies. Official Harbor revision
+`bf991e490394ef9c3250a6db2bc5cbda903cb4c3` supports both. Verify that the runtime
+preserves `no-network` for the environment, agent, and verifier before executing
+the sample. From the Marin repository root, this example fetches only metadata
 and writes a reproducible three-task selection:
 
 ```python
@@ -417,6 +420,12 @@ model endpoint and native runtime paths, and replace its `source` with:
 Run `make_review.py` with that config, `--n 3`, and a fixed seed, using the
 commands above. The review runtime uses a MarinSkyRL checkout for its existing
 Harbor result adapter; this does not require registering a training source.
+Set `runtime.harbor_reward_mode` to `skill2env_components` for Skill2Env. Its
+native verifiers return several named rewards rather than one `reward` field.
+The review retains every component, reports their arithmetic mean, and marks a
+full pass only when every component equals one, following
+[Skill2Env's validation rules](https://github.com/NVlabs/Skill2Env/blob/3fe416cecfeb1ac1d62bd1b5e799f8f248c5ba91/skill2env/validation.py#L228).
+Partial credit is a verified outcome, but does not count as a solved task.
 The review's local population is the staged sample, so retain the full-release
 population and selection method from the sample manifest. A three-task review
 does not establish corpus-wide quality. Native `tests/test.sh` supplies the

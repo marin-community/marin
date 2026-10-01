@@ -26,6 +26,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from filelock import FileLock
 from jsonschema import Draft202012Validator, FormatChecker
+from review_runtime.harbor_rewards import HarborRewardMode
 from review_runtime.review_io import digest, json_text, model_completion, utc_now, write_json
 
 HERE = Path(__file__).resolve().parent
@@ -53,13 +54,13 @@ Coalesce the runtime observations and the three independent judge reviews into t
 Preserve disagreements and distinguish native verifier outcomes from model opinions. Do not claim
 full-source coverage or runtime readiness from a small sample. Do not invent evidence, ratings,
 subjects, or new task outcomes. Produce one synthesis per attempted task and one per source.
-Each synthesis must cite all applicable runtime/judge review IDs via derived_from_review_ids.
+The script records every applicable runtime/judge review ID as synthesis provenance.
 Return only {"syntheses": [{"subject_id": string, "summary": string,
 "verdict": "keep"|"reject"|"conditional"|"inconclusive"|"unrated",
 "metrics": [{"key": string, "value": number|string|boolean|null, "scale": null}],
 "findings": [{"kind": "issue"|"observation", "dimension": string, "text": string,
 "severity": "info"|"low"|"medium"|"high"|"critical"|null}],
-"tags": [{"namespace": string, "value": string}], "derived_from_review_ids": [string]}]}.
+"tags": [{"namespace": string, "value": string}]}]}.
 Severity means defect severity, never confidence. Positive findings have kind observation and severity info or null.
 The script will supply provenance, identities, coverage, and evidence and validate the collection.
 """
@@ -321,22 +322,14 @@ def judgment(model: dict, system: str, payload: dict, directory: Path, limit: in
     response_schema = opinion_schema()
     if system == COALESCE_PROMPT:
         item_schema = opinion_schema()
-        item_schema["properties"].update(
-            {
-                "subject_id": {"type": "string"},
-                "derived_from_review_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
-            }
-        )
-        item_schema["required"].extend(["subject_id", "derived_from_review_ids"])
+        item_schema["properties"]["subject_id"] = {"type": "string"}
+        item_schema["required"].append("subject_id")
         response_schema = {
             "type": "object",
             "required": ["syntheses"],
             "additionalProperties": False,
             "properties": {"syntheses": {"type": "array", "items": item_schema}},
         }
-    wire_schema = copy.deepcopy(response_schema)
-    if system == COALESCE_PROMPT:
-        wire_schema["properties"]["syntheses"]["items"]["properties"]["derived_from_review_ids"].pop("uniqueItems")
     result = model_completion(
         model,
         [{"role": "system", "content": system}, {"role": "user", "content": serialized}],
@@ -346,7 +339,7 @@ def judgment(model: dict, system: str, payload: dict, directory: Path, limit: in
             **model.get("review_parameters", {}),
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "quality_review", "strict": True, "schema": wire_schema},
+                "json_schema": {"name": "quality_review", "strict": True, "schema": response_schema},
             },
         },
         api_key=api_key,
@@ -632,6 +625,7 @@ def review_config(config_path: Path) -> dict:
     config = json.loads(config_path.read_text())
     base = config_path.parent
     native = config["runtime"]
+    HarborRewardMode(native.get("harbor_reward_mode", HarborRewardMode.SCALAR))
     for key in ["marinskyrl_checkout", "gym_python", "harbor_checkout", "harbor_python"]:
         if key in native:
             native[key] = str(local_path(native[key], base))
@@ -846,7 +840,7 @@ def coalesce_reviews(
             "required_synthesis_count": len(required_syntheses),
             "instruction": (
                 "Return every listed synthesis, including the source-level synthesis. "
-                "Use these exact subject IDs and contributing review IDs."
+                "Use these exact subject IDs. The runner records contributing review IDs."
             ),
             "collection": synthesis_input(bundle),
             "schema": schema,
@@ -868,10 +862,6 @@ def coalesce_reviews(
             for review in inputs
             if review["subject_id"] == subject_id or (source_level and task_sources[review["subject_id"]] == subject_id)
         ]
-        required_ids = {review["id"] for review in contributing}
-        if set(opinion["derived_from_review_ids"]) != required_ids:
-            (stage / "parsed.json").unlink()
-            raise ValueError("Synthesis must preserve references to every applicable runtime and judge opinion")
         if source_level:
             task_ids = sorted({review["subject_id"] for review in contributing})
             coverage = {
@@ -893,6 +883,7 @@ def coalesce_reviews(
             [evidence(stage / "parsed.json", output)],
             model,
         )
+        review["derived_from_review_ids"] = [item["id"] for item in contributing]
         bundle["reviews"].append(review)
         bundle["tag_assignments"].extend(tags_for(review, opinion))
 
