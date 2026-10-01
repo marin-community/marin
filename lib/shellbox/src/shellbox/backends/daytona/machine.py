@@ -30,15 +30,16 @@ from daytona import (
     Resources,
 )
 from daytona_api_client_async import SnapshotState
+from rigging.timing import ExponentialBackoff
 
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
-SNAPSHOT_POLL_INTERVAL = 1
 
 
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
+    """Get an active snapshot within the caller's startup deadline."""
     identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
     name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
     try:
@@ -50,10 +51,11 @@ async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSour
         except DaytonaConflictError:
             # Another rollout can create this image through a separate client or event loop.
             snapshot = await client.snapshot.get(name)
+    backoff = ExponentialBackoff(initial=1, maximum=10)
     while snapshot.state != SnapshotState.ACTIVE:
         if snapshot.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE):
             raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
-        await asyncio.sleep(SNAPSHOT_POLL_INTERVAL)
+        await asyncio.sleep(backoff.next_interval())
         snapshot = await client.snapshot.get(name)
     return name
 

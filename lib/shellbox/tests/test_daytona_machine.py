@@ -255,6 +255,25 @@ def test_daytona_rejects_add_inputs_before_snapshot_creation(tmp_path, instructi
     assert not client.snapshot.snapshots
 
 
+@pytest.mark.parametrize("startup_timeout", [None, 0.01])
+def test_daytona_pending_snapshot_times_out_and_closes_client(startup_timeout) -> None:
+    client = LocalDaytona()
+
+    class PendingSnapshots(LocalSnapshots):
+        async def create(self, params):
+            snapshot = await super().create(params)
+            snapshot.state = SnapshotState.BUILDING
+            return snapshot
+
+    client.snapshot = PendingSnapshots()
+    factory = DaytonaMachineFactory(lambda: client, create_timeout=0.01 if startup_timeout is None else 60)
+    with pytest.raises(TimeoutError):
+        asyncio.run(factory.create(MachineSpec(RegistryImage("ubuntu:24.04"), startup_timeout=startup_timeout)))
+    assert client.snapshot.snapshots
+    assert client.params is None
+    assert client.closed
+
+
 def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> None:
     client = LocalDaytona()
 
