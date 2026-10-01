@@ -66,9 +66,15 @@ The profile matches HLO instruction names, so it is built from a trace of the ex
 1. Trace arm: `arm.sh <run> <port> --xla "<final flags>" --trace -- <final CLI switches>` (profiles
    180021-180023; the rest of the window still scores the no-PGLE program).
 2. Build: `pgle_build.sh <run>` downloads the rank-0 host's xplane from
-   `marin-cw:hero-checkpoints/tmp/ttl=30d/xprof/<run>/plugins/profile/`, writes
-   `experiments/grug/moe_hero_ep/pgle/<run>.pbtxt` (~3.8k instruction costs; ~1 s on a CPU), force-adds and
-   commits it, and prints the flag.
+   `marin-cw:hero-checkpoints/tmp/ttl=30d/xprof/<run>/plugins/profile/`, writes the plain profile
+   `experiments/grug/moe_hero_ep/pgle/<run>.pbtxt` (~3.8k instruction costs; ~1 s on a CPU) and the
+   D2H-patched `<run>-d2h.pbtxt` (A's `a/pgle_patch_d2h.py` on `tfop_dump.py` rows of the same xplane: every
+   end-of-step optimizer-state D2H copy-start >= 1 ms gets the batch's serialized total x 1.1, because the
+   GPU LHS models async memcpys with unlimited concurrency), force-adds and commits both, and prints both
+   flags. On the Sep 24 trace the patch moves seven copy-starts (3 x ~69 ms, 2 x ~17 ms, 2 x 2.5 ms) to
+   272.6 ms each. Validate in the PGLE run's trace: copy-start.97/98/99 inside the expert Newton-Schulz
+   phase and no ~0.26 s tail. Watch (A, t21): forward carry D2H fully waited under PGLE (0.19 s/step), and
+   the first momentum H2D hoisted to the start of the backward (+10 GiB through the backward peak).
 3. Scored rerun from that commit: same flags plus the printed PGLE flag. XLA's default
    `--xla_gpu_pgle_accuracy_checker=PGLE_STRICTNESS_LEVEL_WARN` logs instructions missing from the
    profile; grep the task logs for them to confirm the profile matched.
