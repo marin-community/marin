@@ -324,3 +324,25 @@ Smoke (`autoresearch/loop-260930-mfu30/a/stream_smoke.{py,sh}`, GB200x1): an 8-l
 six stacked weights and the carry offloaded to pinned host, run with and without
 `XLA_GPU_HOST_TRANSFER_STREAMS=1` under `TF_CPP_VMODULE=execution_stream_assignment=3`. It prints each
 async start's stream and checks the gradients are bitwise equal across modes.
+
+## M30A-017 Wheel built; GB200 smoke passes (2026-10-01)
+
+Wheel `jax_cuda13_pjrt-0.11.1+marin.283d5b6d98cd-py3-none-manylinux_2_27_aarch64.whl` (sha256
+`1ab96eb43cfeb6f5b14b79c797c0dd951c41a31eefd3b36b3f86b0c77e35f881`, 126 MB), built in 15 min by
+`/mwittmann/m30a-pjrt-build-01`: cuDNN 9.19.0 headers, hermetic NCCL 2.30.7, jax `2d66622450e2`. At
+`s3://marin-us-east-02a/marin/research/mcwitt-mfu30/pjrt/283d5b6d98cd/`. Presigned URL (168 h) in scratchpad
+`mfu30a/pjrt_283d5b6d98cd.url`; a ranged GET returns 206.
+
+Smoke `stream_smoke.sh` on GB200x1 (8-layer rematted scan, 6 stacked weights, carry offloaded to pinned
+host, `TF_CPP_VMODULE=execution_stream_assignment=3`):
+- Production wheel (`m30a-stream-smoke-prod-01`): carry D2H `dynamic-update-slice-start.1` on compute
+  stream 2, shared with weight slices `fusion-start.2/.6/.10/.15`; carry H2D `dynamic-slice-start.1` on
+  stream 3, shared with `.3/.7/.11/.14`. This reproduces C's collision; the env var is a no-op there.
+- New wheel, env unset (`m30a-stream-smoke-hts-01`): assignment identical to production.
+- New wheel, `XLA_GPU_HOST_TRANSFER_STREAMS=1`: carry H2D on stream 4, carry D2H on stream 5, all weight
+  slices on 0-3. Gradients are bitwise equal to the env-unset run, and step time is unchanged
+  (84.7 vs 84.8 ms; the toy does not stall).
+
+Rack pairing (next): the final program on the new wheel via `--pip-package <url>`, with and without
+`--env XLA_GPU_HOST_TRANSFER_STREAMS=1`, gated on `carry_stall.py` < 10 ms/step. The stack needs this
+branch's `--pip-package` plumbing (commit `cf5bc74409`: dispatch, train, launch_diagnostics).
