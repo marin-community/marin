@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
 from shellbox.image import DockerfileSource, ImageCache
 
 
@@ -30,7 +31,7 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
             config = json.dumps({"os": "linux", "architecture": "amd64", "payload": builds[-1].decode()}).encode()
             config_digest = hashlib.sha256(config).hexdigest()
             (blobs / config_digest).write_bytes(config)
-            manifest = json.dumps({"config": {"digest": f"sha256:{config_digest}"}}).encode()
+            manifest = json.dumps({"config": {"digest": f"sha256:{config_digest}"}, "layers": []}).encode()
             manifest_digest = hashlib.sha256(manifest).hexdigest()
             (blobs / manifest_digest).write_bytes(manifest)
             (layout / "index.json").write_text(
@@ -45,6 +46,18 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
                     }
                 )
             )
+        elif args[0] == "umoci":
+            layout = Path(args[args.index("--image") + 1].removesuffix(":image"))
+            descriptor = json.loads((layout / "index.json").read_text())["manifests"][0]
+            bundle = Path(args[-1])
+            (bundle / "rootfs/bin").mkdir(parents=True)
+            (bundle / "rootfs/bin/sh").write_bytes(b"shell fixture")
+            (bundle / "config.json").write_text(json.dumps({"process": {"user": {"uid": 0, "gid": 0}}}))
+            (bundle / "umoci.json").write_text(json.dumps({"from_descriptor_path": {"descriptor_walk": [descriptor]}}))
+        elif args[0] == "cc":
+            Path(args[args.index("-o") + 1]).write_bytes(b"agent fixture")
+        elif args[0] == "cpio":
+            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", run)
@@ -54,6 +67,27 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
     second = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"))
     assert builds == [b"first"]
     assert first.manifest_digest == second.manifest_digest
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    for name in ("qemu", "kernel", "busybox"):
+        (assets_dir / name).write_bytes(b"runtime fixture")
+    (assets_dir / "firmware").mkdir()
+    (assets_dir / "firmware/bios-microvm.bin").write_bytes(b"firmware fixture")
+    (assets_dir / "libraries").mkdir()
+    assets = QemuAssets(
+        qemu=assets_dir / "qemu",
+        kernel=assets_dir / "kernel",
+        busybox=assets_dir / "busybox",
+        firmware=assets_dir / "firmware",
+        libraries=assets_dir / "libraries",
+        umoci=Path("umoci"),
+        disk_size_mb=1,
+        runtime_id="fixture",
+    )
+    bundle = stage_qemu_image(second, assets, tmp_path / "bundles")
+    metadata = json.loads((bundle / "image.json").read_text())
+    assert metadata["manifest_digest"] == second.manifest_digest
+    assert metadata["dockerfile_sha256"] == hashlib.sha256((contexts[1] / "Dockerfile").read_bytes()).hexdigest()
     (contexts[1] / "payload").write_bytes(b"changed")
     changed = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"))
     assert builds == [b"first", b"changed"]

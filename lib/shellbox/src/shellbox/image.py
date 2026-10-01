@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
 
@@ -89,7 +89,7 @@ class ImageCache:
         with lock:
             image = self._images.get(key)
             if image is not None:
-                return image
+                return replace(image, source=source)
             image = prepare_image(
                 source,
                 self.directory,
