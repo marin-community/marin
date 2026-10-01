@@ -710,3 +710,15 @@ the ctx4k controls) ahead of the margin arms. PGLE and holdback arms were cancel
 `m30-pgle-{d2h,plain}-02` and `m30-holdback-02`. Verdict: if seed 1's final-vs-main divergence falls within the
 seed-1 same-code repeat's divergence, the fidelity criterion holds; otherwise report it as a fidelity
 difference and investigate the value-changing components (E's fp32 SwiGLU backward; D's dS).
+
+## M30-043 Off-rack bias test: no systematic loss bias (agent B, M30B-030)
+
+`m30b-bias-02` (GB200x4; C's EP4 model smoke, d1024, 4 layers, 16 experts top-4, 2 shared, sconv, QB hist, FA4,
+carry-offload remat; hero train step incl. QB feedback, MuonH, bf16 compute, z-loss; synthetic Markov data,
+loss 7.66 -> 2.73; 8 seeds x 300 steps; the two main runs share an executable). Per-seed variant minus the
+mean of the two main runs, across seeds, mean +- SE (t, positive/n), late-window | held-out:
+main_b - main_a -4.5e-6 +- 5.5e-6 (-0.81, 3/8) | -2.8e-6 +- 1.9e-5; **final** -1.1e-6 +- 5.7e-6 (-0.19, 3/8) |
++2.3e-6 +- 1.4e-5; e_off +5.7e-6 +- 4.0e-6 (+1.43, 4/8) | +1.6e-5 +- 9.8e-6; d_only -1.2e-6 +- 5.7e-6 |
++2.0e-6 +- 1.3e-5. Detection floor ~1.4e-5 absolute (5e-6 relative). Seed 1's rack drift (+2.65e-4 at loss
+1.26, ~2e-4 relative) is ~40x larger in relative terms than anything the value-changing components produce here.
+Limits: small, from-scratch, synthetic. The rack's seed-1/2 same-code repeats remain the direct calibration.
