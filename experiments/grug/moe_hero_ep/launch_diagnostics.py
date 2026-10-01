@@ -110,6 +110,7 @@ def build_diagnostic_run(
     gated_norm_implementation: str | None = None,
     sconv_implementation: str | None = None,
     regather_attention_weights: bool = False,
+    held_back_shared_experts: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -177,6 +178,7 @@ def build_diagnostic_run(
             ("gated_norm_implementation", gated_norm_implementation),
             ("sconv_implementation", sconv_implementation),
             ("regather_attention_weights", regather_attention_weights or None),
+            ("held_back_shared_experts", held_back_shared_experts),
         )
         if value is not None
     }
@@ -451,6 +453,12 @@ def build_diagnostic_run(
     help="Recompute the attention weight gathers at the JAX level for the backward (PR #9481).",
 )
 @click.option(
+    "--held-back-shared-experts",
+    type=int,
+    default=None,
+    help="Shared experts whose input waits for the routed MoE's last chunk MLP, to run beside its return.",
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
@@ -593,6 +601,7 @@ def main(
     gated_norm_implementation: str | None,
     sconv_implementation: str | None,
     regather_attention_weights: bool,
+    held_back_shared_experts: int | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -634,6 +643,7 @@ def main(
         gated_norm_implementation=gated_norm_implementation,
         sconv_implementation=sconv_implementation,
         regather_attention_weights=regather_attention_weights,
+        held_back_shared_experts=held_back_shared_experts,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,

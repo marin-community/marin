@@ -416,9 +416,10 @@ def _routed_experts_forward(
     weights: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    holdback: jax.Array | None,
     routing: _ExpertRouting,
     layout: _ExpertLayout,
-) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...]]:
+) -> tuple[tuple[Float[Array, "Tlocal H"], jax.Array | None], tuple[_ChunkResiduals, ...]]:
     assignments, hidden_dim = sorted_x.shape
     plans = _chunk_plans(routing, layout)
     # Rows no chunk writes are the dropped assignments, which the combine skips.
@@ -453,6 +454,11 @@ def _routed_experts_forward(
             returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
             chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
 
+    # Release `holdback` only once the last chunk's backward inputs exist: the caller's work on it
+    # then becomes ready beside the last chunk's down projection and return. The recompute for the
+    # backward produces those inputs anyway, so the barrier adds no work there.
+    holdback, _ = jax.lax.optimization_barrier((holdback, chunk_residuals[-1].expert_mlp))
+
     with jax.named_scope("combine"):
         out = _unpermute_from_global_expert(
             returned,
@@ -461,18 +467,19 @@ def _routed_experts_forward(
             tokens_per_shard=layout.tokens_per_shard,
             topk=layout.topk,
         ).astype(sorted_x.dtype)
-    return out, tuple(chunk_residuals)
+    return (out, holdback), tuple(chunk_residuals)
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(5,))
+@functools.partial(jax.custom_vjp, nondiff_argnums=(6,))
 def _routed_experts(
     sorted_x: Float[Array, "TK H"],
     weights: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    holdback: jax.Array | None,
     routing: _ExpertRouting,
     layout: _ExpertLayout,
-) -> Float[Array, "Tlocal H"]:
+) -> tuple[Float[Array, "Tlocal H"], jax.Array | None]:
     """Dispatch the sorted rows to their experts, run the expert MLP, return and combine.
 
     ``weights`` must be zero for every assignment that ``routing.accepted`` marks as dropped.
@@ -487,17 +494,26 @@ def _routed_experts(
     reads neither ``y``, nor the return transport, nor the combined output. When the combined
     output is saved for the backward, a recompute for the backward runs only the dispatch and
     the gate/up projection.
+
+    ``holdback`` (any pytree, or None) comes back unchanged, but only once the last chunk's expert
+    MLP inputs for the backward exist: a scheduling dependency for caller work that should run
+    beside the last chunk's return. Its cotangent passes through.
     """
-    out, _residuals = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
-    return out
+    outputs, _residuals = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, holdback, routing, layout
+    )
+    return outputs
 
 
-def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout):
-    out, chunk_residuals = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
-    return out, (weights, routing, chunk_residuals)
+def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, holdback, routing, layout):
+    outputs, chunk_residuals = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, holdback, routing, layout
+    )
+    return outputs, (weights, routing, chunk_residuals)
 
 
-def _routed_experts_bwd(layout, residuals, out_cotangent):
+def _routed_experts_bwd(layout, residuals, cotangents):
+    out_cotangent, holdback_cotangent = cotangents
     weights, routing, chunk_residuals = residuals
     assignments = routing.sorted_indices.shape[0]
     hidden_dim = out_cotangent.shape[1]
@@ -569,6 +585,7 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
         weights_cotangent,
         jnp.concatenate(moe_w13_cotangents, axis=0),
         jnp.concatenate(moe_w2_cotangents, axis=0),
+        holdback_cotangent,
         None,
     )
 
@@ -589,6 +606,38 @@ def _moe_mlp_ep_ragged_a2a_local(
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
+    out_local, drops, _ = _moe_mlp_ep_ragged_a2a_local_holdback(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        token_valid_local,
+        moe_w13_local,
+        moe_w2_local,
+        None,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        token_sharding_axes=token_sharding_axes,
+    )
+    return out_local, drops
+
+
+def _moe_mlp_ep_ragged_a2a_local_holdback(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    token_valid_local: Bool[Array, "Tlocal"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    holdback_local: jax.Array | None,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    token_sharding_axes: tuple[str, ...],
+) -> tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array | None]:
+    """`_moe_mlp_ep_ragged_a2a_local` that also returns ``holdback_local``, released only once the
+    last expert chunk has run its MLP (see `_routed_experts`)."""
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -666,9 +715,12 @@ def _moe_mlp_ep_ragged_a2a_local(
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.
     weights = jnp.where(accepted, combine_weights_local, 0)
-    out_local = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    out_local, holdback_local = _routed_experts(
+        sorted_x, weights, moe_w13_local, moe_w2_local, holdback_local, routing, layout
+    )
 
     with jax.named_scope("combine"):
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(accepted_group_sizes, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
-    return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
+    drops = CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
+    return out_local, drops, holdback_local

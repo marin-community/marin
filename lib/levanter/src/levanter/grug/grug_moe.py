@@ -50,7 +50,10 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
-from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    _moe_mlp_ep_ragged_a2a_local,
+    _moe_mlp_ep_ragged_a2a_local_holdback,
+)
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
@@ -426,6 +429,34 @@ class MoEExpertMlp(eqx.Module):
             num_expert_waves=self.num_expert_waves,
         )
 
+    @named_call
+    def call_with_holdback(
+        self,
+        x: Float[Array, "T D"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+        holdback: Float[Array, "T X"],
+        *,
+        token_valid: Bool[Array, "T"] | None = None,
+        mesh: jax.sharding.AbstractMesh | None = None,
+    ) -> tuple[Float[Array, "T D"], MoeDispatchCounts, Float[Array, "T X"]]:
+        """`moe_mlp_with_holdback` with these expert weights."""
+        if self.implementation != "ragged_all_to_all":
+            raise ValueError(f"holdback needs the ragged_all_to_all implementation, got {self.implementation!r}")
+        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
+        return moe_mlp_with_holdback(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            self.w_down,
+            holdback,
+            token_valid=token_valid,
+            activation=self.activation,
+            mesh=mesh,
+            capacity_factor=self.capacity_factor,
+        )
+
 
 @named_call
 def moe_mlp(
@@ -679,6 +710,74 @@ def moe_mlp(
     return out
 
 
+def moe_mlp_with_holdback(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    w_up_gate: Float[Array, "E D I2"],
+    w_down: Float[Array, "E I D"],
+    holdback: Float[Array, "T X"],
+    *,
+    token_valid: Bool[Array, "T"] | None = None,
+    activation: MoeActivation = ActivationFunctionEnum.silu,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+) -> tuple[Float[Array, "T D"], MoeDispatchCounts, Float[Array, "T X"]]:
+    """`moe_mlp` on the expert-parallel ragged transport that also returns ``holdback``.
+
+    ``holdback`` (token-sharded like ``x``) comes back unchanged, but only once the last expert
+    chunk has run its MLP: caller work on it becomes ready beside that chunk's return transport,
+    so the scheduler has it to overlap with the return. Its gradient passes through unchanged.
+    """
+    if mesh is None:
+        mesh = _current_mesh()
+    expert_axis_size = _mesh_axis_size(mesh, "expert")
+    if mesh is None or mesh.empty or expert_axis_size <= 1:
+        raise ValueError("moe_mlp_with_holdback needs an expert mesh axis larger than one")
+    activation_fn = activation.to_jax_fn() if isinstance(activation, ActivationFunctionEnum) else activation
+    if token_valid is None:
+        token_valid = jnp.ones((x.shape[0],), dtype=jnp.bool_)
+    padding_skipped = padding_skipped_assignments(token_valid, topk=selected_experts.shape[1])
+    num_experts = int(w_up_gate.shape[0])
+    if num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+    token_spec = _token_spec_from_x(x, mesh)
+    token_sharding_axes = _axis_names(token_spec[0])
+    if "expert" not in token_sharding_axes:
+        raise ValueError(f"expert-parallel moe_mlp needs the token dim sharded over 'expert'; got {token_spec}")
+    holdback_spec = P(token_spec[0], *([None] * (holdback.ndim - 1)))
+    expert_spec = P("expert", None, None)
+    shard_fn = shard_map(
+        partial(
+            _moe_mlp_ep_ragged_a2a_local_holdback,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+            token_sharding_axes=token_sharding_axes,
+        ),
+        mesh=mesh,
+        in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, holdback_spec),
+        out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P()), holdback_spec),
+        check_vma=False,
+    )
+    out, drops, held = shard_fn(
+        _reshard_for_shard_map(x, mesh, token_spec),
+        _reshard_for_shard_map(selected_experts, mesh, token_spec),
+        _reshard_for_shard_map(combine_weights, mesh, token_spec),
+        _reshard_for_shard_map(token_valid, mesh, token_spec),
+        _reshard_for_shard_map(w_up_gate, mesh, expert_spec),
+        _reshard_for_shard_map(w_down, mesh, expert_spec),
+        _reshard_for_shard_map(holdback, mesh, holdback_spec),
+    )
+    assert held is not None
+    counts = MoeDispatchCounts(
+        sender_dropped=drops.sender_dropped,
+        receiver_dropped=drops.receiver_dropped,
+        padding_skipped=padding_skipped,
+    )
+    return out, counts, held
+
+
 __all__ = [
     "MOE_DROPPED_ASSIGNMENTS_METRIC",
     "MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC",
@@ -693,6 +792,7 @@ __all__ = [
     "PspecAxis",
     "QBRoutedMoE",
     "moe_mlp",
+    "moe_mlp_with_holdback",
     "moe_routing_stats",
     "moe_routing_stats_local",
     "reduce_moe_routing_stats",

@@ -270,6 +270,10 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
     regather_attention_weights: bool = False
+    # Shared experts, counted from the end of `shared`, whose input is held back until the routed
+    # MoE's last expert chunk has run its MLP, so the scheduler has their GEMMs to run beside that
+    # chunk's return transport. A scheduling dependency only: values and parameters are unchanged.
+    held_back_shared_experts: int = 0
     """Recompute the attention projections' FSDP weight gathers at the JAX level for the backward
     (PR #9481) instead of letting XLA keep or rematerialize them. With
     `--xla_gpu_enable_host_memory_offloading=true` XLA no longer rematerializes those gathers as
@@ -1066,7 +1070,13 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         token_valid: Bool[Array, "B S"],
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        holdback: Float[Array, "B S X"] | None = None,
+    ) -> (
+        tuple[Float[Array, "B S D"], dict[str, jax.Array]]
+        | tuple[Float[Array, "B S D"], dict[str, jax.Array], Float[Array, "B S X"]]
+    ):
+        """Routed MoE. With ``holdback``, also returns it unchanged, released only once the last
+        expert chunk has run its MLP (expert-parallel ragged transport only)."""
         b, s, _ = x.shape
         x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
         token_valid_flat = reshard(rearrange(token_valid, "b s -> (b s)"), _token_spec())
@@ -1109,14 +1119,26 @@ class MoEMLP(eqx.Module):
             )
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(routed_input)
-        moe_out = self.expert_mlp(
-            routed_input,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            token_valid=token_valid_flat,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=self.cfg.report_capacity_overflow,
-        )
+        held_flat = None
+        if holdback is not None:
+            routed_out, dispatch_counts, held_flat = self.expert_mlp.call_with_holdback(
+                routed_input,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                reshard(rearrange(holdback, "b s d -> (b s) d"), _token_spec()),
+                token_valid=token_valid_flat,
+                mesh=get_abstract_mesh(),
+            )
+            moe_out = (routed_out, dispatch_counts) if self.cfg.report_capacity_overflow else routed_out
+        else:
+            moe_out = self.expert_mlp(
+                routed_input,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                token_valid=token_valid_flat,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=self.cfg.report_capacity_overflow,
+            )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
         s_minus_alpha = reshard(router_logits - qb_alpha, _token_spec())
         # The QB statistics feed only the next step's router bias. Their collectives run after the
@@ -1198,7 +1220,10 @@ class MoEMLP(eqx.Module):
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _activation_spec(x))
-        return routed, router_stats
+        if held_flat is None:
+            return routed, router_stats
+        held = reshard(rearrange(held_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(holdback))
+        return routed, router_stats, held
 
 
 class Block(eqx.Module):
@@ -1278,10 +1303,18 @@ class Block(eqx.Module):
         mlp, shared = self.mlp, self.shared
         if resolve_moe_implementation(mlp.cfg.moe_implementation) == "ragged_all_to_all":
             mlp, shared, mlp_in = _prefetch_mlp_weights(mlp, shared, mlp_in)
-        mlp_out, router_stats = mlp(mlp_in, token_valid)
+        held_back = mlp.cfg.held_back_shared_experts
+        shared_inputs = [mlp_in] * (len(shared) if shared is not None else 0)
+        if held_back:
+            if shared is None or held_back > len(shared):
+                raise ValueError(f"held_back_shared_experts={held_back} exceeds the {len(shared or ())} shared experts")
+            mlp_out, router_stats, held_mlp_in = mlp(mlp_in, token_valid, holdback=mlp_in)
+            shared_inputs[len(shared) - held_back :] = [held_mlp_in] * held_back
+        else:
+            mlp_out, router_stats = mlp(mlp_in, token_valid)
         if shared is not None:
-            for shared_expert in shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+            for shared_expert, shared_in in zip(shared, shared_inputs, strict=True):
+                mlp_out = mlp_out + shared_expert(shared_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
