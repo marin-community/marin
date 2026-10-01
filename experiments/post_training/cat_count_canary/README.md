@@ -169,8 +169,12 @@ uv run --frozen python -m ci.marin_nightly.gate \
 ```
 
 The checker verdict determines success. A process exit alone does not prove
-learning. `gate-filter` uses the async learning spec and additionally requires
-a positive `async/dynamic_sampling/discarded_rate` in the complete log.
+learning. `gate-filter` uses
+`ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async-filter.json`.
+It requires a positive `async/dynamic_sampling/discarded_rate` and zero
+`reward/zero_std_group_fraction` among admitted groups. The ordinary async
+spec requires an admitted zero-variance group; filtering tests a different
+admission path.
 
 A pass demonstrates task learning through Iris launch, model staging,
 Megatron DP=2, separate-host vLLM, NCCL weight synchronization, Gym rollout
