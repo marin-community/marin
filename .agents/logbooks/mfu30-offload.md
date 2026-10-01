@@ -208,3 +208,14 @@ main+flag. B's D adds ~18 GiB live across the backward, so remat (device-only vi
 again and the LHS would sit at its limit. The stack needs `--xla_gpu_memory_limit_slop_factor` ~110
 (limit 113.4 GiB) or a higher fraction; physical peak ~104 + 18 - E/unfilled savings ~ 120 GiB fits under
 138.2.
+
+My score (`mfu30a/score.py`, 180011-180059 minus profiled): treatment median 28.580 (sd 0.41, n=46),
+13.734 s; control 28.261 (sd 0.23, n=49), 13.889 s. Step 180000 loss, drop fraction and load-balancing
+loss are identical. From 180001, drops and load-balancing loss differ at the 1e-5 level in both
+directions; drop median 1.75e-4 vs control 1.92e-4. The loss difference is small and mostly positive.
+Read: the program change is placement-only (remat clones removed; buffer offsets and alignment change), so
+rounding-level differences from step 180001 are expected (allowed by the fidelity ruling). They also
+match B's attention-backward nondeterminism, and a one-signed difference within one pair is what a
+chaotic but unbiased divergence looks like: once weights differ, consecutive steps share the offset.
+Verdict waits on the same-code repeat `m30-ctl-s0-r2`. If its |dloss| vs s0 is of the same order (max
+~4e-4), H-A4 is clean.
