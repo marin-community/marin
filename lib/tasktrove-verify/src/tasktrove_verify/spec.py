@@ -224,6 +224,12 @@ class JudgeSpec:
     output: str = DEFAULT_OUTPUT
 
 
+class JudgeRuntimeSource(StrEnum):
+    """Explicit selection of the legacy environment-configured judge endpoint."""
+
+    ENVIRONMENT = "environment"
+
+
 @dataclass(frozen=True)
 class JudgeRuntimeConfig:
     """Runner-owned judge endpoint settings, separate from the private task rubric."""

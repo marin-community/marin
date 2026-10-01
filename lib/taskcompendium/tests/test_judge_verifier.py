@@ -108,7 +108,26 @@ async def test_judge_exact_gate_skips_endpoint_and_keeps_reference_private(tmp_p
     assert "Scoring note" not in instruction
 
 
-async def test_judge_reference_reuses_shared_rubric_and_records_evidence(tmp_path, judge_endpoint):
+async def test_judge_without_runner_config_does_not_use_environment_endpoint(tmp_path, judge_endpoint, monkeypatch):
+    monkeypatch.setenv(grade_judge.BASE_URL_ENV, judge_endpoint.url)
+    monkeypatch.setenv(grade_judge.MODEL_ENV, "environment-judge")
+    judge_endpoint.replies.append("SCORE: 1")
+    verifier = judge_answer(JudgeSpec(references=("Mars",), exact_gate=False))
+    result, _ = await _run(
+        tmp_path, judge_endpoint, _task(verifier), "The red planet", "missing-runtime", provide_runtime=False
+    )
+
+    outcome = json.loads((tmp_path / "trials/missing-runtime/verifier/taskcompendium-result.json").read_text())
+    assert outcome["status"] == Outcome.INFRA_ERROR
+    assert outcome["reward"] is None
+    assert "requires runner configuration" in outcome["error"]
+    assert result.verifier_result is None
+    assert judge_endpoint.requests == []
+
+
+async def test_judge_reference_reuses_shared_rubric_and_records_evidence(tmp_path, judge_endpoint, monkeypatch):
+    monkeypatch.setenv(grade_judge.BASE_URL_ENV, "http://127.0.0.1:1/v1")
+    monkeypatch.setenv(grade_judge.MODEL_ENV, "environment-judge")
     judge_endpoint.replies.append("The answer is substantially correct.\nSCORE: 1")
     verifier = judge_answer(JudgeSpec(references=("Mars",), model="fixture-judge"))
     result, _ = await _run(tmp_path, judge_endpoint, _task(verifier), "The red planet", "reference")

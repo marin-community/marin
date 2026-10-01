@@ -35,6 +35,7 @@ from tasktrove_verify.spec import (
     RUBRIC_REFERENCE,
     RUBRICS,
     JudgeRuntimeConfig,
+    JudgeRuntimeSource,
     JudgeSpec,
     Spec,
 )
@@ -153,7 +154,12 @@ class _ChecklistResult:
         }
 
 
-def grade(spec: Spec, tests_dir: Path, workspace: Path, runtime: JudgeRuntimeConfig | None = None) -> Reward:
+def grade(
+    spec: Spec,
+    tests_dir: Path,
+    workspace: Path,
+    runtime: JudgeRuntimeConfig | JudgeRuntimeSource | None = JudgeRuntimeSource.ENVIRONMENT,
+) -> Reward:
     assert isinstance(spec, JudgeSpec)
     _validate_spec(spec)
     context = _context(spec, tests_dir)
@@ -161,12 +167,18 @@ def grade(spec: Spec, tests_dir: Path, workspace: Path, runtime: JudgeRuntimeCon
 
 
 def grade_candidate(
-    spec: JudgeSpec, candidate: str, *, context: str = "", runtime: JudgeRuntimeConfig | None = None
+    spec: JudgeSpec,
+    candidate: str,
+    *,
+    context: str = "",
+    runtime: JudgeRuntimeConfig | JudgeRuntimeSource | None = JudgeRuntimeSource.ENVIRONMENT,
 ) -> Reward:
     """Grade candidate text with decoded context, without reading or writing files.
 
     The caller supplies the contents of any context file named by the spec.
     Empty candidate text scores zero, as it does through the file-based API.
+    An explicit runtime=None permits deterministic gates only; the default
+    selects the legacy environment endpoint.
     """
     _validate_spec(spec)
     references = tuple(reference for reference in spec.references if reference.strip())
@@ -237,8 +249,10 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _client(spec: JudgeSpec, runtime: JudgeRuntimeConfig | None) -> _JudgeClient:
-    if runtime is not None:
+def _client(spec: JudgeSpec, runtime: JudgeRuntimeConfig | JudgeRuntimeSource | None) -> _JudgeClient:
+    if runtime is None:
+        raise JudgeInfrastructureError("remote judge grading requires runner configuration")
+    if isinstance(runtime, JudgeRuntimeConfig):
         if spec.model.strip() and spec.model.strip() != runtime.model:
             raise RuntimeError(
                 f"task requires judge model {spec.model.strip()!r}, but the runner selected {runtime.model!r}"
@@ -278,7 +292,11 @@ def _question(spec: JudgeSpec) -> str:
 
 
 def _judge_reference(
-    spec: JudgeSpec, references: tuple[str, ...], context: str, candidate: str, runtime: JudgeRuntimeConfig | None
+    spec: JudgeSpec,
+    references: tuple[str, ...],
+    context: str,
+    candidate: str,
+    runtime: JudgeRuntimeConfig | JudgeRuntimeSource | None,
 ) -> Reward:
     judge = _client(spec, runtime)
     prompt = REFERENCE_PROMPT.format(
@@ -287,7 +305,7 @@ def _judge_reference(
         references="\n".join(f"- {reference}" for reference in references),
         candidate=candidate.strip(),
     )
-    budget = _CallBudget(runtime.max_requests) if runtime is not None else None
+    budget = _CallBudget(runtime.max_requests) if isinstance(runtime, JudgeRuntimeConfig) else None
     try:
         answer = _ask(judge.client, judge.model, prompt, judge.timeout, budget)
     except Exception as error:
@@ -310,12 +328,12 @@ def _judge_checklist(
     criteria: tuple[str, ...],
     context: str,
     candidate: str,
-    runtime: JudgeRuntimeConfig | None,
+    runtime: JudgeRuntimeConfig | JudgeRuntimeSource | None,
 ) -> Reward:
     judge = _client(spec, runtime)
     context_block = f"\nReference context (not the candidate):\n{context.strip()}\n" if context.strip() else ""
     results: list[_ChecklistResult] = []
-    budget = _CallBudget(runtime.max_requests) if runtime is not None else None
+    budget = _CallBudget(runtime.max_requests) if isinstance(runtime, JudgeRuntimeConfig) else None
     for criterion in criteria:
         prompt = CHECKLIST_PROMPT.format(
             context=context_block, question=_question(spec), candidate=candidate.strip(), criterion=criterion.strip()
