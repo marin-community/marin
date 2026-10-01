@@ -1,12 +1,11 @@
 # RLVR1 SkyRL config adapted from targeted-sft/rl-config-v125-sep21-async-16k/async.yaml.
 entrypoint: standard
 context_budget:
-  request_window_tokens: 65536
-  max_new_tokens_per_turn: 16384
+  request_window_tokens: 102400
+  max_new_tokens_per_turn: 49152
   max_turns: 999999
-  generated_budget_fraction: 0.25
+  generated_budget_fraction: 0.48
   overlong_cache_fraction: 0.5
-  overlong_penalty_scale: 0.1
 trainer:
   strategy: megatron
   seed: 42
@@ -27,8 +26,7 @@ trainer:
     dynamic_sampling:
       type: null
     policy_loss_type: regular
-    use_tis: true
-    tis_imp_ratio_cap: 2.0
+    off_policy_correction: tis
     tito_full: true
   epochs: 2
   max_steps: 128
@@ -89,20 +87,19 @@ trainer:
     ref_num_nodes: 10
     ref_num_gpus_per_node: 8
     policy_strict_spread_pg: true
-  run_name: datakit-rlvr1-loop2-length01-20260930-v1
+  run_name: datakit-rlvr1-turn49152-window102400-production-20261001-v1
   hf_hub_repo_id: null
   debug_mode: light
   restore_dataloader_state: true
   hf_save_interval: -1
   rollout_buffer:
-    resume_policy: regenerate
     max_staleness_steps: 2
     # Preserve the previous trainer's commit-order admission policy.
     batch_policy: rolling
     # 128 groups × 16 responses exceed the engines' 768 sequence slots.
     max_in_flight: 128
     # Expiring checkpoint prefix: checkpoints store URIs instead of copying route payloads.
-    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-loop2-length01-2026.09.30.1
+    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-turn49152-window102400-production-2026.10.01.2
 generator:
   # Frozen EAGLE-3 recipe from Echo wiki 541; no online draft training.
   speculative_decoding:
@@ -113,6 +110,10 @@ generator:
     num_speculative_tokens: 3
   trajectory_reward_shaping:
     enabled: true
+    successful_length:
+      free_tokens: 8192
+      penalty_per_token: 0.00001220703125
+      max_penalty: 0.1
     loop:
       max_period_tokens: 256
       tail_tokens: 2048
@@ -161,7 +162,6 @@ environment:
     nemotron_ultra:
       sandbox:
         host: snowball-nemo-skills-sandbox.iris.svc.cluster.local
-        replica_service: snowball-nemo-skills-sandbox-replicas.iris.svc.cluster.local
         port: 6000
       judges:
         general:
