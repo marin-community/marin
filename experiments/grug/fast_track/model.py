@@ -186,6 +186,16 @@ class AttnResLayerBackward(StrEnum):
     Same math as RECOMPUTE; needs the memory to hold every layer's residuals."""
 
 
+class ExpertVisitBias(StrEnum):
+    """Whether, and how, each routed expert a token visits writes its own learned vector into the residual."""
+
+    NONE = "none"
+    SUM = "sum"
+    """The routed output gains ``sum_{e in selected} bias[e]``: an unweighted record of which experts ran."""
+    WEIGHTED = "weighted"
+    """The same, each row scaled by the expert's combine weight (so the router gets gradient through it)."""
+
+
 class RouterCombine(StrEnum):
     """How the MoE combine weights of the K selected experts are formed from their unbiased logits."""
 
@@ -665,6 +675,9 @@ class GrugModelConfig:
     expert_output_gain: bool = False
     """A learnable gain per expert (init 1, Adam) on each routed expert's output, folded into the combine weight
     of every (token, slot) as ``w * gain[expert]`` (so every MoE backend runs it unchanged)."""
+    expert_visit_bias: ExpertVisitBias = ExpertVisitBias.NONE
+    """A per-layer ``[E, D]`` table (init 0, Adam) whose rows for the token's selected experts are added to the
+    routed output, so later layers can condition on which experts a token visited."""
     simbal_loss_weight: float = 0.0
     """SimBal (arXiv 2506.14038): adds ``weight * sum_l ||R_l^T R_l - I||_1`` over the real-expert router
     columns ``R_l`` [D, E] to the training loss (unnormalized, as in the paper; it uses 0.1). 0: off."""
@@ -2758,6 +2771,7 @@ class MoEMLP(eqx.Module):
     bank_scale: Float[Array, " 2"] | None
     router_logit_scale: Float[Array, ""] | None
     expert_output_gain: Float[Array, " E"] | None
+    expert_visit_bias: Float[Array, "E D"] | None
     null_const_v: Float[Array, "C L"] | None
     null_const_w: Float[Array, "C L 2"] | None
     w_latent_down: jax.Array | None
@@ -2861,6 +2875,9 @@ class MoEMLP(eqx.Module):
             bank_scale=jnp.ones((2,), jnp.float32) if cfg.moe_bank2_experts and cfg.moe_bank2_scale else None,
             router_logit_scale=jnp.ones((), jnp.float32) if cfg.router_logit_scale else None,
             expert_output_gain=jnp.ones((e,), jnp.float32) if cfg.expert_output_gain else None,
+            expert_visit_bias=(
+                jnp.zeros((e, cfg.hidden_dim), jnp.float32) if cfg.expert_visit_bias != ExpertVisitBias.NONE else None
+            ),
             null_const_v=(
                 jnp.zeros((cfg.moe_const_experts, expert_width), jnp.float32) if cfg.moe_const_experts else None
             ),
@@ -3024,6 +3041,26 @@ class MoEMLP(eqx.Module):
         )
         beta = jnp.concatenate([beta - jnp.mean(beta), jnp.zeros((num_null,), beta.dtype)])
         return beta, lo, hi
+
+    def _visit_bias(self, selected: jax.Array, combine_weights: jax.Array, dtype) -> jax.Array:
+        """``[T, D]`` sum of ``expert_visit_bias`` rows over each token's selected experts (``ExpertVisitBias``);
+        ids past the table (null experts) add nothing."""
+        assert self.expert_visit_bias is not None
+        if self.cfg.expert_visit_bias == ExpertVisitBias.WEIGHTED:
+            weights = combine_weights.astype(dtype)
+        else:
+            weights = jnp.ones(selected.shape, dtype)
+        counts = _visit_counts(
+            reshard(selected, P(_BATCH_AXES, None)),
+            reshard(weights, P(_BATCH_AXES, None)),
+            self.expert_visit_bias.shape[0],
+        )
+        return jnp.einsum(
+            "te,ed->td",
+            counts,
+            reshard(self.expert_visit_bias, P(None, None)).astype(dtype),
+            out_sharding=_batch_spec(),
+        )
 
     def _split_null_slots(
         self,
@@ -3331,10 +3368,17 @@ class MoEMLP(eqx.Module):
             routed_flat = jnp.pad(routed_flat * gain, ((0, 0), (0, pad)))
         if overlap_out is not None:
             routed_flat = routed_flat + reshard(overlap_out, _batch_spec()).astype(routed_flat.dtype)
+        if self.expert_visit_bias is not None:
+            routed_flat = routed_flat + self._visit_bias(selected_experts, combine_weights_f, routed_flat.dtype)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, {**router_stats, **assignments, _ROUTED_INPUT: routed_input}
+
+
+def _visit_counts(selected: jax.Array, weights: jax.Array, num_experts: int) -> jax.Array:
+    """``[T, E]`` with each token's weight on each of its selected experts (0 elsewhere)."""
+    return jnp.sum(jax.nn.one_hot(selected, num_experts, dtype=weights.dtype) * weights[..., None], axis=1)
 
 
 def _shared_experts_tail(
