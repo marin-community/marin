@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-def test_archive_retains_harbor_trajectories_and_offline_setup(tmp_path, monkeypatch):
+def test_archive_retains_harbor_evidence_and_runtime_identity(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(Path(__file__).parent))
     publisher = importlib.import_module("publish_review")
     files = {
@@ -16,6 +16,8 @@ def test_archive_retains_harbor_trajectories_and_offline_setup(tmp_path, monkeyp
         "tasks/0000/execution-000/review-f634561b1d8dd2b88908/agent/offline-tooling.json": '{"return_code": 0}',
         "tasks/0001/execution-000/trial/agent/trajectory.json": '{"steps": [3]}',
         "tasks/0000/attempt.json": '{"verification": {"status": "verified"}}',
+        "run.json": '{"config": {"model": {"name": "solver", "parameters": {"temperature": 0.7}}}}',
+        "quality-review.schema.json": '{"type": "object"}',
     }
     for relative, content in files.items():
         path = tmp_path / relative
