@@ -391,7 +391,7 @@ def _complete(client: openai.OpenAI, model: str, prompt: str, timeout: float) ->
 
 
 def _score(reply: str) -> float | None:
-    """The last ``SCORE: <value>`` in the reply, when it is between zero and one."""
+    """The last ``SCORE: <value>`` in the reply, when it is a value the rubric allows."""
     matches = SCORE_PATTERN.findall(reply)
     if not matches:
         return None
