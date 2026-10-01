@@ -144,17 +144,36 @@ def test_wandb_tracker_rejects_artifacts_larger_than_20_mb(tmp_path):
         WandbTracker(FakeRun()).log_artifact(artifact_path)
 
 
-def test_wandb_config_skips_oversized_source_capture_but_keeps_commit(tmp_path, monkeypatch):
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.fixture
+def oversized_source(tmp_path):
     source_path = tmp_path / "source"
     source_path.mkdir()
     large_file = source_path / "oversized.bin"
     large_file.touch()
     with large_file.open("r+b") as artifact_file:
         artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
-    commit = "0123456789abcdef0123456789abcdef01234567"
-    monkeypatch.setenv("GIT_COMMIT", commit)
+    return source_path
 
-    assert WandbConfig(save_code=str(source_path))._git_settings() == {"git_commit": commit}
+
+def test_wandb_config_skips_oversized_automatic_source_capture(oversized_source, monkeypatch):
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+
+    assert WandbConfig(save_code=str(oversized_source))._git_settings() == {}
+
+
+def test_wandb_config_records_commit_when_source_is_too_large_to_capture(oversized_source, monkeypatch):
+    monkeypatch.setenv("GIT_COMMIT", COMMIT)
+
+    assert WandbConfig(save_code=str(oversized_source))._git_settings() == {"git_commit": COMMIT}
+
+
+def test_wandb_config_records_commit_with_source_capture_off(monkeypatch):
+    monkeypatch.setenv("GIT_COMMIT", COMMIT)
+
+    assert WandbConfig(save_code=False)._git_settings() == {"git_commit": COMMIT}
 
 
 def test_wandb_config_fork_initializes_child_without_resume(monkeypatch):

@@ -596,27 +596,27 @@ class WandbConfig(TrackerConfig):
             code_dir = infer_experiment_git_root() or "."  # type: ignore
         else:
             code_dir = None
-        if code_dir is None:
-            return other_settings
-        try:
-            _validate_wandb_artifact_size(code_dir, artifact_name="source code")
-        except ValueError as exc:
-            logger.error(
-                "Automatic W&B source capture is disabled: %s. Set save_code=False or choose a smaller "
-                "source directory.",
-                exc,
-            )
-        else:
-            logger.info(f"Setting wandb code_dir to {code_dir}")
-            other_settings["code_dir"] = code_dir
-            other_settings["git_root"] = code_dir
-        # The commit is run metadata, so record it even when the source is too large to capture.
+        if code_dir is not None:
+            try:
+                _validate_wandb_artifact_size(code_dir, artifact_name="source code")
+            except ValueError as exc:
+                logger.error(
+                    "Automatic W&B source capture is disabled: %s. Set save_code=False or choose a smaller "
+                    "source directory.",
+                    exc,
+                )
+            else:
+                logger.info(f"Setting wandb code_dir to {code_dir}")
+                other_settings["code_dir"] = code_dir
+                other_settings["git_root"] = code_dir
+        # The commit is run metadata, so record it whether or not the source is captured.
         # wandb doesn't populate it on its own.
+        commit_dir = code_dir or "."
         try:
-            sha = self._get_git_sha(code_dir)
+            sha = self._get_git_sha(commit_dir)
         except Exception as exc:
             # The commit is optional metadata; a broken checkout must not stop training.
-            logger.warning("Could not get git sha for %s (%s). Will not log git commit.", code_dir, exc)
+            logger.warning("Could not get git sha for %s (%s). Will not log git commit.", commit_dir, exc)
             sha = None
         if sha is not None:
             other_settings["git_commit"] = sha
