@@ -30,6 +30,7 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.shared_swiglu import SharedSwigluMlp, select_shared_swiglu_mlp
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -763,17 +764,56 @@ class DenseMLP(eqx.Module):
         else:
             activation_fn = activation
 
-        b, s, _ = x.shape
-        # Flattening sequence shards requires an all-to-all when a device owns multiple
-        # batch rows; restoring the residual layout exchanges them back.
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
+        mlp = select_shared_swiglu_mlp(activation_fn)
+        return self.project_out(mlp, self.gate_up(mlp, _flat_tokens(x)), x)
+
+    def gate_up(self, mlp: SharedSwigluMlp, x_flat: Float[Array, "T D"]) -> tuple[jax.Array, ...]:
+        """The gate/up half of the MLP on token-major activations; see `SharedSwigluMlp`."""
+        token_spec = _token_spec()
+        weight_spec = P(_FSDP_AXES, None)
+
+        def _local(x, w_gate, w_up):
+            # Gathering inside the shard map makes the weight gradients' transpose a reduce-scatter.
+            w_gate = jax.lax.all_gather(w_gate, _FSDP_AXES, axis=0, tiled=True)
+            w_up = jax.lax.all_gather(w_up, _FSDP_AXES, axis=0, tiled=True)
+            return mlp.gate_up(x, w_gate, w_up)
+
+        return shard_map(
+            _local,
+            mesh=get_abstract_mesh(),
+            in_specs=(token_spec, weight_spec, weight_spec),
+            out_specs=token_spec,
+            check_rep=False,
+        )(x_flat, reshard(self.w_gate, weight_spec), reshard(self.w_up, weight_spec))
+
+    def project_out(
+        self, mlp: SharedSwigluMlp, gate_up: tuple[jax.Array, ...], like: Float[Array, "B S D"]
+    ) -> Float[Array, "B S D"]:
+        """The down half of the MLP on `gate_up`'s output, back in ``like``'s residual layout."""
+        token_spec = _token_spec()
+        weight_spec = P(None, _FSDP_AXES)
+
+        def _local(gate_up, w_down):
+            return mlp.down(gate_up, jax.lax.all_gather(w_down, _FSDP_AXES, axis=1, tiled=True))
+
+        out_flat = shard_map(
+            _local,
+            mesh=get_abstract_mesh(),
+            in_specs=(token_spec, weight_spec),
+            out_specs=token_spec,
+            check_rep=False,
+        )(gate_up, reshard(self.w_down, weight_spec))
+        b, s, _ = like.shape
         # Reshard after the reshape so the shared-expert output carries the same sharding as the
         # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
         # for why the unflattened tensor cannot keep the fused token tuple.
-        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
+        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(like))
+
+
+def _flat_tokens(x: Float[Array, "B S D"]) -> Float[Array, "T D"]:
+    # Flattening sequence shards requires an all-to-all when a device owns multiple
+    # batch rows; restoring the residual layout exchanges them back.
+    return reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:

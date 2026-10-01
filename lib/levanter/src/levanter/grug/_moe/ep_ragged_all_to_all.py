@@ -159,9 +159,10 @@ class _CuteExpertMlp:
 
 @functools.cache
 def _quack_grouped_gemm_available() -> bool:
-    if jax.default_backend() != "gpu":
-        return False
-    if float(jax.devices("gpu")[0].compute_capability) < _SM100_COMPUTE_CAPABILITY:
+    # Ask the device itself: a test that stubs `jax.default_backend` to trace a GPU-only path
+    # still runs on CPU devices, which cannot run these kernels.
+    device = jax.devices()[0]
+    if device.platform != "gpu" or float(device.compute_capability) < _SM100_COMPUTE_CAPABILITY:
         return False
     try:
         # `sonic_cute` pulls in `quack_moe_cute`, which imports QuACK's varlen entry points at

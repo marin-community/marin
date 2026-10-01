@@ -66,11 +66,20 @@ def _max_active_clusters(cluster_mnk) -> int:
 
 @cute_launcher_factory
 def _build_launcher(
-    *, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle, use_clc_persistence=False
+    *,
+    a_dtype,
+    tile_mn,
+    cluster_mnk,
+    activation,
+    max_active_clusters,
+    max_swizzle,
+    store_preact,
+    use_clc_persistence=False,
 ):
     """Return a ``@cute.jit`` launcher with the cutlass_call signature.
 
-    Signature: (stream, mA, mB, mCuSeqlens, mD, mPostAct)
+    Signature: (stream, mA, mB, mCuSeqlens, mD, mPostAct), or without ``mD`` when ``store_preact``
+    is false, in which case the kernel never writes the pre-activations.
       mA:[M,K] tokens (k-major)  mB:[E,K,2N] weights  mCuSeqlens:[E+1] int32
       mD:[M,2N] preact out (n-major)  mPostAct:[M,N] swiglu out (n-major)
     """
@@ -88,8 +97,7 @@ def _build_launcher(
         add_to_output=False,
     )
 
-    @cute.jit
-    def launcher(stream, mA, mB, mCuSeqlens, mD, mPostAct):
+    def launch(stream, mA, mB, mCuSeqlens, mD, mPostAct):
         gemm = gemm_type(
             _ACC,
             a_dtype,
@@ -103,6 +111,18 @@ def _build_launcher(
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
         gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream)
+
+    if store_preact:
+
+        @cute.jit
+        def launcher(stream, mA, mB, mCuSeqlens, mD, mPostAct):
+            launch(stream, mA, mB, mCuSeqlens, mD, mPostAct)
+
+    else:
+
+        @cute.jit
+        def launcher(stream, mA, mB, mCuSeqlens, mPostAct):
+            launch(stream, mA, mB, mCuSeqlens, None, mPostAct)
 
     return launcher
 
@@ -122,7 +142,8 @@ def quack_gated_grouped_gemm(
     """Grouped SwiGLU expert GEMM via QuACK's SM100 kernel.
 
     x_sort: [M, K] tokens sorted by expert. w_gate_up: [E, K, 2N]. cu_seqlens: [E+1] int32.
-    Returns postact [M, N].
+    Returns postact [M, N], or ``(preact [M, 2N], postact)`` with ``return_preact``. Without it the
+    kernel does not write the pre-activations at all, which saves their HBM traffic.
     """
     M, K = x_sort.shape
     N2 = w_gate_up.shape[2]
@@ -136,6 +157,7 @@ def quack_gated_grouped_gemm(
         activation=activation,
         max_active_clusters=max_active_clusters,
         max_swizzle=max_swizzle,
+        store_preact=return_preact,
         use_clc_persistence=use_clc_persistence,
     )
     ts = cjax.TensorSpec
@@ -147,18 +169,18 @@ def quack_gated_grouped_gemm(
     cu_spec = ts(static=False)  # [E+1] int32
     d_spec = ts(divisibility=(1, 8), static=False)  # [M,2N] n-major
     p_spec = ts(divisibility=(1, 8), static=False)  # [M,N]  n-major
+    preact_shape = jax.ShapeDtypeStruct((M, N2), x_sort.dtype)
+    postact_shape = jax.ShapeDtypeStruct((M, N), x_sort.dtype)
+    # A single output is passed bare, as `_grouped_gemm_call` does.
     call = cutlass_call(
         launcher,
-        output_shape_dtype=(
-            jax.ShapeDtypeStruct((M, N2), x_sort.dtype),
-            jax.ShapeDtypeStruct((M, N), x_sort.dtype),
-        ),
+        output_shape_dtype=(preact_shape, postact_shape) if return_preact else postact_shape,
         input_spec=(a_spec, b_spec, cu_spec),
-        output_spec=(d_spec, p_spec),
+        output_spec=(d_spec, p_spec) if return_preact else (p_spec,),
         use_static_tensors=False,
     )
-    preact, postact = call(x_sort, w_gate_up, cu_seqlens.astype(jnp.int32))
-    return (preact, postact) if return_preact else postact
+    outputs = call(x_sort, w_gate_up, cu_seqlens.astype(jnp.int32))
+    return tuple(outputs) if return_preact else outputs
 
 
 @cute_launcher_factory
