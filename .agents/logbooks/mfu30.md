@@ -619,3 +619,11 @@ carry H2D (48) + optimizer-state H2D (54), another only carry D2H (48) + optimiz
 weight slices use the other four. XLA's stream pool reassigns xprof stream ids across steps, so check per step.
 Exposed copies (stackseq-03 / F1 / hmo-02, s/step): optimizer D2H tail 0.261 / 0.261 / 0.260; carry H2D 0.219 /
 0.218 / 0.219; **carry D2H 0.141 / 0.004 / 0.006**; optimizer H2D 0.100 / 0.101 / 0.099; total 0.773 / 0.641 / 0.624.
+
+## M30-036 QB-after-MLP revert: no gain (2026-10-01)
+
+`m30-f1-noqb-01` (final-seq-noqb 3b88a218cc, otherwise identical to f1-seq-02): **30.127 / 13.029 s** vs
+f1-seq-02 30.219 / 12.990 (-0.09 MFU). Peak 123.50; loss at 180000 exact, dloss max 3.8e-4, late mean
+-4.2e-5, 14/49 positive. The revert does not recover the forward return c1 exposure (or costs more
+elsewhere), so the shared-expert placement has another trigger. Final program stays final-seq (d4234c88e7);
+confirmation arms `m30-conf-seq-s{0,1,2}` already use it.
