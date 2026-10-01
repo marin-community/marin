@@ -22,7 +22,7 @@ from taskcompendium.lowering import (
     validate_environment_config,
     validate_submission_tools,
 )
-from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider, validate_staged_git_provider
+from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, ToolProviderCache, parse_git_provider
 from taskcompendium.submission import chat_request, submission_compatibility
 from taskcompendium.verifier_registry import validate_launch_parallel_tool_calls
 
@@ -52,60 +52,61 @@ async def run_trial(
     trial_name: str,
 ) -> TrialResult:
     """Run a lowered task and return Harbor's trial result."""
-    if environment_config != read_environment_config(task_dir / ENVIRONMENT_CONFIG_FILE):
-        raise ValueError("Launch environment configuration differs from the exported task")
-    specification = read_specification(task_dir / SPECIFICATION_FILE)
-    convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
-    provider_sources = {
-        name: task_dir / ENVIRONMENT_DIR / PROVIDER_SOURCES_DIR / name
-        for name, binding in environment_config.tool_providers.items()
-        if parse_git_provider(binding.provider) is not None
-    }
-    for name, source in provider_sources.items():
-        validate_staged_git_provider(environment_config.tool_providers[name].provider, source)
-    validate_environment_config(specification, convention, environment_config, provider_sources=provider_sources)
-    compatibility = submission_compatibility(specification, convention)
-    if not compatibility.compatible:
-        raise ValueError(f"Submission convention differs from task contract: {'; '.join(compatibility.reasons)}")
-
-    validate_submission_tools(specification, convention, environment_config)
-    request = chat_request(specification, convention)
-    if launch.temperature is not None:
-        request["temperature"] = launch.temperature
-    if launch.parallel_tool_calls is not None:
-        if "parallel_tool_calls" in request and request["parallel_tool_calls"] != launch.parallel_tool_calls:
-            raise ValueError("Launch parallel-tool policy conflicts with the submission convention")
-        request["parallel_tool_calls"] = launch.parallel_tool_calls
-    validate_launch_parallel_tool_calls(specification.verifier, request.get("parallel_tool_calls"))
-    agent_kwargs = {
-        "api_base": launch.api_base,
-        "api_key_env": launch.api_key_env,
-        "request_timeout": launch.request_timeout,
-        "request": request,
-        "max_turns": launch.max_turns,
-    }
-    environment = {
-        "import_path": "taskcompendium.harbor.adapter:CompositeToolEnvironment",
-        "kwargs": {
-            "tool_providers": {
-                name: binding.model_dump(mode="json") for name, binding in environment_config.tool_providers.items()
-            }
-        },
-    }
-    config = TrialConfig.model_validate(
-        {
-            "task": {"path": str(task_dir.resolve())},
-            "trials_dir": str(trials_dir.resolve()),
-            "trial_name": trial_name,
-            "environment": environment,
-            "agent": {
-                "import_path": "taskcompendium.harbor.adapter:ChatAgent",
-                "model_name": launch.model,
-                "kwargs": agent_kwargs,
-            },
-            "verifier": {"import_path": "taskcompendium.harbor.adapter:SemanticVerifier"},
-            **({"trial_attempt_timeout_sec": launch.trial_timeout} if launch.trial_timeout is not None else {}),
+    with ToolProviderCache() as cache:
+        if environment_config != read_environment_config(task_dir / ENVIRONMENT_CONFIG_FILE):
+            raise ValueError("Launch environment configuration differs from the exported task")
+        specification = read_specification(task_dir / SPECIFICATION_FILE)
+        convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
+        provider_sources = {
+            name: task_dir / ENVIRONMENT_DIR / PROVIDER_SOURCES_DIR / name
+            for name, binding in environment_config.tool_providers.items()
+            if parse_git_provider(binding.provider) is not None
         }
-    )
-    trial = await Trial.create(config)
-    return await trial.run()
+        validate_environment_config(
+            specification, convention, environment_config, provider_sources=provider_sources, cache=cache
+        )
+        compatibility = submission_compatibility(specification, convention)
+        if not compatibility.compatible:
+            raise ValueError(f"Submission convention differs from task contract: {'; '.join(compatibility.reasons)}")
+
+        validate_submission_tools(specification, convention, environment_config)
+        request = chat_request(specification, convention)
+        if launch.temperature is not None:
+            request["temperature"] = launch.temperature
+        if launch.parallel_tool_calls is not None:
+            if "parallel_tool_calls" in request and request["parallel_tool_calls"] != launch.parallel_tool_calls:
+                raise ValueError("Launch parallel-tool policy conflicts with the submission convention")
+            request["parallel_tool_calls"] = launch.parallel_tool_calls
+        validate_launch_parallel_tool_calls(specification.verifier, request.get("parallel_tool_calls"))
+        agent_kwargs = {
+            "api_base": launch.api_base,
+            "api_key_env": launch.api_key_env,
+            "request_timeout": launch.request_timeout,
+            "request": request,
+            "max_turns": launch.max_turns,
+        }
+        environment = {
+            "import_path": "taskcompendium.harbor.adapter:CompositeToolEnvironment",
+            "kwargs": {
+                "tool_providers": {
+                    name: binding.model_dump(mode="json") for name, binding in environment_config.tool_providers.items()
+                }
+            },
+        }
+        config = TrialConfig.model_validate(
+            {
+                "task": {"path": str(task_dir.resolve())},
+                "trials_dir": str(trials_dir.resolve()),
+                "trial_name": trial_name,
+                "environment": environment,
+                "agent": {
+                    "import_path": "taskcompendium.harbor.adapter:ChatAgent",
+                    "model_name": launch.model,
+                    "kwargs": agent_kwargs,
+                },
+                "verifier": {"import_path": "taskcompendium.harbor.adapter:SemanticVerifier"},
+                **({"trial_attempt_timeout_sec": launch.trial_timeout} if launch.trial_timeout is not None else {}),
+            }
+        )
+        trial = await Trial.create(config)
+        return await trial.run()
