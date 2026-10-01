@@ -42,9 +42,17 @@ class CatCountDataConfig:
             raise ValueError("train_rows must be positive")
 
 
+def cat_count_data_source(n: int) -> str:
+    return f"cat_count_n{n}"
+
+
+def cat_count_eval_ns(train_ns: tuple[int, ...]) -> tuple[int, ...]:
+    return (*train_ns, *HELDOUT_NS, *EXTRAPOLATION_NS)
+
+
 def cat_count_record(n: int, split: str, index: int) -> dict[str, object]:
     return {
-        "data_source": f"cat_count_n{n}",
+        "data_source": cat_count_data_source(n),
         "prompt": [
             {
                 "role": "user",
@@ -65,7 +73,7 @@ def cat_count_rows(config: CatCountDataConfig) -> tuple[list[dict[str, object]],
         rng.shuffle(cycle)
         schedule.extend(cycle)
     train = [cat_count_record(n, "train", index) for index, n in enumerate(schedule[: config.train_rows])]
-    eval_ns = (*config.train_ns, *HELDOUT_NS, *EXTRAPOLATION_NS)
+    eval_ns = cat_count_eval_ns(config.train_ns)
     validation = [cat_count_record(n, "validation", index) for index, n in enumerate(eval_ns)]
     return train, validation
 

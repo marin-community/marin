@@ -42,10 +42,12 @@ from experiments.post_training.cat_count_canary.data import (
     HELDOUT_NS,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
+    cat_count_data_source,
     cat_count_data_step,
 )
 
 EXPERIMENT_NAME = "cat-count-canary"
+DEFAULT_MODEL = "qwen2.5-0.5b-instruct"
 CLUSTER = "cw-rno2a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 2
@@ -201,7 +203,7 @@ def training_config(
     *,
     preset: str = "gate",
     lane: str = "async",
-    model: str = "qwen2.5-0.5b-instruct",
+    model: str = DEFAULT_MODEL,
     batch_size: int = TRAIN_BATCH_SIZE,
     group_size: int = GROUP_SIZE,
     micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
@@ -319,7 +321,7 @@ def training_config(
             for metric in ("avg_score", "environment/exact"):
                 source_metric = "environment/cat_count/exact" if metric == "environment/exact" else metric
                 metric_groups[f"{profile}/{split}/{metric}"] = [
-                    f"{profile}/cat_count_n{n}/{source_metric}" for n in counts
+                    f"{profile}/{cat_count_data_source(n)}/{source_metric}" for n in counts
                 ]
     if eval_reward_rise is not None and (
         not math.isfinite(eval_reward_rise) or eval_reward_rise <= 0 or trainer["eval_interval"] <= 0
@@ -355,7 +357,7 @@ def build_run(
     *,
     preset: str = "gate",
     lane: str = "async",
-    model: str = "qwen2.5-0.5b-instruct",
+    model: str = DEFAULT_MODEL,
     batch_size: int = TRAIN_BATCH_SIZE,
     group_size: int = GROUP_SIZE,
     micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
@@ -444,7 +446,7 @@ def build_run(
 @click.option("--preset", type=click.Choice(tuple(PRESETS)), default="dry", show_default=True)
 @click.option("--cluster", type=click.Choice(("cw-rno2a", "cw-us-east-02a")), default=CLUSTER, show_default=True)
 @click.option("--lane", type=click.Choice(("sync", "async")), default="async", show_default=True)
-@click.option("--model", type=click.Choice(tuple(MODELS)), default="qwen2.5-0.5b-instruct")
+@click.option("--model", type=click.Choice(tuple(MODELS)), default=DEFAULT_MODEL)
 @click.option("--batch-size", type=int, default=TRAIN_BATCH_SIZE)
 @click.option("--group-size", type=int, default=GROUP_SIZE)
 @click.option("--micro-train-batch-size", type=int, default=MICRO_TRAIN_BATCH_SIZE, show_default=True)
