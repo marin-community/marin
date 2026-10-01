@@ -627,3 +627,11 @@ f1-seq-02 30.219 / 12.990 (-0.09 MFU). Peak 123.50; loss at 180000 exact, dloss 
 -4.2e-5, 14/49 positive. The revert does not recover the forward return c1 exposure (or costs more
 elsewhere), so the shared-expert placement has another trigger. Final program stays final-seq (d4234c88e7);
 confirmation arms `m30-conf-seq-s{0,1,2}` already use it.
+B (M30B-028): in the noqb trace the shared-expert forward GEMMs return under dispatch c1 / return c0 (as in
+sonic-02), but forward return c1 stays bare (0.214) and the QB compute and collectives move back before the MoE
+(+0.055 compute, +0.057 exposed dispatch all-gather); QB-after-MLP is a net win. Same code in two jobs is
+not bitwise (XLA GEMM autotuning picks per job: 40/88 metrics, 35/36 grads differ), which explains part of the
+same-code band. With autotune off, final-seq and noqb agree on loss, qb_beta, margins and bias, with only 1-ulp
+diffs in z-loss/LB metrics, so QB-after-MLP leaves the QB statistics unchanged. Margin work started: C builds
+PGLE profiles (plain + A's D2H patch) from the f1-seq-02 trace on `research/mcwitt/mfu30-final-pgle`; B
+prototypes holding one shared expert back to cover forward return c1 (up to ~0.19 s).
