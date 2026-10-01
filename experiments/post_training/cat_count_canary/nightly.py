@@ -6,6 +6,7 @@
 import json
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from iris.cli.connect import rpc_client
 from iris.cluster.client.job_info import get_job_info
@@ -51,13 +52,13 @@ def run() -> None:
         while not stopped.wait(RECEIPT_INTERVAL):
             print_scheduler_receipt(info.controller_address, job_id)
 
-    observer = threading.Thread(target=observe, daemon=True)
-    observer.start()
-    try:
-        main(args=sys.argv[1:])
-    finally:
-        stopped.set()
-        observer.join()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        observer = executor.submit(observe)
+        try:
+            main(args=sys.argv[1:])
+        finally:
+            stopped.set()
+            observer.result()
 
 
 if __name__ == "__main__":
