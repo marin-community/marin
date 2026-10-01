@@ -162,7 +162,11 @@ def test_api_surface_over_fixtures(client):
     meta = client.get("/meta").json()
     assert meta["store"] == "memory"
     assert "snowball" in meta["models"]
-    assert meta["verified_cohorts"] == ["eval-policy-2026-09-16-verified", "eval-policy-2026-09-24-verified"]
+    assert meta["verified_cohorts"] == [
+        "eval-policy-2026-09-16-verified",
+        "eval-policy-2026-09-24-verified",
+        "eval-policy-2026-09-29-verified",
+    ]
 
     panel = client.get("/panel", params={"cohort": "all"}).json()
     assert set(panel["benchmarks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}

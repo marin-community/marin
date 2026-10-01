@@ -13,6 +13,7 @@ from types import MappingProxyType
 
 import yaml
 
+from marin.evaluation.campaign_policy import CAMPAIGN, SEPTEMBER_29_VERSION, campaign_policy_violations
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
@@ -138,12 +139,22 @@ POLICIES: Mapping[str, Mapping[str, PolicyEval]] = MappingProxyType(
     {
         SEPTEMBER_16_VERSION: SEPTEMBER_16,
         SEPTEMBER_24_VERSION: SEPTEMBER_24,
+        SEPTEMBER_29_VERSION: MappingProxyType(
+            {
+                **{
+                    name: _evalchemy(ref.tasks[0].name, ref.tasks[0].num_fewshot or 0)
+                    for name, ref in CAMPAIGN.evalchemy.items()
+                },
+                **{name: _harbor() for name in CAMPAIGN.harbor},
+            }
+        ),
     }
 )
 RUNTIME_COMMITS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         SEPTEMBER_16_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
         SEPTEMBER_24_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
+        SEPTEMBER_29_VERSION: MappingProxyType(CAMPAIGN.runtimes),
     }
 )
 
@@ -151,6 +162,8 @@ RUNTIME_COMMITS: Mapping[str, Mapping[str, str]] = MappingProxyType(
 def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef) -> tuple[str, ...]:
     """Return launch/record violations; unlabelled and non-policy runs are unrestricted."""
     version_key = version or ""
+    if version == SEPTEMBER_29_VERSION:
+        return campaign_policy_violations(model, evaluation)
     policy = POLICIES.get(version_key)
     if policy is None:
         if version is not None and version.startswith("eval-policy-"):
