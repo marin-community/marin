@@ -11,7 +11,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, cast
@@ -60,7 +60,7 @@ class SkyRLRuntime:
     """Identity-bearing SkyRL revision and locked dependency profile."""
 
     profile: SkyRLRuntimeProfile
-    commit: str = field(init=False, default=MARIN_SKYRL.commit)
+    commit: str = MARIN_SKYRL.commit
 
 
 @dataclass(frozen=True)
@@ -892,7 +892,7 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            launcher_requirement=MARIN_SKYRL.requirement(),
+            launcher_requirement=replace(MARIN_SKYRL, commit=spec.runtime.commit).requirement(),
         )
 
     return ArtifactStep(

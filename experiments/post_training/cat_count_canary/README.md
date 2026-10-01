@@ -75,6 +75,11 @@ submit_canary atqamar-cat-count-sync-20260930 \
   --version 2026.09.30.3 --preset gate --lane sync
 ```
 
+`--runtime-commit <MarinSkyRL SHA>` selects the same immutable revision for
+the launcher package and GPU runtime. The MarinSkyRL CatCount nightly passes
+its checkout revision through this option; ordinary launches use Marin's
+locked runtime.
+
 The coordinator resolves the pinned model and data dependencies and submits
 the training child. Checkpoints and HF export are enabled only with
 `--checkpoint` and `--export`; export also enables its prerequisite checkpoint.

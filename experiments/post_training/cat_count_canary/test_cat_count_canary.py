@@ -10,7 +10,9 @@ import pytest
 import yaml
 from click.testing import CliRunner
 from marin.execution.lazy import StepContext
+from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import SkyRLRun
+from packaging.requirements import Requirement
 
 from experiments.post_training.cat_count_canary.data import (
     DEFAULT_TRAIN_NS,
@@ -69,6 +71,26 @@ def test_parquet_writes_typed_rows(tmp_path):
 
 
 def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
+    default = build_run(version="2026.09.26", preset="gate")
+    rendered = default.build_config(StepContext.for_fingerprint(default.runtime_args, default.deps))
+    launch = yaml.safe_load(rendered.launch_config_yaml)
+    trainer = launch["skyrl"]["trainer"]
+    assert trainer["strategy"] == "megatron"
+    assert trainer["algorithm"]["policy_loss_type"] == "behavior_clip"
+    assert trainer["algorithm"]["off_policy_correction"] == "none"
+    assert trainer["rollout_buffer"]["max_staleness_steps"] == 2
+    assert trainer["seed"] == 17
+    assert trainer["max_steps"] == 30
+    assert trainer["ckpt_interval"] == -1
+    callbacks = {callback["type"]: callback for callback in trainer["callbacks"]}
+    assert callbacks.keys().isdisjoint({"checkpoint", "hf_model_save"})
+    evaluation = callbacks["evaluation"]
+    assert evaluation["eval_steps"] == 5
+    assert evaluation["eval_before_train"] is True
+    assert evaluation["additional_evaluations"]["sampled"]["n_samples_per_prompt"] == 8
+    assert evaluation["additional_evaluations"]["sampled"]["sampling_params"]["temperature"] == 1.0
+    assert evaluation["stop_when"] == {"eval/sampled/train/avg_score": {"minimum": 0.65}}
+    assert trainer["policy"]["megatron_config"]["check_dp_weight_consistency"] is True
     train_ns = (*DEFAULT_TRAIN_NS, 32)
     launches = {}
     for lane in ("async", "sync"):
@@ -122,10 +144,11 @@ def test_model_pins_and_distinct_artifact_identities(monkeypatch):
     assert any(dep.name == MODELS["qwen2.5-0.5b-instruct"].step.name for dep in async_run.deps)
 
 
-def test_upstream_model_uri_resolves_as_the_hf_snapshot(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("runtime_commit", (None, "1234567890123456789012345678901234567890"))
+def test_upstream_model_uri_and_selected_runtime_resolve(tmp_path: Path, monkeypatch, runtime_commit):
     monkeypatch.setattr("marin.rl.skyrl.skyrl_temporary_run_path", lambda *_args, **_kwargs: str(tmp_path / "scratch"))
 
-    run = build_run(version="2026.09.26", preset="dry", job_timeout_seconds=1800)
+    run = build_run(version="2026.09.26", preset="dry", job_timeout_seconds=1800, runtime_commit=runtime_commit)
     config = run.build_config(
         StepContext.for_run(
             output_path=str(tmp_path / "output"),
@@ -136,6 +159,9 @@ def test_upstream_model_uri_resolves_as_the_hf_snapshot(tmp_path: Path, monkeypa
     )
 
     assert config.model.uri.rstrip("/") == QWEN_SOURCE.rstrip("/")
+    selected = runtime_commit or MARIN_SKYRL.commit
+    assert yaml.safe_load(config.launch_config_yaml)["runtime"]["launcher_commit"] == selected
+    assert Requirement(config.launcher_requirement).url == f"git+{MARIN_SKYRL.repository}@{selected}"
 
 
 def test_remote_result_round_trips_at_the_run_output_prefix(tmp_path, monkeypatch):
