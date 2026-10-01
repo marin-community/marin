@@ -489,6 +489,65 @@ def _reference_distribution(reference: str, prefill: str | None) -> str:
     return "diagnostic_re_read_or_trainer"
 
 
+# vLLM pads a step of at most this many tokens to a CUDA-graph size (all data-parallel ranks alike, so the expert outputs
+# are reduce-scattered); a longer step runs eager at its own size (each rank's outputs reduced to it).
+VLLM_MAX_CUDA_GRAPH_TOKENS = 512
+
+
+def _logged_reread(manifest: ManifestRow) -> dict:
+    """The probe's logged vLLM re-reads: each prefix's step, and the launch config of each vendored vLLM kernel."""
+    hardware = json.loads(manifest.hardware_json)
+    reread, reference = hardware.get("vllm_reread"), hardware.get("prefill_reference")
+    if reread is None:
+        return {}
+    summary = {"engine": reread["engine"], "kernel_configs": reread["kernel_choices"], "updates": {}}
+    for update, steps in reread["steps"].items():
+        tokens = np.asarray([step["tokens"] for step in steps.values()])
+        rows = np.asarray([step["rows"] for step in steps.values()])
+        summary["updates"][update] = {
+            "prefixes": len(steps),
+            "cuda_graph_steps": int((tokens <= VLLM_MAX_CUDA_GRAPH_TOKENS).sum()),
+            "padded_rows": int((rows - tokens).sum()),
+            "max_tokens": int(tokens.max()),
+        }
+    summary["step_logs"] = {
+        label: [
+            {"engine": engine, "steps": len(worker["steps"]), "dummy_steps": worker["dummy_steps"]}
+            for engine, workers in enumerate(logs)
+            for worker in workers
+        ]
+        for label, logs in reread["step_logs"].items()
+    }
+    if reference is not None:
+        summary["prefill_reference_archive"] = reference["archive"]
+    return summary
+
+
+def _byte_equal_by_step(probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]], prefill: str, steps: dict):
+    """Each update-0 trainer mode's byte-equal fraction against the prefill reference, by its prefixes' step kind."""
+    kinds = {
+        row.sample_id: "cuda_graph" if steps[row.sample_id]["tokens"] <= VLLM_MAX_CUDA_GRAPH_TOKENS else "eager"
+        for row in probes
+    }
+    result = {}
+    for mode in _update_zero_trainer_modes(scores):
+        target = scores[_trainer_scoring(0, mode)]
+        counts = {kind: [0, 0] for kind in ("cuda_graph", "eager")}
+        for row in probes:
+            mask = np.asarray(row.loss_mask, dtype=np.bool_)
+            equal = (
+                np.asarray(target[row.sample_id].logprobs, dtype=np.float32)[mask]
+                == np.asarray(scores[prefill][row.sample_id].logprobs, dtype=np.float32)[mask]
+            )
+            counts[kinds[row.sample_id]][0] += int(equal.sum())
+            counts[kinds[row.sample_id]][1] += int(mask.sum())
+        result[mode] = {
+            kind: {"byte_equal_fraction": equal / total if total else None, "tokens": total}
+            for kind, (equal, total) in counts.items()
+        }
+    return result
+
+
 def _timing_values(archive: ArchiveData) -> dict[str, float]:
     values = {
         name: seconds
@@ -534,6 +593,8 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS, kept_nu
         "checks": {},
         "timing": json.loads(manifest.timing_json),
         "step_metrics": json.loads(manifest.step_metrics_json),
+        "logged_reread": _logged_reread(manifest),
+        "byte_equal_by_step": {},
     }
     if identity["fraction"] != 1.0:
         report["checks"]["token_identity"] = "failed"
@@ -546,6 +607,9 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS, kept_nu
     report["reread_route_agreement"] = _vllm_route_diagnostics(probes, scores, manifest.bootstrap_seed, bootstrap_draws)
 
     prefill = report["prefill_reference"]
+    reference_steps = (json.loads(manifest.hardware_json).get("prefill_reference") or {}).get("steps")
+    if prefill is not None and reference_steps is not None:
+        report["byte_equal_by_step"] = _byte_equal_by_step(probes, scores, prefill, reference_steps)
     prompt_ids = [row.prompt_id for row in probes]
     definitions = _comparison_definitions(scores)
     sampled_metrics = {}
@@ -922,6 +986,48 @@ def render_markdown(report: dict) -> str:
     lines.append("")
     if report["prefill_reference"] is not None:
         lines.extend([f"Prefill reference: `{report['prefill_reference']}`.", ""])
+    logged = report.get("logged_reread") or {}
+    if logged:
+        lines.extend(
+            [
+                "## Logged vLLM re-read",
+                "",
+                f"Every cache-off re-read ran each prefix alone in one engine step on engine {logged['engine']}. "
+                f"Steps of at most {VLLM_MAX_CUDA_GRAPH_TOKENS} tokens are CUDA-graph steps (padded rows, expert "
+                "outputs reduce-scattered); longer ones run eager.",
+                "",
+                "| Update | prefixes | CUDA-graph steps | padded rows | longest prefix |",
+                "|---|---:|---:|---:|---:|",
+            ]
+        )
+        for update, item in logged["updates"].items():
+            lines.append(
+                f"| {update} | {item['prefixes']} | {item['cuda_graph_steps']} | {item['padded_rows']} | "
+                f"{item['max_tokens']} |"
+            )
+        lines.extend(["", "| Kernel | launch config | read from | .best_config agrees |", "|---|---|---|---|"])
+        for role, choice in sorted(logged["kernel_configs"].items()):
+            lines.append(
+                f"| {role} | `{json.dumps(choice['launch'], sort_keys=True)}` | {choice['source']} | "
+                f"{choice['best_config_agrees']} |"
+            )
+        lines.append("")
+    if report.get("byte_equal_by_step"):
+        lines.extend(
+            [
+                "Byte-equal fraction against the prefill reference by the kind of step that re-read each prefix:",
+                "",
+                "| Mode | CUDA-graph steps | tokens | eager steps | tokens |",
+                "|---|---:|---:|---:|---:|",
+            ]
+        )
+        for mode, kinds in report["byte_equal_by_step"].items():
+            cells = " | ".join(
+                f"{_display_metric(kinds[kind]['byte_equal_fraction'], percent_digits=2)} | {kinds[kind]['tokens']}"
+                for kind in ("cuda_graph", "eager")
+            )
+            lines.append(f"| {mode} | {cells} |")
+        lines.append("")
     if report["comparisons"]:
         headers = " | ".join(f"{METRIC_TITLES[metric]} | 95% CI" for metric in HEADLINE_METRICS)
         lines.extend(

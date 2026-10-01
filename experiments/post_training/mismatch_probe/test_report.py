@@ -46,6 +46,7 @@ def _archive(
     matching_native_routes=False,
     missing_route_layer=False,
     frozen_reread=False,
+    logged_reread=False,
 ):
     rows = []
     scores = []
@@ -122,6 +123,9 @@ def _archive(
         }
         if frozen_reread:
             values["vllm.rescore_frozen@0"] = [-1.99, -2.99]
+        if logged_reread:
+            # Byte-equal to the re-read on prompt p0, whose prefixes ran in CUDA-graph steps, and not on p1.
+            values["trainer@0:steps"] = [-2.0, -3.0] if position < 2 else [-2.0, -3.01]
         if cache_mode == "on":
             values = {
                 f"{name}:on" if name.startswith("vllm.rescore@") else name: scores for name, scores in values.items()
@@ -180,7 +184,7 @@ def _archive(
         created_at_utc="2026-09-26T00:00:00Z",
         config_json="{}",
         software_json="{}",
-        hardware_json="{}",
+        hardware_json=json.dumps(_logged_hardware() if logged_reread else {}),
         batch_layout_json="{}",
         timing_json=json.dumps({"trainer@0:native/seconds": forward_seconds}),
         step_metrics_json="{}",
@@ -193,6 +197,50 @@ def _archive(
             for row in scores:
                 transaction.table(SCORES_TABLE).add(row.model_dump())
             transaction.table(MANIFEST_TABLE).add(manifest.model_dump())
+
+
+def _logged_hardware() -> dict:
+    """A logged re-read: prompt p0's prefixes in 300-token CUDA-graph steps, p1's in 700-token eager steps."""
+    steps = {
+        f"p{prompt}:{repetition}": {"tokens": tokens, "rows": rows, "tokens_across_dp": None}
+        for prompt, (tokens, rows) in enumerate(((300, 304), (700, 700)))
+        for repetition in range(2)
+    }
+    kernel = {"launch": {"kwargs": {"R0_BLOCK": 2048, "XBLOCK": 1}}, "source": "autotuner", "best_config_agrees": True}
+    return {
+        "vllm_reread": {
+            "engine": 0,
+            "steps": {"0": steps},
+            "step_logs": {
+                "vllm.rescore@0": [[{"steps": [{}] * 4, "dummy_steps": 0}], [{"steps": [], "dummy_steps": 4}]]
+            },
+            "kernel_configs": {"rms_norm": kernel["launch"]},
+            "kernel_choices": {"rms_norm": kernel},
+        },
+        "prefill_reference": {"archive": "here", "dp_ranks": [0] * 4, "steps": steps, "kernel_configs": {}},
+    }
+
+
+def test_report_splits_byte_equality_by_the_step_kind_of_the_logged_reread(tmp_path):
+    root = tmp_path / "archive"
+    _archive(root, logged_reread=True)
+
+    report = analyze_archive(str(root), bootstrap_draws=20)
+
+    by_step = {
+        mode: {kind: (item["byte_equal_fraction"], item["tokens"]) for kind, item in kinds.items()}
+        for mode, kinds in report["byte_equal_by_step"].items()
+    }
+    assert by_step["steps"] == {"cuda_graph": (1.0, 4), "eager": (0.5, 4)}
+    assert by_step["reread_replay"] == {"cuda_graph": (0.0, 4), "eager": (0.0, 4)}
+    assert report["logged_reread"]["updates"]["0"] == {
+        "prefixes": 4,
+        "cuda_graph_steps": 2,
+        "padded_rows": 8,
+        "max_tokens": 700,
+    }
+    markdown = render_markdown(report)
+    assert "| steps | 100.00% | 4 | 50.00% | 4 |" in markdown
 
 
 def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, monkeypatch):
