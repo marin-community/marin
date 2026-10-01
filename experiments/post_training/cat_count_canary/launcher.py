@@ -468,7 +468,7 @@ def build_run(
 @click.option("--batch-size", type=int, default=TRAIN_BATCH_SIZE)
 @click.option("--group-size", type=int, default=GROUP_SIZE)
 @click.option("--micro-train-batch-size", type=int, default=MICRO_TRAIN_BATCH_SIZE, show_default=True)
-@click.option("--eval-reward-rise", type=float, help="Stop at this sampled training evaluation score.")
+@click.option("--eval-minimum-score", type=float, help="Stop at this sampled training evaluation score.")
 @click.option("--train-n", "train_ns", multiple=True, type=int)
 @click.option("--seed", type=int, default=SEED)
 @click.option("--job-timeout-seconds", type=int, default=JOB_TIMEOUT_SECONDS, show_default=True)

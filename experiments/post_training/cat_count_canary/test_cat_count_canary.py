@@ -8,6 +8,7 @@ import click
 import duckdb
 import pytest
 import yaml
+from click.testing import CliRunner
 from marin.execution.lazy import StepContext
 
 from experiments.post_training.cat_count_canary.data import (
@@ -20,7 +21,7 @@ from experiments.post_training.cat_count_canary.data import (
     cat_count_rows,
     write_cat_count_parquet,
 )
-from experiments.post_training.cat_count_canary.launcher import MODELS, QWEN_SOURCE, build_run, training_config
+from experiments.post_training.cat_count_canary.launcher import MODELS, QWEN_SOURCE, build_run, main, training_config
 
 
 def test_procedural_rows_balance_and_holdout_exclusion():
@@ -64,6 +65,8 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
     train_ns = (*DEFAULT_TRAIN_NS, 32)
     launches = {}
     for lane in ("async", "sync"):
+        result = CliRunner().invoke(main, ["--version", "2026.09.26", "--preset", "gate", "--lane", lane])
+        assert result.exit_code == 0, result.exception
         run = build_run(version="2026.09.26", preset="gate", lane=lane, train_ns=train_ns)
         launch_config = run.build_config(StepContext.for_fingerprint(run.runtime_args, run.deps))
         launches[lane] = yaml.safe_load(launch_config.launch_config_yaml)
