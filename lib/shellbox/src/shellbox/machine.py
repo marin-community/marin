@@ -83,6 +83,12 @@ class ShellSimBuiltins:
 
 @dataclass(frozen=True)
 class MachineSpec:
+    """Machine inputs, with a provider startup timeout for Daytona.
+
+    Other factories do not apply startup_timeout. Callers enforce their own
+    deadline for the complete create operation.
+    """
+
     source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins
     workdir: str = "/workspace"
     env: dict[str, str] = field(default_factory=dict)

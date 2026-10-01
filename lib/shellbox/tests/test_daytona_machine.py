@@ -83,7 +83,7 @@ class LocalDaytona:
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc, traceback):
+    async def __aexit__(self, _exc_type, _exc, _traceback):
         self.closed = True
 
 

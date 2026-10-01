@@ -19,7 +19,7 @@ def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_pa
     def path(value):
         return container / value.split(":", 1)[1].lstrip("/") if ":" in value else Path(value)
 
-    async def docker(*args, **kwargs):
+    async def docker(*args, **_kwargs):
         if args[0] == "exec":
             assert args[1:3] == ("--user", "0")
             assert args[4:6] == ("mkdir", "-p")
@@ -58,7 +58,7 @@ def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_pa
 def test_docker_wire_preserves_resource_limits_and_per_command_users(monkeypatch):
     requests = []
 
-    async def docker(*args, **kwargs):
+    async def docker(*args, **_kwargs):
         requests.append(args)
         return DockerCommandResult(0, b"", b"")
 
@@ -92,7 +92,7 @@ def test_cancelled_docker_start_removes_a_container_before_returning(monkeypatch
     async def scenario():
         started = asyncio.Event()
 
-        async def docker(*args, **kwargs):
+        async def docker(*args, **_kwargs):
             if args[0] == "run":
                 containers.add(args[args.index("--name") + 1])
                 started.set()
