@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from taskcompendium.importers.tasktrove.models import TaskArchive
 
 TASK_MANIFEST = "task.toml"
+VERIFIER_SPEC = "tests/verifier.toml"
 METADATA_TABLE = "metadata"
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 1_024

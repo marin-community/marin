@@ -18,7 +18,7 @@ def json_schema_archive(
     source: str,
     path: str,
 ) -> TaskArchive:
-    """Build a synthetic structured-output task with a two-field schema."""
+    """Build a synthetic structured-output task with a one-field answer schema."""
     schema = json.dumps(
         {
             "type": "object",

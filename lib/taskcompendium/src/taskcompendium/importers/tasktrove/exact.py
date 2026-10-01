@@ -6,7 +6,7 @@
 from tasktrove_verify.spec import ExactSpec, parse_spec
 
 from taskcompendium.grading import ExactAnswerOrder, exact_answer
-from taskcompendium.importers.tasktrove.convert import import_metadata, task_id
+from taskcompendium.importers.tasktrove.convert import VERIFIER_SPEC, import_metadata, task_id
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
 
@@ -30,7 +30,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         metadata = import_metadata(archive)
         if metadata.family != FAMILY or metadata.converter != CONVERTER or metadata.mode != "exact":
             raise ValueError("Unsupported TaskTrove exact-mode source")
-        contract = parse_spec(archive.files["tests/verifier.toml"].decode())
+        contract = parse_spec(archive.files[VERIFIER_SPEC].decode())
         if not isinstance(contract, ExactSpec):
             raise ValueError("TaskTrove archive must declare an exact verifier")
         instruction = _clean_instruction(archive.files["instruction.md"].decode())

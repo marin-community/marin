@@ -125,7 +125,7 @@ The exact importer accepts the cleaned `math-answer` / `all_puzzles` source tupl
 
 ### TaskTrove JSON Schema
 
-The JSON-schema importer supports the cleaned Nemotron structured-outputs v4 converter. It preserves source tag order, removes file-only submission directions, and carries the source schema in the private verifier. Install `taskcompendium[schema]` for JSON, YAML, or TOML candidate parsing and schema validation. Public v4 derivatives require attribution to NVIDIA's Nemotron-RL-Instruction-Following-Structured-Outputs-v2 and notice that TaskTrove Clean normalization and TaskCompendium import modified the data.
+The JSON-schema importer supports the cleaned Nemotron structured-outputs v4 converter. It preserves source tag order, removes file-only submission directions, and carries the source schema in the private verifier. The generated prompt also shows the schema and required JSON, YAML, or TOML format so the model can produce a valid answer. Install `taskcompendium[schema]` for candidate parsing and schema validation. Public v4 derivatives require attribution to NVIDIA's Nemotron-RL-Instruction-Following-Structured-Outputs-v2 and notice that TaskTrove Clean normalization and TaskCompendium import modified the data.
 
 ### NeMo predicted function calls
 
