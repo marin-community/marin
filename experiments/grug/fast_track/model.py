@@ -499,6 +499,12 @@ class GrugModelConfig:
     """Width the routed experts write (``w_down``'s output dim); None: their input width (``latent_dim``, or
     ``hidden_dim`` without a latent). ``w_latent_up`` maps it to ``hidden_dim`` and is dropped when it equals
     ``hidden_dim`` (the experts write the stream directly). Splits LatentMoE's read and write compression."""
+    global_local_window: int | None = None
+    """Give every global (softmax) layer a short sliding-window softmax attention branch of this window, added to
+    its global attention output (``LocalWindowAttention``): the hybrid's KDA layers left no local softmax attention.
+    None: off."""
+    global_local_heads: int = 4
+    global_local_head_dim: int = 64
     latent_out_full_layers: tuple[int, ...] = ()
     """Layers whose routed experts write the full residual stream (``latent_out_dim = hidden_dim``, no
     ``w_latent_up``) while the others keep the latent write. These layers live in their own stacks
@@ -1298,6 +1304,10 @@ class GrugModelConfig:
             raise ValueError(f"latent_select_layers must be all, kda or global, got {self.latent_select_layers!r}")
         if self.latent_select_layers != "all" and self.local_mixer != LocalMixer.KDA:
             raise ValueError("latent_select_layers kda/global needs local_mixer=KDA")
+        if self.global_local_window is not None and (self.local_mixer != LocalMixer.KDA or self.global_local_window < 1):
+            raise ValueError(
+                "global_local_window needs local_mixer=KDA (the local layers are KDA) and a positive window"
+            )
         tail_modes = (self.latent_out_full_layers, self.latent_free_layers, self.wide_expert_layers, self.topk_layers)
         if sum(bool(x) for x in tail_modes) > 1:
             raise ValueError(
@@ -3720,6 +3730,58 @@ def _memory_branch(
     return memory(rms_norm(h))
 
 
+class LocalWindowAttention(eqx.Module):
+    """A short sliding-window softmax attention branch for the global layers (``global_local_window``): its own
+    q/k/v projections of the layer's normed attention input, weightless per-head QK RMSNorm, full RoPE, the same
+    document boundaries, and a per-head output gate. The gate starts at zero (on Adam), so the branch starts as a
+    no-op; the matrices are random-init so MuonH can move them."""
+
+    w_q: Float[Array, "D E"]
+    w_k: Float[Array, "D E"]
+    w_v: Float[Array, "D E"]
+    w_o: Float[Array, "E D"]
+    out_gate: Float[Array, " H"]
+    cfg: GrugModelConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "LocalWindowAttention":
+        d, width, std = cfg.hidden_dim, cfg.global_local_heads * cfg.global_local_head_dim, cfg.initializer_std
+        k_q, k_k, k_v, k_o = random.split(key, 4)
+        return LocalWindowAttention(
+            w_q=reshard(_init_weight(k_q, (d, width), std), P(_FSDP_AXES, None)),
+            w_k=reshard(_init_weight(k_k, (d, width), std), P(_FSDP_AXES, None)),
+            w_v=reshard(_init_weight(k_v, (d, width), std), P(_FSDP_AXES, None)),
+            w_o=reshard(_init_weight(k_o, (width, d), std), P(None, _FSDP_AXES)),
+            out_gate=reshard(jnp.zeros((cfg.global_local_heads,), jnp.float32), P(None)),
+            cfg=cfg,
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+        cfg = self.cfg
+        window, head_dim = cfg.global_local_window, cfg.global_local_head_dim
+        assert window is not None
+        batch_size, seq_len = x.shape[0], x.shape[1]
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        local_mask = AttentionMask(is_causal=True, sliding_window=window, segment_ids=segment_ids)
+        lower_bounds, valid = fa4_cute_segment_bounds(
+            local_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=window
+        )
+        local_mask = local_mask.with_fa4_bounds(_batch_reshard(lower_bounds), _batch_reshard(valid))
+
+        def heads(w: jax.Array) -> jax.Array:
+            return rearrange(jnp.einsum("bsd,de->bse", x, w.astype(x.dtype)), "... (n h) -> ... n h", h=head_dim)
+
+        q, k = apply_rotary_embedding(
+            rms_norm(heads(self.w_q)), rms_norm(heads(self.w_k)), seq_len=seq_len, head_dim=head_dim, rope=cfg.rope
+        )
+        attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
+        o = attention(q, k, heads(self.w_v), local_mask, implementation=attn_impl)
+        o = o * unshard(self.out_gate).astype(o.dtype)[:, None]
+        o = jnp.reshape(o, (*o.shape[:-2], o.shape[-2] * o.shape[-1]), out_sharding=P(_BATCH_AXES, None, None))
+        return jnp.einsum("bse,ed->bsd", o, self.w_o.astype(o.dtype), out_sharding=_batch_spec())
+
+
 class Block(eqx.Module):
     rms_attn: LearnedRMSNorm | DyT
     attn_gated_norm: GatedNorm
@@ -3745,6 +3807,8 @@ class Block(eqx.Module):
     out_norm_mlp: "LearnedRMSNorm | None"
     laurel_a_attn: Float[Array, "D R"] | None
     laurel_b_attn: Float[Array, "R D"] | None
+    local_attn: "LocalWindowAttention | None"
+    """The global layers' short sliding-window branch (``global_local_window``)."""
     laurel_a_mlp: Float[Array, "D R"] | None
     laurel_b_mlp: Float[Array, "R D"] | None
     bias_attn_out: Float[Array, " D"] | None
@@ -3819,6 +3883,11 @@ class Block(eqx.Module):
             out_norm_mlp=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
             laurel_a_attn=_laurel_a(cfg, random.fold_in(key, 91)),
             laurel_b_attn=_laurel_b(cfg),
+            local_attn=(
+                LocalWindowAttention.init(cfg, key=random.fold_in(key, 97))
+                if cfg.global_local_window is not None and not use_kda
+                else None
+            ),
             laurel_a_mlp=_laurel_a(cfg, random.fold_in(key, 92)),
             laurel_b_mlp=_laurel_b(cfg),
             bias_attn_out=jnp.zeros((cfg.hidden_dim,)) if "attn_out" in cfg.proj_biases else None,
@@ -3886,6 +3955,8 @@ class Block(eqx.Module):
                 value_residual=value_residual,
                 kv_input=kv_input,
             )
+            if self.local_attn is not None:
+                out = out + self.local_attn(attn_in, mask).astype(out.dtype)
         if self.bias_attn_out is not None:
             out = out + unshard(self.bias_attn_out).astype(out.dtype)
         if self.sconv_attn is not None:
