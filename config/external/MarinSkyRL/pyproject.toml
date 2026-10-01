@@ -11,4 +11,4 @@ required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
 # Keep the rollout integration runtime pinned to one revision during review.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "1acdcebfdd6681701226b2f4fe280f049f1ee09f" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "a7d5a51b71060eba03ae04016c0ab7f170154354" }
