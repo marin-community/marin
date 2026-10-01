@@ -197,6 +197,7 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
                 for config_path in config_paths:
                     with open(config_path) as config_file:
                         f.write(config_file.read())
+                        f.write("\n")
         else:
             raise ValueError("No config path found in args")
 

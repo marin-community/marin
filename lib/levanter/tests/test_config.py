@@ -36,6 +36,24 @@ def test_main_wrapper_loads_from_fsspec():
     main()
 
 
+def test_main_wrapper_joins_configs_without_trailing_newline(tmp_path):
+    first = tmp_path / "first.yaml"
+    second = tmp_path / "second.yaml"
+    first.write_text("project: test")
+    second.write_text("x: 2\n")
+
+    @dataclasses.dataclass
+    class Config:
+        project: str
+        x: int
+
+    @levanter.config.main(args=["--configs", str(first), str(second)])
+    def main(config: Config):
+        return config
+
+    assert main() == Config(project="test", x=2)
+
+
 def test_remote_config_temp_file_handle_is_closed():
     fd_dir = "/proc/self/fd"
     if not os.path.isdir(fd_dir):

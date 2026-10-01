@@ -84,6 +84,10 @@ trainer:
 The inclusion path is always relative to the config file. Unfortunately, we don't (can't) support inclusion
 at the top level.
 
+To split top-level settings across files in a command wrapped by `levanter.config.main`, pass
+`--configs first.yaml second.yaml`. Levanter joins the file text in argument order, inserts a newline after each file,
+and parses the result as one YAML document. Each file should define distinct top-level keys.
+
 ## Trainer and TrainerConfig
 
 The [levanter.trainer.Trainer][] class is governed by the [levanter.trainer.TrainerConfig][] dataclass.
