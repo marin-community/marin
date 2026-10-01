@@ -266,6 +266,7 @@ import yaml
 
 from experiments.evaluation.evals import EvalchemyDefinition
 from marin.evaluation.evalchemy.config import load_evalchemy_config
+from marin.external_dependencies import EVALCHEMY
 from marin.evaluation.model_config import load_model_config
 
 models = Path(os.environ["MODEL_CONFIG_DIR"])
@@ -365,7 +366,9 @@ for model_path in models.glob("*.yaml"):
     for name in thinking_on | thinking_off:
         config_path = evalchemy / f"{name}.yaml"
         source = load_evalchemy_config(config_path)
-        resolved = EvalchemyDefinition(name=name, config_path=config_path).config_for(source, model, None)
+        resolved = EvalchemyDefinition(name=name, config_path=config_path).config_for(
+            source, model, None, EVALCHEMY
+        )
         expected = {"enable_thinking": name in thinking_on}
         if name in thinking_off and model.generation.thinking_off_template_kwargs:
             expected = dict(model.generation.thinking_off_template_kwargs)
@@ -376,7 +379,9 @@ for model_path in models.glob("*.yaml"):
         )
     nupa_path = evalchemy / "nupa.yaml"
     nupa_source = load_evalchemy_config(nupa_path)
-    nupa = EvalchemyDefinition(name="nupa", config_path=nupa_path).config_for(nupa_source, model, None)
+    nupa = EvalchemyDefinition(name="nupa", config_path=nupa_path).config_for(
+        nupa_source, model, None, EVALCHEMY
+    )
     assert "enable_thinking" not in nupa.chat_template_kwargs, (model.location, nupa.chat_template_kwargs)
 fallbacks = {
     "openai/gpt-oss-20b": {"reasoning_effort": "low"},
