@@ -64,13 +64,10 @@ def parse_candidate(text: str, candidate_format: SchemaFormat) -> Any:
     return stringify_dates(document)
 
 
-def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
-    schema = load_schema(tests_dir / spec.schema)
-    text = read_output(spec, workspace)
-    if text is None:
-        return scored(0.0, reason="no_output")
+def grade_json_schema_candidate(schema: dict, candidate_format: SchemaFormat, text: str) -> Reward:
+    """Score an extracted document against a validated JSON Schema."""
     try:
-        instance = parse_candidate(unwrap_fence(text), spec.format)
+        instance = parse_candidate(unwrap_fence(text), candidate_format)
     except (ValueError, yaml.YAMLError) as error:
         return scored(0.0, reason="parse_error", error=str(error))
 
@@ -89,3 +86,11 @@ def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
         path="/".join(str(part) for part in first.path),
         error=first.message,
     )
+
+
+def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
+    schema = load_schema(tests_dir / spec.schema)
+    text = read_output(spec, workspace)
+    if text is None:
+        return scored(0.0, reason="no_output")
+    return grade_json_schema_candidate(schema, spec.format, text)

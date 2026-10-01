@@ -96,17 +96,10 @@ class JsonSchemaVerifier(Verifier):
     async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("JSON-schema verifier requires a text submission")
-        import yaml  # noqa: PLC0415
-        from jsonschema.validators import validator_for  # noqa: PLC0415
-        from tasktrove_verify.modes.extract import unwrap_fence  # noqa: PLC0415
-        from tasktrove_verify.modes.grade_json_schema import parse_candidate  # noqa: PLC0415
+        from tasktrove_verify.modes.grade_json_schema import grade_json_schema_candidate  # noqa: PLC0415
 
-        try:
-            candidate = parse_candidate(unwrap_fence(submission.value), self.format)
-        except (ValueError, TypeError, yaml.YAMLError):
-            return GradeResult(Outcome.GRADED, 0.0)
-        validator = validator_for(self.schema_definition)(self.schema_definition)
-        return GradeResult(Outcome.GRADED, float(validator.is_valid(candidate)))
+        result = grade_json_schema_candidate(self.schema_definition, self.format, submission.value)
+        return GradeResult(Outcome.GRADED, result.reward)
 
 
 class NumericAnswerVerifier(Verifier):
