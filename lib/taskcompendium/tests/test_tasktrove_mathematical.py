@@ -154,13 +154,15 @@ def test_import_sankalp_file_named_instruction_preserves_the_math_question():
     archive.files["instruction.md"] = (
         b"Please place your final answer in a file named `/app/answer.txt`.\n"
         b"Evaluate the exact value of one third.\n"
-        b"Write the final answer to `/app/answer.txt`. Put the final expression in `\\boxed{...}` when practical."
+        b"Write the final answer to `/app/answer.txt`. Put the final expression in\n"
+        b"`\\boxed{...}` when practical. Reasoning may precede the final answer, but the\n"
+        b"last meaningful line must state the answer unambiguously."
     )
 
     result = import_task(archive)
     prompt = result.specification.context.events[0].content
 
-    assert prompt.startswith("Evaluate the exact value of one third.")
+    assert prompt == "Evaluate the exact value of one third."
     assert "/app/" not in prompt and "answer.txt" not in prompt
     assert "\\boxed" not in prompt
     assert result.tags == ("math", "nemotron", "source tag")
@@ -219,6 +221,8 @@ def test_import_all_puzzles_preserves_math_answer_shape_without_transport_instru
         b"explanation). The verifier reads that file and compares it to the gold answer\n"
         b"using the format described in the problem statement:\n"
         b"- coordinates as (x, y) rounded to 3 decimals where applicable\n\n"
+        b"Do not include units labels the problem did not ask for; do not wrap the answer\n"
+        b"in prose. The score is 1 for a correct answer, 0 otherwise.\n\n"
         b"## Problem Statement\nFind the orthocenter. Return only the coordinates.\n"
     )
 
@@ -228,7 +232,10 @@ def test_import_all_puzzles_preserves_math_answer_shape_without_transport_instru
     assert "answer.txt" not in prompt
     assert "coordinates as (x, y) rounded to 3 decimals" in prompt
     assert "Find the orthocenter." in prompt
-    assert "Return only the coordinates." not in prompt
+    assert "Return the coordinates." in prompt
+    assert "units labels the problem did not ask for" in prompt
+    assert "score" not in prompt.lower()
+    assert "verifier" not in prompt.lower()
 
 
 def test_import_preserves_boxed_notation_when_it_is_part_of_the_math_problem():
