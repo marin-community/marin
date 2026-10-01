@@ -23,7 +23,7 @@ from taskcompendium.models import Source
 from taskcompendium.parquet import read_tasks, write_tasks
 from taskcompendium.rollout import RolloutInterrupted, RolloutOperation
 
-from .test_rollout import ReplayModel, engine
+from .test_rollout import ReplayModel, engine, run_task
 
 GRADER = b"""#!/bin/sh
 if [ "$(cat /logs/artifacts/answer)" = "$EXPECTED" ]; then
@@ -178,7 +178,7 @@ async def test_harbor_package_grades_private_files_after_parquet_reload(
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await engine(model, {EnvironmentKind.DOCKER: ImageFactory()}).run(next(read_tasks(parquet)))
+    result = await run_task(engine(model, {EnvironmentKind.DOCKER: ImageFactory()}), next(read_tasks(parquet)))
     assert (result.grade.status, result.grade.reward, result.grade.passed) == (Outcome.GRADED, reward, passed)
     assert result.grade.diagnostics["exit_code"] == 7
     assert result.response_token_ids == (20, 90, 91, 21)
@@ -274,12 +274,12 @@ async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
     runner = engine(model, {EnvironmentKind.DOCKER: Factory()})
     if last_grader == "setup_failed":
         with pytest.raises(RolloutInterrupted) as caught:
-            await runner.run(next(read_tasks(path)))
+            await run_task(runner, next(read_tasks(path)))
         result = caught.value.rollout
         assert caught.value.operation == RolloutOperation.PREPARE
         assert isinstance(caught.value.__cause__, RuntimeError)
     else:
-        result = await runner.run(next(read_tasks(path)))
+        result = await run_task(runner, next(read_tasks(path)))
     assert (result.grade.status, result.grade.reward) == (status, reward)
     assert len(result.grade.diagnostics["stages"]) == stage_count
     assert len(machines) == 1

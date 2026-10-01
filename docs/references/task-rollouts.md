@@ -2,13 +2,12 @@
 
 TaskCompendium defines executable tasks and the common rollout loop in
 `lib/taskcompendium/src/taskcompendium/rollout.py`.
-`ShellboxRolloutEngine` calls a model, executes task operations, and grades the result.
-`RolloutSink` accepts the resulting records.
+`ShellboxRolloutEngine` calls a model, executes task operations, and grades each task.
 
 The SkyRL worker is in `MarinSkyRL/skyrl-train/skyrl_train/rollouts/task_worker.py`.
-`TaskRolloutWorker` supplies model inference, completes group grading, and projects
-rollouts into training data. It submits completed prompt groups through
-`BufferRolloutSink`. The engine has no buffer dependency.
+`TaskRolloutWorker` supplies model inference, completes grading that compares rollouts, and projects
+rollouts into training data. It writes completed prompt groups directly to the
+SkyRL buffer. The engine has no buffer dependency.
 The explicit SkyRL entrypoint is `skyrl_train.entrypoints.taskcompendium`.
 The SWE examples use this entrypoint. The default training entrypoint prepares
 Gym source rows as task Parquet and uses the same worker. The Harbor entrypoint
@@ -70,7 +69,7 @@ Daytona also executes tasks with `environment.kind: docker`. The caller's machin
 factory selects the backend. Daytona accepts registry images or a Dockerfile at
 the build context root. It does not accept nested Dockerfile paths or local images.
 An `environment.interaction` value selects a factory from the engine's `sessions`
-mapping. The factory receives the task, machine, and submission convention.
+mapping. The callable receives the task and returns a fresh session.
 Without that value, the engine uses its shell-tool session.
 
 The caller supplies a `MachineFactory` for each executable environment kind.
@@ -85,6 +84,9 @@ Text, numeric, multiple-choice, and final-action tasks use the shared verifier r
 A final-action task submits a function call as its answer. A null environment
 records that call without execution.
 An incorrect answer has a numeric grade. A verifier failure has no grade.
+`GradeResult.score_min` and `score_max` retain the verifier's native score range.
+SkyRL uses those bounds for normalized score metrics. Score normalization leaves
+optimization rewards and reward shaping unchanged.
 
 Grading starts when the session reports completion, the model reaches its token
 limit, or the engine reaches `max_turns`. Execution failures raise
@@ -163,7 +165,7 @@ policy determines whether the interrupted record enters training.
 
 ## Model and token contract
 
-`RolloutModel.complete(ModelRequest)` returns a `ModelTurn` with the parsed
+The model callable accepts `ModelRequest` and asynchronously returns `ModelTurn` with the parsed
 assistant message and exact prompt and response token IDs.
 Optional log probabilities must align with the response tokens.
 For continuation, the next prompt must preserve the complete served token prefix.
@@ -184,22 +186,42 @@ A session can request a conversation reset through `Transition.reset_conversatio
 When another turn is available, that reset discards earlier attempts from the
 training record. Lean refinement uses this operation after a failed proof attempt.
 
-`RolloutEngine.generate(Iterator[TaskSpec])` returns an asynchronous iterator of
-`RolloutData`. `RolloutSink.consume` consumes that iterator.
+`RolloutEngine.generate(Iterator[TaskSpec])` returns `Iterator[RolloutData]`.
+The iterator blocks its caller until the next rollout completes. One thread
+advances the iterator for each engine. That thread can differ from the thread
+that created the engine. The engine uses an internal event loop for model and
+machine operations. An async caller must execute the iterator on a separate thread.
+SkyRL's model callable sends inference requests to the worker's event loop and
+awaits their results from the engine loop. The inference client stays on the
+worker's loop.
 
-This example connects a task, caller-supplied model, and caller-supplied sink.
+`ShellboxRolloutEngine.cancel()` requests cancellation of the active task from
+another thread and prevents more tasks from starting. The iterator reports task
+cancellation with `asyncio.CancelledError` after session and machine cleanup.
+Cleanup errors propagate. The worker must wait for the active `next()` call to
+finish before it reuses the thread.
+
+`RolloutEngine.generate` gives the caller completed `RolloutData` records.
+The caller controls their storage. SkyRL's `TaskRolloutWorker.run_task` returns
+successfully only after the buffer writer commits the prompt group.
+
+This example connects tasks and a caller-supplied model on the execution thread.
 The model must implement the token contract above.
 
 ```python
+from collections.abc import Awaitable, Callable, Iterator
+
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import TaskSpec
-from taskcompendium.rollout import RolloutModel, RolloutSink, ShellboxRolloutEngine
+from taskcompendium.rollout import ModelRequest, ModelTurn, RolloutData, ShellboxRolloutEngine
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
-async def run_task(task: TaskSpec, model: RolloutModel, sink: RolloutSink) -> None:
+def generate_tasks(
+    tasks: Iterator[TaskSpec], model: Callable[[ModelRequest], Awaitable[ModelTurn]]
+) -> Iterator[RolloutData]:
     engine = ShellboxRolloutEngine(
         model,
         {
@@ -210,7 +232,7 @@ async def run_task(task: TaskSpec, model: RolloutModel, sink: RolloutSink) -> No
         command_timeout=120,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
-    await sink.consume(engine.generate(iter([task])))
+    yield from engine.generate(tasks)
 ```
 
 Application-supplied sessions require an additional `sessions` mapping.
@@ -309,9 +331,10 @@ labels, teacher routes, and Nemotron metadata. Harbor resource settings, turn
 limits, error policies, and reward shaping apply only to Harbor tasks in the batch.
 The worker retains request order and publishes coverage counts for each blend and agent.
 Harbor training concurrency divides `harbor.n_concurrent_trials` across workers.
-The reserved evaluation worker uses the full value. Harbor's limit does not queue
-Gym tasks. `trajectory_runner.max_concurrent_tasks` optionally limits all tasks
-within each worker. Its default is `null`, with no common task limit.
+The reserved evaluation worker uses the full value. Harbor's separate limit does
+not apply to Gym tasks. `trajectory_runner.max_concurrent_tasks` limits all active
+tasks within each worker. Its default is `null`, which uses
+`trajectory_runner.rollout_workers.executor_threads` as the common limit.
 
 The SkyRL adapter uses exact structured-chat inference through vLLM.
 It completes GenRM comparison cohorts before it emits rollout records.
@@ -356,10 +379,10 @@ Unavailable terminal grades and verifier errors exclude the rollout from loss an
 baseline calculations. Explicitly skipped grading remains eligible.
 An intermediate tool operation can remain trainable when the terminal grade is valid.
 
-`BufferRolloutSink` projects and finalizes a completed prompt group before one
+`TaskRolloutWorker.run_task` projects and finalizes a completed prompt group before one
 lease-aware buffer write. A failed group produces no partial buffer commit.
 A prompt group contains the rollouts in one leased `RolloutTask` request.
-The sink passes the lease to the buffer writer so the buffer can identify the
+The worker passes the lease to the buffer writer so the buffer can identify the
 worker assignment and policy step for the result.
 
 ## Local checks
@@ -378,3 +401,26 @@ uv run --no-sync pytest skyrl-train/tests/cpu/rollouts/test_engine.py -q
 
 The CPU tests use ShellSim and model or HTTP fixtures. They do not validate a live
 vLLM service or a Docker rollout.
+
+## Multi-turn GPU smoke
+
+The `experiments.post_training.task_rollouts` artifact main supplies eight ShellSim
+tasks to the shared engine. Each task copies a source file in one stage and reads
+the copy in the next stage. The prompt does not disclose the number in the source file.
+Private graders check the file and the final answer. The run uses
+one sample per task, behavior log probabilities, one optimizer step, and HF export.
+
+Run the preflight with a fresh version, then add `--run` to submit it:
+
+```bash
+uv run python -m experiments.post_training.task_rollouts --version YYYY.MM.DD.N
+```
+
+The smoke uses Qwen3-4B with eight H100 policy GPUs and eight H100 inference GPUs.
+It uses reward-weighted advantages because each task has one sample. Score the
+trainer's `WANDB_MIRROR` log with the companion SkyRL `ci/marin_nightly/gate.py`
+and `specs/task-rollouts.json`. Measure elapsed time from artifact submission until
+checkpoint export completes and the coordinator succeeds.
+The gate also requires a tool call in every task and a nonzero gradient.
+Also verify the final checkpoint and export metadata. This run validates live
+inference and training with ShellSim. Docker and Daytona require separate checks.

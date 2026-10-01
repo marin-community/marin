@@ -208,7 +208,7 @@ class FileReward(BaseModel):
 
 
 class ShellVerifierSpec(BaseModel):
-    """Private files and a command that writes a numeric reward.
+    """Private files, a verifier command, and its reward source.
 
     The engine installs private files after the final model response. For file
     rewards, a valid reward file takes priority over the command exit code.

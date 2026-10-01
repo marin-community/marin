@@ -42,7 +42,8 @@ class PreparedImage:
     source: RegistryImage | DockerfileSource
 
 
-def _source_key(source: RegistryImage | DockerfileSource) -> str:
+def image_source_key(source: RegistryImage | DockerfileSource) -> str:
+    """Identify a registry reference or the current contents of a build context."""
     if isinstance(source, RegistryImage):
         return f"registry:{source.reference}"
     context = source.context.resolve()
@@ -82,7 +83,7 @@ class ImageCache:
 
     def prepare(self, source: RegistryImage | DockerfileSource) -> PreparedImage:
         """Prepare a source once per cache key, including concurrent callers."""
-        key = _source_key(source)
+        key = image_source_key(source)
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:

@@ -85,7 +85,7 @@ def submission_compatible(specification: TaskSpec, convention: SubmissionConvent
 def submission_instruction(convention: SubmissionConvention) -> str:
     """Return the instruction added after a conversation prefix."""
     if convention.answer_format == AnswerFormat.PLAIN:
-        return "Give your answer as plain text."
+        return "After you complete the task, give your final answer as plain text."
     if convention.answer_format == AnswerFormat.JSON:
         return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
@@ -143,7 +143,10 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     messages = conversation_messages(specification.context)
     instruction = submission_instruction(convention)
     if instruction:
-        messages.append({"role": "user", "content": instruction})
+        if messages and messages[-1]["role"] == "user":
+            messages[-1]["content"] += f"\n\n{instruction}"
+        else:
+            messages.append({"role": "user", "content": instruction})
     request: dict[str, Any] = {"messages": messages}
     tools: list[dict[str, object]] = [
         {"type": "function", "function": function.model_dump(exclude_none=True)}

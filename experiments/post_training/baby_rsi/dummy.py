@@ -3,7 +3,6 @@
 
 """Deterministic implementations of the Baby RSI interfaces."""
 
-import asyncio
 import json
 import re
 from collections.abc import Sequence
@@ -138,7 +137,7 @@ class DummyRolloutModel:
     def __init__(self, policy: PolicyState):
         self.policy = policy
 
-    async def complete(self, request: ModelRequest) -> ModelTurn:
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
         instruction = self._arithmetic_instruction(request.messages)
         match = _ARITHMETIC.search(instruction)
         if match is None:
@@ -182,11 +181,11 @@ def dummy_rollout_engine(policy: PolicyState) -> RolloutEngine:
     )
 
 
-async def _collect_rollouts(policy: PolicyState, tasks: tuple[TaskSpec, ...]) -> RolloutBuffer:
+def _collect_rollouts(policy: PolicyState, tasks: tuple[TaskSpec, ...]) -> RolloutBuffer:
     labels = {task.id: _capability_id(task) for task in tasks}
     records = []
     engine = dummy_rollout_engine(policy)
-    async for rollout in engine.generate(iter(tasks)):
+    for rollout in engine.generate(iter(tasks)):
         response = rollout.messages[-1].get("content", "")
         assert isinstance(response, str)
         records.append(
@@ -202,7 +201,7 @@ async def _collect_rollouts(policy: PolicyState, tasks: tuple[TaskSpec, ...]) ->
 
 def run_policy(policy: PolicyState, tasks: tuple[TaskSpec, ...]) -> RolloutBuffer:
     """Run a policy through TaskCompendium and collect the feedback fields."""
-    return asyncio.run(_collect_rollouts(policy, tasks))
+    return _collect_rollouts(policy, tasks)
 
 
 def _capability_id(task: TaskSpec) -> str:

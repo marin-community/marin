@@ -18,7 +18,7 @@ from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import Source
 from taskcompendium.parquet import read_tasks, write_tasks
 
-from .test_rollout import ReplayModel, engine
+from .test_rollout import ReplayModel, engine, run_task
 
 
 class LocalGitMachine:
@@ -120,7 +120,7 @@ async def test_swe_parquet_task_applies_and_grades_the_patch_in_a_fresh_reposito
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await engine(model, {EnvironmentKind.DOCKER: Factory()}).run(next(read_tasks(path)))
+    result = await run_task(engine(model, {EnvironmentKind.DOCKER: Factory()}), next(read_tasks(path)))
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert (git_image / "value.txt").read_text() == "broken\n"
     assert len(machines) == 2

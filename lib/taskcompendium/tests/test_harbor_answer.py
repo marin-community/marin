@@ -538,13 +538,14 @@ async def test_chat_trial_preserves_conversation_roles(tmp_path, specification, 
     )
 
     assert result.verifier_result.rewards == {"reward": 1.0}
-    assert chat_endpoint.requests[0]["messages"] == [
+    messages = chat_endpoint.requests[0]["messages"]
+    assert messages[:-1] == [
         {"role": "system", "content": "Answer arithmetic questions."},
         {"role": "user", "content": "What is 2 + 2?"},
         {"role": "assistant", "content": "4"},
-        {"role": "user", "content": "What is 7 + 5?"},
-        {"role": "user", "content": "Give your answer as plain text."},
     ]
+    assert messages[-1]["role"] == "user"
+    assert messages[-1]["content"].startswith("What is 7 + 5?")
 
 
 async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specification, chat_endpoint):

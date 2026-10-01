@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import threading
 from dataclasses import dataclass, field
 
 import pytest
@@ -41,11 +42,16 @@ from taskcompendium.rollout import (
     GenerationLimitReached,
     ModelRequest,
     ModelTurn,
+    RolloutEngine,
     RolloutInterrupted,
     RolloutOperation,
     ShellboxRolloutEngine,
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
+
+
+async def run_task(runner: RolloutEngine, task: TaskSpec):
+    return (await asyncio.to_thread(list, runner.generate(iter([task]))))[0]
 
 
 @dataclass
@@ -83,7 +89,7 @@ def arithmetic_task() -> TaskSpec:
 
 def engine(model, factories):
     return ShellboxRolloutEngine(
-        model,
+        model.complete,
         factories,
         max_turns=3,
         command_timeout=5,
@@ -92,11 +98,11 @@ def engine(model, factories):
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-async def test_parquet_task_produces_private_grade_and_training_tokens(tmp_path, answer, reward):
+def test_parquet_task_produces_private_grade_and_training_tokens(tmp_path, answer, reward):
     path = str(tmp_path / "tasks.parquet")
     write_tasks(path, iter([arithmetic_task()]))
     model = ReplayModel([{"role": "assistant", "content": answer}])
-    results = [result async for result in engine(model, {}).generate(read_tasks(path))]
+    results = list(engine(model, {}).generate(read_tasks(path)))
     result = results[0]
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert result.prompt_token_ids == (10, 11)
@@ -146,7 +152,7 @@ async def test_shellbox_tools_persist_files_and_mask_observations():
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
+    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}), file_task())
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
     assert result.response_token_ids == (20, 90, 91, 21)
     assert result.loss_mask == (1, 0, 0, 1)
@@ -178,7 +184,7 @@ async def test_context_limit_grades_only_completed_shell_operations(completed_tu
             }
         ]
     )
-    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
+    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}), file_task())
     assert result.stop_reason == "length"
     if completed_turns:
         assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
@@ -200,10 +206,13 @@ async def test_failed_shell_grader_has_no_reward():
             )
         }
     )
-    result = await engine(
-        ReplayModel([{"role": "assistant", "content": "Completed."}]),
-        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-    ).run(task)
+    result = await run_task(
+        engine(
+            ReplayModel([{"role": "assistant", "content": "Completed."}]),
+            {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+        ),
+        task,
+    )
     assert (result.grade.status, result.grade.reward) == (Outcome.INFRA_ERROR, None)
 
 
@@ -233,7 +242,7 @@ async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine(
     )
     task = file_task().model_copy(update={"agent_timeout": 1.0})
     with pytest.raises(RolloutInterrupted) as failure:
-        await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(task)
+        await run_task(engine(model, {EnvironmentKind.SHELLSIM: factory}), task)
     assert isinstance(failure.value.__cause__, TimeoutError)
     assert failure.value.operation == RolloutOperation.MODEL
     rollout = failure.value.rollout
@@ -280,10 +289,13 @@ async def test_file_grader_preserves_priority_and_rejects_agent_scores(tmp_path,
     )
     path = str(tmp_path / "tasks.parquet")
     write_tasks(path, iter([task]))
-    result = await engine(
-        ReplayModel([{"role": "assistant", "content": "Completed."}]),
-        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-    ).run(next(read_tasks(path)))
+    result = await run_task(
+        engine(
+            ReplayModel([{"role": "assistant", "content": "Completed."}]),
+            {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+        ),
+        next(read_tasks(path)),
+    )
     assert (result.grade.status, result.grade.reward) == (status, reward)
 
 
@@ -296,7 +308,7 @@ async def test_model_failure_releases_the_shellbox_machine():
             raise ConnectionError("Inference endpoint unavailable")
 
     with pytest.raises(RolloutInterrupted) as failure:
-        await engine(FailedModel(), {EnvironmentKind.SHELLSIM: factory}).run(file_task())
+        await run_task(engine(FailedModel(), {EnvironmentKind.SHELLSIM: factory}), file_task())
     assert isinstance(failure.value.__cause__, ConnectionError)
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(argv=("true",)))
@@ -315,7 +327,7 @@ async def test_machine_setup_failure_releases_resources_and_retains_an_empty_rec
         }
     )
     with pytest.raises(RolloutInterrupted) as failure:
-        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: factory}).run(task)
+        await run_task(engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: factory}), task)
     assert failure.value.operation == RolloutOperation.START
     assert failure.value.rollout.task_id == task.id
     assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
@@ -327,16 +339,27 @@ async def test_machine_setup_failure_releases_resources_and_retains_an_empty_rec
 
 @pytest.mark.parametrize(
     "phase",
-    ["upload", "healthcheck", "command_timeout", "attempt_startup", "model", "grade", "cancel", "cleanup_cancel"],
+    [
+        "upload",
+        "healthcheck",
+        "command_timeout",
+        "attempt_startup",
+        "model",
+        "grade",
+        "cancel",
+        "cleanup_cancel",
+        "cancel_twice",
+    ],
 )
 async def test_startup_and_attempt_deadlines_release_machines_without_partial_training_data(phase):
     entered = asyncio.Event()
     closing = asyncio.Event()
-    release = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
     machines = []
 
     async def stall():
-        entered.set()
+        loop.call_soon_threadsafe(entered.set)
         await asyncio.Future()
 
     class Machine:
@@ -345,14 +368,14 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
 
         async def run(self, command):
             if command.argv == ("command-timeout",):
-                entered.set()
+                loop.call_soon_threadsafe(entered.set)
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             if command.argv == ("stall",):
                 await stall()
             return await self.machine.run(command)
 
         async def upload(self, source, target):
-            if phase in {"upload", "attempt_startup", "cancel", "cleanup_cancel"}:
+            if phase in {"upload", "attempt_startup", "cancel", "cleanup_cancel", "cancel_twice"}:
                 await stall()
             await self.machine.upload(source, target)
 
@@ -360,9 +383,9 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
             await self.machine.download(source, target)
 
         async def close(self):
-            if phase == "cleanup_cancel":
-                closing.set()
-                await release.wait()
+            if phase in {"cleanup_cancel", "cancel_twice"}:
+                loop.call_soon_threadsafe(closing.set)
+                await asyncio.to_thread(release.wait)
             await self.machine.close()
 
     class Factory:
@@ -405,13 +428,19 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
         }
     )
     model = Model([{"role": "assistant", "content": "Done."}])
-    pending = asyncio.create_task(engine(model, {EnvironmentKind.SHELLSIM: Factory()}).run(task))
+    runner = engine(model, {EnvironmentKind.SHELLSIM: Factory()})
+    pending = asyncio.create_task(run_task(runner, task))
     await asyncio.wait_for(entered.wait(), timeout=5)
-    if phase in {"cancel", "cleanup_cancel"}:
-        if phase == "cleanup_cancel":
-            await asyncio.wait_for(closing.wait(), timeout=5)
-        pending.cancel()
-        asyncio.get_running_loop().call_soon(release.set)
+    if phase in {"cancel", "cleanup_cancel", "cancel_twice"}:
+        try:
+            if phase == "cleanup_cancel":
+                await asyncio.wait_for(closing.wait(), timeout=5)
+            runner.cancel()
+            if phase == "cancel_twice":
+                await asyncio.wait_for(closing.wait(), timeout=5)
+                runner.cancel()
+        finally:
+            release.set()
         with pytest.raises(asyncio.CancelledError):
             await pending
     else:
@@ -491,7 +520,7 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(tmp_
     factory = RecordingShellSimFactory()
     machines = factory.machines
 
-    result = await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(next(read_tasks(path)))
+    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: factory}), next(read_tasks(path)))
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected_reward)
     assert len(machines) == 2
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
