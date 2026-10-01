@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 
 import click
@@ -58,7 +58,9 @@ MICRO_TRAIN_BATCH_SIZE = 16
 GROUP_SIZE = 8
 SAMPLED_EVAL_SAMPLES = 8
 SEED = 17
-JOB_TIMEOUT_SECONDS = 7200
+JOB_TIMEOUT_SECONDS = 1200
+CANARY_ROOT = "s3://marin-us-east-02a/marin/rl-canaries/cat-count/gpu"
+QWEN_SOURCE = CANARY_ROOT + "/upstream/hf/Qwen/Qwen2.5-0.5B-Instruct/7ae557604adf67be50417f59c2c2f167def9a775/"
 
 
 @dataclass(frozen=True)
@@ -91,15 +93,14 @@ MODELS = MappingProxyType(
 class Preset:
     async_steps: int
     sync_steps: int
-    reward_rise: float | None
+    minimum_score: float | None
 
 
 PRESETS = MappingProxyType(
     {
         "dry": Preset(1, 1, None),
         "calibrate": Preset(30, 30, None),
-        "gate": Preset(70, 35, 0.2),
-        "gate-filter": Preset(70, 35, 0.2),
+        "gate": Preset(30, 30, 0.65),
         "on-policy": Preset(30, 30, None),
     }
 )
@@ -207,9 +208,11 @@ def training_config(
     batch_size: int = TRAIN_BATCH_SIZE,
     group_size: int = GROUP_SIZE,
     micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
-    eval_reward_rise: float | None = None,
+    eval_minimum_score: float | None = None,
     train_ns: tuple[int, ...] = DEFAULT_TRAIN_NS,
     seed: int = SEED,
+    checkpoint: bool = False,
+    export: bool = False,
     settings: tuple[str, ...] = (),
 ) -> dict:
     if preset not in PRESETS:
@@ -222,8 +225,8 @@ def training_config(
     plan = role_plan(batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size)
     preset_config = PRESETS[preset]
     max_steps = preset_config.async_steps if lane == "async" else preset_config.sync_steps
-    if eval_reward_rise is None:
-        eval_reward_rise = preset_config.reward_rise
+    if eval_minimum_score is None:
+        eval_minimum_score = preset_config.minimum_score
     geometry = {
         "tensor_model_parallel_size": 1,
         "pipeline_model_parallel_size": 1,
@@ -251,7 +254,7 @@ def training_config(
             "eval_batch_size": len(train_ns) + len(HELDOUT_NS) + len(EXTRAPOLATION_NS),
             "eval_interval": 1 if preset == "dry" else 5,
             "hf_save_interval": max_steps,
-            "resume_mode": "latest",
+            "resume_mode": "latest" if checkpoint else "none",
             "max_ckpts_to_keep": 1,
             "seed": seed,
             "logger": "wandb",
@@ -267,9 +270,8 @@ def training_config(
                 "eps_clip_high": 0.2,
                 "use_kl_loss": False,
                 "use_kl_in_reward": False,
-                "use_tis": lane == "sync",
-                "tis_imp_ratio_cap": 2.0,
-                "dynamic_sampling": {"type": "filter" if preset == "gate-filter" else None},
+                "off_policy_correction": "tis" if lane == "sync" else "none",
+                "dynamic_sampling": {"type": None},
             },
             "policy": {
                 "optimizer_config": {
@@ -278,7 +280,7 @@ def training_config(
                     "weight_decay": 0.01,
                     "max_grad_norm": 1.0,
                 },
-                "megatron_config": geometry,
+                "megatron_config": {**geometry, "check_dp_weight_consistency": True},
             },
             "ref": {"megatron_config": geometry},
             "rollout_buffer": {
@@ -314,7 +316,7 @@ def training_config(
         apply_setting(config, setting)
     trainer = config["trainer"]
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
-    trainer["ckpt_interval"] = max(1, trainer["eval_interval"])
+    trainer["ckpt_interval"] = max(1, trainer["eval_interval"]) if checkpoint else -1
     metric_groups = {}
     for profile in ("eval", "eval/sampled"):
         for split, counts in (("train", train_ns), ("heldout", HELDOUT_NS), ("extrapolation", EXTRAPOLATION_NS)):
@@ -323,12 +325,11 @@ def training_config(
                 metric_groups[f"{profile}/{split}/{metric}"] = [
                     f"{profile}/{cat_count_data_source(n)}/{source_metric}" for n in counts
                 ]
-    if eval_reward_rise is not None and (
-        not math.isfinite(eval_reward_rise) or eval_reward_rise <= 0 or trainer["eval_interval"] <= 0
+    if eval_minimum_score is not None and (
+        not math.isfinite(eval_minimum_score) or eval_minimum_score <= 0 or trainer["eval_interval"] <= 0
     ):
         raise ValueError("evaluation reward rise requires a finite positive margin and periodic evaluation")
     trainer["callbacks"] = [
-        {"type": "checkpoint", "save_steps": trainer["ckpt_interval"]},
         {
             "type": "evaluation",
             "eval_steps": trainer["eval_interval"],
@@ -337,9 +338,12 @@ def training_config(
                 "sampled": {"sampling_params": {"temperature": 1.0}, "n_samples_per_prompt": SAMPLED_EVAL_SAMPLES}
             },
             "metric_groups": metric_groups,
-            "stop_on_improvement": {"eval/train/avg_score": eval_reward_rise} if eval_reward_rise is not None else {},
+            "stop_when": (
+                {"eval/sampled/train/avg_score": {"minimum": eval_minimum_score}}
+                if eval_minimum_score is not None
+                else {}
+            ),
         },
-        {"type": "hf_model_save", "save_steps": trainer["hf_save_interval"]},
         {"type": "database_registration"},
         {
             "type": "inference_stats",
@@ -348,6 +352,10 @@ def training_config(
             "log_to_tracker": True,
         },
     ]
+    if checkpoint:
+        trainer["callbacks"].append({"type": "checkpoint", "save_steps": trainer["ckpt_interval"]})
+    if export:
+        trainer["callbacks"].append({"type": "hf_model_save", "save_steps": trainer["hf_save_interval"]})
     if lane == "sync" and trainer["rollout_buffer"]["max_staleness_steps"] != 0:
         raise ValueError("the sync lane requires zero rollout staleness")
     return config
@@ -361,12 +369,14 @@ def build_run(
     batch_size: int = TRAIN_BATCH_SIZE,
     group_size: int = GROUP_SIZE,
     micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
-    eval_reward_rise: float | None = None,
+    eval_minimum_score: float | None = None,
     train_ns: tuple[int, ...] = DEFAULT_TRAIN_NS,
     seed: int = SEED,
     job_timeout_seconds: int = JOB_TIMEOUT_SECONDS,
     version: str | None = None,
     cluster: str = CLUSTER,
+    checkpoint: bool = False,
+    export: bool = False,
     settings: tuple[str, ...] = (),
 ) -> ArtifactStep[SkyRLRun]:
     if job_timeout_seconds <= 0:
@@ -378,15 +388,16 @@ def build_run(
         batch_size=batch_size,
         group_size=group_size,
         micro_train_batch_size=micro_train_batch_size,
-        eval_reward_rise=eval_reward_rise,
+        eval_minimum_score=eval_minimum_score,
         train_ns=train_ns,
         seed=seed,
+        checkpoint=checkpoint,
+        export=export,
         settings=settings,
     )
     max_steps = config["trainer"]["max_steps"]
-    row_multiplier = 4 if preset == "gate-filter" else 1
     prefetch_rows = config["trainer"]["rollout_buffer"]["max_staleness_steps"] * batch_size
-    train_rows = (batch_size * max_steps + prefetch_rows) * row_multiplier
+    train_rows = batch_size * max_steps + prefetch_rows
     identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(config) + repr(train_ns))}"
     data_identity = fingerprint_hash(repr((train_ns, train_rows, seed)))
     data_name = f"documents/{EXPERIMENT_NAME}/{data_identity}"
@@ -400,14 +411,20 @@ def build_run(
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{identity}"
     choice = MODELS[model]
     download = choice.step.build_config(StepContext.for_fingerprint(choice.step.runtime_args, choice.step.deps))
-    return skyrl_step(
+    model_step = (
+        ArtifactStep.adopt(choice.step.name, choice.step.version, QWEN_SOURCE, kind=choice.step.artifact_type)
+        if model == DEFAULT_MODEL
+        else choice.step
+    )
+    run = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
-                step=choice.step,
+                step=model_step,
+                relative_path="" if model == DEFAULT_MODEL else None,
                 tokenizer_uri=download.hf_dataset_id,
                 tokenizer_revision=download.revision,
             ),
@@ -438,8 +455,9 @@ def build_run(
             wandb_entity=None,
             job_timeout_seconds=job_timeout_seconds,
         ),
-        export_hf=True,
+        export_hf=export,
     )
+    return replace(run, override_path=f"{CANARY_ROOT}/runs/{identity}/{run.version}")
 
 
 @click.command(help=__doc__)
@@ -450,10 +468,12 @@ def build_run(
 @click.option("--batch-size", type=int, default=TRAIN_BATCH_SIZE)
 @click.option("--group-size", type=int, default=GROUP_SIZE)
 @click.option("--micro-train-batch-size", type=int, default=MICRO_TRAIN_BATCH_SIZE, show_default=True)
-@click.option("--eval-reward-rise", type=float, help="Stop after this gain in greedy training evaluation reward.")
+@click.option("--eval-reward-rise", type=float, help="Stop at this sampled training evaluation score.")
 @click.option("--train-n", "train_ns", multiple=True, type=int)
 @click.option("--seed", type=int, default=SEED)
 @click.option("--job-timeout-seconds", type=int, default=JOB_TIMEOUT_SECONDS, show_default=True)
+@click.option("--checkpoint", is_flag=True, help="Save resumable training checkpoints.")
+@click.option("--export", is_flag=True, help="Export the final Hugging Face model.")
 @click.option("--set", "settings", multiple=True, metavar="KEY=VALUE")
 @rl_build_options
 def main(
@@ -464,10 +484,12 @@ def main(
     batch_size: int,
     group_size: int,
     micro_train_batch_size: int,
-    eval_reward_rise: float | None,
+    eval_minimum_score: float | None,
     train_ns: tuple[int, ...],
     seed: int,
     job_timeout_seconds: int,
+    checkpoint: bool,
+    export: bool,
     settings: tuple[str, ...],
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
@@ -478,10 +500,12 @@ def main(
         batch_size=batch_size,
         group_size=group_size,
         micro_train_batch_size=micro_train_batch_size,
-        eval_reward_rise=eval_reward_rise,
+        eval_minimum_score=eval_minimum_score,
         train_ns=train_ns or DEFAULT_TRAIN_NS,
         seed=seed,
         job_timeout_seconds=job_timeout_seconds,
+        checkpoint=checkpoint,
+        export=export,
         settings=settings,
     )
 

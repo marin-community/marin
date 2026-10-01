@@ -6,7 +6,7 @@ Megatron trainer. Training uses counts 1–20 except held-out counts
 `3, 5, 13, 16`. Evaluation also reports extrapolation counts `24, 28`.
 Held-out and extrapolation results do not determine the learning verdict.
 
-Both lanes use two Megatron data-parallel ranks on one H100 host and two
+The canary uses two Megatron data-parallel ranks on one H100 host and two
 vLLM engines on another. Each task requests two H100s and 65 CPUs; the CPU
 request places our tasks on separate 128-CPU hosts. Four Gym rollout workers
 on the policy host reserve 32 CPUs. Gym uses token requests; the HTTP
@@ -14,7 +14,7 @@ endpoint serves Harbor and is off in this recipe. Training metrics and
 policy-training and rollout spans are enabled explicitly.
 
 `--lane async` uses behavior clipping, permits two steps of rollout staleness
-and applies two update epochs per batch. `--lane sync` uses zero staleness,
+and applies two update epochs per batch. `--lane sync` is a manual experiment outside the canary and CI. It uses zero staleness,
 the regular policy objective and TIS with a cap of 2. Both use the same
 trainer loop, 64 prompts with eight samples each, a full-batch mini-batch,
 matching training and forward micro-batches of 16 per GPU, and learning
@@ -58,10 +58,10 @@ submit_canary() {
   uv run iris --cluster marin job run \
     --target-cluster cw-rno2a --job-name "$canary_job_name" \
     --priority interactive --cpu 4 --memory 16GB --disk 8GB \
-    --enable-extra-resources --extra cpu --timeout 9000 \
+    --enable-extra-resources --extra cpu --timeout 1200 \
     --max-retries 0 --no-wait -- \
     python -m experiments.post_training.cat_count_canary \
-    --cluster cw-rno2a --job-timeout-seconds 7200 "$@" --run
+    --cluster cw-rno2a --job-timeout-seconds 1200 "$@" --run
 }
 
 submit_canary atqamar-cat-count-dry-20260930 \
@@ -74,9 +74,12 @@ submit_canary atqamar-cat-count-sync-20260930 \
   --version 2026.09.30.3 --preset gate --lane sync
 ```
 
-The coordinator builds model and data dependencies, submits the training
-child, and exports the final checkpoint. Its timeout must cover those three
-stages; `--job-timeout-seconds` bounds only the training child. Monitor queue
+The coordinator resolves the pinned model and data dependencies and submits
+the training child. Checkpoints and HF export are enabled only with
+`--checkpoint` and `--export`, respectively; both are off by default and in CI.
+The default model reads the immutable rl-canaries Qwen snapshot, and outputs
+resolve below `s3://marin-us-east-02a/marin/rl-canaries/cat-count/gpu/runs/`.
+The coordinator timeout covers the whole run; `--job-timeout-seconds` bounds only the training child. Monitor queue
 time as part of a separate submission-to-completion deadline. Verify the
 job is yours before cancelling it:
 
@@ -98,25 +101,26 @@ baseline is the resumed evaluation, rather than the original step-0 policy.
 | --- | ---: | ---: | --- |
 | `dry` | 1 | 1 | Initial evaluation and one training step. |
 | `calibrate` | 30 | 30 | Exploratory training without a default early stop. |
-| `gate` | 70 | 35 | Stops at a greedy training evaluation gain of 0.2. |
-| `gate-filter` | 70 | 35 | Experimental filtering of zero-variance groups; no calibrated learning spec. |
+| `gate` | 30 | 30 | Stops at sampled training evaluation reward ≥0.65. |
 | `on-policy` | 30 | 30 | Sets async staleness to zero and uses one update epoch. |
 
 Evaluation runs at step 0 and every five completed steps; `dry` evaluates
 every step. It records greedy responses and eight sampled responses per
-count at temperature 1. The gate requires improvement in
-`eval/train/avg_score` from step 0. Reaching the cap without that gain fails.
-`--eval-reward-rise` overrides the preset's margin. The launcher's stop
-margin must equal the spec's `min_improvement`. A stopping step writes a
-checkpoint and a final HF export.
+count at temperature1. The async gate requires step0 sampled reward in
+[0.10,0.45] and `eval/sampled/train/avg_score` ≥0.65 by step30.
+`--eval-minimum-score` selects an exploratory sampled-score stopping threshold.
+The checked-in gate preset and async spec use0.65. A stopping step ends
+training; checkpoints and HF export require their explicit flags.
+Megatron logs `policy/dp_weight_checksum_mismatch` after every optimizer step;
+any mismatch fails the spec. The grouped step metric keeps the maximum across
+optimizer windows. Greedy, held-out and extrapolation scores are reported only.
 
 Grouped metrics include `eval/{train,heldout,extrapolation}/avg_score`,
 `eval/{train,heldout,extrapolation}/environment/exact` and their
 `eval/sampled/` equivalents. Per-count exact rates are
 `eval/cat_count_n{N}/environment/cat_count/exact`. `pass_at_8` means at least
 one sampled response is exact; the environment exact rate is the fraction of
-responses that are exact. `eval/train/avg_score_improvement` is the stopping
-signal. Training logs also report `environment/exact_n{N}` and
+responses that are exact. `eval/sampled/train/avg_score` is the stopping signal. Training logs also report `environment/exact_n{N}` and
 `reward/zero_std_group_fraction`.
 
 `--model` selects the instruct model, `qwen2.5-0.5b`, or `qwen3-0.6b`.
@@ -156,8 +160,7 @@ for `CHILD_DURATION_SECONDS`.
 
 Check out the exact MarinSkyRL commit named by the marin plan's
 `launcher_requirement`. From that checkout's `skyrl-train` directory, select
-`ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json` or
-`ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-sync.json`, then run:
+`ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json`, then run:
 
 ```bash
 uv run --frozen python -m ci.marin_nightly.gate \
@@ -180,29 +183,12 @@ clipping, probability, template or partial weight-sync errors can still learn.
 
 ## Calibration results
 
-The selected configuration uses learning rate 2e-6. Four seeds in each lane
-reached a gain of 0.2 with evaluation every five steps. The caps are 70 async
-and 35 sync, about 1.5× the worst first crossing across four seeds, rounded to the evaluation interval. Each
-run stops at its first crossing.
-
-| Lane | Seed | First crossing | Peak and final eval | Ordinary step median |
-| --- | ---: | ---: | ---: | ---: |
-| Async | 17 | 20 | 0.806 | 5.36 s |
-| Async | 23 | 35 | 0.827 | 5.26 s |
-| Async | 31 | 15 | 0.840 | 5.60 s |
-| Async | 47 | 45 | 0.826 | 5.06 s |
-| Sync | 17 | 5 | 0.799 | 6.23 s |
-| Sync | 23 | 15 | 0.809 | 5.73 s |
-| Sync | 31 | 20 | 0.856 | 5.64 s |
-| Sync | 47 | 10 | 0.809 | 6.11 s |
-
-These measurements use marin commit `c57ae7b8de8a905dcd89f1b021e1ec351e534001`
-and MarinSkyRL commit `1f130218e56590075363d59cd94fb97c292d65e0`.
-The initial greedy training reward was 0.555–0.605. Async training tasks
-took 664–1,119 seconds; sync tasks took 524–765 seconds, including startup
-and teardown. Ordinary step medians exclude step 1 and evaluation steps.
-Sync seed 31 completed training but its finished worker was lost; its
-training data is retained and its export is absent.
+The canary uses seed17 and learning rate2e-6. Native historical replay at the
+0.65 sampled-score threshold passes six healthy async runs. Their smallest
+peak margin by step30 is+0.0953. Sign reversal, rollout-probability corruption
+and learning rates5e-6/1e-5 fail; the closest control margin is−0.1153.
+Historical replay checks existing metric rows; the new post-step checksum and
+artifact-free20-minute deadline require current GPU validation.
 
 Model staging, Ray and vLLM startup happen once per invocation. The dry
 step's measured 72 seconds included 5.7 seconds of policy training and
