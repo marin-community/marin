@@ -162,19 +162,19 @@ def _summary(records, steps):
             if variant == "main_b":
                 ref_late = np.mean(mains[0]["losses"][late])
                 late_diffs.append(float(np.mean(mains[1]["losses"][late]) - ref_late))
-                held_diffs.append(mains[1]["held_out"] - mains[0]["held_out"])
+                held_diffs.append(float(mains[1]["held_out"] - mains[0]["held_out"]))
                 continue
             ref_late = np.mean([np.mean(m["losses"][late]) for m in mains])
             ref_held = np.mean([m["held_out"] for m in mains])
             run = next(r for r in runs if r["variant"] == variant)
             late_diffs.append(float(np.mean(run["losses"][late]) - ref_late))
-            held_diffs.append(run["held_out"] - ref_held)
+            held_diffs.append(float(run["held_out"] - ref_held))
 
         def stats(xs):
             mean = statistics.mean(xs)
             se = statistics.stdev(xs) / len(xs) ** 0.5 if len(xs) > 1 else float("nan")
             return dict(
-                mean=mean, se=se, t=mean / se if se else float("nan"), positive=sum(x > 0 for x in xs), n=len(xs)
+                mean=mean, se=se, t=mean / se if se else float("nan"), positive=int(sum(x > 0 for x in xs)), n=len(xs)
             )
 
         out[variant] = dict(late=stats(late_diffs), held_out=stats(held_diffs), late_per_seed=late_diffs)
