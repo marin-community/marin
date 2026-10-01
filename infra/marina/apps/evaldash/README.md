@@ -48,6 +48,10 @@ expanding each serve group to its evals, plus a flat filterable table), run deta
 interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
 live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
 
+Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
+so reopening a link restores the same runs and scores. Links without a cohort resolve to the
+dashboard's default cohort and add it to the URL.
+
 The per-sample browser shows how each prediction was graded (the grader method, headline metric,
 score, and verbatim grader detail) and highlights the picked-versus-gold answer. Agentic (Harbor)
 samples reference a step trajectory by URI; the browser lazy-loads it through the artifact endpoint
@@ -88,7 +92,7 @@ GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
-GET  /models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
+GET  /models/{model}    one model configuration's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
 GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
 GET  /history?model=&task=   every run's headline score for one cell, over time
@@ -136,14 +140,16 @@ a cell whose metric or kind differs is rejected rather than ranked against unlik
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
 their columns remain populated while benchmarks are rerun.
 
-By default each benchmark is taken from the newest run that clears the request's admission rules
+The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-24-verified`. Historical labels remain selectable, and `cohort=all` selects the newest admissible run per benchmark across cohorts. The UI marks those views with an asterisk because their settings are not verified as comparable. A named verified cohort admits only records with its approved benchmark config, evaluator revision, and thinking mode. Models with different normalized source YAMLs have separate comparison names ending in `@<12-character digest>`.
+
+Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
 of the benchmark the run set out to grade; a capped run whose benchmark size is unrecorded is never
 admitted. The corresponding rejection reasons report low benchmark coverage, an unreported benchmark
-size for a capped run, or a metric protocol mismatch. A cohort that re-ran only part of a model's
-benchmark set does not hide results that are still the newest available for their own benchmark;
-`cohort=<version>` pins every column to one launch instead. A `(model, benchmark)` with no admitted
-cell is reported in `missing` with the reason and the offending run, so an empty cell is explained.
+size for a capped run, or a metric protocol mismatch. A cohort may contain only a subset of
+its benchmarks. A `(model, benchmark)` with no admitted cell is reported in `missing` with the reason
+and the offending run. Policy-rejected runs are reported separately with their model, benchmark,
+run ID, and reasons, scoped to the selected cohort and filters.
 `complete=1` keeps only models covering every selected benchmark. No cross-benchmark aggregate is
 produced unless `aggregate=` names a missing-data policy (`require_complete` or `bound`), and one that
 is produced carries its panel, per-benchmark metrics, and policy. An unusable query value (an unknown
@@ -227,25 +233,37 @@ tests/                  unit tests; journeys/ walks the app in a browser
 
 ## Develop
 
-Serve the fixture records with no database, no CoreWeave credentials and no Iris/finelog access --
-the fastest way to iterate on the UI. The live job and log panels degrade to "unreachable" exactly as
-they do off-VPC.
+Serve synthetic fixture records locally without a database or cloud credentials. Isolate
+EvalDash from other Marina apps, which may require a database. Live job and log panels show
+"unreachable".
+
+Run from the repository root:
 
 ```bash
 cd infra/marina
 uv run marina build --only evaldash
-uv run python -c "from apps.evaldash import fixtures; fixtures.build_fixtures('/tmp/evaldash-fixtures')"
-EVALDASH_STORE=local RECORDS_PREFIXES=/tmp/evaldash-fixtures uv run marina dev
+preview_records=$(mktemp -d /tmp/evaldash-records.XXXXXX)
+preview_apps=$(mktemp -d /tmp/evaldash-apps.XXXXXX)
+ln -s "$PWD/apps/evaldash" "$preview_apps/evaldash"
+uv run python -m apps.evaldash.fixtures "$preview_records"
+EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
+  uv run marina dev --apps-dir "$preview_apps"
 # -> http://127.0.0.1:8080/evaldash/
 ```
 
-Against a real Postgres, point the kernel at one and migrate first:
+Click `Rescan` to load the records. Fixture cohorts predate verified policies; select
+`Newest per benchmark (all cohorts)*` to view them. To inspect real
+runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep dev storage
+local to avoid production writes. After frontend edits, rerun `marina build --only evaldash`
+and reload the browser; this command does not hot-reload the frontend.
+
+For a Postgres-backed preview, generate fixtures as above, then run from `infra/marina`:
 
 ```bash
-cd infra/marina
 export MARINA_DATABASE_URL=postgresql+pg8000://postgres:marina@127.0.0.1:5432/marina
 uv run marina migrate --only evaldash
-RECORDS_PREFIXES=/tmp/evaldash-fixtures uv run marina dev
+EVALDASH_STORE=postgres RECORDS_PREFIXES="$preview_records" \
+  uv run marina dev --apps-dir "$preview_apps"
 ```
 
 ## Test

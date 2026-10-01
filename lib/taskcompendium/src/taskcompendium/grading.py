@@ -3,17 +3,18 @@
 
 """Grade submissions with typed private verifiers."""
 
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from tasktrove_verify.grade import InvalidTask, numeric_tolerance
+from tasktrove_verify.modes.grade_exact import grade_exact_candidate
+from tasktrove_verify.modes.grade_math import grade_numeric_candidate
+from tasktrove_verify.spec import ExactSpec, NumericSpec
 
-from taskcompendium.models import VerifierKind, VerifierSpec
+from taskcompendium.models import ConversationEvent, VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention, extract_answer
-
-WHITESPACE = re.compile(r"\s+")
 
 
 class Outcome(StrEnum):
@@ -34,7 +35,7 @@ class GradingAttempt:
     """Submission evidence available to a verifier."""
 
     convention: SubmissionConvention
-    response: str | None
+    conversation: tuple[ConversationEvent, ...]
     environment: object
 
 
@@ -64,11 +65,46 @@ class ExactAnswerVerifier(Verifier):
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
         try:
-            candidate = extract_answer(attempt.response, attempt.convention)
+            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        match = _normalize_exact(candidate, self) == _normalize_exact(self.expected, self)
-        return GradeResult(Outcome.GRADED, float(match))
+        contract = ExactSpec(
+            expected=(self.expected,), ignore_case=self.ignore_case, ignore_whitespace=self.collapse_whitespace
+        )
+        return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, candidate).reward)
+
+
+class NumericAnswerVerifier(Verifier):
+    """Compare a submitted number with explicit absolute and relative tolerances."""
+
+    expected: float
+    tolerance_abs: float
+    tolerance_rel: float
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> "NumericAnswerVerifier":
+        contract = NumericSpec(
+            expected=self.expected, tolerance_abs=self.tolerance_abs, tolerance_rel=self.tolerance_rel
+        )
+        try:
+            numeric_tolerance(contract)
+        except InvalidTask as error:
+            raise ValueError(f"Invalid numeric verifier contract: {error}") from error
+        return self
+
+    def grade(self, attempt: GradingAttempt) -> GradeResult:
+        try:
+            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
+        except (ValueError, TypeError) as error:
+            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+        try:
+            value = float(candidate.strip())
+        except ValueError:
+            return GradeResult(Outcome.GRADED, 0.0)
+        contract = NumericSpec(
+            expected=self.expected, tolerance_abs=self.tolerance_abs, tolerance_rel=self.tolerance_rel
+        )
+        return GradeResult(Outcome.GRADED, grade_numeric_candidate(contract, value).reward)
 
 
 def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
@@ -77,6 +113,6 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
     return VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json=verifier.model_dump_json())
 
 
-def _normalize_exact(value: str, verifier: ExactAnswerVerifier) -> str:
-    value = WHITESPACE.sub(" ", value).strip() if verifier.collapse_whitespace else value.strip()
-    return value.casefold() if verifier.ignore_case else value
+def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
+    verifier = NumericAnswerVerifier(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel)
+    return VerifierSpec(kind=VerifierKind.NUMERIC_ANSWER, parameters_json=verifier.model_dump_json())

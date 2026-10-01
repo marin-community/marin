@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
 from marin.evaluation.runner import EvaluationError
+from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
@@ -428,6 +430,35 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     }
 
 
+def test_historical_harbor_descriptor_uses_locked_dependencies(tmp_path, monkeypatch):
+    commit = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
+    project = f"config/external/harbor/pins/{commit}"
+    lock_dir = tmp_path / project
+    lock_dir.mkdir(parents=True)
+    (lock_dir / "uv.lock").write_text(
+        f"""
+[[package]]
+name = "harbor"
+source = {{ git = "https://github.com/marin-community/harbor.git#{commit}" }}
+[[package]]
+name = "marin-external-harbor"
+dependencies = [{{ name = "gcsfs" }}]
+[[package]]
+name = "gcsfs"
+version = "1.0"
+"""
+    )
+    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: tmp_path)
+    monkeypatch.setattr(driver_config, "HARBOR", replace(HARBOR, runtime_requirements=("future==1",)))
+
+    descriptor = driver_config.harbor_runtime_descriptor(commit, project)
+
+    assert "gcsfs==1.0" in descriptor
+    assert "future==1" not in descriptor
+    with pytest.raises(ValueError, match="pins"):
+        driver_config.harbor_runtime_descriptor("0" * 40, project)
+
+
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):
     terminated_return_codes: list[int | None] = []
     terminate_process_group = driver_config.terminate_process_group
@@ -478,6 +509,27 @@ def test_harbor_driver_environment_preserves_iris_uv_wrapper_variables(monkeypat
     environment = driver_config._driver_environment()
 
     assert {key: environment[key] for key in iris_environment} == iris_environment
+
+
+def test_harbor_driver_can_use_iris_uv_wrapper(tmp_path, monkeypatch):
+    uv = tmp_path / "uv"
+    uv.write_text(
+        """#!/bin/bash
+set -u
+recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
+exec "$IRIS_UV_EXECUTABLE" "$@"
+"""
+    )
+    uv.chmod(0o755)
+    executable = tmp_path / "real-uv"
+    executable.write_text('#!/bin/bash\nprintf "%s" "$IRIS_WORKDIR"\n')
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("IRIS_UV_EXECUTABLE", str(executable))
+
+    completed = driver_config._capture_driver(["uv", "run"])
+    assert completed.stdout == str(tmp_path)
 
 
 def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):

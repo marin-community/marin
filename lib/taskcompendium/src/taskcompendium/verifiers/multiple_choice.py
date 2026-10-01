@@ -31,7 +31,7 @@ class MultipleChoiceVerifier(Verifier):
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
         try:
-            candidate = extract_answer(attempt.response, attempt.convention).strip()
+            candidate = extract_answer(attempt.conversation[-1], attempt.convention).strip()
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
         if len(candidate) != 1 or not "A" <= candidate.upper() <= "Z":

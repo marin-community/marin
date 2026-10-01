@@ -14,7 +14,9 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from rigging.secrets import is_secret_reference
 
-RESERVED_ENDPOINT_MODEL_ARGS = frozenset({"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests"})
+RESERVED_ENDPOINT_MODEL_ARGS = frozenset(
+    {"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests", "chat_template_kwargs"}
+)
 
 
 class ChatTokenizerBackend(StrEnum):
@@ -81,6 +83,7 @@ class EvalchemyConfig(BaseModel):
     task_options: Mapping[str, EvalchemyTaskOptions] = Field(default_factory=dict)
     apply_chat_template: bool | None = None
     chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
+    debug: bool = False
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: str | None = None

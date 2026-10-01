@@ -287,7 +287,8 @@ def main() -> None:
         ingress="INGRESS_TRAFFIC_ALL",
         iap_enabled=False,
         deletion_protection=False,
-        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=0, max_instance_count=4),
+        # Public applet navigation otherwise waits for the whole Marina image to cold start.
+        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=1, max_instance_count=4),
         template=gcp.cloudrunv2.ServiceTemplateArgs(
             service_account=SERVICE_ACCOUNT,
             timeout="60s",
