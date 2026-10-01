@@ -10,7 +10,6 @@ import pytest
 import yaml
 from marin.execution.lazy import StepContext
 
-from experiments.post_training.cat_count_canary.launcher import MODELS, build_run, training_config
 from experiments.post_training.cat_count_canary.data import (
     DEFAULT_TRAIN_NS,
     EXTRAPOLATION_NS,
@@ -21,6 +20,7 @@ from experiments.post_training.cat_count_canary.data import (
     cat_count_rows,
     write_cat_count_parquet,
 )
+from experiments.post_training.cat_count_canary.launcher import MODELS, build_run, training_config
 
 
 def test_procedural_rows_balance_and_holdout_exclusion():

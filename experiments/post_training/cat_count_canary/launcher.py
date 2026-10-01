@@ -84,6 +84,7 @@ MODELS = MappingProxyType(
     }
 )
 
+
 @dataclass(frozen=True)
 class Preset:
     async_steps: int
@@ -91,13 +92,15 @@ class Preset:
     reward_rise: float | None
 
 
-PRESETS = MappingProxyType({
-    "dry": Preset(1, 1, None),
-    "calibrate": Preset(30, 30, None),
-    "gate": Preset(60, 60, 0.2),
-    "gate-filter": Preset(60, 60, 0.2),
-    "on-policy": Preset(30, 30, None),
-})
+PRESETS = MappingProxyType(
+    {
+        "dry": Preset(1, 1, None),
+        "calibrate": Preset(30, 30, None),
+        "gate": Preset(50, 25, 0.2),
+        "gate-filter": Preset(50, 25, 0.2),
+        "on-policy": Preset(30, 30, None),
+    }
+)
 
 
 def role_plan(
@@ -344,7 +347,7 @@ def training_config(
         },
     ]
     if lane == "sync" and trainer["rollout_buffer"]["max_staleness_steps"] != 0:
-        raise click.BadParameter("the sync lane requires zero rollout staleness")
+        raise ValueError("the sync lane requires zero rollout staleness")
     return config
 
 

@@ -101,8 +101,8 @@ baseline is the resumed evaluation, rather than the original step-0 policy.
 | --- | ---: | ---: | --- |
 | `dry` | 1 | 1 | Initial evaluation and one training step. |
 | `calibrate` | 30 | 30 | Exploratory training without a default early stop. |
-| `gate` | 60 | 60 | Stops at a greedy training evaluation gain of 0.2. |
-| `gate-filter` | 60 | 60 | Applies the same learning check with zero-variance groups discarded and replaced. |
+| `gate` | 50 | 25 | Stops at a greedy training evaluation gain of 0.2. |
+| `gate-filter` | 50 | 25 | Applies the same learning check with zero-variance groups discarded and replaced. |
 | `on-policy` | 30 | 30 | Sets async staleness to zero and uses one update epoch. |
 
 Evaluation runs at step 0 and every five completed steps; `dry` evaluates
@@ -180,3 +180,38 @@ The canary does not establish loss-scale parity, DP parameter equality,
 exported-output equivalence, GPU checkpoint-resume correctness, or coverage
 of TP/PP/CP/EP, MoE, multi-turn tools, Harbor, LoRA or long contexts. Subtle
 clipping, probability, template or partial weight-sync errors can still learn.
+
+## Calibration results
+
+The selected configuration uses learning rate 2e-6. Four seeds in each lane
+reached a gain of 0.2 with evaluation every five steps. The cap is the worst
+first crossing plus five steps; each run stops at its first crossing.
+
+| Lane | Seed | First crossing | Peak and final eval | Ordinary step median |
+| --- | ---: | ---: | ---: | ---: |
+| Async | 17 | 20 | 0.806 | 5.36 s |
+| Async | 23 | 35 | 0.827 | 5.26 s |
+| Async | 31 | 15 | 0.840 | 5.60 s |
+| Async | 47 | 45 | 0.826 | 5.06 s |
+| Sync | 17 | 5 | 0.799 | 6.23 s |
+| Sync | 23 | 15 | 0.809 | 5.73 s |
+| Sync | 31 | 20 | 0.856 | 5.64 s |
+| Sync | 47 | 10 | 0.809 | 6.11 s |
+
+These measurements use marin commit `c57ae7b8de8a905dcd89f1b021e1ec351e534001`
+and MarinSkyRL commit `1f130218e56590075363d59cd94fb97c292d65e0`.
+The initial greedy training reward was 0.555–0.605. Async training tasks
+took 664–1,119 seconds; sync tasks took 524–765 seconds, including startup
+and teardown. Ordinary step medians exclude step 1 and evaluation steps.
+Sync seed 31 completed training but its finished worker was lost; its
+training data is retained and its export is absent.
+
+Model staging, Ray and vLLM startup happen once per invocation. The dry
+step's measured 72 seconds included 5.7 seconds of policy training and
+49 seconds of checkpoint work. Checkpoint work recurs at save intervals;
+it is not an ordinary-step cost. Evaluation also recurs every five steps.
+HF export runs after training.
+
+Sampled policy-GPU memory maxima in seven completed runs ranged from 17.1
+to 30.5 GiB per device. These are node telemetry samples, not CUDA allocation
+peaks; sync seed 31 has no joined memory receipt.
