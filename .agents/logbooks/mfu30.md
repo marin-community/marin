@@ -599,3 +599,17 @@ Confirmation arms queued (f1-seq program, d4234c88e7, custom wheel, streams on, 
 unprofiled, 180000 -> 180100): `m30-conf-seq-s0` / `-s1` / `-s2` (seeds 0/1/2; ports 33020-33022), paired
 against mhep-ctx4k-s0 / s1 / s2. If f1-noqb screens clearly higher with clean checks, it gets its own
 confirmation set.
+
+## M30-035 F1-seq-02 attribution (agent B, M30B-027)
+
+Profiled steps 1 and 3 vs stackseq-03 (s/step): span 13.087 -> 12.977 (-0.110; scored -0.125); compute
+10.803 -> 10.854 (+0.051: expert GEMMs +0.037 now under dispatch c1, attention projections +0.014); exposed
+collectives 1.491 -> 1.473; exposed copies 0.769 -> 0.625 (**-0.144: carry stall 141 -> 3.7 ms/step, the
+stream fix**). Re-gather off: -0.025 net (smaller than the earlier +0.1 estimate). Forward-order backward: net 0
+(recomputed dispatch c1 0.167 -> 0.010, but dy c0's reverse return now sits bare at 0.149). Remaining ragged
+exposure 0.843: fwd dispatch c0 0.192, fwd return c1 0.186 (noqb's target), bwd recomputed dispatch c0 0.300
+(~0.14 transfer + skew), bwd dy c0 reverse return 0.149, recomputed dispatch c1 0.010. Other exposure:
+latent reduce-scatters 0.284 (skew), backward remat_carry all-gathers 0.168, forward FSDP all-gathers 0.149,
+exposed copies 0.625. QB value check: within a job the model smoke is deterministic. Across final-seq and noqb
+the QB stats differ at fp32-reassociation level (qb_beta 0.2837 vs 0.2762, loss 1e-7 relative); autotune-off
+and same-code repeats are running to tell fusion from autotune. noqb restores main's QB placement.
