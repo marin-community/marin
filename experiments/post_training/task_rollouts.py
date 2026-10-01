@@ -185,7 +185,7 @@ generator:
   run_engines_locally: true
   weight_sync_backend: nccl
   sampling_params:
-    temperature: 0.1
+    temperature: 1.0
     top_p: 1.0
 data:
   kind: tasks
@@ -234,7 +234,7 @@ def main() -> ArtifactStep[SkyRLRun]:
             cluster=CLUSTER,
             cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
             cpu=16,
-            memory="128GB",
+            memory="256GB",
             disk="1TB",
             priority="interactive",
             max_retries=0,
