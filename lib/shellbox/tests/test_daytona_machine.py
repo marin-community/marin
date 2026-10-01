@@ -19,7 +19,7 @@ from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, MachineSpec
+from shellbox.machine import Command, MachineSpec, UnsupportedMachineSpec
 
 
 class LocalFiles:
@@ -207,7 +207,7 @@ def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) 
     assert sum(client.deleted for client in clients) == 2
 
 
-def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path: Path) -> None:
+def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path: Path, monkeypatch) -> None:
     snapshots = LocalSnapshots()
     clients = []
 
@@ -223,8 +223,9 @@ def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path
     dockerfile.write_text("FROM ubuntu:24.04\nCOPY input /input\n")
     source = context / "input"
     source.write_text("first")
+    monkeypatch.chdir(context)
     spec = MachineSpec(
-        source=DockerfileSource(context, dockerfile), workdir=str(tmp_path / "work"), cpus=1, memory_mb=1024
+        source=DockerfileSource(Path("."), dockerfile), workdir=str(tmp_path / "work"), cpus=1, memory_mb=1024
     )
     factory = DaytonaMachineFactory(client_factory)
 
@@ -241,6 +242,17 @@ def test_daytona_reuses_snapshot_until_build_inputs_or_resources_change(tmp_path
     assert names[0] == names[1]
     assert len(set(names)) == 3
     assert all(client.deleted and client.closed for client in clients)
+
+
+@pytest.mark.parametrize("instruction", ["ADD payload.tar /opt/", 'add ["payload.tar", "/opt/"]'])
+def test_daytona_rejects_add_inputs_before_snapshot_creation(tmp_path, instruction):
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(f"FROM ubuntu:24.04\n{instruction}\n")
+    (tmp_path / "payload.tar").write_bytes(b"archive fixture")
+    client = LocalDaytona()
+    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
+        asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(DockerfileSource(tmp_path, dockerfile))))
+    assert not client.snapshot.snapshots
 
 
 def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> None:

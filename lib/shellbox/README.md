@@ -58,6 +58,8 @@ The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `value`. Without a policy override, the factory uses `MachineSpec.network`.
 `MachineSpec.startup_timeout` bounds snapshot preparation and sandbox creation. Without
 this value, the factory uses its `create_timeout` setting.
+The pinned Daytona SDK does not upload local `ADD` inputs. Dockerfiles with `ADD`
+require a prebuilt registry image.
 Other factories do not apply `MachineSpec.startup_timeout`. Callers enforce the
 deadline for the complete create operation.
 

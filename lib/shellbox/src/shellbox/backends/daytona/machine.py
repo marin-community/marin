@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import math
+import re
 import shlex
 import stat
 import tarfile
@@ -14,7 +15,7 @@ import tempfile
 import uuid
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -240,8 +241,12 @@ class DaytonaMachineFactory:
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
         if isinstance(spec.source, DockerfileSource):
-            if spec.source.dockerfile.parent != spec.source.context:
+            source = DockerfileSource(spec.source.context.resolve(), spec.source.dockerfile.resolve())
+            if source.dockerfile.parent != source.context:
                 raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
+            if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
+                raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+            spec = replace(spec, source=source)
         elif not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
         resources = Resources(
