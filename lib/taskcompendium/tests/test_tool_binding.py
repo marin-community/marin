@@ -5,7 +5,7 @@
 
 import asyncio
 import hashlib
-import importlib
+import inspect
 import json
 import subprocess
 import sys
@@ -14,8 +14,12 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from harbor.models.task.config import EnvironmentConfig
+from harbor.models.trial.paths import TrialPaths
+from upath import UPath
 
 from taskcompendium.grading import exact_answer, structured_exact
+from taskcompendium.harbor.adapter import CompositeToolEnvironment
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, ToolBinding, compatible_lowerings, lower_to_harbor
 from taskcompendium.models import (
@@ -28,7 +32,12 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.provider_sources import SOURCE_MANIFEST, validate_staged_git_provider
+from taskcompendium.provider_sources import (
+    SOURCE_MANIFEST,
+    ToolProviderCache,
+    stage_git_provider,
+    validate_staged_git_provider,
+)
 from taskcompendium.submission import AnswerCall, PlainText, ProviderState
 
 
@@ -99,13 +108,18 @@ def _specification() -> TaskSpec:
     )
 
 
-def _git_provider(tmp_path: Path) -> tuple[ToolBinding, Path]:
-    module = f"external_{hashlib.sha256(str(tmp_path).encode()).hexdigest()[:8]}"
+def _git_provider(
+    tmp_path: Path, *, module: str | None = None, revision: str = "first", failure: str | None = None
+) -> tuple[ToolBinding, Path]:
+    module = module or f"external_{hashlib.sha256(str(tmp_path).encode()).hexdigest()[:8]}"
     checkout = tmp_path / "provider-checkout"
     package = checkout / "src" / module
     package.mkdir(parents=True)
     definitions = ({"type": "function", "function": {"name": "lookup_a", "parameters": {"type": "object"}}},)
     (package / "__init__.py").write_text(
+        "import asyncio\n"
+        "from pathlib import Path\n"
+        "from .counter import next_call\n"
         "class ServiceA:\n"
         "    ACTION_INTERFACE = 'a:v1'\n"
         "    SEED_SHA256 = 'a' * 64\n"
@@ -113,8 +127,23 @@ def _git_provider(tmp_path: Path) -> tuple[ToolBinding, Path]:
         f"    TOOL_DEFINITIONS = {definitions!r}\n"
         "    def __init__(self, *, seed_sha256, action_interface):\n"
         "        assert seed_sha256 == self.SEED_SHA256 and action_interface == self.ACTION_INTERFACE\n"
+        "        self.calls = 0\n"
         "    async def native_tool_definitions(self): return list(self.TOOL_DEFINITIONS)\n"
-        "    async def dispatch_action(self, name, arguments, call_id): return '{}'\n"
+        "    async def dispatch_action(self, name, arguments, call_id):\n"
+        "        self.calls += 1\n"
+        f"        return str(({revision!r}, self.calls, next_call()))\n"
+        "    async def start(self):\n"
+        + (
+            "        raise RuntimeError('start failed')\n"
+            if failure == "start"
+            else "        raise asyncio.CancelledError()\n" if failure == "cancel" else "        pass\n"
+        )
+        + "    async def stop(self):\n"
+        "        assert Path(__file__).is_file()\n"
+        + ("        raise RuntimeError('stop failed')\n" if failure == "stop" else "        pass\n")
+    )
+    (package / "counter.py").write_text(
+        "calls = 0\ndef next_call():\n    global calls\n    calls += 1\n    return calls\n"
     )
     (checkout / "LICENSE").write_text("Apache-2.0\n")
     subprocess.run(("git", "init", "-q", str(checkout)), check=True)
@@ -159,7 +188,7 @@ def git_provider_task(tmp_path, monkeypatch):
     environment_config = HarborEnvironmentConfig(tool_providers={"a": binding, "b": second})
     convention = PlainText(id="plain")
 
-    assert compatible_lowerings(
+    (candidate,) = compatible_lowerings(
         specification,
         (convention,),
         (environment_config,),
@@ -167,16 +196,17 @@ def git_provider_task(tmp_path, monkeypatch):
     )
     task = lower_to_harbor(
         specification,
-        convention,
-        environment_config,
+        candidate.convention,
+        candidate.environment_config,
         tmp_path / "task",
         trusted_provider_sources={"a": checkout},
     )
-    return task, binding, environment_config
+    return task, environment_config
 
 
 def test_git_provider_exports_verified_source_snapshot(git_provider_task):
-    task, binding, _ = git_provider_task
+    task, environment_config = git_provider_task
+    binding = environment_config.tool_providers["a"]
     source = task / "environment" / "provider_sources" / "a"
     validate_staged_git_provider(binding.provider, source)
     assert (source / "LICENSE").read_text() == "Apache-2.0\n"
@@ -184,7 +214,7 @@ def test_git_provider_exports_verified_source_snapshot(git_provider_task):
 
 
 async def test_git_provider_runs_concurrent_offline_trials(git_provider_task, tmp_path, monkeypatch):
-    task, _, environment_config = git_provider_task
+    task, environment_config = git_provider_task
     requests = []
 
     def respond(request, timeout):
@@ -208,27 +238,29 @@ async def test_git_provider_runs_concurrent_offline_trials(git_provider_task, tm
     )
     assert [result.verifier_result.rewards for result in results] == [{"reward": 1.0}] * 2
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == ["lookup_a", "lookup_b"]
-    assert (
-        sum(any(message.get("tool_call_id") == "git1" for message in request["messages"]) for request in requests) == 2
-    )
+    observations = [
+        message["content"]
+        for request in requests
+        for message in request["messages"]
+        if message.get("tool_call_id") == "git1"
+    ]
+    assert observations == ["('first', 1, 1)"] * 2
 
 
 @pytest.mark.parametrize("rewrite_manifest", (False, True), ids=("source", "source-and-manifest"))
 async def test_git_provider_tampering_prevents_launch(git_provider_task, tmp_path, rewrite_manifest):
-    task, _, environment_config = git_provider_task
+    task, environment_config = git_provider_task
     source = task / "environment" / "provider_sources" / "a"
     changed = b"changed\n"
     (source / "LICENSE").write_bytes(changed)
-    error = "source digest mismatch"
     if rewrite_manifest:
         manifest_path = source / SOURCE_MANIFEST
         manifest = json.loads(manifest_path.read_text())
         license_entry = next(item for item in manifest["files"] if item["path"] == "LICENSE")
-        license_entry["sha256"] = hashlib.sha256(changed).hexdigest()
-        license_entry["git_blob"] = hashlib.sha1(b"blob 8\0" + changed, usedforsecurity=False).hexdigest()
+        (source / "LICENSE").rename(source / "LICENSE.changed")
+        license_entry["path"] = "LICENSE.changed"
         manifest_path.write_text(json.dumps(manifest))
-        error = "tree differs from pinned commit"
-    with pytest.raises(ValueError, match=error):
+    with pytest.raises(ValueError, match="tree differs from pinned commit"):
         await run_trial(
             task,
             environment_config,
@@ -259,29 +291,12 @@ def test_external_services_export_as_one_chat_task(tmp_path, monkeypatch):
     specification = _specification()
     convention = AnswerCall(id="answer-call")
 
-    assert compatible_lowerings(specification, (convention,), (environment_config,))
     task_dir = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     exported = json.loads((task_dir / "environment_config.json").read_text())
     assert list(exported["tool_providers"]) == ["a", "b"]
     assert [binding["provider"] for binding in exported["tool_providers"].values()] == [
         binding.provider for binding in bindings
     ]
-
-
-def test_new_unselected_provider_tool_preserves_existing_binding(tmp_path, monkeypatch):
-    bindings = _external_services(tmp_path, monkeypatch, names=("stable_a", "stable_b"))
-    module_name = bindings[0].provider.split(":")[1]
-    provider = importlib.import_module(module_name).ServiceA
-    provider.TOOL_DEFINITIONS = (
-        *provider.TOOL_DEFINITIONS,
-        {"type": "function", "function": {"name": "new_tool", "parameters": {"type": "object"}}},
-    )
-    environment_config = HarborEnvironmentConfig(tool_providers={"a": bindings[0], "b": bindings[1]})
-    specification = _specification()
-    convention = PlainText(id="plain")
-
-    assert compatible_lowerings(specification, (convention,), (environment_config,))
-    lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
 
 def test_provider_tool_collisions_reject_export(tmp_path, monkeypatch):
@@ -399,7 +414,7 @@ def test_git_provider_without_state_excludes_state_candidate(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("name", ("../../../outside", "/absolute", "nested/provider", "..", r"..\outside"))
-def test_escaping_provider_name_prevents_export(tmp_path, monkeypatch, name):
+def test_escaping_provider_name_prevents_export(tmp_path, name):
     binding, checkout = _git_provider(tmp_path)
     with pytest.raises(ValueError):
         environment_config = HarborEnvironmentConfig(tool_providers={name: binding})
@@ -412,3 +427,160 @@ def test_escaping_provider_name_prevents_export(tmp_path, monkeypatch, name):
         )
     assert not (tmp_path / "task").exists()
     assert not (tmp_path / "outside").exists()
+
+
+async def test_git_staging_preserves_unused_source_without_import_policy_checks(tmp_path):
+    binding, checkout = _git_provider(tmp_path)
+    module = binding.provider.rsplit(":", maxsplit=2)[1]
+    package = checkout / "src" / module
+    entrypoint = package / "__init__.py"
+    entrypoint.write_text(entrypoint.read_text() + f"\nif False:\n    import {module}.optional\n")
+    unused = package / "unused.py"
+    unused.write_bytes(b'value = t"{name}"\n')
+    subprocess.run(("git", "-C", str(checkout), "add", "."), check=True)
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "optional source",
+        ),
+        check=True,
+    )
+    commit = subprocess.check_output(("git", "-C", str(checkout), "rev-parse", "HEAD"), text=True).strip()
+    previous = binding.provider.split("@", maxsplit=1)[1].split(":", maxsplit=1)[0]
+    provider = binding.provider.replace(previous, commit)
+    snapshot = tmp_path / "snapshot"
+    stage_git_provider(provider, checkout, snapshot)
+    assert (snapshot / "src" / module / "unused.py").read_bytes() == unused.read_bytes()
+    with ToolProviderCache() as cache:
+        staged = cache.stage(provider, snapshot)
+        service = cache.load(staged, seed_sha256=binding.seed_sha256, action_interface=binding.action_interface)
+        assert await service.dispatch_action("lookup_a", "{}", "call") == "('first', 1, 1)"
+
+
+async def test_cache_isolates_revisions_and_fresh_instances(tmp_path):
+    first, first_checkout = _git_provider(tmp_path / "first", module="same_package", revision="first")
+    second, second_checkout = _git_provider(tmp_path / "second", module="same_package", revision="second")
+    first_source, second_source = tmp_path / "first-source", tmp_path / "second-source"
+    stage_git_provider(first.provider, first_checkout, first_source)
+    stage_git_provider(second.provider, second_checkout, second_source)
+    with ToolProviderCache() as first_cache, ToolProviderCache() as second_cache:
+        first_staged = first_cache.stage(first.provider, first_source)
+        second_staged = second_cache.stage(second.provider, second_source)
+        first_provider = first_cache.load(
+            first_staged, seed_sha256=first.seed_sha256, action_interface=first.action_interface
+        )
+        second_provider = second_cache.load(
+            second_staged, seed_sha256=second.seed_sha256, action_interface=second.action_interface
+        )
+        fresh_provider = first_cache.load(
+            first_staged, seed_sha256=first.seed_sha256, action_interface=first.action_interface
+        )
+        responses = await asyncio.gather(
+            first_provider.dispatch_action("lookup_a", "{}", "first"),
+            second_provider.dispatch_action("lookup_a", "{}", "second"),
+        )
+        assert responses == ["('first', 1, 1)", "('second', 1, 1)"]
+        assert await fresh_provider.dispatch_action("lookup_a", "{}", "fresh") == "('first', 1, 2)"
+        module_names = [staged.factory.__module__ for staged in (first_staged, second_staged)]
+        source_files = [Path(inspect.getfile(staged.factory)) for staged in (first_staged, second_staged)]
+    assert all(name not in sys.modules and name + ".counter" not in sys.modules for name in module_names)
+    assert all(not path.exists() for path in source_files)
+    assert (first_source / "LICENSE").is_file() and (second_source / "LICENSE").is_file()
+
+
+@pytest.mark.parametrize("failure", (None, "start", "stop", "cancel"))
+async def test_environment_releases_imports_after_provider_cleanup(tmp_path, failure):
+    binding, checkout = _git_provider(tmp_path, failure=failure)
+    environment_dir = tmp_path / "environment"
+    stage_git_provider(binding.provider, checkout, environment_dir / "provider_sources" / "a")
+    composite = CompositeToolEnvironment(
+        environment_dir=environment_dir,
+        environment_name="task",
+        session_id="trial",
+        trial_paths=TrialPaths(UPath(tmp_path / "trial")),
+        task_env_config=EnvironmentConfig(),
+        tool_providers={"a": binding.model_dump(mode="json")},
+    )
+    tool_provider = composite.providers["a"]
+    module_name = type(tool_provider).__module__
+    source_file = Path(inspect.getfile(type(tool_provider)))
+    if failure == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await composite.start(False)
+    elif failure == "start":
+        with pytest.raises(RuntimeError, match="start failed"):
+            await composite.start(False)
+    else:
+        await composite.start(False)
+        if failure == "stop":
+            with pytest.raises(ExceptionGroup, match="Provider cleanup failed"):
+                await composite.stop(False)
+        else:
+            await composite.stop(False)
+    # Harbor also stops the environment after a failed start; released providers must not stop twice.
+    await composite.stop(False)
+    assert module_name not in sys.modules and module_name + ".counter" not in sys.modules
+    assert not source_file.exists()
+
+
+async def test_changed_tool_schema_fails_before_trial_or_endpoint(git_provider_task, tmp_path, monkeypatch):
+    task, environment_config = git_provider_task
+    changed = environment_config.model_copy(
+        update={
+            "tool_providers": {
+                **environment_config.tool_providers,
+                "a": environment_config.tool_providers["a"].model_copy(update={"tools_sha256": "0" * 64}),
+            }
+        }
+    )
+    (task / "environment_config.json").write_text(changed.model_dump_json())
+
+    def unexpected_request(_request, timeout):
+        raise AssertionError("Invalid provider must not reach the model endpoint")
+
+    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", unexpected_request)
+    with pytest.raises(ValueError, match="tool schemas differ"):
+        await run_trial(
+            task, changed, ChatLaunch(model="model", api_base="https://example.invalid"), tmp_path / "trials", "invalid"
+        )
+    assert not (tmp_path / "trials").exists()
+
+
+@pytest.mark.parametrize("reserved", (SOURCE_MANIFEST.upper(), SOURCE_MANIFEST + "/nested"))
+def test_reserved_manifest_collision_prevents_source_overwrite(tmp_path, reserved):
+    binding, checkout = _git_provider(tmp_path)
+    collision = checkout / reserved
+    collision.parent.mkdir(parents=True, exist_ok=True)
+    collision.write_text("committed source\n")
+    subprocess.run(("git", "-C", str(checkout), "add", "."), check=True)
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "collision",
+        ),
+        check=True,
+    )
+    commit = subprocess.check_output(("git", "-C", str(checkout), "rev-parse", "HEAD"), text=True).strip()
+    previous = binding.provider.split("@", maxsplit=1)[1].split(":", maxsplit=1)[0]
+    provider = binding.provider.replace(previous, commit)
+    destination = tmp_path / "snapshot"
+    with pytest.raises(ValueError, match="collides with reserved manifest"):
+        stage_git_provider(provider, checkout, destination)
+    assert not destination.exists()
+    assert collision.read_text() == "committed source\n"

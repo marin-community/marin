@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import subprocess
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,7 @@ import pytest
 
 from taskcompendium.grading import exact_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.importers import nemo_workplace
 from taskcompendium.importers.nemo_workplace import (
     DATASET_REVISION,
     DATASET_SPLIT_ROW_COUNTS,
@@ -38,7 +40,7 @@ from taskcompendium.importers.nemo_workplace import (
 )
 from taskcompendium.lowering import lower_to_harbor, provider_class
 from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
-from taskcompendium.provider_sources import stage_git_provider
+from taskcompendium.provider_sources import ToolProviderCache, stage_git_provider
 from taskcompendium.submission import GradingAttempt, PlainText, SubmissionConvention
 from taskcompendium.verifier_registry import grade_answer
 
@@ -74,7 +76,8 @@ def provider_source(tmp_path_factory, trusted_provider_checkout) -> Path:
 @pytest.fixture(scope="module")
 def workplace_provider(provider_source):
     binding = workplace_environment_config(provider_source).tool_providers["workplace"]
-    return provider_class(binding, provider_source)
+    with ToolProviderCache() as cache:
+        yield provider_class(binding, provider_source, cache=cache)
 
 
 @contextmanager
@@ -465,3 +468,71 @@ async def test_workplace_harbor_trials_are_fresh_and_concurrent(
         {"reward": 0.0},
         {"reward": 1.0},
     ]
+
+
+def test_import_retains_provider_source_until_expected_state_is_built(tmp_path, monkeypatch):
+    checkout = tmp_path / "checkout"
+    package = checkout / "src" / "synthetic_workplace"
+    package.mkdir(parents=True)
+    schema = {"name": "finish", "parameters": {"type": "object"}}
+    definitions = [{"type": "function", "function": schema}]
+    (package / "__init__.py").write_text(
+        "import importlib\nimport json\nfrom pathlib import Path\n"
+        "ACTION_INTERFACE = 'synthetic:v1'\nSEED_SHA256 = 'a' * 64\n"
+        "PROVIDER_REVISION = 'synthetic-v1'\nTOOLS_SHA256 = 'b' * 64\n"
+        f"TOOL_DEFINITIONS = {definitions!r}\n"
+        "REQUEST_PARALLEL_TOOL_CALLS = False\nREQUEST_TEMPERATURE = 0\n"
+        "class ToolProvider: pass\n"
+        "def _seed_digest(): return SEED_SHA256\n"
+        f"def get_tools(): return {{'schemas': [{schema!r}]}}\n"
+        "def expected_state_json(actions):\n"
+        "    assert importlib.import_module(__name__) is not None\n"
+        "    return json.dumps({'snapshot_present': Path(__file__).is_file()})\n"
+    )
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    subprocess.run(
+        ["git", "-C", str(checkout), "remote", "add", "origin", "https://github.com/example/synthetic"], check=True
+    )
+    subprocess.run(["git", "-C", str(checkout), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "Synthetic provider",
+        ],
+        check=True,
+    )
+    revision = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
+    locator = f"python+git+https://github.com/example/synthetic@{revision}:synthetic_workplace:ToolProvider"
+    monkeypatch.setattr(nemo_workplace, "PROVIDER", locator)
+    source = tmp_path / "source"
+    stage_git_provider(locator, checkout, source)
+    row = json.dumps(
+        {
+            "id": 0,
+            "environment_name": "workplace_assistant",
+            "category": "workplace_assistant_calendar",
+            "responses_create_params": {
+                "input": [{"role": "user", "content": "Finish the task."}],
+                "tools": [schema],
+                "parallel_tool_calls": False,
+                "temperature": 0,
+            },
+            "ground_truth": [],
+        }
+    ).encode()
+    monkeypatch.setattr(nemo_workplace, "ROW_SHA256_BY_ID", {0: hashlib.sha256(row).hexdigest()})
+    before = set(sys.modules)
+
+    imported = import_row(row, source)
+
+    assert json.loads(imported.specification.verifier.parameters_json)["expected"] == {"snapshot_present": True}
+    assert imported.environment_config.tool_providers["workplace"].provider == locator
+    assert not any(name.startswith("_taskcompendium_providers_") for name in set(sys.modules) - before)
