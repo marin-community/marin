@@ -67,10 +67,9 @@ BATCH_SIZE = 512
 # half of a batch (~45% on CPU, nearly all of it on an accelerator), so keeping two
 # batches in flight lets it overlap the forward pass. Bounds memory to a few batches.
 PREFETCH_BATCHES = 2
-# Scoring is I/O-bound (workers sit ~25% CPU streaming parquet). A worker sits ~3 GiB
-# resident (model + a batch's JAX activations + per-seq-len compiled caches); a heavier
-# shard can spike transiently above that -- 4g OOM-killed workers on the 100B corpus.
-# 8g covers the spike with margin; packing is CPU-bound (cpu=2), so the extra RAM is free.
+# A worker sits ~3 GiB resident (model + a batch's JAX activations + per-seq-len
+# compiled caches); a heavier shard can spike transiently above that -- 4g OOM-killed
+# workers on the 100B corpus. 8g covers the spike with margin.
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
 SAMPLE_TEXT_CHARS = 4_000  # text kept per sampled doc for the report spot-check
