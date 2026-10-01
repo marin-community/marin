@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskTrove exact imports with direct-chat Harbor coverage."""
+"""TaskTrove puzzle choice and ordered-list imports with Harbor coverage."""
 
 import json
 
 import pytest
 
 from taskcompendium.grading import Outcome
-from taskcompendium.importers.tasktrove.exact import import_task
+from taskcompendium.importers.tasktrove.puzzle_choices_and_lists import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import (
     AnswerType,
