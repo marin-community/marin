@@ -515,3 +515,30 @@ Remaining exposure by lever (s/step):
   0.111 inside remat dispatch c0. Remat dispatch c0's transfer (0.143) has only the shared-expert backward GEMMs
   as candidate cover, and they currently cover the reverse dispatches.
 - Copies (A's area): 0.62, mostly at the step end.
+
+## M30B-024 Recompute pipelining check and forward-order backward
+
+(a) Does the pipelined branch's recompute pipeline? `b/recompute_deps.py` traces the stack model's grad jaxpr on
+CPU, flattens the backward scan body into one dataflow graph, and lists each ragged all-to-all's transitive
+inputs. `mfu30-stack-pipelined` (MoE module = 64909b24d0): the recomputed dispatch c1 depends only on the
+recomputed dispatch c0 (barrier on `x_dispatch` c0), no c0 expert matmul, so it can run under the c0 recompute
+GEMMs; the return-path barrier is dead in the recompute and the backward body has 8 all-to-alls, no return or
+down GEMM. `mfu30-stack` (sequential): the recomputed dispatch c1 has the two c0 recompute matmuls among its
+inputs (barrier on c0's expert-MLP residuals), the serialization behind sonic-02's 0.169 s. Both reverse returns of
+dy have no inputs but dy, in both variants: their placement is purely the scheduler's.
+
+(b) Forward-order backward: `_routed_experts_bwd` runs chunks 0, 1 instead of 1, 0, so chunk 0's backward and its
+returns depend only on the c0 recompute and dy c0's reverse return, never on dispatch c1 or the c1 recompute
+(`recompute_deps.py`). Commits: sequential 547bf2ad20 (`research/mcwitt/mfu30-routing`), pipelined 2cc470d88f
+(`research/mcwitt/mfu30-routing-pipelined`); each applies cleanly to C's matching stack branch (ff0ce13b29,
+62095665a6).
+
+Gate `m30b-reorder-gate-01` (GB200x4, `b/reorder_gate.sh`): out/dropped/dx/dS/dW13/dW2 bitwise for forward order
+vs D, pipelined forward order vs pipelined, and pipelined vs D, in all six routing cases (small uniform, skewed
+with 12,685 drops, padded, one-hot; hero uniform, hero skewed+padded with 357,643 drops). 3-layer rematted scans:
+gradients bitwise for both pairs; step time unchanged (D 0.2917 s vs forward order 0.2919; pipelined 0.2966 vs
+0.2968). pytest 88 passed, plus the same 3 GPU-only failures as main (f32 into QuACK). In the MoE-only scan the
+scheduler still leaves most incoming transports without a GEMM under them in either order (it has no shared
+experts or attention to place), so the scan cannot show the hero effect; that needs a rack trace. If the hero
+schedule does not move, the deterministic option is a manual remat: the bwd rule recomputes the dispatch and
+gate/up itself, so barriers inside it can order the transports.
