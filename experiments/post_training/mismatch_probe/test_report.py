@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import math
 
 import numpy as np
 import pytest
-from finestore.mismatch_probe import (
+from finestore.reader import ReadView
+from finestore.rl.mismatch_probe import (
     MANIFEST_TABLE,
     PROBE_TABLE,
     SCORES_TABLE,
@@ -14,10 +16,10 @@ from finestore.mismatch_probe import (
     ScoreRow,
     register_mismatch_tables,
 )
-from finestore.reader import ReadView
 from finestore.store import DataStore
 
 from experiments.post_training.mismatch_probe import report as report_module
+from experiments.post_training.mismatch_probe.metrics import comparison_metrics
 from experiments.post_training.mismatch_probe.report import (
     analyze_archive,
     compare_archives,
@@ -37,8 +39,12 @@ def _archive(
     cache_mode="off",
     invalid_generation=False,
     native_offset=0.0,
-    weight_tag="w",
-    reread_weight_override=None,
+    checkpoint_path="checkpoint",
+    runtime_commit="runtime",
+    starting_step=0,
+    reread_step_override=None,
+    omit_scoring=None,
+    known_ratios=False,
     tokenizer_fingerprint="toy-tokenizer",
     probe_hash="frozen",
     response_shift=0,
@@ -48,7 +54,7 @@ def _archive(
 ):
     rows = []
     scores = []
-    for position in range(4):
+    for position in range(2 if known_ratios else 4):
         prompt = f"p{position // 2}"
         sample = f"{prompt}:{position % 2}"
         response = [10 + position + response_shift, 20 + position + response_shift]
@@ -67,7 +73,7 @@ def _archive(
                 vllm_output_ids=response,
                 trainer_input_ids=[response[0], 99] if corrupt_token and position == 0 else response,
                 response_mask=[True, True],
-                loss_mask=[True, True],
+                loss_mask=[True, not (known_ratios and position == 1)],
                 reward=float(position % 2),
                 advantage=1.0 if position % 2 else -1.0,
                 request_seed=position,
@@ -95,6 +101,11 @@ def _archive(
             "vllm.rescore@2": [-1.97, -2.97],
             "trainer@2:native": [-2.07, -3.07],
         }
+        if known_ratios:
+            ratios = [0.25, 0.5] if position == 0 else [1.0, 100.0]
+            values["trainer@0:native"] = [
+                base + math.log(ratio) for base, ratio in zip([-2.0, -3.0], ratios, strict=True)
+            ]
         if cache_mode == "on":
             values = {
                 f"{name}:on" if name.startswith("vllm.rescore@") else name: scores for name, scores in values.items()
@@ -121,10 +132,10 @@ def _archive(
                     mode=name.split(":", 1)[1] if name.startswith("trainer@") else "",
                     cache_mode=("on" if name.endswith(":on") else "off") if name.startswith("vllm.rescore@") else None,
                     update=update,
-                    weights_hash=(
-                        reread_weight_override
-                        if reread_weight_override is not None and name.startswith("vllm.rescore@1")
-                        else f"{weight_tag}{update}"
+                    global_step=(
+                        reread_step_override
+                        if reread_step_override is not None and name.startswith("vllm.rescore@1")
+                        else starting_step + update
                     ),
                     logprobs=logprobs,
                     expert_choices=observed.tobytes() if observed is not None else None,
@@ -137,11 +148,12 @@ def _archive(
         archive=str(root),
         status="complete",
         probe_hash=probe_hash,
-        starting_weights_hash=f"{weight_tag}0",
+        checkpoint_path=checkpoint_path,
+        runtime_commit=runtime_commit,
         tokenizer_fingerprint=tokenizer_fingerprint,
-        starting_global_step=0,
+        starting_global_step=starting_step,
         scored_updates=[0, 1, 2],
-        scored_global_steps=[0, 1, 2],
+        scored_global_steps=[starting_step, starting_step + 1, starting_step + 2],
         architecture="GrugMoeForCausalLM",
         vllm_enforce_eager=False,
         optimizer_steps_per_update=1,
@@ -161,6 +173,8 @@ def _archive(
             for row in rows:
                 transaction.table(PROBE_TABLE).add(row.model_dump())
             for row in scores:
+                if row.scorer == omit_scoring:
+                    continue
                 transaction.table(SCORES_TABLE).add(row.model_dump())
             transaction.table(MANIFEST_TABLE).add(manifest.model_dump())
 
@@ -168,6 +182,24 @@ def _archive(
 def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, monkeypatch):
     root = tmp_path / "archive"
     _archive(root)
+    numerical_root = tmp_path / "known-ratios"
+    _archive(numerical_root, known_ratios=True)
+    archived = report_module.load_archive(str(numerical_root))
+    chosen = [archived.scores["trainer@0:native"][row.sample_id].logprobs for row in archived.probes]
+    generation = [archived.scores["vllm.generate@0"][row.sample_id].logprobs for row in archived.probes]
+    known = comparison_metrics(chosen, generation, [row.loss_mask for row in archived.probes], tis_cap=0.5)
+    numerical_report = analyze_archive(str(numerical_root), bootstrap_draws=20)
+    assert numerical_report["comparisons"]["implementation_mismatch"]["metrics"]["tokens"] == 3
+    assert known["tokens"] == 3
+    assert known["abs_min"] == 0.0
+    assert known["abs_p50"] == pytest.approx(math.log(2), abs=1e-6)
+    assert known["abs_p75"] == pytest.approx((math.log(2) + math.log(4)) / 2, abs=1e-6)
+    assert known["abs_max"] == pytest.approx(math.log(4), abs=1e-6)
+    assert known["share_beyond_2x"] == pytest.approx(2 / 3)
+    assert known["k3"] == pytest.approx(sum(ratio - 1 - math.log(ratio) for ratio in (0.25, 0.5, 1)) / 3, abs=1e-6)
+    assert known["token_ess_fraction_raw"] == pytest.approx(49 / (3 * 21))
+    assert known["token_ess_fraction_capped"] == pytest.approx(25 / (3 * 9))
+    assert known["sequence_ess_fraction_raw"] == pytest.approx(81 / (2 * 65))
     report = analyze_archive(str(root), bootstrap_draws=80)
     assert report["comparisons"]["implementation_mismatch"]["metrics"]["abs_p99"] > 0.09
     assert report["comparisons"]["trainer_floor"]["metrics"]["abs_p99"] == 0.0
@@ -251,12 +283,17 @@ def test_report_refuses_invalid_generation_distribution(tmp_path):
     _archive(root, invalid_generation=True)
     with pytest.raises(ValueError, match="sampling-distribution check failed"):
         analyze_archive(str(root), bootstrap_draws=20)
+    for scorer in ("trainer", "vllm.generate"):
+        missing = tmp_path / scorer
+        _archive(missing, omit_scoring=scorer)
+        with pytest.raises(ValueError, match="require native and generation"):
+            analyze_archive(str(missing), bootstrap_draws=20)
 
 
 def test_report_refuses_same_update_comparison_with_different_weights(tmp_path):
     root = tmp_path / "different-reread-weights"
-    _archive(root, reread_weight_override="wrong-update-1")
-    with pytest.raises(ValueError, match="comparison mismatch_after_1 scores different weights"):
+    _archive(root, reread_step_override=99)
+    with pytest.raises(ValueError, match=r"scoring vllm\.rescore@1 differs from the recorded trainer step"):
         analyze_archive(str(root), bootstrap_draws=20)
 
 
@@ -266,7 +303,7 @@ def test_configuration_comparison_pairs_prompts_and_requires_same_starting_weigh
     )
     _archive(left, with_routes=True)
     _archive(right, native_offset=0.04, with_routes=True, forward_seconds=0.3, matching_native_routes=True)
-    _archive(changed_weights, weight_tag="other")
+    _archive(changed_weights, checkpoint_path="other")
     _archive(changed_tokenizer, tokenizer_fingerprint="other-tokenizer")
     _archive(independent, probe_hash="another-answer-set", response_shift=1)
     paired = compare_archives(str(left), str(right), bootstrap_draws=40)
@@ -292,8 +329,13 @@ def test_configuration_comparison_pairs_prompts_and_requires_same_starting_weigh
     effect = paired["comparisons"]["implementation_mismatch"]
     assert effect["metrics"]["abs_p99_left_minus_right"] > 0
     assert effect["ci95"]["abs_p99_left_minus_right"][0] > 0
-    with pytest.raises(ValueError, match="same starting weight hash"):
+    with pytest.raises(ValueError, match="same starting checkpoint_path"):
         compare_archives(str(left), str(changed_weights), bootstrap_draws=20)
+    for field, value in (("runtime_commit", "other-runtime"), ("starting_step", 4)):
+        changed = tmp_path / field
+        _archive(changed, **{field: value})
+        with pytest.raises(ValueError, match="same starting"):
+            compare_archives(str(left), str(changed), bootstrap_draws=20)
     with pytest.raises(ValueError, match="same tokenizer fingerprint"):
         compare_archives(str(left), str(changed_tokenizer), bootstrap_draws=20)
     with pytest.raises(ValueError, match="same frozen probe hash"):

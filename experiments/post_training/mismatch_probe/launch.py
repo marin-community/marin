@@ -58,7 +58,7 @@ class ProbeSettings:
     seed: int
     prompt_count: int
     samples_per_prompt: int
-    updates: tuple[int, ...]
+    updates: int
     keep_fraction: float
     cache_mode: str
     reuse_probe: str | None
@@ -85,7 +85,7 @@ def probe_block(settings: ProbeSettings) -> dict:
                 "seed": settings.seed,
                 "archive_uri": None,
                 "reuse_probe": settings.reuse_probe,
-                "score_after_updates": list(settings.updates),
+                "updates": settings.updates,
                 "extra_trainer_modes": ["router_replay", "router_replay_filtered"],
                 "filtered_replay": {"keep_fraction": settings.keep_fraction},
                 "rescore_prefix_cache": settings.cache_mode,
@@ -126,8 +126,8 @@ def tiny_grug_recipe(
             "strategy": "megatron",
             "flash_attn": False,
             "use_sample_packing": arm.use_sample_packing,
-            "epochs": WARMUP_UPDATES + max(settings.updates),
-            "max_steps": WARMUP_UPDATES if warmup else max(settings.updates),
+            "epochs": WARMUP_UPDATES + settings.updates,
+            "max_steps": WARMUP_UPDATES if warmup else settings.updates,
             "update_epochs_per_batch": 1,
             "micro_forward_batch_size_per_gpu": 2,
             "ckpt_interval": 1,
@@ -254,7 +254,7 @@ def build_arms(
 @click.option("--seed", type=int, default=17, show_default=True)
 @click.option("--prompt-count", type=int, default=2, show_default=True)
 @click.option("--samples-per-prompt", type=int, default=2, show_default=True)
-@click.option("--score-after-update", "updates", multiple=True, type=int, default=(0, 1, 2))
+@click.option("--updates", type=click.IntRange(min=0), default=2, show_default=True)
 @click.option("--keep-fraction", type=float, default=0.5, show_default=True)
 @click.option("--rescore-prefix-cache", "cache_mode", type=click.Choice(("off", "on", "both")), default="off")
 @rl_build_options
@@ -269,7 +269,7 @@ def main(
     seed: int,
     prompt_count: int,
     samples_per_prompt: int,
-    updates: tuple[int, ...],
+    updates: int,
     keep_fraction: float,
     cache_mode: str,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:

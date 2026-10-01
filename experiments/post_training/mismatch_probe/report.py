@@ -8,13 +8,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from finestore.mismatch_probe import MANIFEST_TABLE, PROBE_TABLE, SCORES_TABLE, ManifestRow, ProbeRow, ScoreRow
 from finestore.reader import ReadView
+from finestore.rl.mismatch_probe import MANIFEST_TABLE, PROBE_TABLE, SCORES_TABLE, ManifestRow, ProbeRow, ScoreRow
 
 from experiments.post_training.mismatch_probe.metrics import (
     comparison_metrics,
@@ -43,6 +43,56 @@ def _rescore_scoring(update: int, cache_mode: str = "off") -> str:
 
 
 NATIVE_SCORING = _trainer_scoring(0, NATIVE_MODE)
+
+
+@dataclass(frozen=True)
+class TokenIdentity:
+    samples: int
+    matching_responses: int
+    matching_prompts: int
+
+    @property
+    def fraction(self) -> float:
+        return min(self.matching_responses, self.matching_prompts) / self.samples
+
+
+@dataclass(frozen=True)
+class Comparison:
+    target: str
+    reference: str
+    metrics: dict[str, float | int]
+    ci95: dict[str, tuple[float, float]]
+    reference_distribution: str
+    route_set_agreement: dict | None = None
+
+
+@dataclass(frozen=True)
+class PairedImprovement:
+    native_minus_mode: float
+    ci95: tuple[float, float]
+
+
+@dataclass(frozen=True)
+class SamplingCheck:
+    mean_ratio: float
+    bootstrap_standard_error: float
+    passed: bool
+
+
+@dataclass
+class ArchiveReport:
+    analysis_version: int
+    archive: str
+    manifest: dict
+    input_commit_token: str
+    bootstrap: dict
+    token_identity: TokenIdentity
+    timing: dict
+    step_metrics: dict
+    comparisons: dict[str, Comparison] = field(default_factory=dict)
+    paired_improvements: dict[str, dict[str, PairedImprovement]] = field(default_factory=dict)
+    route_diagnostics: dict = field(default_factory=dict)
+    checks: dict[str, SamplingCheck | str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -117,17 +167,20 @@ def load_archive(uri: str) -> ArchiveData:
             raise ValueError(f"scoring {name} does not cover every frozen sample")
         if (
             len({score.update for score in sample_scores.values()}) != 1
-            or len({score.weights_hash for score in sample_scores.values()}) != 1
+            or len({score.global_step for score in sample_scores.values()}) != 1
         ):
-            raise ValueError(f"scoring {name} mixes updates or weight identities")
+            raise ValueError(f"scoring {name} mixes relative updates or trainer steps")
         for probe in probes:
             score = sample_scores[probe.sample_id]
             if len(score.logprobs) != len(probe.vllm_output_ids):
                 raise ValueError(f"scoring {name} has incomplete tokens for {probe.sample_id}")
             if any(not math.isfinite(value) for value in score.logprobs):
                 raise ValueError(f"scoring {name} has nonfinite tokens for {probe.sample_id}")
-            if score.update == 0 and score.weights_hash != manifest.starting_weights_hash:
-                raise ValueError(f"scoring {name} differs from the starting weight hash")
+            expected_steps = dict(zip(manifest.scored_updates, manifest.scored_global_steps, strict=True))
+            if score.global_step != expected_steps.get(score.update):
+                raise ValueError(f"scoring {name} differs from the recorded trainer step")
+    if NATIVE_SCORING not in scores or GENERATION_SCORING not in scores:
+        raise ValueError("complete mismatch archives require native and generation scorings")
     return ArchiveData(manifest=manifest, probes=probes, scores=scores, commit_token=str(view.token))
 
 
@@ -137,8 +190,8 @@ def _require_same_weights_if_same_update(
     """Reject purported same-weight comparisons before numerical analysis."""
     target_row = next(iter(target.values()))
     reference_row = next(iter(reference.values()))
-    if target_row.update == reference_row.update and target_row.weights_hash != reference_row.weights_hash:
-        raise ValueError(f"comparison {label} scores different weights at update {target_row.update}")
+    if target_row.update == reference_row.update and target_row.global_step != reference_row.global_step:
+        raise ValueError(f"comparison {label} scores different trainer steps at update {target_row.update}")
 
 
 def _trainer_modes(scores: dict[str, dict[str, ScoreRow]]) -> list[str]:
@@ -180,6 +233,16 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
 
 
 def _finite_json(value):
+    if isinstance(value, TokenIdentity):
+        return asdict(value) | {"fraction": value.fraction}
+    if isinstance(value, SamplingCheck):
+        return {
+            "mean_ratio": value.mean_ratio,
+            "bootstrap_standard_error": value.bootstrap_standard_error,
+            "pass": value.passed,
+        }
+    if is_dataclass(value):
+        return {name: _finite_json(item) for name, item in vars(value).items()}
     if isinstance(value, dict):
         return {key: _finite_json(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -264,31 +327,26 @@ def _timing_values(archive: ArchiveData) -> dict[str, float]:
 def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict:
     archive = load_archive(uri)
     manifest, probes, scores = archive.manifest, archive.probes, archive.scores
-    identity = {
-        "samples": len(probes),
-        "matching_responses": sum(row.vllm_output_ids == row.trainer_input_ids for row in probes),
-        "matching_prompts": sum(row.prompt_token_ids == row.trainer_prompt_ids for row in probes),
-    }
-    identity["fraction"] = min(identity["matching_responses"], identity["matching_prompts"]) / len(probes)
-    report = {
-        "analysis_version": ANALYSIS_VERSION,
-        "archive": uri,
-        "manifest": manifest.model_dump(),
-        "input_commit_token": archive.commit_token,
-        "bootstrap": {"seed": manifest.bootstrap_seed, "draws": bootstrap_draws, "cluster": "prompt_id"},
-        "token_identity": identity,
-        "comparisons": {},
-        "paired_improvements": {},
-        "route_diagnostics": {},
-        "checks": {},
-        "timing": json.loads(manifest.timing_json),
-        "step_metrics": json.loads(manifest.step_metrics_json),
-    }
-    if identity["fraction"] != 1.0:
-        report["checks"]["token_identity"] = "failed"
+    identity = TokenIdentity(
+        samples=len(probes),
+        matching_responses=sum(row.vllm_output_ids == row.trainer_input_ids for row in probes),
+        matching_prompts=sum(row.prompt_token_ids == row.trainer_prompt_ids for row in probes),
+    )
+    report = ArchiveReport(
+        analysis_version=ANALYSIS_VERSION,
+        archive=uri,
+        manifest=manifest.model_dump(),
+        input_commit_token=archive.commit_token,
+        bootstrap={"seed": manifest.bootstrap_seed, "draws": bootstrap_draws, "cluster": "prompt_id"},
+        token_identity=identity,
+        timing=json.loads(manifest.timing_json),
+        step_metrics=json.loads(manifest.step_metrics_json),
+    )
+    if identity.fraction != 1.0:
+        report.checks["token_identity"] = "failed"
         return _finite_json(report)
 
-    report["route_diagnostics"] = _route_diagnostics(probes, scores, manifest.bootstrap_seed, bootstrap_draws)
+    report.route_diagnostics = _route_diagnostics(probes, scores, manifest.bootstrap_seed, bootstrap_draws)
 
     prompt_ids = [row.prompt_id for row in probes]
     definitions = _comparison_definitions(scores)
@@ -301,27 +359,27 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
             return rows.metrics(indices)
 
         bootstrap = prompt_cluster_bootstrap(prompt_ids, calculate, seed=manifest.bootstrap_seed, draws=bootstrap_draws)
-        report["comparisons"][label] = {
-            "target": target_name,
-            "reference": reference_name,
-            "metrics": bootstrap.point,
-            "ci95": bootstrap.intervals,
-            "reference_distribution": (
+        route = report.route_diagnostics.get(target_name)
+        report.comparisons[label] = Comparison(
+            target=target_name,
+            reference=reference_name,
+            metrics=bootstrap.point,
+            ci95=bootstrap.intervals,
+            reference_distribution=(
                 "generation" if reference_name == GENERATION_SCORING else "diagnostic_re_read_or_trainer"
             ),
-        }
-        if target_name in report["route_diagnostics"]:
-            route = report["route_diagnostics"][target_name]
-            report["comparisons"][label]["route_set_agreement"] = {
-                "value": route["metrics"]["set_agreement"],
-                "ci95": route["ci95"].get("set_agreement"),
-            }
+            route_set_agreement=(
+                {"value": route["metrics"]["set_agreement"], "ci95": route["ci95"].get("set_agreement")}
+                if route is not None
+                else None
+            ),
+        )
         sampled_metrics[label] = bootstrap.draws
 
     baseline = "implementation_mismatch"
     for mode in _trainer_modes(scores):
         variant = f"{mode}_vs_generation"
-        if baseline not in sampled_metrics or variant not in sampled_metrics:
+        if variant not in sampled_metrics:
             continue
         paired = {}
         for metric in HEADLINE_METRICS:
@@ -331,28 +389,21 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
                     for left, right in zip(sampled_metrics[baseline], sampled_metrics[variant], strict=True)
                 ]
             )
-            point = (
-                report["comparisons"][baseline]["metrics"][metric] - report["comparisons"][variant]["metrics"][metric]
-            )
-            paired[metric] = {"native_minus_mode": float(point), "ci95": np.percentile(draws, [2.5, 97.5]).tolist()}
-        report["paired_improvements"][mode] = paired
+            point = report.comparisons[baseline].metrics[metric] - report.comparisons[variant].metrics[metric]
+            paired[metric] = PairedImprovement(float(point), tuple(np.percentile(draws, [2.5, 97.5]).tolist()))
+        report.paired_improvements[mode] = paired
 
-    if "implementation_mismatch" in sampled_metrics:
-        baseline_stats = report["comparisons"]["implementation_mismatch"]["metrics"]
-        bootstrap_ratios = np.asarray([draw["mean_ratio"] for draw in sampled_metrics["implementation_mismatch"]])
-        standard_error = float(bootstrap_ratios.std(ddof=1)) if len(bootstrap_ratios) > 1 else math.nan
-        mean_ratio = baseline_stats["mean_ratio"]
-        passes = math.isfinite(standard_error) and mean_ratio <= 1 + 3 * standard_error
-        report["checks"]["generation_ratio_sanity"] = {
-            "mean_ratio": mean_ratio,
-            "bootstrap_standard_error": standard_error,
-            "pass": passes,
-        }
-        if not passes:
-            raise ValueError(
-                f"generation-time sampling-distribution check failed: mean ratio {mean_ratio:.6g}, "
-                f"bootstrap standard error {standard_error:.6g}"
-            )
+    baseline_stats = report.comparisons["implementation_mismatch"].metrics
+    bootstrap_ratios = np.asarray([draw["mean_ratio"] for draw in sampled_metrics["implementation_mismatch"]])
+    standard_error = float(bootstrap_ratios.std(ddof=1)) if len(bootstrap_ratios) > 1 else math.nan
+    mean_ratio = baseline_stats["mean_ratio"]
+    passes = math.isfinite(standard_error) and mean_ratio <= 1 + 3 * standard_error
+    report.checks["generation_ratio_sanity"] = SamplingCheck(mean_ratio, standard_error, passes)
+    if not passes:
+        raise ValueError(
+            f"generation-time sampling-distribution check failed: mean ratio {mean_ratio:.6g}, "
+            f"bootstrap standard error {standard_error:.6g}"
+        )
     return _finite_json(report)
 
 
@@ -371,8 +422,9 @@ def compare_archives(
             for row in archive.probes
         ):
             raise ValueError("configuration A/B requires exact trainer and sampler token identity in both archives")
-    if left.manifest.starting_weights_hash != right.manifest.starting_weights_hash:
-        raise ValueError("configuration A/B requires the same starting weight hash")
+    for name in ("checkpoint_path", "starting_global_step", "runtime_commit"):
+        if getattr(left.manifest, name) != getattr(right.manifest, name):
+            raise ValueError(f"configuration A/B requires the same starting {name}")
     if left.manifest.vllm_enforce_eager != right.manifest.vllm_enforce_eager:
         raise ValueError("configuration A/B requires the same vLLM execution mode")
     left_tokenizer = left.manifest.tokenizer_fingerprint
@@ -417,7 +469,9 @@ def compare_archives(
         "left": left_uri,
         "right": right_uri,
         "kind": "shared_tokens",
-        "starting_weights_hash": left.manifest.starting_weights_hash,
+        "checkpoint_path": left.manifest.checkpoint_path,
+        "starting_global_step": left.manifest.starting_global_step,
+        "runtime_commit": left.manifest.runtime_commit,
         "probe_hashes": [left.manifest.probe_hash, right.manifest.probe_hash],
         "bootstrap": {"seed": left.manifest.bootstrap_seed, "draws": bootstrap_draws, "cluster": "prompt_id"},
         "comparisons": {},
