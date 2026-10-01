@@ -12,15 +12,25 @@ from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequ
 
 FAMILY = "math-answer"
 CONVERTER = "all_puzzles"
+_TASK_SCAFFOLDS = frozenset(
+    {
+        "Solve the task and write to `/app/answer.txt`.",
+        "Solve this puzzle and provide your answer. The expected format and requirements are specified "
+        "in the problem statement above. Note: This is a logic/reasoning puzzle that requires careful "
+        "analysis and systematic thinking to arrive at the correct solution.",
+    }
+)
 
 
 def _clean_instruction(instruction: str) -> str:
     """Keep the puzzle content while removing the source's file-based harness contract."""
     title, separator, remainder = instruction.partition("\n")
     _, puzzle_separator, content = remainder.partition("## Puzzle Type")
-    problem, task_separator, _ = content.partition("## Task")
+    problem, task_separator, tail = content.partition("## Task")
     if not separator or not puzzle_separator or not task_separator or not problem.strip():
         raise ValueError("Unsupported exact-mode puzzle instruction")
+    if " ".join(tail.split()) not in _TASK_SCAFFOLDS:
+        raise ValueError("Unsupported exact-mode puzzle task section")
     return f"{title.strip()}\n\n## Puzzle Type{problem.rstrip()}"
 
 
