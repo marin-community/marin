@@ -144,15 +144,17 @@ def test_wandb_tracker_rejects_artifacts_larger_than_20_mb(tmp_path):
         WandbTracker(FakeRun()).log_artifact(artifact_path)
 
 
-def test_wandb_config_skips_oversized_automatic_source_capture(tmp_path):
+def test_wandb_config_skips_oversized_source_capture_but_keeps_commit(tmp_path, monkeypatch):
     source_path = tmp_path / "source"
     source_path.mkdir()
     large_file = source_path / "oversized.bin"
     large_file.touch()
     with large_file.open("r+b") as artifact_file:
         artifact_file.truncate(MAX_WANDB_ARTIFACT_BYTES + 1)
+    commit = "0123456789abcdef0123456789abcdef01234567"
+    monkeypatch.setenv("GIT_COMMIT", commit)
 
-    assert WandbConfig(save_code=str(source_path))._git_settings() == {}
+    assert WandbConfig(save_code=str(source_path))._git_settings() == {"git_commit": commit}
 
 
 def test_wandb_config_fork_initializes_child_without_resume(monkeypatch):

@@ -596,27 +596,29 @@ class WandbConfig(TrackerConfig):
             code_dir = infer_experiment_git_root() or "."  # type: ignore
         else:
             code_dir = None
-        if code_dir is not None:
-            try:
-                _validate_wandb_artifact_size(code_dir, artifact_name="source code")
-            except ValueError as exc:
-                logger.error(
-                    "Automatic W&B source capture is disabled: %s. Set save_code=False or choose a smaller "
-                    "source directory.",
-                    exc,
-                )
-                return other_settings
+        if code_dir is None:
+            return other_settings
+        try:
+            _validate_wandb_artifact_size(code_dir, artifact_name="source code")
+        except ValueError as exc:
+            logger.error(
+                "Automatic W&B source capture is disabled: %s. Set save_code=False or choose a smaller "
+                "source directory.",
+                exc,
+            )
+        else:
             logger.info(f"Setting wandb code_dir to {code_dir}")
             other_settings["code_dir"] = code_dir
             other_settings["git_root"] = code_dir
-            # for some reason, wandb isn't populating the git commit, so we do it here
-            try:
-                sha = self._get_git_sha(code_dir)
-            except:  # noqa: E722
-                logger.warning(f"Could not get git sha for {code_dir}. Will not log git commit.")
-                sha = None
-            if sha is not None:
-                other_settings["git_commit"] = sha
+        # The commit is run metadata, so record it even when the source is too large to capture.
+        # wandb doesn't populate it on its own.
+        try:
+            sha = self._get_git_sha(code_dir)
+        except:  # noqa: E722
+            logger.warning(f"Could not get git sha for {code_dir}. Will not log git commit.")
+            sha = None
+        if sha is not None:
+            other_settings["git_commit"] = sha
 
         return other_settings
 

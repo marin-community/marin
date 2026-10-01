@@ -94,6 +94,7 @@ jobs:
             --preemptible \
             --reserve "$RESERVE_TPU_TYPE" \
             -e RUN_ID "$RUN_ID" \
+            -e GIT_COMMIT "$GITHUB_SHA" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
             -e CANARY_TPU_TYPE "$CANARY_TPU_TYPE" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
