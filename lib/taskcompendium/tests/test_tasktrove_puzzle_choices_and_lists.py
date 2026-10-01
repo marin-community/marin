@@ -72,3 +72,10 @@ async def test_exact_import_harbor_replay_returns_correct_rewards(tmp_path, resp
     outcome = json.loads((tmp_path / f"trials/{trial_name}/verifier/taskcompendium-result.json").read_text())
     assert harbor_result.exception_info is None, harbor_result.exception_info
     assert outcome == {"status": "graded", "reward": reward, "error": None}
+
+
+def test_exact_import_rejects_unrecognized_substantive_task_section():
+    archive = exact_archive()
+    archive.files["instruction.md"] += b"Use only the first two words, excluding the third.\n"
+    with pytest.raises(ValueError, match="Unsupported exact-mode puzzle task section"):
+        import_task(archive)
