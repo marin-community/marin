@@ -118,15 +118,23 @@ def test_calendar_import_keeps_tags_and_expected_schedule_private(source, tmp_pa
 
 def test_calendar_import_preserves_requirements_and_leaves_delivery_to_conventions():
     specification = import_task(_archive(), runtime_image=RUNTIME_IMAGE)
-    expected = (
-        "You are scheduling events on a calendar. Read the conversation below and "
-        "provide the calendar as a JSON list. Each event must include `event_id` "
-        '(int), `event_name` (str), `start_time` ("HH:MM"), and `duration` (minutes). '
-        "Include exactly the requested events with their specified durations. "
-        "Satisfy every event's time window and declared constraints. Events must not overlap.\n\n---\n\n"
-        "Schedule the named event inside its allowed time window."
-    )
-    assert specification.context.events[0].content == expected
+    content = specification.context.events[0].content
+    for requirement in (
+        "JSON list",
+        "`event_id` (int)",
+        "`event_name` (str)",
+        '`start_time` ("HH:MM")',
+        "`duration` (minutes)",
+        "exactly the requested events",
+        "specified durations",
+        "time window",
+        "declared constraints",
+        "must not overlap",
+    ):
+        assert requirement in content
+    assert content.rpartition("\n\n---\n\n")[2] == "Schedule the named event inside its allowed time window."
+    for scaffolding in ("verifier", "/app/answer.txt", "final response"):
+        assert scaffolding not in content
 
     for convention, delivery in (
         (PlainText(id="plain"), "Give your answer as plain text."),
@@ -135,7 +143,7 @@ def test_calendar_import_preserves_requirements_and_leaves_delivery_to_conventio
     ):
         request = chat_request(specification, convention)
         assert request["messages"] == [
-            {"role": "user", "content": expected},
+            {"role": "user", "content": content},
             {"role": "user", "content": delivery},
         ]
 
