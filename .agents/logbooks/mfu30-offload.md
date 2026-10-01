@@ -357,3 +357,11 @@ candidate add-on, as its own paired comparison against the final program. `arm2_
 Same-code repeat `m30-ctl-s0-r2` vs `mhep-ctx4k-s0`: MFU 28.235 vs 28.261; |dloss| max 3.3e-4, late mean
 -3.9e-5, 35/89 positive. hmo-02's drift (max 4.4e-4, late mean +1.58e-4, 48/49 positive) is near that max
 but more one-signed. The final program gets replicated loss pairs to settle it.
+
+## M30A-019 Custom PJRT wheel ON HOLD (2026-10-01)
+
+The orchestrator withdrew approval for campaign rack jobs that install the 283d5b6d98cd wheel, pending the
+user's decision. Do not submit any job that installs it, and do not pass the presigned URL to other
+agents. The pushed XLA branch stays as-is. The two single-node smokes (`m30a-stream-smoke-prod-01`,
+`-hts-01`) ran before the hold. If the user declines, the fallback is the JAX-only integer-zero
+dependency (M30A-015), built only if `carry_stall.py` shows the stall on the final program.
