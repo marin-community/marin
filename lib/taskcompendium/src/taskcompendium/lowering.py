@@ -4,7 +4,6 @@
 """Export a TaskSpec and selected chat binding as a Harbor task package."""
 
 import hashlib
-import importlib
 import inspect
 import json
 import shutil
@@ -13,15 +12,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
+from taskcompendium.models import SCHEMA_VERSION, SHA256_PATTERN, AnswerType, TaskSpec
 from taskcompendium.path_validation import validate_relative_file_paths
 from taskcompendium.provider_sources import (
     PROVIDER_SOURCES_DIR,
-    import_staged_provider,
+    ToolProviderCache,
     parse_git_provider,
     stage_git_provider,
 )
@@ -36,7 +35,6 @@ from taskcompendium.submission import (
 from taskcompendium.tool_provider import ToolProviderFactory, tool_schema_sha256
 from taskcompendium.verifier_registry import validate_verifier
 
-SHA256_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
@@ -54,14 +52,14 @@ class ToolBinding(BaseModel):
 
     # Versioned action contract, such as "nemo_workplace:v1".
     action_interface: str = Field(min_length=1)
-    seed_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
+    seed_sha256: str = Field(pattern=SHA256_PATTERN)
     # Python class locator selected by the code that prepares and launches tasks.
     provider: str
     # Immutable implementation revision expected at export and launch.
     provider_revision: str = Field(min_length=1)
     # Ordered names of functions selected from the provider for this task.
     tools: tuple[Annotated[str, Field(min_length=1)], ...] = Field(min_length=1)
-    tools_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
+    tools_sha256: str = Field(pattern=SHA256_PATTERN)
 
     @model_validator(mode="after")
     def validate_binding(self) -> "ToolBinding":
@@ -99,17 +97,11 @@ class HarborEnvironmentConfig(BaseModel):
         return self
 
 
-def provider_class(binding: ToolBinding, provider_source: Path | None = None) -> ToolProviderFactory:
-    """Load the provider implementation selected by the task-launching code."""
-    if parse_git_provider(binding.provider) is not None:
-        if provider_source is None:
-            raise ValueError("Git provider requires a verified source snapshot")
-        return import_staged_provider(binding.provider, provider_source)
-    _, module_name, class_name = binding.provider.split(":", maxsplit=2)
-    provider = getattr(importlib.import_module(module_name), class_name)
-    if not inspect.isclass(provider):
-        raise ValueError("Tool provider import path must name a class")
-    return cast(ToolProviderFactory, provider)
+def provider_class(
+    binding: ToolBinding, provider_source: Path | None = None, *, cache: ToolProviderCache
+) -> ToolProviderFactory:
+    """Resolve an implementation for the lifetime of the caller's cache."""
+    return cache.stage(binding.provider, provider_source).factory
 
 
 def selected_tool_definitions(definitions: Sequence[dict[str, Any]], tool_names: Sequence[str]) -> list[dict[str, Any]]:
@@ -125,9 +117,11 @@ def selected_tool_definitions(definitions: Sequence[dict[str, Any]], tool_names:
     return [available[name] for name in tool_names]
 
 
-def validate_provider_surface(binding: ToolBinding, provider_source: Path | None = None) -> None:
+def validate_provider_surface(
+    binding: ToolBinding, provider_source: Path | None = None, *, cache: ToolProviderCache
+) -> None:
     """Check provider identity and action schemas before an export or launch."""
-    provider = provider_class(binding, provider_source)
+    provider = provider_class(binding, provider_source, cache=cache)
     for method in ("native_tool_definitions", "dispatch_action"):
         if not inspect.iscoroutinefunction(getattr(provider, method, None)):
             raise ValueError(f"Tool provider requires async {method}")
@@ -257,7 +251,7 @@ def validate_environment_candidate(
 ) -> None:
     """Check requirements and pinned provider implementations before selection."""
     _validate_provider_requirements(specification, convention, environment_config)
-    with tempfile.TemporaryDirectory(prefix="taskcompendium-candidate-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="taskcompendium-candidate-") as temporary, ToolProviderCache() as cache:
         sources: dict[str, Path] = {}
         for name, binding in environment_config.tool_providers.items():
             if parse_git_provider(binding.provider) is None:
@@ -267,7 +261,7 @@ def validate_environment_candidate(
             source = Path(temporary) / name
             stage_git_provider(binding.provider, trusted_provider_sources[name], source)
             sources[name] = source
-        validate_environment_config(specification, convention, environment_config, provider_sources=sources)
+        validate_environment_config(specification, convention, environment_config, provider_sources=sources, cache=cache)
 
 
 def validate_environment_config(
@@ -276,13 +270,16 @@ def validate_environment_config(
     environment_config: HarborEnvironmentConfig,
     *,
     provider_sources: dict[str, Path] | None = None,
+    cache: ToolProviderCache,
 ) -> None:
     """Check all selected provider implementations against their pinned surfaces."""
     state_provider = _validate_provider_requirements(specification, convention, environment_config)
     for name, binding in environment_config.tool_providers.items():
         source = provider_sources[name] if provider_sources is not None and name in provider_sources else None
-        validate_provider_surface(binding, source)
-        if name == state_provider and not callable(getattr(provider_class(binding, source), "canonical_state", None)):
+        validate_provider_surface(binding, source, cache=cache)
+        if name == state_provider and not callable(
+            getattr(provider_class(binding, source, cache=cache), "canonical_state", None)
+        ):
             raise ValueError("State task requires canonical provider state")
 
 
@@ -331,8 +328,6 @@ def lower_to_harbor(
         for name, binding in environment_config.tool_providers.items()
         if parse_git_provider(binding.provider) is not None
     }
-    if not git_bindings:
-        validate_environment_config(specification, convention, environment_config)
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
@@ -341,18 +336,20 @@ def lower_to_harbor(
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     try:
-        (destination / ENVIRONMENT_DIR).mkdir()
-        staged_sources: dict[str, Path] = {}
-        for name, binding in git_bindings.items():
-            if trusted_provider_sources is None or name not in trusted_provider_sources:
-                raise ValueError(f"Git provider requires a trusted source checkout: {name}")
-            source = destination / ENVIRONMENT_DIR / PROVIDER_SOURCES_DIR / name
-            source.parent.mkdir(parents=True, exist_ok=True)
-            stage_git_provider(binding.provider, trusted_provider_sources[name], source)
-            staged_sources[name] = source
-        if git_bindings:
-            validate_environment_config(specification, convention, environment_config, provider_sources=staged_sources)
-        _write_harbor_task(specification, convention, environment_config, destination, instruction)
+        with ToolProviderCache() as cache:
+            (destination / ENVIRONMENT_DIR).mkdir()
+            staged_sources: dict[str, Path] = {}
+            for name, binding in git_bindings.items():
+                if trusted_provider_sources is None or name not in trusted_provider_sources:
+                    raise ValueError(f"Git provider requires a trusted source checkout: {name}")
+                source = destination / ENVIRONMENT_DIR / PROVIDER_SOURCES_DIR / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                stage_git_provider(binding.provider, trusted_provider_sources[name], source)
+                staged_sources[name] = source
+            validate_environment_config(
+                specification, convention, environment_config, provider_sources=staged_sources, cache=cache
+            )
+            _write_harbor_task(specification, convention, environment_config, destination, instruction)
     except Exception:
         shutil.rmtree(destination)
         raise
