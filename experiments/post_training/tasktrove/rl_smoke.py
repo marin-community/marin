@@ -219,6 +219,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
             coordinator_timeout_hours=12,
             wandb_entity=None,
         ),
+        export_hf=True,
     )
 
 
