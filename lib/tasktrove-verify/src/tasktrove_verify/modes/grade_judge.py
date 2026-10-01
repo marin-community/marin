@@ -156,7 +156,8 @@ class _ChecklistResult:
 def grade(spec: Spec, tests_dir: Path, workspace: Path, runtime: JudgeRuntimeConfig | None = None) -> Reward:
     assert isinstance(spec, JudgeSpec)
     _validate_spec(spec)
-    return grade_candidate(spec, read_output(spec, workspace) or "", context=_context(spec, tests_dir), runtime=runtime)
+    context = _context(spec, tests_dir)
+    return grade_candidate(spec, read_output(spec, workspace) or "", context=context, runtime=runtime)
 
 
 def grade_candidate(

@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.grade import Status
+from tasktrove_verify.grade import Status, grade
 from tasktrove_verify.modes import grade_judge
 from tasktrove_verify.spec import Constraint, JudgeSpec
 
@@ -300,3 +300,16 @@ def test_invalid_rubric_precedes_candidate_file_failure(tmp_path):
     spec = JudgeSpec(rubric="unsupported", output="x" * 5000)
     with pytest.raises(grade_judge.InvalidTask):
         grade_judge.grade(spec, tmp_path, tmp_path)
+
+
+def test_missing_context_remains_invalid_when_candidate_is_unreadable(tmp_path, monkeypatch):
+    (tmp_path / "answer.txt").write_text("candidate")
+
+    def unreadable_file(_path, *args, **kwargs):
+        raise PermissionError("candidate cannot be read")
+
+    monkeypatch.setattr(Path, "read_text", unreadable_file)
+    spec = JudgeSpec(references=("Mars",), context="missing-context.txt")
+    reward = grade(spec, tests_dir=tmp_path, workspace=tmp_path)
+
+    assert (reward.reward, reward.status) == (0.0, Status.INVALID_TASK)
