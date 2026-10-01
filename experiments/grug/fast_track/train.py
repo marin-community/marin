@@ -1834,8 +1834,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
             # From the EMA start on, evals score the EMA weights.
-            eval_model_getter=lambda s: _router_tie_view(
-                s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params, int(s.step)
+            # Lagged steps (``_LaggedStateView``) carry no params; only the per-step hooks see them.
+            eval_model_getter=lambda s: (
+                None
+                if s.params is None
+                else _router_tie_view(
+                    s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params, int(s.step)
+                )
             ),
             opt_state_getter=lambda s: s.opt_state,
         )
@@ -1926,13 +1931,141 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_leaves, state_treedef = jax.tree.flatten(state)
         train_step = _flat_train_step(train_step_fn, state_treedef)
 
+        eval_interval = eval_cfg.steps_per_eval if eval_cfg is not None and eval_cfg.steps_per_eval else None
+        last_ready_time: float | None = None
+
+        def finish_step(rec: "_PendingStep", step_state: GrugTrainState | None) -> None:
+            """Wait for ``rec``'s step and do its host work. With ``step_state`` (the state after the step, not yet
+            donated) the state-dependent work runs too; without it the step was finished lagged, behind the next
+            dispatch, and the callbacks see only its step number and loss."""
+            nonlocal state, state_leaves, last_loss, last_step_duration, host_gap_start, hlo_written, last_ready_time
+            metrics, step = rec.metrics, rec.step
+            jax.block_until_ready(metrics["train/loss"])
+            ready_time = time.perf_counter()
+            stall_sampler.arm()
+            # The devices' time for this step: from its dispatch, or from the previous step's completion when it was
+            # dispatched before that (the pipelined case).
+            duration = ready_time - (rec.step_start if last_ready_time is None else max(last_ready_time, rec.step_start))
+            last_ready_time = ready_time
+            if step_state is not None and config.trainer.hlo_dump_path is not None and not hlo_written:
+                if jax.process_index() == 0:
+                    _write_train_step_hlo(
+                        train_step,
+                        state_leaves,
+                        rec.batch,
+                        rec.loop_active,
+                        rec.router_tie_active,
+                        config.trainer.hlo_dump_path,
+                    )
+                hlo_written = True
+            state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
+            if not jnp.isfinite(metrics["train/loss"]):
+                raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {step + 1}.")
+            if rec.captured_before is not None:
+                assert step_state is not None
+                captured_grads, params_before = rec.captured_before
+                params_after = jax.device_get(_captured_params(step_state.params))
+                if jax.process_index() == 0:
+                    capture_writer.submit(
+                        step,
+                        captured_grads,
+                        {name: params_after[name] - params_before[name] for name in params_before},
+                        params_before if step - 1 not in grad_capture_due else None,
+                    )
+            if step_state is not None and step + 1 == config.model.router_embed_tie_release_step:
+                # Before the callbacks, so the checkpoint and evals at this step already see the release.
+                step_state = _release_router_ties(step_state)
+                state = step_state
+                state_leaves, released_treedef = jax.tree.flatten(state)
+                if released_treedef != state_treedef:
+                    raise ValueError("releasing the router ties changed the state's tree structure")
+                logger.info("router ties released at step %d", step + 1)
+            hook_start = time.perf_counter()
+            with jax.profiler.TraceAnnotation("callbacks"):
+                view = step_state if step_state is not None else _LaggedStateView(step=step + 1)
+                state_callbacks.run(view, loss=metrics["train/loss"], step_duration=duration)
+                last_loss = metrics["train/loss"]
+                last_step_duration = duration
+                levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                levanter.tracker.log({"throughput/dispatch_time": rec.dispatch_time}, step=step)
+                levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                # One batched device-to-host copy: handing the tracker device scalars makes it fetch each
+                # one separately, which cost 0.1-0.7 s of host time per logging step (and more with one
+                # process driving every GPU).
+                router_metrics = jax.device_get(
+                    {
+                        key: value
+                        for key, value in metrics.items()
+                        if key.startswith(
+                            (
+                                "train/router/",
+                                "moe_bias/",
+                                "train/attn_res/",
+                                "train/aux/",
+                                "train/newton_muon/",
+                                "train/optim/",
+                            )
+                        )
+                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+                    }
+                )
+                if router_metrics:
+                    levanter.tracker.log(router_metrics, step=step)
+                if "train/cross_entropy_loss" in metrics:
+                    levanter.tracker.log({"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]}, step=step)
+                if "moe/dropped_assignments" in metrics:
+                    drop_metrics = _drop_metrics(
+                        metrics["moe/dropped_assignments"],
+                        metrics["moe/sender_dropped_assignments"],
+                        metrics["moe/receiver_dropped_assignments"],
+                        batch_size=rec.batch.tokens.shape[0],
+                        sequence_length=rec.batch.tokens.shape[1],
+                        top_k=config.model.num_experts_per_token,
+                        num_layers=config.model.num_layers,
+                    )
+                    levanter.tracker.log(jax.device_get(drop_metrics), step=step)
+                if rec.watch_stats is not None:
+                    levanter.tracker.log(jax.device_get(rec.watch_stats), step=step)
+            if step_state is not None:
+                if dump_routing is not None and step + 1 in pending_dumps:
+                    dump_routing(step_state)
+                    pending_dumps.discard(step + 1)
+                if checkpointer is not None:
+                    with callbacks.progress_event_scope(
+                        state_callbacks.emit_event,
+                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    ):
+                        checkpointer.on_step(tree=step_state, step=step + 1)
+            if step % GC_EVERY_STEPS == 0:
+                gc.collect()
+                gc.freeze()
+            host_gap_start = time.perf_counter()
+            stall_sampler.disarm(step)
+            if host_gap_start - ready_time > HOST_GAP_WARN:
+                logger.warning(
+                    "post-step host work %.3f s after step %d on process %d",
+                    host_gap_start - ready_time,
+                    step,
+                    jax.process_index(),
+                )
+
         # Main optimization loop.
         try:
             with HostStallSampler(HOST_STALL_SAMPLE_THRESHOLD) as stall_sampler:
-                while int(state.step) < stop_step:
+                # Pipelined loop: step n+1 is dispatched before step n's loss is waited on, so the host's dispatch
+                # and logging overlap the devices' work. A step whose follow-up needs its state (an eval, a
+                # checkpoint poll, a routing dump, the router-tie release, the HLO dump, gradient capture, the last
+                # step) is finished before the next dispatch, since that dispatch donates the state.
+                host_step = int(state.step)
+                pending: _PendingStep | None = None
+                while host_step < stop_step:
                     with jax.profiler.TraceAnnotation("load_batch"):
                         batch = next(iterator)
-                    current_step = int(state.step)
+                    if pending is not None and pending.needs_state:
+                        finish_step(pending, state)
+                        pending = None
+                    current_step = host_step
                     watch_due = (
                         watch_config.is_enabled
                         and watch_config.interval > 0
@@ -1960,7 +2093,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                     grow_step = config.model.loop_grow_step
                     # Looped growth compiles one program per pass count (a traced switch would keep both alive).
-                    loop_active = None if grow_step is None else int(state.step) >= grow_step
+                    loop_active = None if grow_step is None else current_step >= grow_step
                     # The router tie release likewise switches programs once (plus a host-side param rewrite below).
                     router_tie_active = _router_ties_active(config.model, current_step)
                     for muon_probe in muon_probes:
@@ -2002,117 +2135,37 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         state_leaves, batch, loop_active=loop_active, router_tie_active=router_tie_active
                     )
                     state = jax.tree.unflatten(state_treedef, state_leaves)
-                    # Host time to hand the step to the devices (argument flattening, donation, launch); the GPUs
-                    # idle through it because the previous step has already finished.
+                    # Host time to hand the step to the devices (rebuilding the state tree, launch).
                     dispatch_time = time.perf_counter() - dispatch_start
                     if inline_watch_stats is not None and watch_due:
                         watch_stats = inline_watch_stats
-                    step = int(state.step) - 1
-                    if captured_before is not None:
-                        captured_grads, params_before = captured_before
-                        params_after = jax.device_get(_captured_params(state.params))
-                        if jax.process_index() == 0:
-                            capture_writer.submit(
-                                current_step,
-                                captured_grads,
-                                {name: params_after[name] - params_before[name] for name in params_before},
-                                params_before if current_step - 1 not in grad_capture_due else None,
-                            )
-
-                    jax.block_until_ready(metrics["train/loss"])
-                    ready_time = time.perf_counter()
-                    stall_sampler.arm()
-                    if config.trainer.hlo_dump_path is not None and not hlo_written and jax.process_index() == 0:
-                        _write_train_step_hlo(
-                            train_step, state_leaves, batch, loop_active, router_tie_active, config.trainer.hlo_dump_path
-                        )
-                    hlo_written = True
-                    state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
-
-                    if not jnp.isfinite(metrics["train/loss"]):
-                        raise RuntimeError(
-                            f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}."
-                        )
-                    duration = time.perf_counter() - step_start
-                    if int(state.step) == config.model.router_embed_tie_release_step:
-                        # Before the callbacks, so the checkpoint and evals at this step already see the release.
-                        state = _release_router_ties(state)
-                        state_leaves, released_treedef = jax.tree.flatten(state)
-                        if released_treedef != state_treedef:
-                            raise ValueError("releasing the router ties changed the state's tree structure")
-                        logger.info("router ties released at step %d", int(state.step))
-                    hook_start = time.perf_counter()
-                    with jax.profiler.TraceAnnotation("callbacks"):
-                        state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
-                        last_loss = metrics["train/loss"]
-                        last_step_duration = duration
-                        levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
-                        levanter.tracker.log({"throughput/dispatch_time": dispatch_time}, step=step)
-                        levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                        # One batched device-to-host copy: handing the tracker device scalars makes it fetch each
-                        # one separately, which cost 0.1-0.7 s of host time per logging step (and more with one
-                        # process driving every GPU).
-                        router_metrics = jax.device_get(
-                            {
-                                key: value
-                                for key, value in metrics.items()
-                                if key.startswith(
-                                    (
-                                        "train/router/",
-                                        "moe_bias/",
-                                        "train/attn_res/",
-                                        "train/aux/",
-                                        "train/newton_muon/",
-                                        "train/optim/",
-                                    )
-                                )
-                                and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
-                            }
-                        )
-                        if router_metrics:
-                            levanter.tracker.log(router_metrics, step=step)
-                        if "train/cross_entropy_loss" in metrics:
-                            levanter.tracker.log(
-                                {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
-                                step=step,
-                            )
-                        if "moe/dropped_assignments" in metrics:
-                            drop_metrics = _drop_metrics(
-                                metrics["moe/dropped_assignments"],
-                                metrics["moe/sender_dropped_assignments"],
-                                metrics["moe/receiver_dropped_assignments"],
-                                batch_size=batch.tokens.shape[0],
-                                sequence_length=batch.tokens.shape[1],
-                                top_k=config.model.num_experts_per_token,
-                                num_layers=config.model.num_layers,
-                            )
-                            levanter.tracker.log(jax.device_get(drop_metrics), step=step)
-
-                        if watch_stats is not None:
-                            levanter.tracker.log(jax.device_get(watch_stats), step=step)
-
-                    if dump_routing is not None and int(state.step) in pending_dumps:
-                        dump_routing(state)
-                        pending_dumps.discard(int(state.step))
-                    if checkpointer is not None:
-                        with callbacks.progress_event_scope(
-                            state_callbacks.emit_event,
-                            callbacks.ProgressEvent.CHECKPOINT_STARTED,
-                            callbacks.ProgressEvent.CHECKPOINT_FINISHED,
-                        ):
-                            checkpointer.on_step(tree=state, step=int(state.step))
-                    if current_step % GC_EVERY_STEPS == 0:
-                        gc.collect()
-                        gc.freeze()
-                    host_gap_start = time.perf_counter()
-                    stall_sampler.disarm(current_step)
-                    if host_gap_start - ready_time > HOST_GAP_WARN:
-                        logger.warning(
-                            "post-step host work %.3f s after step %d on process %d",
-                            host_gap_start - ready_time,
-                            current_step,
-                            jax.process_index(),
-                        )
+                    host_step += 1
+                    if pending is not None:
+                        # The previous step, finished while this one runs on the devices.
+                        finish_step(pending, None)
+                    pending = _PendingStep(
+                        step=current_step,
+                        metrics=metrics,
+                        batch=batch,
+                        loop_active=loop_active,
+                        router_tie_active=router_tie_active,
+                        watch_stats=watch_stats,
+                        captured_before=captured_before,
+                        dispatch_time=dispatch_time,
+                        step_start=step_start,
+                        needs_state=(
+                            host_step >= stop_step
+                            or captured_before is not None
+                            or (eval_interval is not None and host_step % eval_interval == 0)
+                            or host_step % CHECKPOINT_POLL_STEPS == 0
+                            or (dump_routing is not None and host_step in pending_dumps)
+                            or host_step == config.model.router_embed_tie_release_step
+                            or (config.trainer.hlo_dump_path is not None and not hlo_written)
+                        ),
+                    )
+                if pending is not None:
+                    finish_step(pending, state)
+                    pending = None
 
         except BaseException:
             logger.exception(
@@ -2192,6 +2245,37 @@ def _ema_blend_group(path: str) -> str:
 # Seed of the training-only router noise (``moe_gumbel_tau``); folded with the step.
 ROUTE_NOISE_SEED = 7
 GC_EVERY_STEPS = 50
+# The pipelined loop finishes a step with its state (for the checkpointer's time-based saves) at least this often.
+CHECKPOINT_POLL_STEPS = 25
+
+
+@dataclasses.dataclass(frozen=True)
+class _LaggedStateView:
+    """What the per-step callbacks see for a step finished behind the next dispatch: its step number only (the
+    state was donated). Hooks that need the model (evals) run on steps finished with their state."""
+
+    step: int
+    params: None = None
+    ema_params: None = None
+    opt_state: None = None
+
+
+@dataclasses.dataclass
+class _PendingStep:
+    """A dispatched step whose host work (wait, logging, callbacks) is still to do."""
+
+    step: int
+    metrics: dict
+    batch: object
+    loop_active: bool | None
+    router_tie_active: bool | None
+    watch_stats: object
+    captured_before: object
+    dispatch_time: float
+    step_start: float
+    needs_state: bool
+
+
 GC_PAUSE_WARN = 0.05
 _gc_start: dict[str, float] = {}
 
