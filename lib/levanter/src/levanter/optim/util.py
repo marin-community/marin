@@ -210,7 +210,7 @@ def map_flattened_linear_layers(
 
 
 # Newton-Schulz coefficient options for zeropower iteration
-CoefficientType = Literal["simple", "quintic", "polar_express", "aol"]
+CoefficientType = Literal["simple", "quintic", "polar_express", "aol", "tight_top", "boost_low"]
 
 # Coefficient sets from https://github.com/NVIDIA-NeMo/Emerging-Optimizers
 NEWTON_SCHULZ_COEFFICIENTS = {
@@ -231,6 +231,24 @@ NEWTON_SCHULZ_COEFFICIENTS = {
         (1.8726, -1.2307, 0.3585),
         (1.8564, -1.2132, 0.3568),
         (1.8750, -1.2500, 0.3750),
+    ],
+    # "quintic" variants for probing which part of the spectrum matters. tight_top: three quintic steps, then two
+    # cubic (1.5, -0.5) steps that pin large singular values at 1 and boost small ones less (about 136x vs 493x).
+    "tight_top": [
+        (4.0848, -6.8946, 2.9270),
+        (3.9505, -6.3029, 2.6377),
+        (3.7418, -5.5913, 2.3037),
+        (1.5, -0.5, 0.0),
+        (1.5, -0.5, 0.0),
+    ],
+    # boost_low: the steepest first step twice, so small singular values grow more (about 710x) and large ones
+    # land in a looser band ([0.92, 1.15] above 1% of the Frobenius norm).
+    "boost_low": [
+        (4.0848, -6.8946, 2.9270),
+        (4.0848, -6.8946, 2.9270),
+        (3.9505, -6.3029, 2.6377),
+        (3.7418, -5.5913, 2.3037),
+        (2.8769, -3.1427, 1.2046),
     ],
     # Turbo-Muon (arXiv 2512.04632): the last four "quintic" steps. Tuned for inputs rescaled by the AOL
     # preconditioner rather than the Frobenius norm, and run for exactly four steps.
