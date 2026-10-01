@@ -10,8 +10,8 @@ ragged all-to-alls and the expert-MLP matmuls (`ragged_dot_general`) among its t
 dependencies bind the GPU scheduler; everything else is its choice. A recomputed chunk-1 dispatch with the
 chunk-0 recompute matmuls among its inputs cannot run under them.
 
-Run from a stack checkout:
-  XLA_FLAGS=--xla_force_host_platform_device_count=4 JAX_PLATFORMS=cpu python <this file>
+Run from a stack checkout (optional integer config overrides as key=value):
+  XLA_FLAGS=--xla_force_host_platform_device_count=4 JAX_PLATFORMS=cpu python <this file> [key=value ...]
 """
 
 import collections
@@ -107,7 +107,9 @@ def _label(name_stack):
 
 
 def main():
-    cfg = dataclasses.replace(ms.CFG, attention_implementation="reference")
+    # Optional integer config overrides as key=value arguments, e.g. held_back_shared_experts=1.
+    overrides = {k: int(v) for k, v in (arg.split("=", 1) for arg in sys.argv[1:])}
+    cfg = dataclasses.replace(ms.CFG, attention_implementation="reference", **overrides)
     devices = np.asarray(jax.devices()).reshape(1, 1, 1, len(jax.devices()), 1)
     mesh = Mesh(devices, ("replica_dcn", "data", "context", "expert", "model"), axis_types=(AxisType.Explicit,) * 5)
     with jax.set_mesh(mesh):
