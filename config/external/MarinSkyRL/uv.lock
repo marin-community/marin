@@ -1264,7 +1264,7 @@ secrets = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fcat-count-canary-gates#787ff73be159bc53b06b874821eb0bcb50d627f0" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fcat-count-canary-gates#ab97929fc620a7525a03eec4b5e54fa4bf9306ba" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
