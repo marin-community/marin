@@ -8,6 +8,7 @@ import gc
 import glob
 import io
 import logging
+import math
 import os
 import re
 import time
@@ -1914,7 +1915,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 for hook in eval_hooks:
                     state_callbacks.add_hook(hook, every=interval)
 
-        last_loss: float | jax.Array = 0.0
+        last_loss = 0.0
         last_step_duration = 0.0
         host_gap_start: float | None = None
         gc.callbacks.append(_warn_on_long_gc)
@@ -1940,7 +1941,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             dispatch, and the callbacks see only its step number and loss."""
             nonlocal state, state_leaves, last_loss, last_step_duration, host_gap_start, hlo_written, last_ready_time
             metrics, step = rec.metrics, rec.step
-            jax.block_until_ready(metrics["train/loss"])
+            # A host float, and no device math on the metrics below: a device op would queue behind the step
+            # dispatched after this one and wait for it, undoing the overlap.
+            loss = float(jax.device_get(metrics["train/loss"]))
             ready_time = time.perf_counter()
             stall_sampler.arm()
             # The devices' time for this step: from its dispatch, or from the previous step's completion when it was
@@ -1959,8 +1962,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     )
                 hlo_written = True
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
-            if not jnp.isfinite(metrics["train/loss"]):
-                raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {step + 1}.")
+            if not math.isfinite(loss):
+                raise RuntimeError(f"Non-finite loss ({loss}) at step {step + 1}.")
             if rec.captured_before is not None:
                 assert step_state is not None
                 captured_grads, params_before = rec.captured_before
@@ -1983,8 +1986,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             hook_start = time.perf_counter()
             with jax.profiler.TraceAnnotation("callbacks"):
                 view = step_state if step_state is not None else _LaggedStateView(step=step + 1)
-                state_callbacks.run(view, loss=metrics["train/loss"], step_duration=duration)
-                last_loss = metrics["train/loss"]
+                state_callbacks.run(view, loss=loss, step_duration=duration)
+                last_loss = loss
                 last_step_duration = duration
                 levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                 levanter.tracker.log({"throughput/dispatch_time": rec.dispatch_time}, step=step)
