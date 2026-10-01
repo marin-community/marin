@@ -4,8 +4,9 @@
 """Grade typed final function calls without depending on a harness wire protocol."""
 
 from pydantic import field_validator, model_validator
+from tasktrove_verify.json_comparison import json_values_equal
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, json_values_equal
+from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
 from taskcompendium.models import (
     AssistantMessage,
     ConversationToolCall,
