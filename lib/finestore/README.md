@@ -207,7 +207,7 @@ Evaldash reads the same schemas. Marin separately records each evaluation or RL 
 `marin.rollout_runs` discovery table, with a URI pointing back to its rollout store. FineStore
 contains no evaluator conversion policy, Finelog integration, or Marin pipeline dependency.
 
-`finestore.mismatch_probe` defines the frozen-response, scorer and manifest tables
+`finestore.rl.mismatch_probe` defines the frozen-response, scorer and manifest tables
 shared by MarinSkyRL producers and Marin's mismatch reports. Tokenizer identity,
 relative updates and absolute trainer steps are typed provenance fields. This
 contract sits next to `finestore.eval` so producers need only `marin-finestore`

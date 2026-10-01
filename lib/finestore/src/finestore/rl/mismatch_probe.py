@@ -86,7 +86,7 @@ class ScoreRow(BaseModel):
     scorer: str
     mode: str = ""
     update: int
-    weights_hash: str
+    global_step: int
     cache_mode: str | None = None
     logprobs: list[float]
     forward_seconds: float | None = None
@@ -117,7 +117,8 @@ class ManifestRow(BaseModel):
     archive: str
     status: ArchiveStatus
     probe_hash: str
-    starting_weights_hash: str
+    checkpoint_path: str
+    runtime_commit: str | None
     source_probe_archive: str | None = None
     tokenizer_fingerprint: str
     starting_global_step: int
