@@ -753,3 +753,70 @@ sconv dw order) on top of FA4-backward nondeterminism. Against the pre-registere
 (+2.65e-4) exceeds the ~2e-4 bound by 0.65e-4; max |d| and the absence of a consistent sign across seeds
 (-9.2e-5 / +2.65e-4 / -1.81e-4) and B's null 8-seed bias test support "numerically ~equal". Reported as such,
 not as bitwise-equivalent. Seed-2 repeat pending.
+
+## M30-046 Seed-2 same-code repeat and CLOSEOUT: goal met (2026-10-01)
+
+`m30-ctl-s2-r2` (main, seed 2) vs mhep-ctx4k-s2: MFU 28.242; dloss max 9.1e-4, late mean -5.06e-4, 0/89 positive
+(fully one-signed); mean |d| by thirds 3.05e-4 / 4.88e-4 / 5.85e-4. Same code drifts further on seed 2 than the
+final program does (max 5.5e-4, late mean -1.8e-4).
+
+### Verdict
+
+**30% single-rack MFU reached with loss parity.** Final program = `research/mcwitt/mfu30-final-seq` @ d4234c88e7
+on PJRT wheel `jax_cuda13_pjrt-0.11.1+marin.283d5b6d98cd` (user-approved), env
+`XLA_GPU_HOST_TRANSFER_STREAMS=1`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78`, XLA flags
+`--xla_gpu_enable_host_memory_offloading=true --xla_gpu_memory_limit_slop_factor=105`, launcher
+`--sconv-implementation triton_gpu`. Restore step-180000, 100 steps, unprofiled, median over 180011-180099:
+
+| seed | main | final | gain | same-code max abs d / late mean | final-vs-main max abs d / late mean |
+|---|---|---|---|---|---|
+| 0 | 28.260 | 30.218 | +1.96 | 3.3e-4 / -3.9e-5 | 3.75e-4 / -9.2e-5 |
+| 1 | 28.235 | 30.206 | +1.97 | 5.2e-4 / +6.7e-5 | 7.7e-4 / +2.65e-4 |
+| 2 | 28.266 | 30.206 | +1.94 | 9.1e-4 / -5.06e-4 | 5.5e-4 / -1.81e-4 |
+
+Step time 13.89 -> 12.99-13.00 s (-0.90 s, -6.5%); peak HBM 103.1 -> 123.5 GiB (limit 143.75). Every final-vs-main
+divergence lies inside the same-code range across seeds, signs vary, and the off-rack 8-seed bias test is null
+(M30-043). Deviation from the pre-registration: seed 1's late mean (+2.65e-4) exceeded the ~2e-4 number, which was
+calibrated on seed 0 alone; the seed-2 same-code repeat (5.06e-4) shows that number was too tight. The principle
+(within the same-code band) holds.
+
+### Accepted changes (in the final program)
+
+1. B: inverse routing (argsort -> index scatter), chained ragged-a2a cotangents, unfilled transport buffers (bitwise).
+2. B: D, SonicMoE-style backward (expert-side dS, latent MoE output saved on device, recompute drops the down GEMM,
+   the return all-to-all and the combine). Needs collective overlap limit 1. Mirror transpose parameters (#9481 idea).
+3. B: E, SwiGLU backward in QuACK's dh GEMM epilogue (~1 ulp); forward-order backward (net 0, kept).
+4. B: Triton short-conv kernel (bitwise out and dx).
+5. #9481 model commits: MLP-weight prefetch, QB-after-MLP (net win, verified), pgle_profile tooling.
+6. A: `--xla_gpu_enable_host_memory_offloading=true` (XLA remat stops counting the host carry as device memory).
+7. A: memory fraction 0.78 / slop 105 (makes room for D's 18 GiB without remat).
+8. A: memcpy-stream patch (custom wheel), which removes the ~0.14 s/step carry-D2H stream-collision lottery.
+
+### Rejected / dropped
+
+Dense GEMM fusion and kernel selection (power-capped at 1200 W; M30-002); fused RMSNorm+GatedNorm kernel +
+`--xla_gpu_enable_triton_gemm=false` (-0.24, optimizer reorder + stream collision; M30-021); pipelined chunks
+(+0.21 exposure; M30-030); #9481 attention re-gather (~neutral); QB-after-MLP revert (-0.09; M30-036); on-device
+optimizer state (does not fit with D; M30-018); loss/lm_head and optimizer elementwise (<=0.012 s; M30-011).
+
+### Untested levers (prepared, cancelled when the goal was met)
+
+PGLE from the f1-seq-02 trace, plain and D2H-patched (`research/mcwitt/mfu30-final-pgle` @ 883faa103f; A's
+patch targets the 0.26 s end-of-step optimizer D2H tail); shared-expert holdback
+(`research/mcwitt/mfu30-final-seq-holdback` @ ab78bbe3ad; targets forward return c1, 0.186 s exposed);
+carry-prefetch (A's arm2). Remaining exposure on the final program: ragged a2a 0.84 s (fwd dispatch c0 0.19,
+fwd return c1 0.19, bwd recompute dispatch c0 0.30 incl. skew, dy c0 reverse return 0.15), latent reduce-scatter
+skew 0.28, exposed copies 0.64.
+
+### Landing debt (none of this is landed; no PRs were opened)
+
+- Stream patch is env-gated and not in the compilation cache key (M30-039). Move it to DebugOptions or make it
+  default-on in a promoted wheel before relying on it; the branch is `mcwitt/adhoc-host-transfer-streams` on
+  marin-community/xla (kept per the user).
+- D requires collective overlap limit 1 (forced for ragged runs in ce112504f1); add an assertion.
+- `tests/test_moe_hero_ep.py` / `test_moe_context_sharding.py`: 9 CPU failures from the `pip_packages` field
+  (cf5bc74409) on final-seq; 3 GPU-only QuACK f32 failures pre-exist on main.
+- Memory settings (0.78/105) are single-rack; the 11-rack hero needs its own check.
+- Iris resurrected two finished coordinators during the campaign (gcab-freeze, m30-conf-seq-s0; #8276 family).
+
+All campaign rack jobs are finished or cancelled; the rack poller is stopped.
