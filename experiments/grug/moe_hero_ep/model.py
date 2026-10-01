@@ -269,6 +269,11 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    regather_attention_weights: bool = False
+    """Recompute the attention projections' FSDP weight gathers at the JAX level for the backward
+    (PR #9481) instead of letting XLA keep or rematerialize them. With
+    `--xla_gpu_enable_host_memory_offloading=true` XLA no longer rematerializes those gathers as
+    synchronous all-gathers, and the re-gather only adds an async all-gather per layer."""
     gated_norm_implementation: GatedRmsNormImplementation | None = None
     """How each block computes RMSNorm followed by its GatedNorm. None runs the two modules as
     written and lets XLA fuse them; "pallas_gpu" runs the fused kernels of
@@ -550,6 +555,12 @@ def _regathered_einsum(equation: str, x: jax.Array, w: jax.Array, gathered_spec:
     return jax.checkpoint(project, policy=policy)(x, w)
 
 
+def _plain_einsum(equation: str, x: jax.Array, w: jax.Array, gathered_spec: P, **kwargs) -> jax.Array:
+    """``einsum(equation, x, w)``, leaving the weight gather to XLA; `_regathered_einsum`'s signature."""
+    del gathered_spec
+    return jnp.einsum(equation, x, w, **kwargs)
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -591,9 +602,10 @@ class CausalSelfAttention(eqx.Module):
         # stay in it, the attention output returns to it, and `w_o` writes it.
         residual_seq_axis = _sequence_axis_of(x)
 
-        q_flat = _regathered_einsum("bsh,hd->bsd", x, self.w_q, P(None, "model"))
-        k_flat = _regathered_einsum("bsh,hd->bsd", x, self.w_k, P(None, "model"))
-        v_flat = _regathered_einsum("bsh,hd->bsd", x, self.w_v, P(None, "model"))
+        project = _regathered_einsum if self.cfg.regather_attention_weights else _plain_einsum
+        q_flat = project("bsh,hd->bsd", x, self.w_q, P(None, "model"))
+        k_flat = project("bsh,hd->bsd", x, self.w_k, P(None, "model"))
+        v_flat = project("bsh,hd->bsd", x, self.w_v, P(None, "model"))
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -716,7 +728,7 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, residual_seq_axis, "model"),
         )
-        return _regathered_einsum(
+        return project(
             "bsh,hd->bsd", attn_out, self.w_o, P("model", None), out_sharding=P(_BATCH_AXES, residual_seq_axis, None)
         )
 
