@@ -6097,6 +6097,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "taskcompendium" },
     { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "types-pyyaml" },
     { name = "types-requests" },
@@ -6129,6 +6130,7 @@ test = [
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "taskcompendium" },
     { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
 ]
 
@@ -6232,6 +6234,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
+    { name = "taskcompendium", editable = "lib/taskcompendium" },
     { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
@@ -6264,6 +6267,7 @@ test = [
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "taskcompendium", editable = "lib/taskcompendium" },
     { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
 ]
 

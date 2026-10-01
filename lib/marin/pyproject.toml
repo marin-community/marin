@@ -67,6 +67,7 @@ test = [
     "pytest-json-report>=1.5",
     "pytest-xdist",
     "pytest-timeout",
+    "taskcompendium",
     "tasktrove-verify[answer,reasoning-gym,schema]",
     # for scaling law plotting tests
     "plotly",
