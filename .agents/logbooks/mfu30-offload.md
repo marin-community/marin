@@ -377,3 +377,13 @@ A's analysis checklist for F1/F0:
 - F1: `carry_stall.py` < 10 ms/step.
 - F0 vs production-wheel arms: same stream layout, no stream-related regression (cuDNN headers differ).
 Later, for the PGLE arm: `copy-start.44` placement, the D2H tail after `pgle_patch_d2h.py`, and peak memory.
+
+## M30A-021 F1/F0 analysis pipeline ready (2026-10-01)
+
+B found stackpipe-03 lost the draw (carry_stall 147 ms/step vs 2.8 in sonic-02, +0.15 s/step). Queued on
+`research/mcwitt/mfu30-final-seq` @ `d4234c88e7`: `m30-f1-seq-02` (env on) and `m30-f0-seq-01` (env off),
+same custom wheel. `autoresearch/loop-260930-mfu30/a/analyze_arm.sh <run> <dir>` downloads the rank-0
+xplane, then runs `stream_check.py` (per-stream memcpy kinds; whether the carry streams share anything),
+C's `carry_stall.py`, and the anatomy summary. On hmo-02 (production wheel) the carry D2H/H2D share all
+four memcpy streams with ~740 D2D slice copies per step each, and carry_stall reads 6.0 ms/step there
+(a won draw).
