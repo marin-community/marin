@@ -736,3 +736,43 @@ No variant shows a consistent sign: final, d_only and the same-code pair are all
 The hero's seed-1 drift (+2.65e-4 at loss 1.26, 2e-4 relative) is ~40x larger in relative terms. Limits: a
 from-scratch d1024 model over 300 steps on synthetic data; a bias that only appears at hero scale or in late training
 would not show here.
+
+## M30B-031 Campaign result and landing notes
+
+Result (orchestrator): the final program, `research/mcwitt/mfu30-final-seq` @ d4234c88e7, confirmed at 30.218 /
+30.206 / 30.206% MFU on seeds 0/1/2 against main's 28.260 / 28.235 / 28.266%. Its contents: this branch's A+B+C
+(inverse routing, chained transport cotangents, unfilled buffers), D (expert-side routing-weight gradient, saved
+routed output), mirror parameters, E (SwiGLU backward in the dh epilogue), forward-order backward and the Triton short
+conv, plus #9481's model commits minus the attention re-gather, on the custom wheel. Loss divergence is inside the
+same-code range (seed 2 main-vs-main max 9.1e-4, late mean -5.1e-4; final max 7.7e-4), consistent with M30B-030's
+null bias test. The PGLE and holdback arms were cancelled unrun.
+
+Landing notes for the routing changes:
+- D requires a collective overlap limit of 1. Its backward's all-to-alls no longer depend on the recomputed forward's,
+  and with several collectives in flight they overlapped and gave run-to-run different gradients, or hung, on GB200
+  (M30B-013). `train.py` forces the limit to 1 for every ragged run (ce112504f1), which also changes non-hero ragged
+  configurations that inherited the default of 4; record this in the landing PR.
+- Three GPU-only tests fail on main and on every branch here, from f32 activations reaching the SM100 QuACK path
+  ("gated aux output must be 16-bit"): `test_moe_ep_path_lowers_on_abstract_mesh[ragged_all_to_all]`,
+  `test_moe_mlp_runs_with_ep_axis_when_available`, `test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity`
+  (`lib/levanter/tests/grug/test_grugformer_moe.py`). They are not regressions from this work; CI runs them on CPU.
+- New files under `lib/` need `git add -f` (global gitignore `lib/` pattern); `triton_gpu.py` was force-added.
+- Values: forward and dx of the short conv are bitwise to the reference; D changes dS at fp32 rounding (s/w), E
+  changes dx/dW13 at about 1 bf16 ulp, the short conv's dw sums fp32 partials in a different order (1e-7);
+  mirror, forward order, A+B+C and the #9481 model commits are bitwise. Same-code runs are not bitwise across jobs
+  anyway: XLA GEMM autotuning picks differ per job (M30B-028) and the FA4 backward is nondeterministic.
+
+Remaining exposure in the final program (F1-seq-02, M30B-027), for whoever continues:
+- Chunk-0 transports. Forward dispatch c0 is bare (0.19 s/step): nothing independent of the routing is left to run
+  under it once the shared experts are scheduled elsewhere. Forward return c1 is bare (0.19): QB-after-MLP moves the
+  shared-expert GEMMs after the MoE, among the QB collectives (M30B-026/028), and reverting it brings them back under
+  dispatch c1 and return c0 but leaves return c1 bare and costs more elsewhere (net slower). In the backward,
+  recomputed dispatch c0 (0.30, of which ~0.16 is rank skew) and dy c0's reverse return (0.149) run back to back at
+  the MoE backward's entry with nothing under them; forward order moved recomputed dispatch c1 under chunk 0's
+  backward GEMMs but the scheduler then left dy c0 bare instead (M30B-027).
+- Unmeasured levers: the shared-expert holdback (`research/mcwitt/mfu30-final-seq-holdback` @ ab78bbe3ad,
+  `--held-back-shared-experts 1`, M30B-029) targets forward return c1 (up to ~0.19 s/step); gated (module bitwise,
+  model gradients at ~1 bf16 ulp from a GEMM split) but never run on the rack. PGLE targets the four bare transports
+  above. A manual remat (dispatch + gate/up recomputed inside the backward rule) would let barriers fix the backward
+  transport order deterministically (M30B-024). Rank-skew waits (~0.3 s/step at the latent-projection
+  reduce-scatter) and the optimizer-state copies at the step end (~0.35) are outside the routing code.
