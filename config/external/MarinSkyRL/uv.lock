@@ -1325,7 +1325,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=f82cbcfe404dfa9c90734eed702296a69c039973" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=2c96161593d143fb7ebb42109759a860a5040b66" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1489,7 +1489,7 @@ shellsim = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=f82cbcfe404dfa9c90734eed702296a69c039973#f82cbcfe404dfa9c90734eed702296a69c039973" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=2c96161593d143fb7ebb42109759a860a5040b66#2c96161593d143fb7ebb42109759a860a5040b66" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -1499,6 +1499,7 @@ dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
     { name = "func-timeout" },
+    { name = "harbor-config" },
     { name = "hf-transfer" },
     { name = "huggingface-hub" },
     { name = "hydra-core" },
@@ -1530,6 +1531,7 @@ dependencies = [
     { name = "s3fs" },
     { name = "smart-open" },
     { name = "taskcompendium" },
+    { name = "tasktrove-verify" },
     { name = "tensorboard" },
     { name = "tokenizers" },
     { name = "tqdm" },
