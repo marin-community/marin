@@ -438,3 +438,45 @@ Consequences:
   `JAX_ENABLE_COMPILATION_CACHE=false` (forwarded `JAX_` prefix), or a flag difference in the key.
 - For deployment, set the env on every run and never mix settings within a cache, or turn the switch into
   a DebugOptions flag (part of the key) or default-on in a promoted wheel.
+
+## M30A-024 Close-out: result and reusable lessons (2026-10-01)
+
+Result: the campaign goal was met. The final program (`research/mcwitt/mfu30-final-seq` @ `d4234c88e7`,
+custom wheel `0.11.1+marin.283d5b6d98cd` with `XLA_GPU_HOST_TRANSFER_STREAMS=1`, H-A4 at fraction 0.78 /
+slop 105) confirmed at 30.218 / 30.206 / 30.206 MFU on seeds 0/1/2, against main at 28.260 / 28.235 /
+28.266. Loss divergence was inside the same-code range (seed-2 main-vs-main reached max 9.1e-4). This
+direction contributed H-A4 (remat accounting, -0.157 s/step on its own), the memory settings for D, and the
+stream patch, which removes a lost-draw stall worth ~0.14 s/step.
+
+Reusable lessons:
+1. **XLA's post-schedule remat counts pinned-host buffers as device memory** unless
+   `--xla_gpu_enable_host_memory_offloading=true` is set (`AllocatedSize` in hlo_rematerialization.cc). With
+   a 36 GiB host carry stack, the hero ran 143 phantom remat clones (0.63 s/step of kernels, including
+   synchronous attention-weight re-gathers). The flag removes them for ~1 GiB of arena. Engagement check:
+   rank-0 "Rematerialized N instructions in module jit_train_step" and zero "Remat via offload".
+2. **XLA's scheduler/remat limit is `(pool - device params) x slop`**, where pool =
+   `XLA_PYTHON_CLIENT_MEM_FRACTION x device memory`, not 0.8 x device memory. Remat's view includes the
+   collective (S(1)) buffers, so the arena is capped at `limit - S(1)`. Size slop and fraction together
+   when a change adds live memory (D needed 0.78 / 105).
+3. **Async copies share 4 round-robin compute streams.** Assignment follows post-order (`kDefaultNumComputeStreams=4`,
+   no flag), so a µs weight-slice copy can queue behind a 4.4 ms host carry transfer. Whether it does is a
+   lottery that any program change or PGLE profile re-draws (stackseq-03 lost: 0.141 s/step). Frontend
+   stream annotations can't reach these async starts because `CreateAsyncInstructions` drops frontend
+   attributes. Fix: XLA patch `mcwitt/adhoc-host-transfer-streams` (`283d5b6d98`), which gives host
+   transfers dedicated streams under `XLA_GPU_HOST_TRANSFER_STREAMS=1`. Built on-cluster in 15 min
+   (`pjrt_build_job.sh`, pin `HERMETIC_NCCL_VERSION=2.30.7`); validate per step, since xprof's pooled stream
+   numbers rotate across steps.
+4. **The persistent compilation cache ignores env-gated XLA behavior.** The cache key covers program, options
+   and XLA flags, not arbitrary env vars, so an env-off run silently reused the env-on executable (F0). Any
+   env-gated on/off pair needs `JAX_ENABLE_COMPILATION_CACHE=false` or a key-changing flag, and deployments
+   must not mix settings within one cache. A proper DebugOptions flag avoids this.
+5. **Untested lever: `pgle_patch_d2h.py`.** The GPU LHS models async memcpys with unlimited concurrency, so
+   even with PGLE the ~0.26 s end-of-step optimizer D2H tail stays exposed. Costing every large D2H
+   copy-start at the serialized batch total should hide ~0.2 s with no HBM cost. A patched profile exists
+   from m30-f1-seq-02 (`pgle/m30-f1-seq-02-d2h.pbtxt` on the stack branch) but no arm ran it. Watch for
+   PGLE hoisting the first momentum H2D into the backward (+10 GiB at the peak).
+6. Placement and offload changes still need a GPU smoke on a real restore. Full optimizer residency (H-A1) did
+   not fit next to D; partial residency remains unsafe (August C3').
+
+Remaining exposed copies on the final program (F1): end-of-step optimizer D2H 0.26 s, backward carry reload
+0.22 s, first momentum and embedding H2D 0.10 s. Carry prefetch (`arm2_on_stack.sh`) was never run.
