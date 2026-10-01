@@ -77,6 +77,7 @@ from experiments.grug.fast_track.model import (
 from experiments.grug.fast_track.muon_probe import MuonProbe
 from experiments.grug.fast_track.optimizer import expert_consistency_metrics, magma_metrics, optimizer_diagnostics
 from experiments.grug.fast_track.snr_probe import SnrProbe
+from experiments.grug.fast_track.stiefel import _msign
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -1426,6 +1427,59 @@ def _neuron_counts_step(mp: jmp.Policy):
     return counts
 
 
+def _expert_grad_step(mp: jmp.Policy, z_loss: float | None):
+    """Jitted ``(params, qb_betas, tokens, segment_ids) -> [per layer (routed w_up, routed w_down, shared w_up, shared
+    w_down) gradients]`` of the plain loss on one batch, for the neuron-health dump's per-unit gradient statistics."""
+
+    @jax.jit
+    def grads(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
+        batch = GrugLmExample(
+            tokens=tokens,
+            loss_weight=(segment_ids >= 0).astype(jnp.float32),
+            attn_mask=AttentionMask.causal().with_segment_ids(segment_ids),
+        )
+        (_, _), g = _loss_and_grads(_apply_qb_betas(params, qb_betas), batch, mp, z_loss)
+        return [
+            (layer.mlp.expert_mlp.w_up, layer.mlp.expert_mlp.w_down, layer.shared[0].w_up, layer.shared[0].w_down)
+            for layer in g.layers()
+        ]
+
+    return grads
+
+
+def _unit_norms(x: jax.Array, axis: int) -> jax.Array:
+    return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axis))
+
+
+@jax.jit
+def _unit_grad_stats(params: Transformer, layer_grads) -> dict[str, jax.Array]:
+    """Per hidden unit of every layer's routed experts (``[L, E, I]``) and shared expert (``[L, I]``): the gradient
+    norm of its ``w_up`` column and ``w_down`` row, the norm of the same slice of Muon's update direction
+    (Newton-Schulz of each expert's gradient: the share of the step that reaches the unit), and the weight norm."""
+    out: dict[str, list[jax.Array]] = {}
+
+    def add(name: str, value: jax.Array) -> None:
+        out.setdefault(name, []).append(value)
+
+    for layer, (g_up, g_down, gs_up, gs_down) in zip(params.layers(), layer_grads, strict=True):
+        em, sh = layer.mlp.expert_mlp, layer.shared[0]
+        g_up, g_down = (reshard(x.astype(jnp.float32), P(*(None,) * x.ndim)) for x in (g_up, g_down))
+        add("routed_grad_up", _unit_norms(g_up, -2))
+        add("routed_grad_down", _unit_norms(g_down, -1))
+        add("routed_ns_up", _unit_norms(_msign(g_up), -2))
+        add("routed_ns_down", _unit_norms(_msign(g_down), -1))
+        add("routed_weight_up", _unit_norms(reshard(em.w_up, P(*(None,) * em.w_up.ndim)), -2))
+        add("routed_weight_down", _unit_norms(reshard(em.w_down, P(*(None,) * em.w_down.ndim)), -1))
+        gs_up, gs_down = (reshard(x.astype(jnp.float32), P(None, None)) for x in (gs_up, gs_down))
+        add("shared_grad_up", _unit_norms(gs_up, -2))
+        add("shared_grad_down", _unit_norms(gs_down, -1))
+        add("shared_ns_up", _unit_norms(_msign(gs_up), -2))
+        add("shared_ns_down", _unit_norms(_msign(gs_down), -1))
+        add("shared_weight_up", _unit_norms(reshard(sh.w_up, P(None, None)), -2))
+        add("shared_weight_down", _unit_norms(reshard(sh.w_down, P(None, None)), -1))
+    return {name: jnp.stack(values) for name, values in out.items()}
+
+
 def write_routing_dump(
     path: str,
     counts: tuple[np.ndarray, np.ndarray, np.ndarray],
@@ -1469,6 +1523,9 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
     add = _routing_counts_step(trainer_cfg.trainer.mp)
     neuron_counts = _neuron_counts_step(trainer_cfg.trainer.mp)
+    expert_grads = _expert_grad_step(
+        trainer_cfg.trainer.mp, trainer_cfg.z_loss_weight if trainer_cfg.z_loss_weight > 0 else None
+    )
     shape = (cfg.num_layers, cfg.vocab_size, cfg.num_experts + cfg.num_null_experts)
     replicated = NamedSharding(mesh, P(None, None, None))
     layer_kinds = np.asarray(model.layer_kinds())
@@ -1490,7 +1547,7 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
             jax.device_put(np.zeros(shape, np.float32), replicated),
         )
         params = _router_tie_view(state.params, step)
-        neurons = None
+        neurons, grad_sum = None, None
         for start in range(0, num_sequences, batch_size):
             batch = slice(start, start + batch_size)
             batch_tokens, batch_segments = global_batch(tokens[batch]), global_batch(segments[batch])
@@ -1498,8 +1555,13 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
             # Neuron activity (ReLU² experts): summed over the same held-out batches, written beside the routing dump.
             batch_neurons = neuron_counts(params, state.pending_qb_betas, batch_tokens, batch_segments)
             neurons = batch_neurons if neurons is None else jax.tree.map(jnp.add, neurons, batch_neurons)
+            batch_grads = expert_grads(params, state.pending_qb_betas, batch_tokens, batch_segments)
+            grad_sum = batch_grads if grad_sum is None else jax.tree.map(jnp.add, grad_sum, batch_grads)
         current, previous, weighted = (np.asarray(c) for c in jax.block_until_ready(counts))
         path = f"{trainer_cfg.routing_dump_path.rstrip('/')}/{ROUTING_DUMP_FILE.format(step=step)}"
+        num_batches = -(-num_sequences // batch_size)
+        mean_grads = jax.tree.map(lambda g: g / num_batches, grad_sum)
+        neurons = {**neurons, **_unit_grad_stats(params, mean_grads)}
         neuron_arrays = {name: np.asarray(v) for name, v in jax.device_get(neurons).items()}
         if jax.process_index() == 0:
             write_routing_dump(path, (current, previous, weighted), cfg, layer_kinds, step, int(np.sum(segments >= 0)))
