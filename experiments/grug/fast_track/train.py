@@ -1830,7 +1830,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if profiler_enabled:
             state_callbacks.add_hook(
                 profiler_cfg.build(
-                    str(trainer.log_dir / run_id / "profiler"),
+                    # One directory per process: processes on one host would otherwise write the same trace file.
+                    str(trainer.log_dir / run_id / "profiler" / f"process{jax.process_index()}"),
                     run_id=run_id,
                     num_steps=profiler_num_steps,
                 ),
