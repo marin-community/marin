@@ -30,7 +30,7 @@ from taskcompendium.models import (
     ToolCallComparatorConfig,
 )
 from taskcompendium.submission import FinalAction, GradingAttempt, chat_request
-from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.verifier_registry import grade_answer, validate_verifier
 from taskcompendium.verifiers.predicted_action import compare, predicted_action_verifier
 
 from .harbor_replay import run_replay_trial
@@ -66,7 +66,8 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     assert saved_specification["answer_type"] == "native_action"
     assert isinstance(saved_specification["final_tools"], list)
     assert saved_specification["final_tools"]
-    assert saved_specification["environment_requirements"] == {"capabilities": [], "action_interfaces": []}
+    assert saved_specification["environment_requirements"]["capabilities"] == []
+    assert saved_specification["environment_requirements"]["tool_providers"] == {}
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
     assert "Okay, let me figure out how to handle this user's query" not in public
@@ -151,7 +152,7 @@ def test_predicted_action_rejects_invalid_expected_arguments(arguments):
         import_row(row, canonical_sha256(row))
 
 
-def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_path):
+def test_predicted_action_rejects_crafted_message_target_on_verifier_resolution(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
@@ -160,7 +161,7 @@ def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_pat
     (task / "specification.json").write_text(json.dumps(data))
 
     with pytest.raises(ValueError, match="Invalid 'predicted_action' verifier parameters"):
-        read_specification(task / "specification.json")
+        validate_verifier(read_specification(task / "specification.json").verifier)
 
 
 def test_predicted_action_reuses_final_action_convention_without_changing_source_request(tmp_path):

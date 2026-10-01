@@ -106,12 +106,12 @@ async def test_invalid_private_verifier_is_not_scored_as_agent_failure():
         ("mcq", multiple_choice_answer("B", 3), AnswerType.TEXT, "B", "A"),
     ],
 )
-async def test_schema_016_canonical_verifier_kinds_serialize_load_and_grade(
+async def test_schema_canonical_verifier_kinds_serialize_load_and_grade(
     wire_kind, verifier, answer_type, correct, wrong
 ):
     serialized = json.loads(_task(verifier, answer_type).model_dump_json())
     assert serialized["verifier"]["kind"] == wire_kind
-    assert serialized["schema_version"] == "0.16"
+    assert serialized["schema_version"] == "0.18"
     loaded = TaskSpec.model_validate_json(json.dumps(serialized))
     convention = PlainText(id="plain")
     correct_result = await grade_answer(loaded, convention, _attempt(loaded, correct))

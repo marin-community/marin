@@ -368,7 +368,7 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
         update={"environment_requirements": EnvironmentRequirements(capabilities=("filesystem",))}
     )
 
-    with pytest.raises(ValueError, match="cannot satisfy"):
+    with pytest.raises(NotImplementedError, match="cannot satisfy"):
         lower_to_harbor(
             specification,
             PlainText(id="plain"),
@@ -452,7 +452,7 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     convention = PlainText(id="plain")
 
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
-    with pytest.raises(ValueError, match="incompatible: plain cannot carry file"):
+    with pytest.raises(NotImplementedError, match="cannot satisfy requirements: file"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     assert not (tmp_path / "task").exists()
 
@@ -555,3 +555,24 @@ async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specificati
 
     assert result.exception_info is not None
     assert "model unavailable" in (tmp_path / "trials/run/result.json").read_text()
+
+
+async def test_tampered_private_verifier_fails_before_request_or_trial(tmp_path, specification, chat_endpoint):
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(specification, PlainText(id="plain"), environment_config, tmp_path / "task")
+    path = task / "specification.json"
+    payload = json.loads(path.read_text())
+    payload["verifier"]["parameters_json"] = '{"expected": "wrong type"}'
+    path.write_text(json.dumps(payload))
+    # A schema record may be loaded without an available, valid grader.
+    assert read_specification(path).verifier.kind == "numeric"
+    with pytest.raises(ValueError, match="Invalid 'numeric' verifier parameters"):
+        await run_trial(
+            task,
+            environment_config,
+            ChatLaunch(model="fixture-model", api_base=chat_endpoint.url),
+            tmp_path / "trials",
+            "run",
+        )
+    assert chat_endpoint.requests == []
+    assert not (tmp_path / "trials").exists()

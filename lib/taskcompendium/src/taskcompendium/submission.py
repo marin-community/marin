@@ -20,6 +20,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     format_conversation,
+    unsupported_direct_chat_features,
 )
 
 ANSWER_CALL_NAME = "submit_answer"
@@ -263,6 +264,9 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
 
 def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
     """Prepare the conversation and tools for the selected submission convention."""
+    unsupported = unsupported_direct_chat_features(specification)
+    if unsupported:
+        raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")

@@ -25,7 +25,7 @@ from taskcompendium.submission import (
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 
-VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
+VERIFIERS: Mapping[str, type[Verifier]] = MappingProxyType(
     {
         VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
         VerifierKind.STRUCTURED_EXACT: StructuredExactVerifier,
@@ -39,11 +39,11 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
 def resolve_verifier(specification: VerifierSpec) -> Verifier:
     verifier_type = VERIFIERS.get(specification.kind)
     if verifier_type is None:
-        raise ValueError(f"Unknown verifier kind: {specification.kind!r}")
+        raise NotImplementedError(f"Unsupported verifier kind: {specification.kind!r}")
     try:
         return verifier_type.model_validate_json(specification.parameters_json)
     except ValidationError as error:
-        raise ValueError(f"Invalid {specification.kind.value!r} verifier parameters: {error}") from error
+        raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error
 
 
 def validate_verifier(specification: VerifierSpec) -> None:
