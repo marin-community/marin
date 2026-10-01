@@ -504,7 +504,8 @@ fn metadata_int64_bounds(
     key_column: &str,
 ) -> Option<(Option<i64>, Option<i64>)> {
     let schema = md.file_metadata().schema_descr();
-    let col_idx = (0..schema.num_columns()).find(|&i| schema.column(i).name() == key_column)?;
+    let col_idx =
+        (0..schema.num_columns()).find(|&i| schema.column(i).path().parts() == [key_column])?;
     let mut lo: Option<i64> = None;
     let mut hi: Option<i64> = None;
     for rg in md.row_groups() {
@@ -531,8 +532,8 @@ fn metadata_key_bounds(
     key_column: &str,
 ) -> Option<(Option<String>, Option<String>)> {
     let schema = metadata.file_metadata().schema_descr();
-    let column =
-        (0..schema.num_columns()).find(|&index| schema.column(index).name() == key_column)?;
+    let column = (0..schema.num_columns())
+        .find(|&index| schema.column(index).path().parts() == [key_column])?;
     match schema.column(column).physical_type() {
         PhysicalType::INT64 => {
             metadata_int64_bounds(metadata, key_column).map(|(minimum, maximum)| {

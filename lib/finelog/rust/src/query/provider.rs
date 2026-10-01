@@ -776,11 +776,11 @@ mod tests {
     use std::os::unix::fs::FileExt;
     use std::sync::Arc;
 
-    use arrow::array::{Array, Int64Array, StringArray};
+    use arrow::array::{Array, Int64Array, ListArray, StringArray};
 
     use crate::indices::trigram::SIDECAR_SPAN_ROWS;
     use crate::query::string_values::StringValues;
-    use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use arrow::datatypes::{DataType, Field, Int64Type, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::physical_plan::FileScanConfig;
@@ -1856,6 +1856,48 @@ mod tests {
             .unwrap();
         assert!(casts_the_data_column(&cast_plan));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn integer_pruning_distinguishes_scalar_from_nested_list_element() {
+        let dir = tempdir("nested_integer_bounds");
+        let list = ListArray::from_iter_primitive::<Int64Type, _, _>([Some(vec![Some(1)])]);
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("values", list.data_type().clone(), true),
+            Field::new("item", DataType::Int64, false),
+            Field::new("data", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(list),
+                Arc::new(Int64Array::from(vec![100])),
+                Arc::new(StringArray::from(vec!["DEBUG matching scalar"])),
+            ],
+        )
+        .unwrap();
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let provider = NamespaceProvider::build_with_local_artifacts(
+            schema,
+            &[path.to_string_lossy().into_owned()],
+        )
+        .unwrap();
+        let ctx = crate::query::make_ctx();
+        ctx.register_table("nested", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql("SELECT data FROM nested WHERE item = 100 AND contains(data, 'DEBUG')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&batches),
+            vec!["DEBUG matching scalar"]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
