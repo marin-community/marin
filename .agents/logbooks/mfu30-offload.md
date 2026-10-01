@@ -262,3 +262,40 @@ PGLE (0.19 s/step vs 0.006 on main and hmo-02); compute stops at copy-start and 
 stack's PGLE arm should check this; it may eat a large part of PGLE's gain. Also under PGLE, t21 hoisted the
 first momentum H2D (copy-start.44) to the start of the backward, holding 10 GiB through the backward peak;
 on the D stack at 0.78/105 that fits (~133 vs 143.76 GiB) but shows up in memory/peak_gib.
+
+## M30A-015 Carry-copy stream collision: mechanism and fix (2026-10-01)
+
+Mechanism, from XLA source at the pinned `708c3a4ec79c`:
+- `DynamicSliceCopyFusionAsyncWrapper` (pre-scheduling) wraps every dynamic-slice / DUS copy fusion in an
+  async pair: the per-layer weight slices from the scan's stacked params, and the carry DUS-to-host /
+  DS-from-host. Its only off switch, `--xla_gpu_experimental_dynamic_slice_fusion_verify_offsets`,
+  de-asyncs all of them and adds runtime offset checks. Unusable.
+- `ExecutionStreamAssignment` gives every compute-scope async start (those plus `copy-start`)
+  `ComputationStreamId(n mod kDefaultNumComputeStreams=4)`, with one counter over each computation's
+  post-order (BFS over computations). That modulus is a constant;
+  `--xla_gpu_executable_num_compute_streams` only raises the allocated-stream floor. Within a loop body,
+  which slices share the carry copy's stream depends only on their relative post-order positions mod 4.
+  A global phase shift therefore cannot fix it, and any change to the body's async ops re-draws it.
+- An explicit `_xla_stream_annotation` frontend attribute overrides the assignment, but
+  `CreateAsyncInstructions` copies metadata and backend config, not frontend attributes, so JAX cannot
+  put one on these async starts.
+- The LHS models async memcpys with unlimited concurrency, so it never sees the shared queue.
+Conclusion: no flag and no clean JAX-level annotation.
+
+Deterministic fix, written but not pushed: XLA branch `mcwitt/adhoc-host-transfer-streams` in worktree
+`~/projects/xla.host-transfer-streams` (commit `283d5b6d98` on `708c3a4ec79c`, +74 lines; patch copied to
+`autoresearch/loop-260930-mfu30/a/xla-host-transfer-streams.patch`). With `XLA_GPU_HOST_TRANSFER_STREAMS=1`,
+async starts touching host memory get dedicated streams: compute stream 4 for H2D, compute stream 5 for
+D2H. That covers `copy-start` with an S(5) source or destination, and async slice fusions reading or
+writing S(5). Everything else stays round-robin over 0-3. Slice copies can never queue behind a host
+transfer; the H2D and D2H batches can overlap each other. Zero runtime cost, same ordering semantics
+(async start/done events), bit-identical when the env var is unset. Needs a branch push to
+marin-community/xla plus a `marin-pjrt.yaml` dispatch (candidate prerelease, ~3.5 h cold build), then a
+`--pjrt-wheel` sideload as in August's H11. That is an external write beyond this agent's permissions.
+
+JAX-level fallback (not built): make the offloaded carry depend on every layer weight slice through a
+non-foldable integer zero. Use `z = OR_k((u16(slice_k[0]) >> 15) & (~u16(slice_k[0]) >> 15))`,
+`x2 = bitcast(bitcast(x, u16) | z)`, and route every use through `name(x2)`. The forward D2H then cannot
+issue before the layer's slices finish. The backward uses the offloaded `x2`, so no extra residual.
+Bitwise exact. It costs ~25 ms/step always (an extra carry pass ~14 ms, plus the layer start waiting for
+all slices ~10 ms), it covers only the forward, and XLA must be checked not to fold `z`.
