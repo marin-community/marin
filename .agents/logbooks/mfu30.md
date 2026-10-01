@@ -722,3 +722,23 @@ main_b - main_a -4.5e-6 +- 5.5e-6 (-0.81, 3/8) | -2.8e-6 +- 1.9e-5; **final** -1
 +2.0e-6 +- 1.3e-5. Detection floor ~1.4e-5 absolute (5e-6 relative). Seed 1's rack drift (+2.65e-4 at loss
 1.26, ~2e-4 relative) is ~40x larger in relative terms than anything the value-changing components produce here.
 Limits: small, from-scratch, synthetic. The rack's seed-1/2 same-code repeats remain the direct calibration.
+
+## M30-044 Confirmations complete: all three seeds >= 30% (2026-10-01)
+
+Median MFU over 180011-180099 (n=89), final program vs main on the same seed and data:
+
+| seed | main | final (m30-conf-seq-s<k>) | gain | s/step final | loss dmax / late mean / positive | mean abs d by thirds |
+|---|---|---|---|---|---|---|
+| 0 | 28.260 | **30.218** | +1.96 | 12.990 | 3.75e-4 / -9.2e-5 / 16 of 89 | 6.6e-5, 1.05e-4, 1.57e-4 |
+| 1 | 28.235 | **30.206** | +1.97 | 12.995 | 7.7e-4 / +2.65e-4 / 87 of 89 | 1.27e-4, 2.75e-4, 3.28e-4 |
+| 2 | 28.266 | **30.206** | +1.94 | 12.995 | 5.5e-4 / -1.81e-4 / 9 of 89 | 1.72e-4, 2.17e-4, 2.65e-4 |
+
+Peak 123.50 GiB in all. The seed-2 control is bimodal within its run (27.83 over 11-59, 28.32 over 60-99),
+so the earlier 28.012 reading (M30-017) was a transient. The drift sign changes across seeds (-, +, -; mean over
+seeds ~0), consistent with run-to-run divergence and with B's null bias test (M30-043). Seeds 1 and 2 diverge
+~2x faster than seed 0's same-code pair; their same-code repeats (`m30-ctl-s{1,2}-r2`) are queued to
+calibrate. Speed criterion met on all seeds; fidelity verdict pending those repeats.
+**Incident:** the coordinator of the finished `m30-conf-seq-s0` was pod-deleted (preemptions=1), restarted, and
+resubmitted its train job (Iris resurrection, #8276 family). The orchestrator's hang poller flagged it at 87 min;
+cancelled at 12:55Z. W&B history intact (101 rows over the original 21.9-minute span). No other campaign
+coordinators were resurrected.
