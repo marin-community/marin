@@ -4,7 +4,6 @@
 """Harbor adapter for ShellSim's built-in Unix-like environment."""
 
 import asyncio
-import shutil
 import tempfile
 from enum import StrEnum
 from pathlib import Path
@@ -31,30 +30,12 @@ from shellbox.machine import (
     ShellSimBuiltins,
 )
 
-_COPY_CHUNK_BYTES = 1024 * 1024
-
 
 def _download_target(target: Path | StoragePath | str) -> Path | StoragePath:
     path = StoragePath(str(target))
     if path.is_local:
         return Path("/" + path.key) if path.scheme == "file" else Path(str(path))
     return path
-
-
-def _copy_file_to_remote(source: Path, target: StoragePath) -> None:
-    target.parent.mkdirs()
-    with source.open("rb") as local_file, target.open("wb") as remote_file:
-        shutil.copyfileobj(local_file, remote_file, length=_COPY_CHUNK_BYTES)
-
-
-def _copy_dir_to_remote(source: Path, target: StoragePath) -> None:
-    target.mkdirs()
-    for entry in source.rglob("*"):
-        remote_entry = target / entry.relative_to(source).as_posix()
-        if entry.is_dir():
-            remote_entry.mkdirs()
-        else:
-            _copy_file_to_remote(entry, remote_entry)
 
 
 class TaskNetworkPolicy(StrEnum):
@@ -174,7 +155,7 @@ class ShellSimEnvironment(BaseEnvironment):
         with tempfile.TemporaryDirectory() as staging_dir:
             staged = Path(staging_dir) / "download"
             await self.machine.download(source_path, staged)
-            await asyncio.to_thread(_copy_file_to_remote, staged, target)
+            await asyncio.to_thread(target.upload_from, str(staged))
 
     async def download_dir(self, source_dir: str, target_dir: Path | StoragePath | str) -> None:
         if self.machine is None:
@@ -187,4 +168,4 @@ class ShellSimEnvironment(BaseEnvironment):
         with tempfile.TemporaryDirectory() as staging_dir:
             staged = Path(staging_dir)
             await self.machine.download(source_dir, staged)
-            await asyncio.to_thread(_copy_dir_to_remote, staged, target)
+            await asyncio.to_thread(target.upload_from, str(staged), recursive=True)
