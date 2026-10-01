@@ -491,9 +491,8 @@ def build_h100_ladder_run(
 
     # Eval at the midpoint and end; no_eval disables it entirely below (the forced final callback would
     # otherwise still run a full eval, so pushing the interval past the end is not enough).
-    # One mid-run eval; rounding up keeps a periodic eval off the second-to-last step, right before the forced
-    # end-of-run eval of the same weights.
-    steps_per_eval = max(1, (num_steps + 1) // 2)
+    # Only the end-of-run eval: the periodic one lands on the last step, where the forced final pass skips it.
+    steps_per_eval = num_steps
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_steps,
         batch_size=batch_size,
