@@ -617,9 +617,12 @@ def build_h100_ladder_run(
                     eval_batch_size=rung.global_device_count,
                     compute_bpb=True,
                     dropless_eval=True,
-                    # The sonic kernel needs equal read and write widths; scatter handles `latent_out_dim`.
+                    # The sonic kernel needs equal read and write widths; scatter handles `latent_out_dim` and
+                    # the full-width tail layers of `latent_out_full_layers`.
                     dropless_eval_moe_implementation=(
-                        "sonic" if model.expert_in_dim == model.expert_out_dim else "scatter"
+                        "sonic"
+                        if model.expert_in_dim == model.expert_out_dim and not model.latent_out_full_layers
+                        else "scatter"
                     ),
                 )
             ),
