@@ -109,6 +109,7 @@ def build_diagnostic_run(
     moe_implementation: str | None = None,
     gated_norm_implementation: str | None = None,
     sconv_implementation: str | None = None,
+    regather_attention_weights: bool = False,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -174,6 +175,7 @@ def build_diagnostic_run(
             ("moe_implementation", moe_implementation),
             ("gated_norm_implementation", gated_norm_implementation),
             ("sconv_implementation", sconv_implementation),
+            ("regather_attention_weights", regather_attention_weights or None),
         )
         if value is not None
     }
@@ -441,6 +443,12 @@ def build_diagnostic_run(
     help="Override the short-conv kernel. Defaults to the Pallas kernel on GPU.",
 )
 @click.option(
+    "--regather-attention-weights",
+    is_flag=True,
+    default=False,
+    help="Recompute the attention weight gathers at the JAX level for the backward (PR #9481).",
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
@@ -576,6 +584,7 @@ def main(
     moe_implementation: str | None,
     gated_norm_implementation: str | None,
     sconv_implementation: str | None,
+    regather_attention_weights: bool,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -615,6 +624,7 @@ def main(
         moe_implementation=moe_implementation,
         gated_norm_implementation=gated_norm_implementation,
         sconv_implementation=sconv_implementation,
+        regather_attention_weights=regather_attention_weights,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
