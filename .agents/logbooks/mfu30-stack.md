@@ -434,3 +434,11 @@ Exposed collectives total 1.48 s.
 
 The wheel build alone removes the stall, and the env var adds nothing measurable. F0 and F1 are the same
 program within noise.
+
+Correction (orchestrator, A; M30-039): F0 never compiled `jit_train_step`. It has zero "Rematerialized ...
+jit_train_step" log lines, against 64 in F1, because it loaded F1's executable from the persistent compilation
+cache. The cache key excludes `XLA_GPU_HOST_TRANSFER_STREAMS`, and stream assignment is fixed at compile time.
+So F0's carry copies sitting off the compute streams is F1's patched layout. The conclusion "the wheel build alone
+removes the stall" above is wrong; F0 is a repeat of F1's executable. stackseq-03 shows the production layout:
+the carry shares a stream with ~720 slice copies. Any future env-only control needs
+`--env JAX_ENABLE_COMPILATION_CACHE=false`. PGLE arms recompile, since the profile path is an XLA flag.
