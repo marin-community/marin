@@ -5,9 +5,7 @@
 
 import base64
 import hashlib
-import json
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import Any
 
 from tasktrove_verify.spec import PytestSpec, spec_to_table
@@ -93,18 +91,3 @@ def converted_row(
         "normalization_changes": changes,
     }
     return row
-
-
-def convert_snapshot(
-    snapshot: Path,
-    output: Path,
-    name: str,
-    *,
-    converter: Callable[[TaskFiles], ConvertedTask | Rejected] | None = None,
-) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with snapshot.open() as source, output.open("w") as target:
-        for line in source:
-            target.write(
-                json.dumps(converted_row(json.loads(line), name, converter=converter), ensure_ascii=False) + "\n"
-            )

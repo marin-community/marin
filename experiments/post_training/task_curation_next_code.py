@@ -5,11 +5,9 @@
 
 from collections.abc import Callable
 from dataclasses import replace
-from pathlib import Path
 
 from tasktrove_verify.spec import Compare, StdioSpec
 
-from experiments.post_training.task_curation_executable import convert_snapshot as convert_executable_snapshot
 from experiments.post_training.tasktrove.converters.code_contests import convert_code_contests
 from experiments.post_training.tasktrove.converters.codeforces import convert_codeforces
 from experiments.post_training.tasktrove.converters.converted_task import ConvertedTask, ConvertStatus, Rejected
@@ -36,7 +34,3 @@ CONVERTERS: dict[str, Callable[[TaskFiles], ConvertedTask | Rejected]] = {
     "code_contests": convert_code_contests,
     "codenet": convert_codenet,
 }
-
-
-def convert_snapshot(snapshot: Path, output: Path, name: str) -> None:
-    convert_executable_snapshot(snapshot, output, name, converter=CONVERTERS[name])

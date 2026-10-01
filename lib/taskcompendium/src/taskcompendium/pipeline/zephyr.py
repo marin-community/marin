@@ -13,11 +13,10 @@ from functools import partial
 from math import ceil
 from pathlib import Path
 from tempfile import SpooledTemporaryFile, TemporaryDirectory
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-import fsspec
 import pyarrow.parquet as pq
-from fsspec.core import OpenFile
+from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.input_file import InputFileSpec
@@ -81,14 +80,14 @@ class AuditExecution:
     reviewer: Reviewer | None = None
 
 
-def _write_json(path: str, value: Any) -> None:
-    with cast(OpenFile, fsspec.open(path, "wt", auto_mkdir=True)) as stream:
+def _write_json(path: StoragePath, value: Any) -> None:
+    with path.open("wt", auto_mkdir=True) as stream:
         json.dump(value, stream, indent=2, ensure_ascii=False, allow_nan=False)
         stream.write("\n")
 
 
-def _read_json(path: str) -> Any:
-    with cast(OpenFile, fsspec.open(path, "rt")) as stream:
+def _read_json(path: StoragePath) -> Any:
+    with path.open("rt") as stream:
         return json.load(stream)
 
 
@@ -97,9 +96,10 @@ def acquire_source(acquisition: SourceAcquisition, output_path: str) -> dict[str
     if acquisition.limit <= 0:
         raise ValueError("A positive sample limit is required")
     source = acquisition.source
+    output = StoragePath(output_path)
     if isinstance(source, SnapshotSource) and acquisition.sample_sha256 is not None:
         digest = hashlib.sha256()
-        with cast(OpenFile, fsspec.open(source.path, "rb")) as stream:
+        with StoragePath(source.path).open("rb") as stream:
             for chunk in iter(lambda: stream.read(GROUP_MEMORY_BYTES), b""):
                 digest.update(chunk)
         if digest.hexdigest() != acquisition.sample_sha256:
@@ -108,8 +108,8 @@ def acquire_source(acquisition: SourceAcquisition, output_path: str) -> dict[str
     count = 0
     rows = iter(source_rows(source, acquisition.limit))
     while count < acquisition.limit:
-        path = f"{output_path}/raw/part-{count // ACQUISITION_SHARD_ROWS:05d}.jsonl"
-        with cast(OpenFile, fsspec.open(path, "wt", auto_mkdir=True)) as stream:
+        path = output / "raw" / f"part-{count // ACQUISITION_SHARD_ROWS:05d}.jsonl"
+        with path.open("wt", auto_mkdir=True) as stream:
             for _ in range(min(ACQUISITION_SHARD_ROWS, acquisition.limit - count)):
                 data = next(rows, None)
                 if data is None:
@@ -119,7 +119,7 @@ def acquire_source(acquisition: SourceAcquisition, output_path: str) -> dict[str
                 digest.update(record.encode())
                 count += 1
     manifest = {"acquisition": asdict(acquisition), "input_rows": count, "raw_sample_sha256": digest.hexdigest()}
-    _write_json(f"{output_path}/manifest.json", manifest)
+    _write_json(output / "manifest.json", manifest)
     return manifest
 
 
@@ -215,21 +215,18 @@ def _deduplicate(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str
             yield audit
 
 
-def _persist_evidence(local_path: Path, remote_path: str) -> None:
+def _persist_evidence(local_path: Path, remote_path: StoragePath) -> None:
     for file in local_path.rglob("*"):
         if file.is_file():
             with (
                 file.open("rb") as source,
-                cast(
-                    OpenFile,
-                    fsspec.open(f"{remote_path}/{file.relative_to(local_path).as_posix()}", "wb", auto_mkdir=True),
-                ) as destination,
+                (remote_path / file.relative_to(local_path).as_posix()).open("wb", auto_mkdir=True) as destination,
             ):
                 shutil.copyfileobj(source, destination)
 
 
 def _audit_batch(
-    records: list[dict[str, Any]], recipe: DatasetRecipe, reviewer: Reviewer, output_path: str
+    records: list[dict[str, Any]], recipe: DatasetRecipe, reviewer: Reviewer, output_path: StoragePath
 ) -> Iterator[dict[str, Any]]:
     audits = [TaskAudit.model_validate(record) for record in records]
     candidates = [audit.normalized for audit in audits if audit.decision is None and audit.normalized is not None]
@@ -237,7 +234,7 @@ def _audit_batch(
         yield from (audit_columns(audit) for audit in audits)
         return
     batch_id = canonical_sha256({"task_ids": [task.id for task in candidates]})
-    evidence = f"{output_path}/evidence/{batch_id}"
+    evidence = output_path / "evidence" / batch_id
     with TemporaryDirectory(prefix="task-curation-review-") as directory:
         local = Path(directory)
         try:
@@ -279,15 +276,14 @@ def _audit_batch(
             _persist_evidence(local, evidence)
 
 
-def _manifest(path: str) -> dict[str, Any]:
+def _manifest(path: StoragePath) -> dict[str, Any]:
     counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0)
     dispositions: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
-    filesystem, root = fsspec.core.url_to_fs(f"{path}/audit/*.parquet")
-    for file in filesystem.glob(root):
+    for file in (path / "audit/*.parquet").glob():
         for row in load_parquet(
             InputFileSpec(
-                filesystem.unstrip_protocol(file),
+                str(file),
                 columns=["normalization_reason", "review_status", "filter_status", "filter_reasons"],
             )
         ):
@@ -321,22 +317,24 @@ def audit_source(
         )
         if actual != review:
             raise ValueError("Review configuration differs from the executing reviewer")
-    acquired = _read_json(f"{source_path}/manifest.json")
+    source = StoragePath(source_path)
+    output = StoragePath(output_path)
+    acquired = _read_json(source / "manifest.json")
     # Partition identity depends on the sample, never on the executing worker count.
     shards = max(1, ceil(acquired["input_rows"] / AUDIT_SHARD_ROWS))
     dataset = (
-        Dataset.from_files(f"{source_path}/raw/*.jsonl")
+        Dataset.from_files(str(source / "raw/*.jsonl"))
         .load_jsonl()
         .map(partial(_normalize, recipe=recipe))
         .group_by(_public_key, reducer=_deduplicate, sort_by=_index, num_output_shards=shards)
         .window(execution.review_batch_size)
-        .flat_map(partial(_audit_batch, recipe=recipe, reviewer=reviewer, output_path=output_path))
-        .write_parquet(f"{output_path}/audit/part-{{shard:05d}}.parquet", schema=TASK_SCHEMA, skip_existing=True)
+        .flat_map(partial(_audit_batch, recipe=recipe, reviewer=reviewer, output_path=output))
+        .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA, skip_existing=True)
     )
     with ZephyrContext(max_workers=execution.max_workers, name=f"audit-{recipe.name}") as context:
         context.execute(dataset)
     manifest = {
-        **_manifest(output_path),
+        **_manifest(output),
         "recipe": recipe.name,
         "recipe_version": recipe.version,
         "review": asdict(review),
@@ -345,7 +343,7 @@ def audit_source(
     }
     if manifest.get("input_rows", 0) != acquired["input_rows"]:
         raise ValueError("Audit ledger does not account for every acquired source row")
-    _write_json(f"{output_path}/manifest.json", manifest)
+    _write_json(output / "manifest.json", manifest)
     return manifest
 
 
@@ -393,28 +391,30 @@ def _is_accepted(row: dict[str, Any]) -> bool:
 
 def filter_source(audit_path: str, output_path: str, policy: FilterPolicy) -> dict[str, Any]:
     """Commit binary decisions from saved observations, preserving the complete audit."""
+    source = StoragePath(audit_path)
+    output = StoragePath(output_path)
     annotated = (
-        Dataset.from_files(f"{audit_path}/audit/*.parquet")
+        Dataset.from_files(str(source / "audit/*.parquet"))
         .load_parquet()
         .map(partial(_filter_row, policy=policy))
-        .write_parquet(f"{output_path}/audit/part-{{shard:05d}}.parquet", schema=TASK_SCHEMA)
+        .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
     )
     with ZephyrContext(name="filter-tasks") as context:
         context.execute(annotated)
         accepted = (
-            Dataset.from_files(f"{output_path}/audit/*.parquet")
+            Dataset.from_files(str(output / "audit/*.parquet"))
             .load_parquet()
             .filter(_is_accepted)
-            .write_parquet(f"{output_path}/accepted/part-{{shard:05d}}.parquet", schema=TASK_SCHEMA)
+            .write_parquet(str(output / "accepted/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
         )
         context.execute(accepted)
-    manifest: dict[str, Any] = {**_manifest(output_path), "policy": asdict(policy), "audited_source": audit_path}
-    audited_manifest = _read_json(f"{audit_path}/manifest.json")
+    manifest: dict[str, Any] = {**_manifest(output), "policy": asdict(policy), "audited_source": str(source)}
+    audited_manifest = _read_json(source / "manifest.json")
     if manifest["input_rows"] != audited_manifest["input_rows"]:
         raise ValueError("Filtering lost rows from the complete audit ledger")
     if sum(manifest["dispositions"].values()) != manifest.get("input_rows", 0):
         raise ValueError("Every final row must have a keep or reject decision")
-    _write_json(f"{output_path}/manifest.json", manifest)
+    _write_json(output / "manifest.json", manifest)
     return manifest
 
 
@@ -425,22 +425,22 @@ def concat_sources(input_paths: Sequence[str], output_path: str, view: Literal["
     files = []
     expected = 0
     for path in input_paths:
-        manifest = _read_json(f"{path}/manifest.json")
+        source = StoragePath(path)
+        manifest = _read_json(source / "manifest.json")
         expected += manifest["input_rows"] if view == "audit" else manifest["dispositions"].get("keep", 0)
-        filesystem, pattern = fsspec.core.url_to_fs(f"{path}/{view}/*.parquet")
-        files.extend(filesystem.unstrip_protocol(file) for file in sorted(filesystem.glob(pattern)))
+        files.extend(str(file) for file in sorted((source / view / "*.parquet").glob(), key=str))
+    output = StoragePath(output_path)
     dataset = (
         Dataset.from_list(files)
         .load_parquet()
         .reshard(max(1, ceil(expected / OUTPUT_SHARD_ROWS)))
-        .write_parquet(f"{output_path}/data/part-{{shard:05d}}.parquet", schema=TASK_SCHEMA)
+        .write_parquet(str(output / "data/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
     )
     with ZephyrContext(name=f"concat-{view}") as context:
         context.execute(dataset)
-    filesystem, pattern = fsspec.core.url_to_fs(f"{output_path}/data/*.parquet")
     actual = 0
-    for file in filesystem.glob(pattern):
-        with filesystem.open(file, "rb") as stream:
+    for file in (output / "data/*.parquet").glob():
+        with file.open("rb") as stream:
             actual += pq.ParquetFile(stream).metadata.num_rows
     if actual != expected:
         raise ValueError(f"Merged output contains {actual} rows; source manifests declare {expected}")
@@ -450,5 +450,5 @@ def concat_sources(input_paths: Sequence[str], output_path: str, view: Literal["
         "input_rows": expected,
         "deduplication_scope": "within each source",
     }
-    _write_json(f"{output_path}/manifest.json", manifest)
+    _write_json(output / "manifest.json", manifest)
     return manifest

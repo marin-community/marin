@@ -31,8 +31,8 @@ yields fewer than the requested count. The entrypoint uses the existing inferenc
 endpoint; it does not start or restart a serving job.
 
 `MARIN_PREFIX` selects the artifact storage location. It can name local storage,
-S3 or GCS according to Marin's configured filesystem access. The acquisition
-builder's name, `download_to_s3`, does not force an S3 destination. Credentials
+S3 or GCS according to Marin's configured filesystem access. The `acquire_source`
+builder writes to that configured destination. Credentials
 and transport clients stay outside persisted artifact configurations.
 
 Each source has an independent branch:
@@ -240,7 +240,7 @@ identical instructions or NeMo trajectories stay in one partition. Holdout count
 can differ from 30 when a group contains multiple rows.
 
 ```bash
-uv run --no-sync --with fastparquet python -m \
+uv run --package marin-core --group test --with fastparquet python -m \
   experiments.post_training.task_curation_sampling \
   --count 100 --seed 6101 --nemo-shard train.jsonl \
   --output /tmp/task-curation-ten/sources
@@ -350,7 +350,7 @@ quality criteria, source configuration and recipe version.
 Prepare snapshots using repeated `--source` arguments, then run their recipes:
 
 ```bash
-uv run --no-sync --with fastparquet python -m \
+uv run --package marin-core --group test --with fastparquet python -m \
   experiments.post_training.task_curation_sampling \
   --count 100 --seed 6201 \
   --source knowledge_mcqa --source arc_transductive \

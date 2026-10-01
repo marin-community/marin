@@ -13,42 +13,41 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
+from taskcompendium.pipeline.datasets import (
+    atlas_arc_injection,
+    atlas_code,
+    atlas_math_qa,
+    calendar_tasks,
+    executable_tasks,
+    nemo_actions,
+    qa_tasks,
+    reasoning_tasks,
+)
+from taskcompendium.pipeline.datasets.instruction_following import REVISION as TASKTROVE_REVISION
 
 from experiments.post_training.task_curation_partitions import assign_partitions
 from experiments.post_training.task_curation_prefix_sampling import READ_BLOCK_BYTES, sample_prefix
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
-TASKTROVE_REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
-NEMO_REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
 CONFIGS = {
-    "nl2bash": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
-    "taco": "laion__exp_rpt_taco-v2",
-    "codeforces": "laion__codeforces-v3",
-    "unitsyn": "DCAgent__exp_rpt_unitsyn-python-v4",
-    "calendar": "laion__nemotron-gym-agent-calendar-v2",
-    "reasoning_gym": "laion__nemotron-gym-reasoning-gym-v2",
-    "all_puzzles": "laion__all-puzzles-v2",
-    "knowledge_openqa": "laion__nemotron-gym-knowledge-openqa-v4",
-    "science_openqa": "laion__nemotron-gym-science-so-openq-v3",
+    **executable_tasks.CONFIGS,
+    "calendar": calendar_tasks.CONFIG,
+    "reasoning_gym": reasoning_tasks.REASONING_CONFIG,
+    "all_puzzles": reasoning_tasks.PUZZLE_CONFIG,
+    "knowledge_openqa": qa_tasks.KNOWLEDGE_CONFIG,
+    "science_openqa": qa_tasks.SCIENCE_CONFIG,
 }
-NEXT_CONFIGS = {
-    "code_contests": "DCAgent__code-contests-noblock",
-    "codenet": "laion__exp_rpt_codenet-python-v4",
-    "math_openreasoning": "laion__nemotron-gym-math-openmathreasoning-v2",
-    "advanced_calculations": "laion__nemotron-gym-math-advanced-calculations-v4",
-    "knowledge_mcqa": "laion__nemotron-gym-knowledge-mcqa-v2",
-    "web_search_mcqa": "laion__nemotron-gym-knowledge-web-search-mcqa-v2",
-    "qa_abstention": "laion__nemotron-gym-qa-abstention-v4",
-    "arc_transductive": "laion__nemotron-gym-arc-agi-transductive-v3",
-    "arc_inductive": "laion__nemotron-gym-arc-agi-python-inductive-v2",
-    "indirect_injection": "laion__nemotron-gym-agentic-indirect-prompt-injection-v3",
-}
+NEXT_CONFIGS = atlas_code.CONFIGS | atlas_math_qa.CONFIGS | atlas_arc_injection.CONFIGS
 SOURCE_CONFIGS = CONFIGS | NEXT_CONFIGS
 MAX_SAMPLE_BYTES = 64 * 1024 * 1024
 
 
 def sample_source(name: str, output: Path, count: int, seed: int, nemo_shard: str) -> dict:
-    """Sample across eight row groups, retaining unsupported rows and all archive files."""
+    """Sample a row-group pool, or an ordered prefix when that pool exceeds its byte budget.
+
+    Start with up to eight random groups and add groups until enough rows exist.
+    Retain unsupported tasks and every sampled archive file.
+    """
     if name == "nemo_actions":
         return sample_nemo(output, count, seed, nemo_shard)
     dataset = "open-thoughts/TaskTrove"
@@ -135,8 +134,8 @@ def sample_source(name: str, output: Path, count: int, seed: int, nemo_shard: st
 
 def sample_nemo(output: Path, count: int, seed: int, source_file: str) -> dict:
     """Sample complete JSONL records from eight bounded byte ranges, grouped by trajectory."""
-    dataset = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
-    path = f"datasets/{dataset}@{NEMO_REVISION}/{source_file}"
+    dataset = nemo_actions.DATASET
+    path = f"datasets/{dataset}@{nemo_actions.REVISION}/{source_file}"
     filesystem = HfFileSystem()
     size = filesystem.info(path)["size"]
     randomizer = random.Random(f"{seed}:nemo_actions")
@@ -164,7 +163,7 @@ def sample_nemo(output: Path, count: int, seed: int, source_file: str) -> dict:
     manifest = {
         "name": "nemo_actions",
         "dataset": dataset,
-        "revision": NEMO_REVISION,
+        "revision": nemo_actions.REVISION,
         "file": source_file,
         "source_bytes": size,
         "sample_rows": len(rows),

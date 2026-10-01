@@ -31,8 +31,8 @@ from taskcompendium.pipeline.zephyr import (
     AuditExecution,
     ReviewConfig,
     SourceAcquisition,
-    acquire_source,
 )
+from taskcompendium.pipeline.zephyr import acquire_source as acquire_source_rows
 from taskcompendium.pipeline.zephyr import (
     audit_source as audit_source_rows,
 )
@@ -116,13 +116,13 @@ def recipe_identity(recipe: DatasetRecipe) -> dict[str, Any]:
     }
 
 
-def download_to_s3(binding: SourceBinding, resources: ResourceConfig) -> ArtifactStep[Artifact]:
+def acquire_source(binding: SourceBinding, resources: ResourceConfig) -> ArtifactStep[Artifact]:
     """Acquire bounded source shards under the configured artifact storage prefix."""
     # Local snapshots must be uploaded by the driver before remote workers can consume them.
     worker = (
-        acquire_source
+        acquire_source_rows
         if isinstance(binding.acquisition.source, SnapshotSource)
-        else remote(acquire_source, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"])
+        else remote(acquire_source_rows, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"])
     )
     return apply(
         content_name(f"{PIPELINE_PREFIX}/{binding.name}/acquired", binding.acquisition),
@@ -234,7 +234,7 @@ def build_workflow(
         raise ValueError("Choose at least one source, with unique artifact names")
     sources = []
     for binding in bindings:
-        acquired = download_to_s3(binding, resources)
+        acquired = acquire_source(binding, resources)
         audited = audit_source(binding, acquired, execution, resources)
         accepted = filter_source(binding, audited, policy, resources)
         sources.append(SourceArtifacts(binding.name, acquired, audited, accepted))
