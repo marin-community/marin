@@ -5,9 +5,16 @@ import pytest
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import ArtifactStep, StepContext
 
+from experiments.datakit.reference_pipeline import TokenizerSpec
 from experiments.datakit.store.datakit_store import BucketCacheStats, ClusteredStoreData
 from experiments.datakit.store.mixture import MixtureWeighting, store_mixture
-from experiments.grug.fast_track.data_pipeline import FastTrackDataStore, store_mixture_for_step
+from experiments.grug.fast_track.data_pipeline import (
+    FastTrackDataConfig,
+    FastTrackDataStore,
+    RepeatedDocumentDataSource,
+    build_fast_track_data,
+    store_mixture_for_step,
+)
 from experiments.grug.fast_track.launch import DataKitTrainingSource, build_h100_ladder_run
 
 
@@ -69,7 +76,8 @@ def test_store_mixture_excludes_buckets_shorter_than_one_sequence():
         store_mixture(store, min_tokens_per_component=8_192)
 
 
-def test_store_mixture_loads_cached_fast_track_artifact(tmp_path):
+def test_store_mixture_loads_cached_fast_track_artifact(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     artifact_path = str(tmp_path / "store")
     store_step = ArtifactStep(
         name="fast-track-store-test",
@@ -93,6 +101,24 @@ def test_store_mixture_loads_cached_fast_track_artifact(tmp_path):
 
     assert set(mixture.components) == {"c01q0", "c07q2"}
     assert mixture.train_weights == {"c01q0": 1.0, "c07q2": 1.0}
+    assert mixture.components["c01q0"].cache_dir == str(tmp_path / "datakit/store/cluster=1/quality=0")
+
+
+def test_fast_track_data_fingerprint_tracks_tokenizer_content():
+    def data_step(tokenizer_identity: str) -> ArtifactStep[FastTrackDataStore]:
+        config = FastTrackDataConfig(
+            run_id="tokenizer-content-test",
+            source=RepeatedDocumentDataSource(count=2),
+            quality_model="quality-model",
+            quality_model_version="test",
+            pool_workers=1,
+            tokenizer=TokenizerSpec("hero-bpe-v16384", tokenizer_identity),
+            tokenizer_vocab=16_384,
+            sequence_length=4_096,
+        )
+        return build_fast_track_data(config, version="test-dev")
+
+    assert data_step("sha256:first").fingerprint() != data_step("sha256:second").fingerprint()
 
 
 def test_fast_track_keeps_data_store_when_it_adds_validation_data():
