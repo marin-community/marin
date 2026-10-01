@@ -23,12 +23,15 @@ from taskcompendium.models import (
 )
 from taskcompendium.submission import (
     AnswerFormat,
+    FileAnswer,
     GradingAttempt,
     JsonAnswer,
     PlainText,
     StateSubmission,
     SubmissionConvention,
+    SubmissionFailure,
     TextSubmission,
+    Workspace,
 )
 from taskcompendium.verifier_registry import grade_answer, resolve_verifier
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
@@ -96,6 +99,42 @@ async def test_invalid_private_verifier_is_not_scored_as_agent_failure():
     task = _task(VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json="{}"))
     with pytest.raises(ValueError, match="Invalid 'exact' verifier parameters"):
         await grade_answer(task, JsonAnswer(id="json"), _attempt(task, '{"answer":'))
+
+
+async def test_file_and_workspace_conventions_extract_final_snapshot(tmp_path):
+    task = _task(exact_answer("unused"))
+    attempt = GradingAttempt(_attempt(task, "Done.").conversation, tmp_path)
+    output = tmp_path / "results" / "answer.bin"
+    output.parent.mkdir()
+    output.write_bytes(b"\x00final file\xff")
+    convention = TypeAdapter(SubmissionConvention).validate_json(
+        FileAnswer(id="file", output_path="results/answer.bin").model_dump_json()
+    )
+
+    submission = await convention.extract(attempt)
+    snapshot = await Workspace(id="workspace").extract(attempt)
+
+    assert submission.path.read_bytes() == b"\x00final file\xff"
+    assert (snapshot.path / "results" / "answer.bin").read_bytes() == b"\x00final file\xff"
+
+
+async def test_file_convention_rejects_missing_file_and_snapshot_escape(tmp_path):
+    task = _task(exact_answer("unused"))
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    attempt = GradingAttempt(_attempt(task, "Done.").conversation, snapshot)
+    convention = FileAnswer(id="file", output_path="results/answer.txt")
+
+    with pytest.raises(SubmissionFailure, match="missing"):
+        await convention.extract(attempt)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "answer.txt").write_text("private outside data")
+    (snapshot / "results").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(SubmissionFailure, match="symlinks"):
+        await convention.extract(attempt)
 
 
 @pytest.mark.parametrize(

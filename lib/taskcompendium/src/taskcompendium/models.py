@@ -20,6 +20,7 @@ class AnswerType(StrEnum):
     NUMBER = "number"
     FILE = "file"
     STATE = "state"
+    WORKSPACE_STATE = "workspace_state"
     NATIVE_ACTION = "native_action"
 
 
@@ -33,6 +34,7 @@ class VerifierKind(StrEnum):
     MATHEMATICAL_ANSWER = "math"
     MCQ_ANSWER = "mcq"
     REASONING_GYM_ANSWER = "reasoning_gym"
+    SCRIPT = "script"
 
 
 class Source(BaseModel):

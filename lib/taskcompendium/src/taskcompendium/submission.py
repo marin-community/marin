@@ -7,6 +7,7 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -24,6 +25,7 @@ from taskcompendium.models import (
 
 ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
+WORKSPACE_ROOT = "/app"
 
 
 def answer_call_tool() -> dict[str, object]:
@@ -48,6 +50,8 @@ class AnswerFormat(StrEnum):
 
     PLAIN = "plain"
     JSON = "json"
+    FILE = "file"
+    WORKSPACE = "workspace"
     ANSWER_CALL = "answer_call"
     FINAL_ACTION = "final_action"
 
@@ -75,7 +79,17 @@ class StateSubmission:
     value: JsonValue
 
 
-type Submission = TextSubmission | ActionSubmission | StateSubmission
+@dataclass(frozen=True)
+class FileSubmission:
+    path: Path
+
+
+@dataclass(frozen=True)
+class WorkspaceSubmission:
+    path: Path
+
+
+type Submission = TextSubmission | ActionSubmission | StateSubmission | FileSubmission | WorkspaceSubmission
 
 
 class SubmissionFailure(ValueError):
@@ -169,7 +183,63 @@ class FinalAction(Convention):
         return ActionSubmission(final)
 
 
-SubmissionConvention = Annotated[PlainText | JsonAnswer | AnswerCall | FinalAction, Field(discriminator="answer_format")]
+class FileAnswer(Convention):
+    """Extract one file from a validated final workspace snapshot."""
+
+    answer_format: Literal[AnswerFormat.FILE] = AnswerFormat.FILE
+    output_path: str
+
+    @model_validator(mode="after")
+    def validate_output_path(self) -> Self:
+        path = self.output_path
+        if (
+            not path
+            or path.startswith("/")
+            or "\\" in path
+            or ":" in path.split("/")[0]
+            or any(ord(character) < 32 for character in path)
+            or any(part in ("", ".", "..") for part in path.split("/"))
+            or PurePosixPath(path).as_posix() != path
+        ):
+            raise ValueError("A file submission requires a normalized relative output path")
+        return self
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type == AnswerType.FILE
+
+    async def extract(self, attempt: GradingAttempt) -> FileSubmission:
+        workspace = _workspace_snapshot(attempt)
+        path = workspace
+        for part in self.output_path.split("/"):
+            path = path / part
+            if path.is_symlink():
+                raise SubmissionFailure("File submission cannot contain symlinks")
+        if not path.is_file():
+            raise SubmissionFailure("Final file submission is missing")
+        return FileSubmission(path)
+
+
+class Workspace(Convention):
+    """Submit a validated final workspace snapshot."""
+
+    answer_format: Literal[AnswerFormat.WORKSPACE] = AnswerFormat.WORKSPACE
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type == AnswerType.WORKSPACE_STATE
+
+    async def extract(self, attempt: GradingAttempt) -> WorkspaceSubmission:
+        return WorkspaceSubmission(_workspace_snapshot(attempt))
+
+
+def _workspace_snapshot(attempt: GradingAttempt) -> Path:
+    if not isinstance(attempt.workspace, Path) or attempt.workspace.is_symlink() or not attempt.workspace.is_dir():
+        raise TypeError("Workspace extraction requires a validated directory snapshot")
+    return attempt.workspace
+
+
+SubmissionConvention = Annotated[
+    PlainText | JsonAnswer | AnswerCall | FinalAction | FileAnswer | Workspace, Field(discriminator="answer_format")
+]
 
 
 def _text_answer(response: ConversationEvent) -> str:
@@ -216,6 +286,10 @@ def submission_instruction(convention: SubmissionConvention) -> str:
         return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
+    if isinstance(convention, FileAnswer):
+        return f"Write your final file to {WORKSPACE_ROOT}/{convention.output_path}."
+    if isinstance(convention, Workspace):
+        return f"Complete the requested changes in {WORKSPACE_ROOT}."
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
         return ""
     raise ValueError(f"Unsupported answer format: {convention.answer_format}")

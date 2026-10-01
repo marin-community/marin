@@ -4,13 +4,13 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through a private verifier registry. The task model also names file and state results, but this slice has no Harbor environment configuration or submission convention for those result types.
+The current implementation exports Harbor tasks for text, number, final function-call, file, and workspace-state results. Direct chat captures text and function calls without executing tools. A Docker environment can expose a capturable `/app` workspace for file and state results. The private verifier registry grades direct answers and final function calls; a `script` verifier runs a pinned grader in a separate Docker container against a copy of the completed workspace.
 
 ## What does it contain?
 
 - **Task specs** describe the source problem, the required capabilities, the kind of result, and how to verify it.
-- **Submission conventions** describe how to ask for and extract a result, such as a plain answer, a JSON object, or a final function call.
-- **Harbor environment configurations** describe the capabilities and tools exposed during execution. The only configuration in this slice is direct chat, which records submission calls but does not execute tools.
+- **Submission conventions** describe how to ask for and extract a result, such as a plain answer, JSON object, final function call, file destination, or final workspace state.
+- **Harbor environment configurations** select direct chat or a digest-pinned Docker image with a capturable `/app` workspace. Direct chat records function calls without executing tools.
 - **Lowering tools** find compatible convention and environment configuration pairs, select a pair, and export a runnable Harbor task package.
 - **A Harbor adapter** runs the exported task against an OpenAI-compatible chat endpoint and records a grading result. Harbor acts as the harness: it orchestrates the model and environment after lowering.
 
@@ -36,7 +36,7 @@ flowchart LR
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | Capabilities or action interfaces needed from the execution environment. |
 | `final_tools` | An ordered list of functions advertised at the decision point. These definitions do not bind functions to an implementation. |
-| `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
+| `answer_type` | The semantic result: `text`, `number`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `tags` | Ordered metadata tags retained with each task; they are not model instructions. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
@@ -111,7 +111,7 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. The schema includes these result types, but exporting and running them requires environment configurations and submission conventions that are not implemented in this slice. A caller can grade an already acquired `StateSubmission` with the pure `structured_exact` verifier; state acquisition remains an environment concern. `environment_requirements` declares capabilities and action interfaces; it does not yet describe resource files or tool implementations.
+`answer_type=file` names a file result. `answer_type=workspace_state` names the final `/app` tree. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. `FileAnswer(output_path="answer.txt")` and `Workspace` extract typed submissions from a captured final `/app` workspace for isolated script grading. These lowerings require a snapshot-capable Docker environment. Non-filesystem state still requires an environment-specific bridge. A caller can grade an already acquired `StateSubmission` with the pure `structured_exact` verifier; state acquisition remains an environment concern. `environment_requirements` declares capabilities and action interfaces; it does not yet describe resource files or tool implementations.
 
 ## What can we import?
 
@@ -129,7 +129,7 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 ## What is a verifier?
 
-Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The submission convention extracts a candidate answer, then the verifier grades it. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
+Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The submission convention identifies the final answer, function call, file, or workspace state; the verifier grades that evidence. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
 The serialized kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `math` for symbolic expressions, `mcq` for a single option letter, `reasoning_gym` for generated Reasoning Gym entries, `structured_exact` for JSON values with strict type and array-order comparison, and `predicted_action` for final function calls. The Python enum and constructors keep their descriptive names. Schema 0.16 stores ordered metadata tags. The expected answer and grading settings stay out of the model-visible instruction.
 
@@ -137,11 +137,11 @@ The serialized kinds are `exact` for normalized text, `numeric` for numbers with
 
 A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with a Harbor environment configuration, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the environment configuration says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
 
-`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no required environment capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
+`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. Direct chat accepts tasks with no required environment capabilities or action interfaces. Workspace Docker accepts text, number, file, and workspace-state script tasks when its declared tools cover the required capabilities. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
 Submission conventions preserve the task’s advertised functions. Plain-text and JSON submissions keep those functions; `AnswerCall` adds `submit_answer` and requires one call with an answer string. An existing function named `submit_answer` conflicts with that convention and is rejected. `FinalAction(require_call=True)` requests a call, and `FinalAction(max_calls=1)` disables parallel calls. A launch may set `parallel_tool_calls` only when it agrees with the convention. Direct chat captures the final assistant turn without executing advertised functions.
 
-An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="shellsim"` to `select_lowerings`; it keeps only ShellSim candidates and raises if none are compatible. A `shell` capability requests an operation, while ShellSim names a concrete execution choice. This initial slice offers only direct chat, so a ShellSim request fails rather than falling back to chat. The selected environment configuration is recorded in the exported Harbor package.
+An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="workspace_docker"` to `select_lowerings`; it keeps only compatible Docker candidates and raises if none exist. The selected environment configuration is recorded in the exported Harbor package.
 
 ```python
 from pathlib import Path
@@ -177,7 +177,7 @@ lower_to_harbor(spec, chosen.convention, chosen.environment_config, Path("/tmp/a
 
 ## How does Harbor run it?
 
-`lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `environment_config.json` for the launcher and custom verifier. The package also has an empty `environment/` directory. A chat launch sends the structured conversation from the spec, then adds the convention's final answer instruction when needed. The agent has no tool to read the package files. Harbor's custom verifier can read the spec and private reference answer. The convention file tells it how to extract the submitted answer.
+`lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `environment_config.json` for the launcher and custom verifier. Script tasks stage digest-checked files under `private_resources/`, outside the agent's `environment/` directory. A chat launch sends the structured conversation from the spec, then adds the convention's final answer instruction when needed. The agent has no tool to read the package files. The custom verifier can read the spec and private resources. The convention file tells it how to extract a direct answer or where the agent must leave a file.
 
 `run_trial` takes the exported directory, its environment configuration, and a chat launch. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. Provide the endpoint's base URL and, if needed, the name of an environment variable containing the API key. The agent resolves that variable in its process; the trial configuration retains only its name.
 
@@ -204,6 +204,64 @@ The direct-chat environment exposes no filesystem or shell tools. The custom ver
 A valid but wrong answer receives reward `0.0`. A well-formed message that violates its submission convention receives `submission_failure` with reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
 
 The package tests replay fixed assistant messages at the HTTP boundary through the production launcher and agent. Replay is absent from the installed package.
+
+## Script verifiers
+
+`ScriptVerifier` requires a `runtime_image` pinned as `name@sha256:<digest>`, an executable `entrypoint`, fixed `args`, a timeout, and private resources. Each resource has a normalized relative path, executable bit, SHA-256 digest, and either embedded base64 bytes or a URI. A URI requires a trusted `Callable[[str], bytes]` passed as `resource_resolver` to `lower_to_harbor`; export checks the bytes and stages them privately. The verifier image is separate from the agent's `HarborEnvironmentConfig.docker_image`. Both images need digest pins; the verifier image must already be loaded in Docker because its runner uses `--pull=never`. The verifier has a bounded process time and memory, and no network by default.
+
+After the agent finishes, the workspace Docker lowering copies `/app` into verifier-only storage. It rejects symlinks, nested mounts, special files, and oversized snapshots. Each script run receives another fresh copy at `/app`, private resources at read-only `/tests`, and `/verifier/submission.json` containing `protocol_version`, `answer_type`, `convention_id`, and the extracted `answer` or `null`. The script writes `/verifier/result.json` with `status="scored"` and a reward in `[0, 1]`, or `status="invalid_task"` or `"infra_error"` without a reward. A script timeout is an infrastructure error. The result file and private process output are not returned to the agent.
+
+For a workspace-state task, an executable private grader can read the copied workspace and write the result with Python's standard library:
+
+```python
+#!/usr/bin/env python3
+import json
+from pathlib import Path
+
+submission = json.loads(Path("/verifier/submission.json").read_text())
+assert submission["answer_type"] == "workspace_state"
+reward = float((Path("/app/state.txt").read_text() == "ready"))
+Path("/verifier/result.json").write_text(json.dumps({"status": "scored", "reward": reward}))
+```
+
+Store that file as `grade.py`, then construct and export a task with the grader bytes kept private:
+
+```python
+import base64
+import hashlib
+from pathlib import Path
+
+from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
+from taskcompendium.models import AnswerType, ConversationInput, Source, EnvironmentRequirements, TaskSpec, TextMessage
+from taskcompendium.submission import Workspace
+from taskcompendium.verifiers.script import PrivateResource, ScriptVerifier, script_verifier
+
+image = "python:3.12-slim-bullseye@sha256:411fa4dcfdce7e7a3057c45662beba9dcd4fa36b2e50a2bfcd6c9333e59bf0db"
+grader = Path("grade.py").read_bytes()
+spec = TaskSpec(
+    id="workspace-ready",
+    context=ConversationInput(events=(TextMessage(role="user", content="Write ready to /app/state.txt."),)),
+    source=Source(dataset="hand-authored", revision="1", row="workspace-ready", importer_revision="1"),
+    environment_requirements=EnvironmentRequirements(capabilities=("filesystem",)),
+    answer_type=AnswerType.WORKSPACE_STATE,
+    verifier=script_verifier(ScriptVerifier(
+        runtime_image=image,
+        entrypoint="grade.py",
+        timeout_seconds=30,
+        resources=(PrivateResource(
+            path="grade.py", sha256=hashlib.sha256(grader).hexdigest(), executable=True,
+            embedded_base64=base64.b64encode(grader).decode("ascii"),
+        ),),
+    )),
+)
+convention = Workspace(id="workspace")
+environment = HarborEnvironmentConfig(environment="workspace_docker", tools=("filesystem",), docker_image=image)
+lower_to_harbor(spec, convention, environment, Path("/tmp/workspace-ready"))
+```
+
+The Docker image must be available to Harbor and contain Python for this example. For a model to edit `/app`, launch the package with a Harbor agent that uses its Docker environment; `ChatLaunch` only supports direct chat. Direct-answer script tasks use plain, JSON, or `submit_answer` submissions and can run in direct chat without a workspace. File submissions name a fixed relative `output_path` under `/app`; workspace-state submissions grade the whole final `/app` tree.
+
+The prompt-injection importer at `taskcompendium.importers.tasktrove.prompt_injection.import_task` accepts a cleaned `TaskArchive` and a required digest-pinned `runtime_image`. It rewrites the source answer-file prompt into a direct answer. Its private adapter copies the extracted answer into the verifier's disposable `/app/answer.txt`, runs the source checker, and converts its reward into the generic result file. An empty chat response receives `submission_failure` with zero reward; the source answer-file checker would score a missing file as zero. The source checker's own timeout remains a scored zero; the outer runtime timeout remains unscored. Stateful external providers have no script snapshot bridge yet.
 
 Run the package tests from the repository root:
 

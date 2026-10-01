@@ -14,6 +14,7 @@ from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
+    WORKSPACE_DOCKER_ENVIRONMENT,
     HarborEnvironmentConfig,
     read_environment_config,
     read_specification,
@@ -52,6 +53,8 @@ async def run_trial(
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     validate_environment_config(specification, environment_config)
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
+    if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT:
+        raise ValueError("Direct chat launch cannot use a workspace Docker environment")
     request = chat_request(specification, convention)
     if launch.temperature is not None:
         request["temperature"] = launch.temperature

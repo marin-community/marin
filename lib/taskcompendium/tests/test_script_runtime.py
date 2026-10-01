@@ -1,0 +1,203 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Isolation and result behavior at the OCI runtime boundary."""
+
+import base64
+import hashlib
+import io
+import json
+import shutil
+import subprocess
+import tarfile
+from pathlib import Path
+
+import pytest
+from harbor.environments.base import ExecResult
+
+from taskcompendium.grading import Outcome
+from taskcompendium.harbor import script_runtime, workspace
+from taskcompendium.harbor.script_runtime import ScriptSubmission
+from taskcompendium.harbor.workspace import UnsafeWorkspaceError, capture_workspace
+from taskcompendium.models import AnswerType
+from taskcompendium.verifiers.script import PrivateResource, ScriptVerifier
+
+
+def _config() -> ScriptVerifier:
+    script = b"#!/usr/bin/env python3\n"
+    reference = b"private answer"
+    resources = (
+        PrivateResource(
+            path="grade.py",
+            sha256=hashlib.sha256(script).hexdigest(),
+            embedded_base64=base64.b64encode(script).decode(),
+            executable=True,
+        ),
+        PrivateResource(
+            path="reference.txt",
+            sha256=hashlib.sha256(reference).hexdigest(),
+            embedded_base64=base64.b64encode(reference).decode(),
+        ),
+    )
+    return ScriptVerifier(
+        entrypoint="grade.py",
+        timeout_seconds=2.0,
+        runtime_image=f"example/verifier@sha256:{'a' * 64}",
+        resources=resources,
+    )
+
+
+def _mounts(command: list[str]) -> dict[str, Path]:
+    mounts: dict[str, Path] = {}
+    for index, token in enumerate(command):
+        if token != "--mount":
+            continue
+        fields = dict(part.split("=", 1) for part in command[index + 1].split(",") if "=" in part)
+        mounts[fields["dst"]] = Path(fields["src"])
+    return mounts
+
+
+def test_script_runtime_stages_private_files_and_isolates_workspace(tmp_path, monkeypatch):
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "program.txt").write_text("agent final state")
+    submission = ScriptSubmission(1, AnswerType.WORKSPACE_STATE, "workspace", None)
+    verifier_dir = tmp_path / "verifier"
+
+    def fake_docker(command, **kwargs):
+        assert command[:2] == ["docker", "run"]
+        assert command[command.index("--network") + 1] == "none"
+        assert kwargs["timeout"] == 2.0
+        mounts = _mounts(command)
+        assert set(mounts) == {"/app", "/tests", "/verifier"}
+        assert (mounts["/app"] / "program.txt").read_text() == "agent final state"
+        assert not (mounts["/app"] / "reference.txt").exists()
+        assert (mounts["/tests"] / "reference.txt").read_bytes() == b"private answer"
+        assert json.loads((mounts["/verifier"] / "submission.json").read_text()) == {
+            "protocol_version": 1,
+            "answer_type": "workspace_state",
+            "convention_id": "workspace",
+            "answer": None,
+        }
+        (mounts["/app"] / "program.txt").write_text("grader mutation")
+        (mounts["/verifier"] / "result.json").write_text('{"status":"scored","reward":0.75}')
+        return subprocess.CompletedProcess(command, 17)
+
+    monkeypatch.setattr(script_runtime.subprocess, "run", fake_docker)
+    result = script_runtime.run_script_verifier(_config(), submission, snapshot, verifier_dir)
+
+    assert result.status == Outcome.GRADED
+    assert result.reward == 0.75
+    assert (snapshot / "program.txt").read_text() == "agent final state"
+    assert json.loads((verifier_dir / "result.json").read_text()) == {"status": "scored", "reward": 0.75}
+
+
+def test_script_runtime_timeout_stops_container_without_reward(tmp_path, monkeypatch):
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    commands = []
+
+    def fake_docker(command, **kwargs):
+        commands.append(command)
+        if command[1] == "run":
+            assert kwargs["timeout"] == 900
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(script_runtime.subprocess, "run", fake_docker)
+    result = script_runtime.run_script_verifier(
+        _config().model_copy(update={"timeout_seconds": 1200.0}),
+        ScriptSubmission(1, AnswerType.TEXT, "plain", "x"),
+        snapshot,
+        tmp_path / "verifier",
+    )
+
+    assert result.status == Outcome.INFRA_ERROR
+    assert result.reward is None
+    assert commands[1][:3] == ["docker", "rm", "-f"]
+    assert commands[1][3] == commands[0][commands[0].index("--name") + 1]
+
+
+def test_script_runtime_rejects_unscored_reward(tmp_path, monkeypatch):
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+
+    def fake_docker(command, **kwargs):
+        verifier = _mounts(command)["/verifier"]
+        (verifier / "result.json").write_text('{"status":"invalid_task","reward":1}')
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(script_runtime.subprocess, "run", fake_docker)
+    result = script_runtime.run_script_verifier(
+        _config(),
+        ScriptSubmission(1, AnswerType.TEXT, "plain", "x"),
+        snapshot,
+        tmp_path / "verifier",
+    )
+
+    assert result.status == Outcome.INVALID_TASK
+    assert result.reward is None
+
+
+async def test_workspace_capture_is_independent_and_rejects_links(tmp_path, monkeypatch):
+    agent_workspace = tmp_path / "agent-workspace"
+    agent_workspace.mkdir()
+    (agent_workspace / "state.txt").write_text("final agent state")
+
+    class Environment:
+        async def exec(self, command):
+            if command == "test -d /app && test ! -L /app":
+                return ExecResult(return_code=0)
+            assert command == "cat /proc/self/mountinfo"
+            return ExecResult(stdout="1 0 0:1 / /app rw - ext4 /dev/root rw\n", return_code=0)
+
+        async def _run_docker_compose_command(self, command, timeout_sec):
+            assert command == ["ps", "-q", "main"]
+            return ExecResult(stdout="a" * 64, return_code=0)
+
+    def copy_workspace(container_id, target):
+        assert container_id == "a" * 64
+        shutil.copytree(agent_workspace, target, symlinks=True)
+
+    monkeypatch.setattr(workspace, "_bounded_docker_copy", copy_workspace)
+
+    copied = await capture_workspace(Environment(), tmp_path / "snapshot")
+    (copied / "state.txt").write_text("grader mutation")
+    assert (agent_workspace / "state.txt").read_text() == "final agent state"
+
+    (agent_workspace / "outside").symlink_to(tmp_path)
+    with pytest.raises(UnsafeWorkspaceError, match="Unsafe workspace entry"):
+        await capture_workspace(Environment(), tmp_path / "unsafe-snapshot")
+
+
+def test_workspace_snapshot_bounds_empty_directories_and_depth(tmp_path, monkeypatch):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    for index in range(3):
+        (root / f"empty-{index}").mkdir()
+    entry_limit = workspace.MAX_WORKSPACE_ENTRIES
+    monkeypatch.setattr(workspace, "MAX_WORKSPACE_ENTRIES", 2)
+    with pytest.raises(UnsafeWorkspaceError, match="entry limit"):
+        workspace.validate_workspace_snapshot(root)
+
+    monkeypatch.setattr(workspace, "MAX_WORKSPACE_ENTRIES", entry_limit)
+    monkeypatch.setattr(workspace, "MAX_WORKSPACE_DEPTH", 1)
+    (root / "empty-0" / "nested").mkdir()
+    with pytest.raises(UnsafeWorkspaceError, match="depth limit"):
+        workspace.validate_workspace_snapshot(root)
+
+
+def test_workspace_archive_rejects_oversized_file_before_writing(tmp_path, monkeypatch):
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        member = tarfile.TarInfo("large.txt")
+        member.size = 3
+        archive.addfile(member, io.BytesIO(b"abc"))
+    payload.seek(0)
+    monkeypatch.setattr(workspace, "MAX_WORKSPACE_BYTES", 2)
+
+    with tarfile.open(fileobj=payload, mode="r|") as archive:
+        with pytest.raises(UnsafeWorkspaceError, match="size limit"):
+            workspace._extract_workspace_archive(archive, tmp_path / "snapshot")
+
+    assert not (tmp_path / "snapshot/large.txt").exists()

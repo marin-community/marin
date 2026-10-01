@@ -26,6 +26,7 @@ from taskcompendium.submission import (
 class Outcome(StrEnum):
     GRADED = "graded"
     SUBMISSION_FAILURE = "submission_failure"
+    INVALID_TASK = "invalid_task"
     INFRA_ERROR = "infra_error"
 
 

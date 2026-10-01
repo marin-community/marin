@@ -26,6 +26,7 @@ from taskcompendium.verifiers.mathematical import MathematicalAnswerVerifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 from taskcompendium.verifiers.reasoning_gym import ReasoningGymAnswerVerifier
+from taskcompendium.verifiers.script import ScriptVerifier
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
@@ -40,7 +41,12 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
 )
 
 
-def resolve_verifier(specification: VerifierSpec) -> Verifier:
+def resolve_verifier(specification: VerifierSpec) -> Verifier | ScriptVerifier:
+    if specification.kind == VerifierKind.SCRIPT:
+        try:
+            return ScriptVerifier.model_validate_json(specification.parameters_json)
+        except ValidationError as error:
+            raise ValueError(f"Invalid 'script' verifier parameters: {error}") from error
     verifier_type = VERIFIERS.get(specification.kind)
     if verifier_type is None:
         raise ValueError(f"Unknown verifier kind: {specification.kind!r}")
@@ -70,6 +76,8 @@ async def grade_answer(
 ) -> GradeResult:
     """Grade a task attempt, assigning zero reward to invalid agent submissions."""
     verifier = resolve_verifier(specification.verifier)
+    if isinstance(verifier, ScriptVerifier):
+        raise ValueError("Script verifiers require an isolated Harbor verifier runtime")
     try:
         submission = await convention.extract(attempt)
     except SubmissionFailure as error:

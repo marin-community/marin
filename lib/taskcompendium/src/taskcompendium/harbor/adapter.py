@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run exported answer tasks through Harbor's agent and verifier lifecycle.
+"""Run exported tasks through Harbor's agent and verifier lifecycle.
 
 ChatAgent sends one prepared model request and saves typed conversation evidence.
 Advertised function calls are submissions and are never executed.
@@ -14,6 +14,7 @@ Agent messages and grading outcomes are written to host-side trial logs.
 import asyncio
 import json
 import os
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -29,15 +30,30 @@ from upath import UPath
 
 from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.harbor.protocol import chat_conversation
+from taskcompendium.harbor.script_runtime import ScriptSubmission, run_script_verifier
+from taskcompendium.harbor.workspace import UnsafeWorkspaceError, capture_workspace
 from taskcompendium.lowering import (
+    ENVIRONMENT_CONFIG_FILE,
+    PRIVATE_RESOURCES_DIR,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
+    WORKSPACE_DOCKER_ENVIRONMENT,
+    read_environment_config,
     read_specification,
     read_submission_convention,
+    validate_exported_private_resources,
 )
-from taskcompendium.models import ConversationTrace
-from taskcompendium.submission import GradingAttempt
-from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.models import ConversationTrace, TaskSpec
+from taskcompendium.submission import (
+    FileSubmission,
+    GradingAttempt,
+    SubmissionConvention,
+    SubmissionFailure,
+    TextSubmission,
+    WorkspaceSubmission,
+)
+from taskcompendium.verifier_registry import grade_answer, resolve_verifier
+from taskcompendium.verifiers.script import ScriptVerifier
 
 SUBMISSION_FILE = "submission.json"
 CHAT_RESPONSE_FILE = "chat-response.json"
@@ -180,23 +196,88 @@ class SemanticVerifier(BaseVerifier):
     """Grade the submitted answer against the task's private reference."""
 
     async def verify(self) -> VerifierResult:
+        script_task = False
         try:
             root = self.task.paths.task_dir
             specification = read_specification(root / SPECIFICATION_FILE)
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             conversation_path = self.trial_paths.agent_dir / SUBMISSION_FILE
             conversation = ConversationTrace.model_validate_json(conversation_path.read_text())
-            result = await grade_answer(
-                specification, convention, GradingAttempt(conversation=conversation, workspace=self.environment)
-            )
+            verifier = resolve_verifier(specification.verifier)
+            if isinstance(verifier, ScriptVerifier):
+                script_task = True
+                result = await self._grade_script(specification, convention, conversation, verifier)
+            else:
+                result = await grade_answer(specification, convention, GradingAttempt(conversation, self.environment))
+        except UnsafeWorkspaceError as error:
+            result = GradeResult(Outcome.INVALID_TASK, None, "Final workspace cannot be captured safely")
+            self._write_result(result)
+            raise RuntimeError(result.error) from error
         except Exception as error:
-            result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
+            if script_task:
+                self.logger.exception("Script verifier failed")
+                result = GradeResult(Outcome.INFRA_ERROR, None, "Script verifier infrastructure failure")
+            else:
+                result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
             raise RuntimeError(result.error) from error
         self._write_result(result)
         if result.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE) or result.reward is None:
             raise RuntimeError(result.error or result.status.value)
         return VerifierResult(rewards={"reward": result.reward})
+
+    async def _grade_script(
+        self,
+        specification: TaskSpec,
+        convention: SubmissionConvention,
+        conversation: ConversationTrace,
+        verifier: ScriptVerifier,
+    ) -> GradeResult:
+        root = self.task.paths.task_dir
+        try:
+            validate_exported_private_resources(specification, root)
+        except ValueError:
+            return GradeResult(Outcome.INVALID_TASK, None, "Pinned private resources are unavailable or changed")
+        environment_config = read_environment_config(root / ENVIRONMENT_CONFIG_FILE)
+        with tempfile.TemporaryDirectory(prefix="taskcompendium-snapshot-") as temporary:
+            scratch = Path(temporary)
+            workspace = scratch / "workspace"
+            if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT:
+                await capture_workspace(self.environment, workspace)
+            else:
+                workspace.mkdir()
+
+            try:
+                extracted = await convention.extract(GradingAttempt(conversation, workspace))
+            except SubmissionFailure as error:
+                return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+            if not isinstance(extracted, (TextSubmission, FileSubmission, WorkspaceSubmission)):
+                raise TypeError("Script verifier requires text, file, or workspace submission")
+            submission = ScriptSubmission(
+                protocol_version=verifier.protocol_version,
+                answer_type=specification.answer_type,
+                convention_id=convention.id,
+                answer=extracted.value if isinstance(extracted, TextSubmission) else None,
+            )
+
+            def resolve_exported(uri: str) -> bytes:
+                for resource in verifier.resources:
+                    if resource.uri == uri:
+                        return (root / PRIVATE_RESOURCES_DIR / resource.path).read_bytes()
+                raise ValueError("Unknown private resource reference")
+
+            result = await asyncio.to_thread(
+                run_script_verifier,
+                verifier,
+                submission,
+                workspace,
+                scratch / "result",
+                resolve_exported,
+            )
+            if result.status == Outcome.GRADED:
+                return GradeResult(Outcome.GRADED, result.reward)
+            self.logger.warning("Script verification failed: %s", result.error)
+            return GradeResult(result.status, None, "Script verification did not produce a score")
 
     def _write_result(self, result: GradeResult) -> None:
         self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)
