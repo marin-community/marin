@@ -454,3 +454,19 @@ divergence shares its sign across consecutive steps (prior hero cutovers showed 
 signature). One pair per arm cannot separate the two. The final program therefore gets a longer
 replicated loss check: >= 2 paired runs of >= 100 steps vs same-code controls, judged against the C-C
 spread.
+
+## M30-024 Stream-patch wheel built; use on hold pending user approval (2026-10-01)
+
+A built `jax_cuda13_pjrt-0.11.1+marin.283d5b6d98cd` on the cluster (`/mwittmann/m30a-pjrt-build-01`, 15 min;
+s3://marin-us-east-02a/marin/research/mcwitt-mfu30/pjrt/283d5b6d98cd/), from branch
+`mcwitt/adhoc-host-transfer-streams` pushed to marin-community/xla (branch only: no PR, no release, no CI
+dispatch). Build pins: cuDNN headers 9.19.0.56 (uv.lock), `HERMETIC_NCCL_VERSION=2.30.7` (matches the fork's
+production build; the copied script had left jax's default). GB200x1 smoke: with the production wheel the
+carry D2H shares stream 2 with four weight slices (collision reproduced); with the new wheel and the env var
+unset, assignment is identical to production; with `XLA_GPU_HOST_TRANSFER_STREAMS=1`, the carry goes to
+streams 4/5 and the slices to 0-3, with bitwise-equal gradients. The `--pip-package` launcher port is
+`cf5bc74409` on `research/mcwitt/mfu30-offload`.
+**On hold:** running campaign jobs on this custom wheel needs the user's approval (asked 2026-10-01). The
+branch push was approved by the orchestrator under an earlier campaign's clarification and is disclosed
+to the user. Until then the final program uses the production wheel, `carry_stall.py` is the gate, and A's
+JAX-only fallback (~25 ms/step always paid) is the alternative if a final trace shows the stall.
