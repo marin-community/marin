@@ -319,7 +319,9 @@ for path in models.glob("*.yaml"):
         actual_thinking_format,
         expected_thinking_format,
     )
-assert len(list(evalchemy.glob("*.yaml"))) == 18
+mrcr_variants = {"mrcr-32k": 32704, "mrcr-65k": 65472}
+evalchemy_names = {path.stem for path in evalchemy.glob("*.yaml")}
+assert len(evalchemy_names) == 20
 assert len(list(harbor.glob("*.yaml"))) == 8
 sotopia = yaml.safe_load((harbor / "sotopia-hard.yaml").read_text())
 assert sotopia["datasets"] == [
@@ -342,9 +344,11 @@ thinking_off = {
 }
 model_default = {"nupa"}
 not_applicable = {"piqa", "winogrande", "boolq", "truthfulqa"}
-assert thinking_on | thinking_off | model_default | not_applicable == {
-    path.stem for path in evalchemy.glob("*.yaml")
-}
+assert thinking_on | thinking_off | model_default | not_applicable == evalchemy_names - set(mrcr_variants)
+mrcr = yaml.safe_load((evalchemy / "mrcr.yaml").read_text())
+for name, max_length in mrcr_variants.items():
+    expected = dict(mrcr, max_length=max_length)
+    assert yaml.safe_load((evalchemy / f"{name}.yaml").read_text()) == expected
 for name in thinking_on | thinking_off:
     expected = {"enable_thinking": name in thinking_on}
     artifact_document = yaml.safe_load((evalchemy / f"{name}.yaml").read_text())
@@ -425,6 +429,8 @@ assert bixbench["agents"][0]["kwargs"]["model_info"] == {
     "max_input_tokens": 65536,
     "max_output_tokens": 16384,
 }
+bfcl = yaml.safe_load((harbor / "bfclparity-pi.yaml").read_text())
+assert bfcl["agents"][0]["version"] == "0.87.0"
 openthoughts = yaml.safe_load((harbor / "ot-tblite-recovery.yaml").read_text())
 assert openthoughts["n_attempts"] == 3
 swebench = yaml.safe_load((harbor / "swebench-verified.yaml").read_text())

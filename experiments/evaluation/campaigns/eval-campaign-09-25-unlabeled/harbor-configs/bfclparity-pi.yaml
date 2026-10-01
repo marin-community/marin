@@ -31,6 +31,7 @@ environment:
   type: daytona
 agents:
 - name: pi
+  version: 0.87.0
   override_setup_timeout_sec: 360
   override_timeout_sec: 1800
   kwargs:
