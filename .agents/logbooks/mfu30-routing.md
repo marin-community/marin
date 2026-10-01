@@ -542,3 +542,44 @@ scheduler still leaves most incoming transports without a GEMM under them in eit
 experts or attention to place), so the scan cannot show the hero effect; that needs a rack trace. If the hero
 schedule does not move, the deterministic option is a manual remat: the bwd rule recomputes the dispatch and
 gate/up itself, so barriers inside it can order the transports.
+
+## M30B-025 Attribution: `m30c-stackpipe-trace-03` vs `m30b-sonic-02`
+
+Scores (orchestrator): stackpipe-03 29.768% / 13.186 s vs sonic-02 29.783% / 13.179 s, net zero, with mirror + E +
+#9481 model commits (MLP-weight prefetch, QB after the MLP, attention re-gather on) + Triton short conv + pipelined
+chunks on top of D. Profiled step 2 of stackpipe-03 is a 14.41 s outlier (two 55-68 ms idle gaps, rank stall), so
+the comparison uses profiled steps 1 and 3 of each trace (`b/split_steps.py`; spans without the step tail: sonic-02
+13.177 s, stackpipe-03 13.144 s).
+
+| s/step | sonic-02 | stackpipe-03 | delta |
+|---|---|---|---|
+| compute | 11.211 | 10.820 | -0.391 |
+| exposed collectives | 1.324 | 1.527 | +0.203 |
+| exposed copies | 0.620 | 0.774 | +0.154 |
+| idle | 0.022 | 0.025 | +0.003 |
+
+Compute (-0.39): E -0.15 (`moe_expert_elementwise` -0.198, `moe_expert_gemm` bwd +0.050); Triton short conv -0.110
+(kernel time 0.218 -> 0.108; its kernels fall into other scopes, so the scope table shows -0.188 and +0.08
+elsewhere); GEMM contention moved, -0.05 net (shared-expert forward GEMMs -0.132 now run alone, expert GEMMs fwd and
+remat +0.081 now run under the pipelined transports); attention -0.05, router/dispatch/shared elementwise -0.07.
+
+Exposed collectives (+0.20), all of it ragged all-to-all (+0.214):
+- forward return c1 0.021 -> 0.188 (+0.167): the shared-expert GEMMs, which covered return c1 (and dispatch c1, return
+  c0) in sonic-02, now run after the routed MoE, between the QB collectives; the pipelined MoE GEMMs cover dispatch c1
+  and return c0 instead;
+- forward dispatch c0 0.141 -> 0.179 (+0.038), still bare;
+- backward: recomputed dispatch c1 0.167 -> 0.150, still bare: the scheduler issues recomputed dispatch c0, dy c1's
+  reverse return and recomputed dispatch c1 back to back at the MoE backward's entry, then runs the c0 recompute under
+  dy c0's return. dy c1's reverse return 0.149 (unchanged, bare). Recomputed dispatch c0 +0.026 (skew).
+- #9481's collectives net ~+0.01: the prefetch removes the in-MoE weight gather (-0.052); the attention re-gather's
+  forward gathers are +0.093 under a new scope, against -0.061 on the old FSDP gathers; backward `remat_carry` gathers
+  +0.034.
+
+Exposed copies (+0.15): the forward carry D2H stall, `carry_stall.py` 147 ms/step (sonic-02 2.8). The carry copy
+shares a memcpy stream with the first weight slice a layer needs; any program change can redraw it.
+
+Loss: max |d| 6.8e-4, late mean +7.7e-5, 38/49 positive, above the same-code max of 3.3e-4. Of the stacked changes
+only E changes values (dx and dW13 at bf16-rounding level, median ~1 ulp); D's dS change is the same as in
+sonic-02 (inside the band), the short conv is bitwise in out/dx with dw at 1e-7, pipelining and the mirror and #9481
+model commits are bitwise. So E is the expected source; consecutive-step loss deltas are strongly correlated, so
+38/49 is not evidence of bias on its own.
