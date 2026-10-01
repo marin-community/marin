@@ -220,6 +220,9 @@ class GrugTrainerConfig:
     save_checkpoints: bool = False
     # Write the compiled (optimized) train-step HLO text here after the first step, for profile attribution.
     hlo_dump_path: str | None = None
+    # Train steps dispatched before the previous step's host work: 1 overlaps that work (logging, callbacks) with
+    # the devices; 0 finishes every step before dispatching the next.
+    pipeline_depth: int = 1
     # Dump XLA's buffer assignment and memory-usage report for the train step and upload them here (process 0),
     # also when the step fails, e.g. with an out-of-memory error: attributes the temp buffer to HLO values.
     xla_memory_report_path: str | None = None
@@ -2062,6 +2065,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 # step) is finished before the next dispatch, since that dispatch donates the state.
                 host_step = int(state.step)
                 pending: _PendingStep | None = None
+                if config.trainer.pipeline_depth not in (0, 1):
+                    raise ValueError(f"pipeline_depth must be 0 or 1, got {config.trainer.pipeline_depth}")
                 while host_step < stop_step:
                     with jax.profiler.TraceAnnotation("load_batch"):
                         batch = next(iterator)
@@ -2158,6 +2163,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         step_start=step_start,
                         needs_state=(
                             host_step >= stop_step
+                            or config.trainer.pipeline_depth == 0
                             or captured_before is not None
                             or (eval_interval is not None and host_step % eval_interval == 0)
                             or host_step % CHECKPOINT_POLL_STEPS == 0
