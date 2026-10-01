@@ -690,3 +690,11 @@ recompute resurrects nothing; no new collectives. Queued `m30-holdback-01` (ab78
 `--held-back-shared-experts 1`, otherwise identical to f1-seq-02; custom wheel, streams on, traced) as a paired
 comparison against f1-seq-02. Target: forward return c1 (0.186 s/step exposed in F1).
 Rack queue: m30-conf-seq-s0/s1/s2 -> m30-pgle-d2h-01 -> m30-pgle-plain-01 -> m30-holdback-01.
+
+## M30-041 Confirmation seed 0: PASS (2026-10-01)
+
+`m30-conf-seq-s0` (final-seq d4234c88e7, custom wheel, streams on, unprofiled, 180000-180100): **MFU median 30.218
+over 180011-180099 (n=89), 12.990 s/step**; control mhep-ctx4k-s0 28.260 / 13.890 on the same steps. Peak 123.50.
+Loss at 180000 exact; dloss max 3.75e-4, late mean -9.2e-5, 16/89 positive. Divergence growth over thirds of the
+window, mean |d| (final vs main | main repeat vs main): 6.6e-5 | 5.0e-5; 1.05e-4 | 1.01e-4; 1.57e-4 | 1.52e-4.
+The final program's loss divergence is indistinguishable from same-code divergence. Seeds 1 and 2 pending.
