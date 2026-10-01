@@ -299,3 +299,28 @@ non-foldable integer zero. Use `z = OR_k((u16(slice_k[0]) >> 15) & (~u16(slice_k
 issue before the layer's slices finish. The backward uses the offloaded `x2`, so no extra residual.
 Bitwise exact. It costs ~25 ms/step always (an extra carry pass ~14 ms, plus the layer start waiting for
 all slices ~10 ms), it covers only the forward, and XLA must be checked not to fold `z`.
+
+## M30A-016 Stream patch approved: branch pushed, cluster build running (2026-10-01)
+
+Orchestrator approved a branch push only: no PR, no release, and no `marin-pjrt.yaml` dispatch. Pushed
+`mcwitt/adhoc-host-transfer-streams` (`283d5b6d98`) to marin-community/xla; `marin-pjrt.yaml` triggers on
+main only, so the push built nothing. Built on the cluster instead:
+`experiments/grug/moe_hero_ep/pjrt_build_job.sh` (copied from `research/mcwitt/xla-ragged-dot`, then changed):
+- `HERMETIC_NCCL_VERSION=2.30.7`, matching the fork's production `marin/build_pjrt.sh`; the copied script
+  left NCCL at jax's default, and a 2.29.7-header wheel hung the ragged hero before.
+- `CUDNN_VERSION` is now required (uv.lock: `nvidia-cudnn-cu13` 9.19.0.56).
+- `S3_DEST` is required.
+- A `SENTINEL_FILE`/`SENTINEL` check that the delta is present.
+Version check: config.json at the ref gives jax `2d66622450e2` / 0.11.1, and the suffix is
+`+marin.<sha12>` (carries its own `+`), so the wheel is `0.11.1+marin.283d5b6d98xx` and
+`verify_ragged_pjrt` accepts it. Job `/mwittmann/m30a-pjrt-build-01` (GB200x1, 64 CPU, 400 GB) uploads to
+`s3://marin-us-east-02a/marin/research/mcwitt-mfu30/pjrt/<sha12>/`.
+
+Consumption: the base had no wheel option, so this branch adds the ragged-dot campaign's `--pip-package`
+(`GrugRunConfig.pip_packages` -> dispatch -> fray `EnvironmentSpec.pip_packages`, installed after the
+sync). Pass a presigned URL from `rclone link --expire 168h`.
+
+Smoke (`autoresearch/loop-260930-mfu30/a/stream_smoke.{py,sh}`, GB200x1): an 8-layer rematted scan with
+six stacked weights and the carry offloaded to pinned host, run with and without
+`XLA_GPU_HOST_TRANSFER_STREAMS=1` under `TF_CPP_VMODULE=execution_stream_assignment=3`. It prints each
+async start's stream and checks the gradients are bitwise equal across modes.

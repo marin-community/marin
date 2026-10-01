@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 OUT=/tmp/stream_smoke; mkdir -p "$OUT"
 if [ -n "${PJRT_WHEEL:-}" ]; then
-  UV_LINK_MODE=copy uv pip install --reinstall --no-deps "$PJRT_WHEEL" 2>&1 | tail -2
+  UV_LINK_MODE=copy uv pip install --python "$(command -v python)" --reinstall --no-deps "$PJRT_WHEEL" 2>&1 | tail -2
 fi
 python -c "import importlib.metadata as m; print('jax-cuda13-pjrt', m.version('jax-cuda13-pjrt'))"
 export TF_CPP_MIN_LOG_LEVEL=0 TF_CPP_VMODULE=execution_stream_assignment=3
