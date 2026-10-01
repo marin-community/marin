@@ -179,3 +179,59 @@ TF_CPP_VMODULE=hlo_rematerialization=1`, CLI `--gated-norm-implementation pallas
 triton_gpu --regather-attention-weights`, seed 0, 180000-180060, profiled 180021-180023. Checks per arm:
 "Rematerialized N instructions" N <= ~10; "Peak memory for main" <= ~110 GiB (else slop 110);
 memory/limit_gib ~143.76; memory/peak_gib < ~139; loss against the grnflag-01 band.
+
+### -02 cancelled after the grnflag-01 regression; -03 without the flag and the fused norm (2026-09-30 18:50 PT)
+
+`m30c-grnflag-01` regressed (below), so the orchestrator cancelled the -02 pair. Resubmitted without
+`--xla_gpu_enable_triton_gemm=false` and without `--gated-norm-implementation pallas_gpu`, everything else
+unchanged, pipelined first:
+
+- `m30c-stackpipe-trace-03` (`/mwittmann/m30c-stackpipe-trace-03-coord`, port 33306) from
+  `research/mcwitt/mfu30-stack-pipelined` @ `fcb44f6920`.
+- `m30c-stackseq-trace-03` (`/mwittmann/m30c-stackseq-trace-03-coord`, port 33307) from
+  `research/mcwitt/mfu30-stack` @ `a1f483afed`.
+
+Both: `--xla "--xla_gpu_enable_host_memory_offloading=true --xla_gpu_memory_limit_slop_factor=105"`, env
+`XLA_PYTHON_CLIENT_MEM_FRACTION=0.78 TF_CPP_MIN_LOG_LEVEL=0 TF_CPP_VMODULE=hlo_rematerialization=1`, CLI
+`--sconv-implementation triton_gpu --regather-attention-weights`, seed 0, 180000-180060, profiled
+180021-180023. Extra trace checks (new, see below): `stack/copy_schedule.py` (copy-start.44 after the backward
+loop) and `stack/carry_stall.py` (forward carry D2H exposed < ~10 ms/step).
+
+### grnflag-01 diagnosis (2026-09-30)
+
+Score: 28.023 MFU (-0.238 vs `mhep-ctx4k-s0` 28.261), 14.007 s (+0.118), peak 117.70 GiB (+14.6), drop
+fraction 1.8e-4 (control 1.9e-4); loss vs control first step -9.5e-7, max |d| 3.0e-4, mean -1.9e-5 over 60
+steps (rounding band). Two mechanisms, neither the kernels' own cost:
+
+1. Memory: the Triton-GEMM flag reorders the optimizer phase and hoists the first momentum H2D to the top of
+   the step. At main level the flag turns 120 Muon Newton-Schulz GEMMs from Triton fusions into cuBLAS calls
+   and regroups their elementwise fusions. The LHS runs on T-shirt costs (A: the SOL estimator rejects
+   ragged all-to-all): Triton fusion 1, cuBLAS call 1000, a while loop 1 regardless of its body. The expert
+   momentum update now directly follows the backward, so its H2D (`copy-start.44`, f32[48,6,3072,3072], 10.1
+   GiB) heads the serialized H2D chain. Nothing above it in the step claims the copy resource, so it floats to
+   position 1 of main, before the forward loop. On main and hmo-02 the chain's head is an s32[] scalar, and
+   `copy-start.44` sits after the backward (main position 1345). The fused norm only changes the scan bodies.
+   The main-level LHS sees those as 1-unit whiles with unchanged resource sets, and its memory limit does not
+   bind, so the kernel cannot cause the reorder. Effect: the copy runs in 0-55 ms of the step, but its
+   buffer is live through the backward peak. The arena grows 68.5 -> 82.1 GiB (live peak 49.4 -> 55.2 GiB,
+   now in the backward body; the rest is fragmentation). Without H-A4, remat then clones more in the
+   backward: 0.868 s/step of XLA remat kernels vs 0.633 on the main baseline trace, 113 vs 103 distinct
+   clones.
+2. Time: forward carry D2H stall, 0.165 s/step. Each layer's compute stream idles ~3.3 ms because the first
+   weight dynamic-slice fusions it needs (async D2D) are queued behind the 4.4 ms carry D2H on the same
+   memcpy stream. XLA's `ExecutionStreamAssignment` hands async compute ops to 4 streams round-robin over the
+   module in post-order, so the collision depends on how many async ops come first. Both components change
+   the forward body's async slices: the fused norm adds a [6144] norm-scale slice, and the flag removes the
+   [6144,48] and [6144,384] projection-weight slices. So this is a lottery any program change re-draws. #9481's
+   PGLE trace t21 shows the same signature (0.192 s/step). A's M30A-004 "PGLE exposes the forward carry
+   D2H" is this collision, not PGLE's latency model.
+
+Rough budget: +0.165 stall, up to +0.235 extra remat compute (part of it under collectives), -0.085
+kernel+flag (block bench) -> same sign and order as the measured +0.118 s.
+
+No single-component arm now. Flag only: re-creates (1), since the main-level reorder is all the flag's
+doing, for <= 0.055 s (block bench). Kernel only: no main-level change and -1.5 GiB temp, predicted -0.06
+s/step, but it re-draws (2). It is worth one add-on arm on the final program after the lineage pick,
+gated on `carry_stall.py`. The larger lever is (2): a lost draw costs 0.165-0.19 s/step (~0.35-0.4 MFU), and
+the PGLE endgame re-draws it. A deterministic fix would pin the carry D2H to its own stream or keep the
+weight slices off the memcpy streams.
