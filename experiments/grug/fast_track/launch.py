@@ -1006,9 +1006,11 @@ def _typed_setting(config: Any, name: str, text: str) -> Any:
     None; tuples are comma-separated)."""
     if name not in {f.name for f in dataclasses.fields(config)}:
         raise ValueError(f"{type(config).__name__} has no field {name!r}")
-    if text.lower() == "none":
+    annotation = typing.get_type_hints(type(config))[name]
+    # "none" means None only for optional fields; a string field may use "none" as a value (muon_pre_norm).
+    if text.lower() == "none" and type(None) in typing.get_args(annotation):
         return None
-    return _parse_as(typing.get_type_hints(type(config))[name], text, name)
+    return _parse_as(annotation, text, name)
 
 
 def _parse_as(annotation: Any, text: str, name: str) -> Any:
