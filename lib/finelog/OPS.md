@@ -95,6 +95,16 @@ one as a place to look, not as a measured cost.
 wall time with plain `EXPLAIN` before tuning Parquet reads. For predicates on
 several indexed columns, Finelog checks range-constrained columns first and
 stops reading a segment's other index sections once its span mask is empty.
+Before loading trigram sections, bounded integer predicates also exclude cached
+local segments using complete Parquet min/max statistics. Missing source files
+or statistics retain the segment for the ordinary scan. The planner retains
+each segment's computed span mask through source planning, so a cache eviction
+does not cause a second index load for the same query.
+
+For log searches, `epoch_ms` is not the catalog key: `log` is keyed by task
+`key`. A time bound can therefore still require footer reads for old segments.
+When a known sequence window is available, bound `seq` as well to exclude
+segments from catalog metadata before either footer or index reads.
 
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
 carries a trigram index; otherwise it decodes the column for every row in the
