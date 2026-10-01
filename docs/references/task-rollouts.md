@@ -85,6 +85,9 @@ Text, numeric, multiple-choice, and final-action tasks use the shared verifier r
 A final-action task submits a function call as its answer. A null environment
 records that call without execution.
 An incorrect answer has a numeric grade. A verifier failure has no grade.
+`GradeResult.score_min` and `score_max` retain the verifier's native score range.
+SkyRL uses those bounds for normalized score metrics. Score normalization leaves
+optimization rewards and reward shaping unchanged.
 
 Grading starts when the session reports completion, the model reaches its token
 limit, or the engine reaches `max_turns`. Execution failures raise
@@ -184,22 +187,37 @@ A session can request a conversation reset through `Transition.reset_conversatio
 When another turn is available, that reset discards earlier attempts from the
 training record. Lean refinement uses this operation after a failed proof attempt.
 
-`RolloutEngine.generate(Iterator[TaskSpec])` returns an asynchronous iterator of
-`RolloutData`. `RolloutSink.consume` consumes that iterator.
+`RolloutEngine.generate(Iterator[TaskSpec])` returns `Iterator[RolloutData]`.
+The iterator blocks its caller until the next rollout completes. One thread
+advances the iterator for each engine. That thread can differ from the thread
+that created the engine. The engine uses an internal event loop for model and
+machine operations. An async caller must execute the iterator on a separate thread.
 
-This example connects a task, caller-supplied model, and caller-supplied sink.
+`ShellboxRolloutEngine.cancel()` requests cancellation of the active task from
+another thread and prevents more tasks from starting. The iterator reports task
+cancellation with `asyncio.CancelledError` after session and machine cleanup.
+Cleanup errors propagate. The worker must wait for the active `next()` call to
+finish before it reuses the thread.
+
+`RolloutSink.consume` is an async method that accepts `Iterator[RolloutData]` and
+returns `None`. SkyRL's `BufferRolloutSink` returns after its buffer writer commits
+the prompt group.
+
+This example connects tasks and a caller-supplied model on the execution thread.
 The model must implement the token contract above.
 
 ```python
+from collections.abc import Iterator
+
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.models import TaskSpec
-from taskcompendium.rollout import RolloutModel, RolloutSink, ShellboxRolloutEngine
+from taskcompendium.rollout import RolloutData, RolloutModel, ShellboxRolloutEngine
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
-async def run_task(task: TaskSpec, model: RolloutModel, sink: RolloutSink) -> None:
+def generate_tasks(tasks: Iterator[TaskSpec], model: RolloutModel) -> Iterator[RolloutData]:
     engine = ShellboxRolloutEngine(
         model,
         {
@@ -210,7 +228,7 @@ async def run_task(task: TaskSpec, model: RolloutModel, sink: RolloutSink) -> No
         command_timeout=120,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
-    await sink.consume(engine.generate(iter([task])))
+    yield from engine.generate(tasks)
 ```
 
 Application-supplied sessions require an additional `sessions` mapping.

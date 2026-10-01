@@ -7,7 +7,8 @@ import asyncio
 import json
 import math
 import tarfile
-from collections.abc import AsyncIterator, Iterator, Mapping
+import threading
+from collections.abc import Iterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -195,11 +196,13 @@ class TaskSessionFactory(Protocol):
 
 
 class RolloutEngine(Protocol):
-    def generate(self, tasks: Iterator[TaskSpec]) -> AsyncIterator[RolloutData]: ...
+    """A blocking task iterator that runs on a worker-owned thread."""
+
+    def generate(self, tasks: Iterator[TaskSpec]) -> Iterator[RolloutData]: ...
 
 
 class RolloutSink(Protocol):
-    async def consume(self, rollouts: AsyncIterator[RolloutData]) -> None: ...
+    async def consume(self, rollouts: Iterator[RolloutData]) -> None: ...
 
 
 async def _install_files(machine: Machine, files: tuple[EnvironmentFile, ...]) -> None:
@@ -684,7 +687,10 @@ def _combined_stage_grade(grades: list[GradeResult], strategy: StageRewardStrate
 
 
 class ShellboxRolloutEngine:
-    """Generate exact-token rollouts with one isolated machine for each task."""
+    """Generate exact-token rollouts on one owner thread.
+
+    Each task has an isolated machine. Another thread can request cancellation.
+    """
 
     def __init__(
         self,
@@ -704,12 +710,37 @@ class ShellboxRolloutEngine:
         self.command_timeout = command_timeout
         self.convention = convention
         self.sessions = {} if sessions is None else sessions
+        self._execution_lock = threading.Lock()
+        self._active: asyncio.Task | None = None
+        self._cancelled = False
 
-    async def generate(self, tasks: Iterator[TaskSpec]) -> AsyncIterator[RolloutData]:
-        for task in tasks:
-            yield await self.run(task)
+    def generate(self, tasks: Iterator[TaskSpec]) -> Iterator[RolloutData]:
+        """Run tasks on the caller's thread and yield each completed rollout."""
+        with asyncio.Runner() as runner:
+            for task in tasks:
+                yield runner.run(self._run_cancellable(task))
 
-    async def run(self, task: TaskSpec) -> RolloutData:
+    def cancel(self) -> None:
+        """Request cancellation from another thread and prevent new task execution."""
+        with self._execution_lock:
+            if self._cancelled:
+                return
+            self._cancelled = True
+            if self._active is not None:
+                self._active.get_loop().call_soon_threadsafe(self._active.cancel)
+
+    async def _run_cancellable(self, task: TaskSpec) -> RolloutData:
+        with self._execution_lock:
+            if self._cancelled:
+                raise asyncio.CancelledError
+            self._active = asyncio.current_task()
+        try:
+            return await self._run(task)
+        finally:
+            with self._execution_lock:
+                self._active = None
+
+    async def _run(self, task: TaskSpec) -> RolloutData:
         """Run one task and release its session and machine after failure."""
         validate_task_verifiers(task)
         deadline = asyncio.timeout(task.attempt_timeout)

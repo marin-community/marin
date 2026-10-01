@@ -5,6 +5,7 @@
 
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,6 +45,7 @@ class LocalDaytona:
     def __init__(self):
         self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
         self.deleted = False
+        self.closed = False
         self.params = None
         self.timeout = None
 
@@ -56,13 +58,19 @@ class LocalDaytona:
         assert sandbox is self.sandbox
         self.deleted = True
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self.closed = True
+
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
 def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     async def scenario() -> None:
         client = LocalDaytona()
         workdir = tmp_path / "work"
-        machine = await DaytonaMachineFactory(client, network_policy=policy).create(
+        machine = await DaytonaMachineFactory(lambda: client, network_policy=policy).create(
             MachineSpec(
                 source=RegistryImage("ubuntu:24.04"),
                 workdir=str(workdir),
@@ -107,5 +115,48 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
         finally:
             await machine.close()
         assert client.deleted
+        assert client.closed
 
     asyncio.run(scenario())
+
+
+def test_daytona_factory_owns_clients_across_worker_event_loops(tmp_path: Path) -> None:
+    clients = []
+
+    class LoopClient(LocalDaytona):
+        def __init__(self):
+            super().__init__()
+            self.loop = asyncio.get_running_loop()
+            clients.append(self)
+
+        async def create(self, params, *, timeout):
+            assert asyncio.get_running_loop() is self.loop
+            if params.env_vars.get("FAIL_CREATE"):
+                raise ConnectionError("Sandbox creation failed")
+            return await super().create(params, timeout=timeout)
+
+    factory = DaytonaMachineFactory(LoopClient)
+
+    async def scenario(index):
+        spec = MachineSpec(
+            source=RegistryImage("ubuntu:24.04"),
+            workdir=str(tmp_path / str(index)),
+            env={"FAIL_CREATE": "1"} if index == 2 else {},
+        )
+        if index == 2:
+            with pytest.raises(ConnectionError):
+                await factory.create(spec)
+            return
+        machine = await factory.create(spec)
+        try:
+            result = await machine.run(Command(("printf", str(index))))
+            assert result.stdout == str(index).encode()
+        finally:
+            await machine.close()
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        pending = [executor.submit(asyncio.run, scenario(index)) for index in range(3)]
+        for result in pending:
+            result.result()
+    assert all(client.closed for client in clients)
+    assert sum(client.deleted for client in clients) == 2

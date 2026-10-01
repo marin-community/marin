@@ -9,6 +9,8 @@ import shlex
 import tarfile
 import tempfile
 import uuid
+from collections.abc import Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -48,10 +50,10 @@ class DaytonaNetworkPolicy:
 class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
-    def __init__(self, client: AsyncDaytona, sandbox: AsyncSandbox, spec: MachineSpec):
-        self.client = client
+    def __init__(self, sandbox: AsyncSandbox, spec: MachineSpec, resources: AsyncExitStack):
         self.sandbox = sandbox
         self.spec = spec
+        self.resources = resources
         self._closed = False
 
     async def _read_output(self, path: str, limit: int) -> tuple[bytes, bool]:
@@ -182,7 +184,7 @@ class DaytonaMachine:
         if self._closed:
             return
         self._closed = True
-        await self.client.delete(self.sandbox)
+        await self.resources.aclose()
 
 
 class DaytonaMachineFactory:
@@ -190,13 +192,13 @@ class DaytonaMachineFactory:
 
     def __init__(
         self,
-        client: AsyncDaytona | None = None,
+        client_factory: Callable[[], AsyncDaytona] = AsyncDaytona,
         *,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
         network_policy: DaytonaNetworkPolicy | None = None,
     ):
-        self.client = client or AsyncDaytona()
+        self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
         self.network_policy = network_policy
@@ -221,24 +223,24 @@ class DaytonaMachineFactory:
             if self.network_policy is None
             else self.network_policy.parameters()
         )
-        sandbox = await self.client.create(
-            CreateSandboxFromImageParams(
-                image=source,
-                os_user="root",
-                env_vars=spec.env,
-                resources=resources,
-                **network,
-                ttl_minutes=self.ttl_minutes,
-            ),
-            timeout=self.create_timeout if spec.startup_timeout is None else spec.startup_timeout,
-        )
-        machine = DaytonaMachine(self.client, sandbox, spec)
-        try:
+        async with AsyncExitStack() as lifetime:
+            client = await lifetime.enter_async_context(self.client_factory())
+            sandbox = await client.create(
+                CreateSandboxFromImageParams(
+                    image=source,
+                    os_user="root",
+                    env_vars=spec.env,
+                    resources=resources,
+                    **network,
+                    ttl_minutes=self.ttl_minutes,
+                ),
+                timeout=self.create_timeout if spec.startup_timeout is None else spec.startup_timeout,
+            )
+            lifetime.push_async_callback(client.delete, sandbox)
+            machine = DaytonaMachine(sandbox, spec, lifetime)
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/"))
                 if result.exit_code:
                     raise RuntimeError(f"Failed to create workdir {spec.workdir}: {result.stderr!r}")
-        except BaseException:
-            await machine.close()
-            raise
-        return machine
+            machine.resources = lifetime.pop_all()
+            return machine
