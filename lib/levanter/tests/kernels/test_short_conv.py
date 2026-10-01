@@ -105,6 +105,26 @@ def _run_both(weight, x, segment_ids, cotangent, blocks):
     return (got, got_dx, got_dw), (want, want_dx, want_dw)
 
 
+def _dw_oracle(x, segment_ids, cotangent, width):
+    """float64 ``dw`` computed directly from the definition."""
+    x64 = np.asarray(jax.device_get(x), np.float64)
+    ct64 = np.asarray(jax.device_get(cotangent), np.float64)
+    seg = np.zeros(x64.shape[:2], np.int32) if segment_ids is None else np.asarray(jax.device_get(segment_ids))
+    oracle = np.zeros((width, x64.shape[2]), np.float64)
+    for lag in range(width):
+        shifted = np.zeros_like(x64)
+        if lag == 0:
+            shifted = x64
+            keep = np.ones(seg.shape, bool)
+        else:
+            shifted[:, lag:, :] = x64[:, :-lag, :]
+            seg_shifted = np.full(seg.shape, -1, seg.dtype)
+            seg_shifted[:, lag:] = seg[:, :-lag]
+            keep = seg_shifted == seg
+        oracle[lag] = np.sum(ct64 * shifted * keep[..., None], axis=(0, 1))
+    return oracle
+
+
 def _inputs(batch, seq_len, channels, width, seed, dtype, packed):
     rng = np.random.default_rng(seed)
     x = jnp.asarray(rng.standard_normal((batch, seq_len, channels)), dtype)
@@ -167,23 +187,7 @@ def test_dw_is_at_least_as_accurate_as_the_reference(shape):
     blocks = ShortConvBlockSizes(s_block_size=s_block, c_block_size=c_block)
     (_, _, got_dw), (_, _, want_dw) = _run_both(weight, x, segment_ids, cotangent, blocks)
 
-    # float64 oracle for dw, computed directly from the definition.
-    x64 = np.asarray(jax.device_get(x), np.float64)
-    ct64 = np.asarray(jax.device_get(cotangent), np.float64)
-    seg = np.asarray(jax.device_get(segment_ids))
-    oracle = np.zeros((width, channels), np.float64)
-    for lag in range(width):
-        shifted = np.zeros_like(x64)
-        if lag == 0:
-            shifted = x64
-            keep = np.ones(seg.shape, bool)
-        else:
-            shifted[:, lag:, :] = x64[:, :-lag, :]
-            seg_shifted = np.full(seg.shape, -1, seg.dtype)
-            seg_shifted[:, lag:] = seg[:, :-lag]
-            keep = seg_shifted == seg
-        oracle[lag] = np.sum(ct64 * shifted * keep[..., None], axis=(0, 1))
-
+    oracle = _dw_oracle(x, segment_ids, cotangent, width)
     got_err = np.max(np.abs(np.asarray(jax.device_get(got_dw), np.float64) - oracle))
     want_err = np.max(np.abs(np.asarray(jax.device_get(want_dw), np.float64) - oracle))
     scale = max(np.max(np.abs(oracle)), 1e-30)
@@ -287,6 +291,73 @@ def test_pallas_short_conv_matches_reference_on_gpu():
         rtol=5e-2,
         atol=5e-2,
     )
+
+
+def _triton_segment_ids(kind, batch, seq_len, rng):
+    if kind == "unpacked":
+        return None
+    if kind == "packed":
+        return _packed_segment_ids(rng, batch, seq_len)
+    if kind == "short_runs":
+        # Documents of one to three tokens: every tap can cross a boundary, including the
+        # boundaries between the rows a program walks and the halo rows it reloads.
+        return _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=3)
+    if kind == "padded":
+        # Two documents, then padding carrying the out-of-range segment id.
+        seg = np.full((batch, seq_len), -1, np.int32)
+        for b in range(batch):
+            valid = int(rng.integers(seq_len // 2, seq_len))
+            seg[b, : valid // 3] = 0
+            seg[b, valid // 3 : valid] = 1
+        return jnp.asarray(seg)
+    raise ValueError(kind)
+
+
+@pytest.mark.parametrize("segments", ["unpacked", "packed", "short_runs", "padded"])
+@pytest.mark.parametrize("shape", [(2, 512, 256), (1, 256, 1536)], ids=lambda s: "x".join(str(v) for v in s))
+def test_triton_short_conv_matches_reference_on_gpu(shape, segments):
+    """Streaming Triton kernels: forward and ``dx`` bitwise, ``dw`` no worse than the reference.
+
+    512 rows span several of the kernel's sequence chunks, and 1536 channels span several
+    channel blocks, so chunk halos and block edges are both exercised.
+    """
+    if jax.default_backend() != "gpu":
+        pytest.skip("requires the JAX GPU backend")
+    batch, seq_len, channels = shape
+    weight, x, _, cotangent = _inputs(batch, seq_len, channels, 4, seed=31, dtype=jnp.bfloat16, packed=False)
+    segment_ids = _triton_segment_ids(segments, batch, seq_len, np.random.default_rng(32))
+
+    def kernel_fn(w, xx):
+        return short_conv(w, xx, segment_ids, implementation="triton_gpu")
+
+    def reference_fn(w, xx):
+        return short_conv_reference(w, xx, segment_ids)
+
+    got = jax.jit(kernel_fn)(weight, x)
+    _, kernel_vjp = jax.vjp(kernel_fn, weight, x)
+    got_dw, got_dx = jax.jit(kernel_vjp)(cotangent)
+    want = jax.jit(reference_fn)(weight, x)
+    _, reference_vjp = jax.vjp(reference_fn, weight, x)
+    want_dw, want_dx = jax.jit(reference_vjp)(cotangent)
+
+    np.testing.assert_array_equal(_bits(got), _bits(want), err_msg="forward is not bit-identical")
+    np.testing.assert_array_equal(_bits(got_dx), _bits(want_dx), err_msg="dx is not bit-identical")
+    oracle = _dw_oracle(x, segment_ids, cotangent, 4)
+    got_err = np.max(np.abs(np.asarray(jax.device_get(got_dw), np.float64) - oracle))
+    want_err = np.max(np.abs(np.asarray(jax.device_get(want_dw), np.float64) - oracle))
+    scale = max(np.max(np.abs(oracle)), 1e-30)
+    assert got_err <= max(want_err * 1.5, 0.02 * scale), f"dw error {got_err:.3e} vs reference {want_err:.3e}"
+
+
+def test_triton_implementation_fails_fast_when_unsupported():
+    """Off GPU the backend is missing; on GPU a kernel width other than 4 is unsupported."""
+    width = 3 if jax.default_backend() == "gpu" else 4
+    weight, x, segment_ids, _ = _inputs(2, 64, 8, width, seed=3, dtype=jnp.bfloat16, packed=True)
+    with pytest.raises(RuntimeError, match="'triton_gpu' is unusable"):
+        short_conv(weight, x, segment_ids, implementation="triton_gpu")
+    with pytest.warns(UserWarning, match="falling back from 'triton_gpu'"):
+        got = short_conv(weight, x, segment_ids, implementation=("triton_gpu", "reference"))
+    np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
 
 
 @pytest.mark.parametrize(
