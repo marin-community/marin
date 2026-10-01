@@ -121,6 +121,7 @@ def build_diagnostic_run(
     profile_steps: int = 0,
     profile_start_step: int = 5,
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    pip_packages: tuple[str, ...] = (),
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build a bounded diagnostic run for the production EP64 hero recipe.
@@ -342,6 +343,7 @@ def build_diagnostic_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=processes_per_task,
+            pip_packages=pip_packages,
         )
 
     return ArtifactStep(
@@ -552,6 +554,12 @@ def build_diagnostic_run(
     default=None,
     help="Query/key attention scale multiplier. Defaults to the hero configuration.",
 )
+@click.option(
+    "--pip-package",
+    "pip_packages",
+    multiple=True,
+    help="Install this requirement or wheel URL into the train tasks after the sync. Repeatable.",
+)
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @build_options
 def main(
@@ -586,6 +594,7 @@ def main(
     expert_axis_size: int,
     qk_mult: float | None,
     restore_from: str | None,
+    pip_packages: tuple[str, ...],
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -629,6 +638,7 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
+        pip_packages=pip_packages,
     )
 
 
