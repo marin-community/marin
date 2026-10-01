@@ -16,8 +16,9 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
     d6144   11    11264   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
-Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
-device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
+At 4K, train batch is 1024 x racks. Longer contexts reduce the sequence batch to preserve tokens
+per step; eval keeps 4K sequences at 64 x racks (one sequence per device). Tokens/steps hold 791 tokens
+per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
 
 Changelog:
@@ -56,6 +57,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
     harrier_mix_2026_08_18_data_config,
+    harrier_mixture_stage_steps,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
@@ -80,12 +82,12 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
-    SEQ_LEN,
     SMALL_SHAPES,
     _active_params,
     _small_model,
 )
 from experiments.grug.moe_hero_ep.train import (
+    FlopsBaseline,
     GrugEvalConfig,
     GrugRunConfig,
     TrainingDataMode,
@@ -102,6 +104,9 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 # Twice the restore barrier, which keeps a barrier expiry ahead of this deadline: the barrier
 # names the ranks that never arrived, while this one only reports that nothing progressed.
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
+
+HERO_REFERENCE_SEQ_LEN = HERO_MODEL_CONFIG.max_seq_len
+HERO_TOKENS_PER_RACK = HERO_EP_BATCH_SIZE * HERO_REFERENCE_SEQ_LEN
 
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 # Each rung uses the rack count that holds its batch. d6144 uses the shared hero recipe. Narrower
@@ -126,11 +131,11 @@ LADDER_MAX_RETRIES_FAILURE = 1000
 LADDER_MAX_TASK_FAILURES = 1000
 
 
-def _ladder_model(size: str):
+def _ladder_model(size: str, seq_len: int):
     """The GrugModelConfig for ``size`` at the hero routing geometry with the QB histogram estimator."""
     if size == "d6144":
         # Only the hero rung is measured with the layer-carry offload.
-        return with_transport_remat_mode(HERO_MODEL_CONFIG)
+        return with_transport_remat_mode(dataclasses.replace(HERO_MODEL_CONFIG, max_seq_len=seq_len))
     shape = SMALL_SHAPES[size]
     return _small_model(
         shape,
@@ -138,7 +143,7 @@ def _ladder_model(size: str):
         attention_implementation="gpu_fa4_cute",
         moe_implementation="ragged_all_to_all",
         expert_chunks=1,
-        seq_len=SEQ_LEN,
+        seq_len=seq_len,
         num_experts=384,
         num_experts_per_token=8,
         intermediate_dim=None,
@@ -152,11 +157,16 @@ def build_ladder_run(
     *,
     run_id: str,
     size: str,
+    seq_len: int,
+    qk_mult: float | None = None,
+    capacity_factor: float | None = None,
     num_steps: int | None = None,
     checkpoint_every: int | None = None,
     gate_router_weight_decay: float = 0.02,
     version: str | None = None,
     initialize_from_checkpoint: str | None = None,
+    flops_baseline: FlopsBaseline | None = None,
+    accept_mixture_boundary_shift: bool = False,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
@@ -179,17 +189,41 @@ def build_ladder_run(
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
+    if seq_len != HERO_REFERENCE_SEQ_LEN and qk_mult is None:
+        raise ValueError("A changed context length requires an explicit qk_mult (--qk-mult)")
+    if initialize_from_checkpoint is not None and seq_len != HERO_REFERENCE_SEQ_LEN and flops_baseline is None:
+        raise ValueError("A resumed context switch requires the handoff FLOPs baseline")
+
     dp_racks = LADDER_RACKS[size]
     # Weak scaling holds per-rack token load constant; eval is one sequence per device.
-    batch_size = HERO_EP_BATCH_SIZE * dp_racks
+    global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
+    if seq_len <= 0 or global_tokens_per_step % seq_len:
+        raise ValueError(f"seq_len={seq_len} must divide {global_tokens_per_step} tokens per step")
+    batch_size = global_tokens_per_step // seq_len
     eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
-    global_tokens_per_step = batch_size * SEQ_LEN
+    if batch_size % eval_batch_size:
+        raise ValueError(f"batch_size={batch_size} must divide evenly over {eval_batch_size} batch devices")
 
-    model = _ladder_model(size)
+    model = _ladder_model(size, seq_len)
+    if qk_mult is not None:
+        model = dataclasses.replace(model, qk_mult=qk_mult)
+    if capacity_factor is not None:
+        model = dataclasses.replace(model, capacity_factor=capacity_factor)
     if num_steps is None:
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    reference_stages = harrier_mixture_stage_steps(num_steps, HERO_EP_BATCH_SIZE * dp_racks)
+    context_stages = harrier_mixture_stage_steps(num_steps, batch_size)
+    if (
+        initialize_from_checkpoint is not None
+        and reference_stages != context_stages
+        and not accept_mixture_boundary_shift
+    ):
+        raise ValueError(
+            f"Context switch moves mixture stages from {reference_stages} to {context_stages}. "
+            "Pass accept_mixture_boundary_shift=True (--accept-mixture-boundary-shift) to accept this data change."
+        )
     flops_per_example, _ = _compute_flops(model_config=model)
     run_flops = flops_per_example * batch_size * num_steps
 
@@ -215,14 +249,14 @@ def build_ladder_run(
     # The optimizer's LR/epsilon are compute-scaled from the token budget and width; the hero builder
     # already does this at d6144, so reuse it there and the shared MoeHeuristic at the narrow rungs.
     if size == "d6144":
-        _, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
+        _, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size, seq_len=seq_len)
     else:
         optimizer = dataclasses.replace(
             MoeHeuristic().build_optimizer_config(
                 num_train_steps=num_steps,
                 batch_size=batch_size,
                 hidden_dim=model.hidden_dim,
-                seq_len=SEQ_LEN,
+                seq_len=seq_len,
             ),
             use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
         )
@@ -305,6 +339,7 @@ def build_ladder_run(
         )
         return GrugRunConfig(
             model=model,
+            flops_baseline=flops_baseline,
             data=harrier_mix_2026_08_18_data_config(
                 ctx=ctx,
                 total_steps=num_steps,
@@ -318,6 +353,7 @@ def build_ladder_run(
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
+                max_seq_len=HERO_REFERENCE_SEQ_LEN,
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
                 # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
@@ -349,6 +385,25 @@ def build_ladder_run(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
+@click.option(
+    "--seq-len",
+    type=click.IntRange(min=1),
+    default=HERO_REFERENCE_SEQ_LEN,
+    show_default=True,
+    help="Training context length. The sequence batch adjusts to preserve tokens per step.",
+)
+@click.option(
+    "--qk-mult",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Query/key attention multiplier on all layers. Required when changing the context length.",
+)
+@click.option(
+    "--capacity-factor",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Override expert receiver capacity. Defaults to the existing hero value.",
+)
 @click.option("--size", required=True, type=click.Choice(sorted(LADDER_RACKS)), help="Ladder rung width.")
 @click.option(
     "--num-steps",
@@ -378,22 +433,57 @@ def build_ladder_run(
     help="Checkpoint directory of another run to resume from under a new --run-id; this run writes only "
     "to its own tree and later restarts prefer its own, newer checkpoints.",
 )
+@click.option(
+    "--accept-mixture-boundary-shift",
+    is_flag=True,
+    help="Accept changed mixture stage boundaries when resuming with a new context length.",
+)
+@click.option(
+    "--flops-baseline-step",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Completed steps at the context switch. Requires --flops-baseline-total.",
+)
+@click.option(
+    "--flops-baseline-total",
+    type=click.FloatRange(min=0),
+    default=None,
+    help="Cumulative FLOPs at the context switch. Requires --flops-baseline-step.",
+)
 @build_options
 def main(
     run_id: str,
     size: str,
+    seq_len: int,
+    qk_mult: float | None,
+    capacity_factor: float | None,
     num_steps: int | None,
     checkpoint_every: int | None,
     gate_router_weight_decay: float,
     initialize_from_checkpoint: str | None,
+    flops_baseline_step: int | None,
+    flops_baseline_total: float | None,
+    accept_mixture_boundary_shift: bool,
 ) -> ArtifactStep[HeroThroughputResult]:
+    if (flops_baseline_step is None) != (flops_baseline_total is None):
+        raise click.UsageError("--flops-baseline-step and --flops-baseline-total must be provided together")
+    flops_baseline = (
+        FlopsBaseline(flops_baseline_step, flops_baseline_total)
+        if flops_baseline_step is not None and flops_baseline_total is not None
+        else None
+    )
     return build_ladder_run(
         run_id=run_id,
         size=size,
+        seq_len=seq_len,
+        qk_mult=qk_mult,
+        capacity_factor=capacity_factor,
         num_steps=num_steps,
         checkpoint_every=checkpoint_every,
         gate_router_weight_decay=gate_router_weight_decay,
         initialize_from_checkpoint=initialize_from_checkpoint,
+        flops_baseline=flops_baseline,
+        accept_mixture_boundary_shift=accept_mixture_boundary_shift,
     )
 
 

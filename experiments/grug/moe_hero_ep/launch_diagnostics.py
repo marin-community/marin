@@ -20,6 +20,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
@@ -48,6 +49,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
+    FlopsBaseline,
     GrugEvalConfig,
     GrugRunConfig,
     MasterParamMode,
@@ -57,6 +59,7 @@ from experiments.grug.moe_hero_ep.train import (
     grug_trainer_mesh_config,
     run_grug,
 )
+from experiments.marin_tokenizer import marin_tokenizer
 
 DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
@@ -96,6 +99,9 @@ def build_diagnostic_run(
     schedule_steps: int | None = None,
     seed: int = 0,
     batch_size: int = HERO_EP_BATCH_SIZE,
+    optimizer_tokens_per_step: int | None = None,
+    gate_router_weight_decay: float = 0.0,
+    flops_baseline: FlopsBaseline | None = None,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
@@ -110,6 +116,8 @@ def build_diagnostic_run(
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
+    eval_max_seq_len: int | None = None,
+    eval_prefix: str = "eval",
     gc_interval: int | None = None,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -129,7 +137,8 @@ def build_diagnostic_run(
     comparable across a sweep. ``None`` keeps the hero value.
 
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
-    ``dp_racks``. ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
+    ``dp_racks``. ``optimizer_tokens_per_step`` can set the parent optimizer token batch independently
+    of the actual batch for a smaller rehearsal. ``schedule_steps`` sets the full schedule length.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -176,12 +185,18 @@ def build_diagnostic_run(
     if overrides:
         model = dataclasses.replace(model, **overrides)
     model = with_transport_remat_mode(model)
+    optimizer_batch_size = batch_size
+    if optimizer_tokens_per_step is not None:
+        if optimizer_tokens_per_step <= 0 or optimizer_tokens_per_step % model.max_seq_len:
+            raise ValueError("optimizer_tokens_per_step must be positive and divisible by max_seq_len")
+        optimizer_batch_size = optimizer_tokens_per_step // model.max_seq_len
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=total_schedule_steps,
-        batch_size=batch_size,
+        batch_size=optimizer_batch_size,
         hidden_dim=model.hidden_dim,
         seq_len=model.max_seq_len,
     )
+    optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
     batch_axes = validated_batch_axis_size(
         device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
         dp_racks=dp_racks,
@@ -242,7 +257,9 @@ def build_diagnostic_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = validation_datasets() if eval_every > 0 else []
+    validation = (
+        [*validation_datasets(), *uncheatable_datasets(tokenizer=marin_tokenizer).values()] if eval_every > 0 else []
+    )
     flops_per_example, _ = _compute_flops(model_config=model)
     experiment_flops = flops_per_example * batch_size * total_schedule_steps
 
@@ -326,7 +343,10 @@ def build_diagnostic_run(
             # run scoreable: comparing configs needs held-out loss, not train loss.
             eval=(
                 GrugEvalConfig(
+                    max_seq_len=eval_max_seq_len,
+                    prefix=eval_prefix,
                     steps_per_eval=eval_every,
+                    eval_at_first_step=True,
                     eval_batch_size=batch_axes,
                     eval_current=False,  # matches the ladder; see #8861
                     eval_ema=False,
@@ -336,6 +356,7 @@ def build_diagnostic_run(
                 if eval_every > 0
                 else None
             ),
+            flops_baseline=flops_baseline,
             stop_after_steps=num_steps,
             processes_per_task=processes_per_task,
         )
@@ -419,6 +440,19 @@ def build_diagnostic_run(
     help="Global sequences per step. This value does not scale with --dp-racks.",
 )
 @click.option(
+    "--optimizer-tokens-per-step",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Reference token batch for optimizer hyperparameters. Use the parent run value for a smaller rehearsal.",
+)
+@click.option(
+    "--gate-router-weight-decay",
+    type=click.FloatRange(min=0),
+    default=0.0,
+    show_default=True,
+    help="Initial gate/router decay coefficient; use the parent run value for a rehearsal.",
+)
+@click.option(
     "--moe-implementation",
     default=None,
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
@@ -468,11 +502,23 @@ def build_diagnostic_run(
     help="Publish checkpoint phase and memory telemetry. Use with --save-checkpoints.",
 )
 @click.option(
+    "--eval-seq-len",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Held-out evaluation context length. Defaults to the training context.",
+)
+@click.option(
+    "--eval-prefix",
+    default="eval",
+    show_default=True,
+    help="Metric prefix. Use a distinct prefix for evaluations at a different context length.",
+)
+@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
     show_default=True,
-    help="Run the paloma suite every N steps. 0 disables eval (throughput-only run).",
+    help="Run Paloma and uncheatable every N steps. 0 disables eval (throughput-only run).",
 )
 @click.option(
     "--gc-interval",
@@ -542,6 +588,18 @@ def build_diagnostic_run(
     default=None,
     help="Query/key attention scale multiplier. Defaults to the hero configuration.",
 )
+@click.option(
+    "--flops-baseline-step",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Completed steps at the context switch. Requires --flops-baseline-total.",
+)
+@click.option(
+    "--flops-baseline-total",
+    type=click.FloatRange(min=0),
+    default=None,
+    help="Cumulative FLOPs at the context switch. Requires --flops-baseline-step.",
+)
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @build_options
 def main(
@@ -551,6 +609,8 @@ def main(
     schedule_steps: int | None,
     seed: int,
     batch_size: int,
+    optimizer_tokens_per_step: int | None,
+    gate_router_weight_decay: float,
     num_experts: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
@@ -564,6 +624,8 @@ def main(
     checkpoint_path: str | None,
     checkpoint_debug: bool,
     eval_every: int,
+    eval_seq_len: int | None,
+    eval_prefix: str,
     gc_interval: int | None,
     watch_interval: int,
     watch_mode: str,
@@ -575,7 +637,16 @@ def main(
     expert_axis_size: int,
     qk_mult: float | None,
     restore_from: str | None,
+    flops_baseline_step: int | None,
+    flops_baseline_total: float | None,
 ) -> ArtifactStep[HeroThroughputResult]:
+    if (flops_baseline_step is None) != (flops_baseline_total is None):
+        raise click.UsageError("--flops-baseline-step and --flops-baseline-total must be provided together")
+    flops_baseline = (
+        FlopsBaseline(flops_baseline_step, flops_baseline_total)
+        if flops_baseline_step is not None and flops_baseline_total is not None
+        else None
+    )
     return build_diagnostic_run(
         run_id=run_id,
         dp_racks=dp_racks,
@@ -583,6 +654,9 @@ def main(
         schedule_steps=schedule_steps,
         seed=seed,
         batch_size=batch_size,
+        optimizer_tokens_per_step=optimizer_tokens_per_step,
+        gate_router_weight_decay=gate_router_weight_decay,
+        flops_baseline=flops_baseline,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
@@ -611,6 +685,8 @@ def main(
             else None
         ),
         eval_every=eval_every,
+        eval_max_seq_len=eval_seq_len,
+        eval_prefix=eval_prefix,
         gc_interval=gc_interval,
         watch_interval=watch_interval,
         watch_mode=WatchMode(watch_mode),
