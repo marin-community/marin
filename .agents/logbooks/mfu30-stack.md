@@ -356,3 +356,25 @@ Loss, steps 180001-180059 (dloss = arm - reference):
 Both stack arms sit above the same-code band (late mean +1.2e-4 to +1.3e-4 against +-2e-5). That is about
 the size of hmo-02 (+1.58e-4) and unfilled-02 (+1.56e-4). One pair per arm cannot tell an offset carried
 from early steps from a bias. The PGLE-scored run's repeats must settle it.
+
+### m30-f1-seq-02: first arm over 30% (2026-10-01 01:15 PT)
+
+Arm: `research/mcwitt/mfu30-final-seq` @ `d4234c88e7`, custom wheel, `XLA_GPU_HOST_TRANSFER_STREAMS=1`, short conv
+on, no re-gather, H-A4 at 0.78/105.
+
+Score: 30.219 MFU and 12.990 s/step, +1.957 against s0, +0.434 against sonic-02, +0.284 (-0.123 s) against
+stackseq-03. Peak 123.50 GiB.
+
+Trace checks:
+- Carry stall: 3.7 ms/step (0.07 ms per copy). The carry copies run on streams #78/#80, the dedicated
+  host-transfer stream, instead of sharing the four compute memcpy streams.
+- `copy-start.44` sits after the backward.
+- Zero XLA remat.
+
+Exposed collectives total 1.49 s (ragged all-to-all 0.85, as in stackseq-03, since QB-after-MLP is still in).
+
+Against stackseq-03, the 0.123 s gain is about the stall the wheel removes (0.141).
+
+The orchestrator holds the PGLE build until `m30-f1-noqb-01` and the pre-registered confirmation runs land
+(M30-034: seeds 0-2 x 100 steps, unprofiled; each seed's median over 180011-180099 >= 30.0, with loss in the
+band).
