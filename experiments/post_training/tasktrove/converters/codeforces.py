@@ -19,7 +19,7 @@ converter removes the source's stale ``Solution.java`` boilerplate. :data:`_BUIL
 C++ case once and :data:`_COMMAND` runs whichever file the workspace has.
 """
 
-from tasktrove_verify.spec import Compare, StdioSpec
+from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

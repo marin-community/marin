@@ -20,7 +20,7 @@ agent to run (``bash /setup_files/setup_seeds.sh``) before starting, mirrored un
 
 import json
 
-from tasktrove_verify.spec import ScriptSpec
+from verifyit.spec import ScriptSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
@@ -51,8 +51,8 @@ _CHECKER_TEMPLATE = '''\
 """Score a captured shell session's output against one task's oracle output.
 
 Reads the expected output from __DATA_NAME__ beside this script (under
-``$TASKTROVE_TESTS_DIR``), compares it against the capture file named by its one argument,
-and reports the reward through ``$TASKTROVE_LOGS_DIR/reward.json``. The comparison is a
+``$VERIFYIT_TESTS_DIR``), compares it against the capture file named by its one argument,
+and reports the reward through ``$VERIFYIT_LOGS_DIR/reward.json``. The comparison is a
 normalized, order-insensitive multiset of "records" (one per output line; ANSI codes, a leading
 ``/workspace/`` or ``./`` prefix, a trailing size unit, and repeated whitespace are stripped):
 every expected record must appear in the actual output, and no extra record may look like an
@@ -100,8 +100,8 @@ def _score(actual, expected):
 
 
 def main():
-    tests_dir = Path(os.environ["TASKTROVE_TESTS_DIR"])
-    logs_dir = Path(os.environ["TASKTROVE_LOGS_DIR"])
+    tests_dir = Path(os.environ["VERIFYIT_TESTS_DIR"])
+    logs_dir = Path(os.environ["VERIFYIT_LOGS_DIR"])
     data = json.loads((tests_dir / "__DATA_NAME__").read_text())
     expected = data["expected_output"]
 
