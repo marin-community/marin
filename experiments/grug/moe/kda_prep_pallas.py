@@ -28,6 +28,7 @@ from the forward so the inverse is not recomputed.
 """
 
 import functools
+from enum import StrEnum
 from typing import NamedTuple
 
 import jax
@@ -60,6 +61,9 @@ class ChunkPrep(NamedTuple):
 
 class PrepConfig(NamedTuple):
     chunk_size: int
+    gate_kind: str
+    gate_floor: float
+    erase_input: str
     sub_chunk: int  # rows per mid-referenced decay tile (_sub_tile); 0: one reference at the chunk start
     mm_dtype: str
     l2norm: bool
@@ -110,14 +114,47 @@ def _softplus(x):
     return jnp.maximum(x, 0.0) + jnp.log1p(jnp.exp(-jnp.abs(x)))
 
 
+class GateKind(StrEnum):
+    """The on-chip log-decay gate ``g = f(a; p, bias)`` of the fused kernels (``gate=(p, bias)``)."""
+
+    SOFTPLUS = "softplus"  # p * softplus(a + bias): Kimi Linear / Mamba2, with p = -exp(A_log)
+    SIGMOID = "sigmoid"  # -floor * sigmoid(p * (a + bias)): Kimi K3, with p = exp(A_log)
+
+
+class GateFn(NamedTuple):
+    """Static description of the on-chip gate (``floor`` is only used by ``SIGMOID``)."""
+
+    kind: GateKind
+    floor: float = 0.0
+
+
+def gate_log_decay(fn: GateFn, a, p, bias):
+    """The gated log-decay (fp32) from pre-activation ``a`` and per-channel ``p`` / ``bias``."""
+    u = a + bias
+    if fn.kind == GateKind.SOFTPLUS:
+        return p * _softplus(u)
+    return -fn.floor * jax.nn.sigmoid(p * u)
+
+
+def gate_grads(fn: GateFn, a, p, bias, d_decay):
+    """``(d a, d p, d bias)`` elementwise (unreduced over tokens) from ``d_decay`` = dL/d(log-decay)."""
+    u = a + bias
+    if fn.kind == GateKind.SOFTPLUS:
+        du = d_decay * p * jax.nn.sigmoid(u)
+        return du, d_decay * _softplus(u), du
+    s = jax.nn.sigmoid(p * u)
+    dx = d_decay * (-fn.floor) * s * (1.0 - s)  # d/d(p * u)
+    du = dx * p
+    return du, dx * u, du
+
+
 def _log_decay(g_raw, gate_refs, cols=slice(None)):
     """The per-channel log-decay of one chunk: ``g_raw`` itself, or with a fused gate
-    (``gate_refs = (rate_ref, bias_ref)``, this head's rows) ``rate * softplus(g_raw + bias)``,
-    the Kimi Linear / Mamba2 parameterization with ``rate = -exp(A_log)``."""
+    (``gate_refs = (GateFn, p_ref, bias_ref)``, this head's rows) ``gate_log_decay``."""
     if not gate_refs:
         return g_raw
-    rate_ref, bias_ref = gate_refs
-    return rate_ref[cols].astype(f32)[None, :] * _softplus(g_raw + bias_ref[cols].astype(f32)[None, :])
+    fn, p_ref, bias_ref = gate_refs
+    return gate_log_decay(fn, g_raw, p_ref[cols].astype(f32)[None, :], bias_ref[cols].astype(f32)[None, :])
 
 
 class _DocMasks(NamedTuple):
@@ -142,17 +179,41 @@ def _doc_masks(starts_ref) -> _DocMasks | None:
     )
 
 
-def _split_refs(refs, gated: bool, segmented: bool, erased: bool):
-    """(gate_refs, starts_ref, erase_ref, rest) from a kernel's optional-then-positional refs."""
-    gate_refs, refs = (refs[:2], refs[2:]) if gated else ((), refs)
+class EraseInput(StrEnum):
+    """What the fused kernels' ``erase`` input holds."""
+
+    GATE = "gate"  # the erase gate b itself
+    LOGITS = "logits"  # z, with b = 2 * sigmoid(z) applied on-chip (Gated DeltaNet-2's (0, 2) range)
+
+
+class _Erase(NamedTuple):
+    ref: object
+    kind: EraseInput
+
+    def gate(self, rows=slice(None), cols=slice(None)):
+        """The erase gate ``b`` (fp32) on a block of the chunk."""
+        b = self.ref[rows, cols].astype(f32)
+        return 2.0 * jax.nn.sigmoid(b) if self.kind == EraseInput.LOGITS else b
+
+    def input_grad(self, d_gate, rows=slice(None), cols=slice(None)):
+        """dL/d(input) from dL/db: through ``b = 2 sigmoid(z)`` for logits (``db/dz = b (1 - b / 2)``)."""
+        if self.kind == EraseInput.GATE:
+            return d_gate
+        b = 2.0 * jax.nn.sigmoid(self.ref[rows, cols].astype(f32))
+        return d_gate * b * (1.0 - 0.5 * b)
+
+
+def _split_refs(refs, gated: GateFn | None, segmented: bool, erased: EraseInput | None):
+    """(gate_refs, starts_ref, erase, rest) from a kernel's optional-then-positional refs."""
+    gate_refs, refs = ((gated, *refs[:2]), refs[2:]) if gated else ((), refs)
     starts_ref, refs = (refs[0], refs[1:]) if segmented else (None, refs)
-    erase_ref, refs = (refs[0], refs[1:]) if erased else (None, refs)
-    return gate_refs, starts_ref, erase_ref, refs
+    erase, refs = (_Erase(refs[0], erased), refs[1:]) if erased else (None, refs)
+    return gate_refs, starts_ref, erase, refs
 
 
-def _erase_key(k, erase_ref, cols=slice(None)):
+def _erase_key(k, erase: _Erase | None, cols=slice(None)):
     """The erase key ``e = b * k`` (Gated DeltaNet-2 erase gate ``b``), or ``k`` without one."""
-    return k if erase_ref is None else k * erase_ref[:, cols].astype(f32)
+    return k if erase is None else k * erase.gate(cols=cols)
 
 
 def _exact_mask_matmul(mask, x, trans_mask: bool = False):
@@ -562,8 +623,8 @@ def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, 
         q_dot = q_dot + jnp.sum(q_raw * dqn, axis=1)
         dqn_blocks.append(dqn)
         if erase_ref is not None:
-            derase_ref[0][:, blk] = (de * k).astype(derase_ref[0].dtype)
-            de = de * erase_ref[:, blk].astype(f32)
+            derase_ref[0][:, blk] = erase_ref.input_grad(de * k, cols=blk).astype(derase_ref[0].dtype)
+            de = de * erase_ref.gate(cols=blk)
         dkn = de + dk_cols + dkw * w
         k_dot = k_dot + jnp.sum(k_raw * dkn, axis=1)
         dkn_blocks.append(dkn)
@@ -589,28 +650,28 @@ def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, 
 def _seg_decay_fwd_kernel(g_ref, *refs, gated):
     """G = the (gated) log-decay's within-document cumsum for one chunk (restarted at each
     document start), so the heavy prep kernels read G instead of recomputing it."""
-    gate_refs, (starts_ref, cum_ref) = (refs[:2], refs[2:]) if gated else ((), refs)
+    gate_refs, (starts_ref, cum_ref) = ((gated, *refs[:2]), refs[2:]) if gated else ((), refs)
     decay = _log_decay(g_ref[...].astype(f32), gate_refs)
     cum_ref[...] = _exact_mask_matmul(_doc_lower_mask(starts_ref), decay)
 
 
 def _seg_decay_bwd_kernel(g_ref, *refs, gated):
-    """dL/dg from dL/dG: within-document suffix sums, then (fused gate) the chain through
-    ``rate * softplus(g + bias)`` with this chunk's column sums of d/d(rate), d/d(bias)."""
+    """dL/dg from dL/dG: within-document suffix sums, then (fused gate) the chain through the
+    gate (``gate_grads``) with this chunk's column sums of d/d(p), d/d(bias)."""
     gate_refs, refs = (refs[:2], refs[2:]) if gated else ((), refs)
     starts_ref, dcum_ref, dg_ref, *dgate_refs = refs
     d_decay = _exact_mask_matmul(_doc_lower_mask(starts_ref), dcum_ref[...].astype(f32), trans_mask=True)
     if not gated:
         dg_ref[...] = d_decay.astype(dg_ref.dtype)
         return
-    rate_ref, bias_ref = gate_refs
-    rate = rate_ref[...].astype(f32)[None, :]
-    u = g_ref[...].astype(f32) + bias_ref[...].astype(f32)[None, :]
-    du = d_decay * rate * jax.nn.sigmoid(u)
-    drate_ref, dbias_ref = dgate_refs
-    drate_ref[...] = jnp.sum(d_decay * _softplus(u), axis=0)
-    dbias_ref[...] = jnp.sum(du, axis=0)
-    dg_ref[...] = du.astype(dg_ref.dtype)
+    p_ref, bias_ref = gate_refs
+    da, dp, dbias = gate_grads(
+        gated, g_ref[...].astype(f32), p_ref[...].astype(f32)[None, :], bias_ref[...].astype(f32)[None, :], d_decay
+    )
+    dp_ref, dbias_ref = dgate_refs
+    dp_ref[...] = jnp.sum(dp, axis=0)
+    dbias_ref[...] = jnp.sum(dbias, axis=0)
+    dg_ref[...] = da.astype(dg_ref.dtype)
 
 
 def _specs(c: int, *dims: int):
@@ -643,10 +704,14 @@ def _head_row_specs(heads: int, dk: int):
     return [pl.BlockSpec((None, dk), lambda gi, ni: (gi % heads, 0)) for _ in range(2)]
 
 
+def _gate_fn(gate, cfg: PrepConfig) -> GateFn | None:
+    return None if gate is None else GateFn(GateKind(cfg.gate_kind), cfg.gate_floor)
+
+
 def _seg_decay_fwd_call(g, gate, starts, cfg: PrepConfig):
     b, length, heads, dk = g.shape
     c = cfg.chunk_size
-    gated = gate is not None
+    gated = _gate_fn(gate, cfg)
     return pl.pallas_call(
         functools.partial(_seg_decay_fwd_kernel, gated=gated),
         grid=(b * heads, length // c),
@@ -663,7 +728,7 @@ def _seg_decay_bwd_call(g, gate, starts, dcum, cfg: PrepConfig):
     b, length, heads, dk = g.shape
     c = cfg.chunk_size
     gb, n = b * heads, length // c
-    gated = gate is not None
+    gated = _gate_fn(gate, cfg)
     part = [pl.BlockSpec((None, None, dk), lambda gi, ni: (gi, ni, 0)) for _ in range(2)] if gated else []
     outs = pl.pallas_call(
         functools.partial(_seg_decay_bwd_kernel, gated=gated),
@@ -718,7 +783,8 @@ def _prep_fwd_call(q, k, v, g, beta, gate, starts, erase, cfg: PrepConfig, save_
     if save_t:
         out_shape.append(sds(c, c, dtype=mmd))
         out_specs += _specs(c, c)
-    gated, segmented, erased = gate is not None, starts is not None, erase is not None
+    gated, segmented = _gate_fn(gate, cfg), starts is not None
+    erased = None if erase is None else EraseInput(cfg.erase_input)
     if cfg.sub_chunk:
         kernel = functools.partial(_prep_fwd_sub_kernel, sub=cfg.sub_chunk)
     else:
@@ -769,7 +835,8 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
     c = cfg.chunk_size
     gb, n = b * heads, length // c
     mmd = jnp.dtype(cfg.mm_dtype)
-    gated, segmented, erased = gate is not None, starts is not None, erase is not None
+    gated, segmented = _gate_fn(gate, cfg), starts is not None
+    erased = None if erase is None else EraseInput(cfg.erase_input)
     gate_specs = [
         *(_head_row_specs(heads, dk) if gated else []),
         *([_starts_spec(c, heads)] if segmented else []),
@@ -855,14 +922,11 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
     dgate = None
     if segmented:
         dg, dgate = _seg_decay_bwd_call(g_in, gate_in, starts, dg, cfg)
-    elif gated:  # dg is d/d(log-decay); chain through g = rate * softplus(g_raw + bias) in XLA
-        rate, bias = gate
-        u = g.astype(f32) + bias.astype(f32)
-        dgate = (
-            jnp.sum(dg * jax.nn.softplus(u), axis=(0, 1)).astype(rate.dtype),
-            jnp.sum(dg * rate.astype(f32) * jax.nn.sigmoid(u), axis=(0, 1)).astype(bias.dtype),
-        )
-        dg = (dg * rate.astype(f32) * jax.nn.sigmoid(u)).astype(g.dtype)
+    elif gated:  # dg is d/d(log-decay); chain through the gate in XLA
+        p, bias = gate
+        da, dp, dbias = gate_grads(gated, g.astype(f32), p.astype(f32), bias.astype(f32), dg)
+        dgate = (jnp.sum(dp, axis=(0, 1)).astype(p.dtype), jnp.sum(dbias, axis=(0, 1)).astype(bias.dtype))
+        dg = da.astype(g.dtype)
     dstarts = None if starts is None else jnp.zeros_like(starts)  # document starts are data
     derase = derase[0] if erased else None
     dk_ = _group_sum(dk_, group, k.dtype)
@@ -900,6 +964,8 @@ def fused_chunk_prep(
     mm_dtype: jnp.dtype,
     sub_chunk_size: int | None = None,
     gate: tuple[jax.Array, jax.Array] | None = None,
+    gate_fn: GateFn = GateFn(GateKind.SOFTPLUS),
+    erase_input: EraseInput = EraseInput.GATE,
     doc_starts: jax.Array | None = None,
     erase: jax.Array | None = None,
     use_qk_l2norm: bool,
@@ -917,9 +983,11 @@ def fused_chunk_prep(
             optionally L2-normalizes both (``use_qk_l2norm``) and scales q by ``d_k**-0.5``.
         v: ``(B, L, H_kv, d_v)``.  beta: ``(B, L, H)``.
         g: ``(B, L, H, d_k)`` log-decay, or with ``gate`` its pre-activation.
-        gate: optional ``(rate, bias)``, each ``(H, d_k)``: the kernels compute the
-            log-decay as ``rate * softplus(g + bias)`` on-chip (``rate = -exp(A_log)``
-            broadcast over d_k) and return cotangents for both.
+        gate: optional ``(p, bias)``, each ``(H, d_k)``: the kernels compute the log-decay
+            from ``g`` on-chip as ``gate_fn`` (``GateKind``; default ``p * softplus(g + bias)``
+            with ``p = -exp(A_log)``) and return cotangents for both.
+        gate_fn: the on-chip gate's form (with ``gate``).
+        erase_input: whether ``erase`` is the erase gate or its logits (``EraseInput``).
         doc_starts: optional ``(B, L)`` fp32 flags (1 = token starts a new document, see
             ``kda.doc_starts``): per chunk, intra-chunk interactions are masked to one
             document, the incoming state reaches only the chunk's first document, and
@@ -959,6 +1027,9 @@ def fused_chunk_prep(
         raise ValueError(f"sub_chunk_size must be a power of two >= 16 dividing chunk_size, got {sub}")
     cfg = PrepConfig(
         chunk_size,
+        GateKind(gate_fn.kind).value,
+        float(gate_fn.floor),
+        EraseInput(erase_input).value,
         sub,
         jnp.dtype(mm_dtype).name,
         use_qk_l2norm,

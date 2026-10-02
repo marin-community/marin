@@ -26,6 +26,7 @@ that contract over d_v (split across programs) are batched GEMMs outside the ker
 """
 
 import functools
+from enum import StrEnum
 from typing import NamedTuple
 
 import jax
@@ -37,6 +38,17 @@ from jax.experimental.pallas import triton as plt
 from experiments.grug.moe.kda_prep_pallas import dot_f32
 
 f32 = jnp.float32
+# d_v column block and warps of the fused cotangent kernel (``StateGrads.PALLAS``), tuned on H100
+# at C=32, d=128 (0.76 ms vs 0.82-1.44 for other tiles; the XLA einsums take ~0.88).
+_GRADS_BLOCK_V = 32
+_GRADS_NUM_WARPS = 4
+
+
+class StateGrads(StrEnum):
+    """Where the backward's per-chunk cotangents that contract over d_v are computed."""
+
+    XLA = "xla"  # batched XLA einsums over the saved per-chunk states and their cotangents
+    PALLAS = "pallas"  # one parallel kernel per (g, chunk) reading every per-chunk tensor once
 
 
 class StateConfig(NamedTuple):
@@ -46,6 +58,7 @@ class StateConfig(NamedTuple):
     num_stages: int
     interpret: bool
     save_states: bool
+    grads: StateGrads
 
 
 def _state_fwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_ref, out_ref, h_ref, vnew_ref, st_ref):
@@ -81,6 +94,63 @@ def _state_bwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, decay_ref, dout_ref, ds
         return ds_in + dot_f32(qi_ref[i].astype(f32), dout, trans_a=True)
 
     ds0_ref[...] = lax.fori_loop(0, n, body, dst_ref[...])
+
+
+def _state_grads_kernel(h_ref, ds_ref, vnew_ref, dvp_ref, dout_ref, dqi_ref, dattn_ref, dkw_ref, dkcd_ref, ddecay_ref):
+    """One chunk's d_v-contracting cotangents from its entering state ``h``, the cotangent ``ds``
+    of the state it leaves, ``v_new``, ``dV_pseudo`` and the output cotangent, walking d_v in
+    column blocks: dQi = dout h^T, dattn = dout v_new^T, dKw = v_new dS^T, dKcd = -dVp h^T and
+    ddecay = rowsum(h * dS) (the einsums of the XLA path, with each tensor read once)."""
+    dk, dv = h_ref.shape
+    c = vnew_ref.shape[0]
+    dqi = jnp.zeros((c, dk), f32)
+    dattn = jnp.zeros((c, c), f32)
+    dkw = jnp.zeros((c, dk), f32)
+    dkcd = jnp.zeros((c, dk), f32)
+    ddecay = jnp.zeros((dk,), f32)
+    for j in range(dv // _GRADS_BLOCK_V):
+        cols = pl.ds(j * _GRADS_BLOCK_V, _GRADS_BLOCK_V)
+        h = h_ref[:, cols].astype(f32)
+        ds = ds_ref[:, cols]
+        vnew = vnew_ref[:, cols]
+        dout = dout_ref[:, cols].astype(f32)
+        dqi = dqi + dot_f32(dout, h, trans_b=True)
+        dattn = dattn + dot_f32(dout, vnew, trans_b=True)
+        dkw = dkw + dot_f32(vnew, ds, trans_b=True)
+        dkcd = dkcd - dot_f32(dvp_ref[:, cols], h, trans_b=True)
+        ddecay = ddecay + jnp.sum(h * ds, axis=1)
+    dqi_ref[...] = dqi.astype(dqi_ref.dtype)
+    dattn_ref[...] = dattn.astype(dattn_ref.dtype)
+    dkw_ref[...] = dkw.astype(dkw_ref.dtype)
+    dkcd_ref[...] = dkcd.astype(dkcd_ref.dtype)
+    ddecay_ref[...] = ddecay
+
+
+def _state_grads_call(qi, attn, kw, kcd, h, vnew, dout, ds, dvp, cfg: StateConfig):
+    gb, n, c, dk = kw.shape
+    dv = vnew.shape[-1]
+    heads = cfg.num_heads
+
+    def chunk(*dims):
+        return pl.BlockSpec((None, None, *dims), lambda gi, ni: (gi, ni) + (0,) * len(dims))
+
+    dout_spec = pl.BlockSpec((None, c, None, dv), lambda gi, ni: (gi // heads, ni, gi % heads, 0))
+    return pl.pallas_call(
+        _state_grads_kernel,
+        grid=(gb, n),
+        in_specs=[chunk(dk, dv), chunk(dk, dv), chunk(c, dv), chunk(c, dv), dout_spec],
+        out_specs=[chunk(c, dk), chunk(c, c), chunk(c, dk), chunk(c, dk), chunk(dk)],
+        out_shape=[
+            jax.ShapeDtypeStruct(qi.shape, qi.dtype),
+            jax.ShapeDtypeStruct(attn.shape, attn.dtype),
+            jax.ShapeDtypeStruct(kw.shape, kw.dtype),
+            jax.ShapeDtypeStruct(kcd.shape, kcd.dtype),
+            jax.ShapeDtypeStruct((gb, n, dk), f32),
+        ],
+        compiler_params=plt.CompilerParams(num_warps=_GRADS_NUM_WARPS, num_stages=1),
+        interpret=cfg.interpret,
+        name="kda_state_bwd_grads",
+    )(h, ds, vnew, dvp, dout)
 
 
 def _full(n, *dims):
@@ -160,7 +230,11 @@ def _state_bwd_call(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConf
         name="kda_state_bwd",
     )(qi, attn, kw, kcd, decay, dout, dst)
     # The C x d_k and C x C cotangents contract over d_v, which the kernel splits across
-    # programs; given the per-chunk dS they are plain batched GEMMs, cheapest done by XLA.
+    # programs; given the per-chunk dS they are plain batched GEMMs (XLA einsums, or one
+    # parallel kernel that reads each per-chunk tensor once).
+    if cfg.grads == StateGrads.PALLAS:
+        dqi, dattn, dkw, dkcd, ddecay = _state_grads_call(qi, attn, kw, kcd, h, vnew, dout, ds, dvp, cfg)
+        return dqi, dattn, dkw, dkcd, dvp, ddecay, ds0
     b = gb // heads
     dout_g = dout.reshape(b, n, c, heads, dv)
     h_g = h.reshape(b, heads, n, dk, dv)
@@ -220,6 +294,7 @@ def chunk_state_pass(
     num_stages: int = 2,
     interpret: bool = False,
     save_states: bool = False,
+    grads: StateGrads = StateGrads.XLA,
 ) -> tuple[jax.Array, jax.Array]:
     """Sequential inter-chunk KDA state pass with the chunk outputs fused in (differentiable).
 
@@ -234,6 +309,7 @@ def chunk_state_pass(
         block_v: ``d_v`` slab width per program (parallelism vs. re-reading the d_k operands).
         save_states: keep the per-chunk states for the backward instead of re-running the
             forward pass there (same values; costs ``G * n * d_k * d_v`` stored elements).
+        grads: where the backward forms the cotangents that contract over d_v (``StateGrads``).
 
     Returns:
         ``(out, final_state)``: ``out_n = q_inflate_n S_{n-1} + attn_n v_new_n`` in model
@@ -242,5 +318,5 @@ def chunk_state_pass(
     dv = v_pseudo.shape[-1]
     if dv % min(block_v, dv):
         raise ValueError(f"d_v={dv} must be a multiple of block_v={block_v}")
-    cfg = StateConfig(num_heads, block_v, num_warps, num_stages, interpret, save_states)
+    cfg = StateConfig(num_heads, block_v, num_warps, num_stages, interpret, save_states, StateGrads(grads))
     return _state_pass(q_inflate, attn, kw, k_cumdecay, v_pseudo, decay, initial_state, jnp.dtype(out_dtype), cfg)

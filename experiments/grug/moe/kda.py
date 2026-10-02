@@ -43,9 +43,12 @@ from experiments.grug.moe.kda_prep_pallas import (
     DEFLATE_EXP_CAP,
     L2NORM_EPS,
     ChunkPrep,
+    EraseInput,
+    GateFn,
+    GateKind,
     fused_chunk_prep,
 )
-from experiments.grug.moe.kda_state_pallas import chunk_state_pass
+from experiments.grug.moe.kda_state_pallas import StateGrads, chunk_state_pass
 
 _L2NORM_EPS = L2NORM_EPS
 # Triton warps of the mid-referenced (sub_chunk_size) prep kernels, tuned on H100 at C=32, d=128
@@ -504,6 +507,8 @@ def _fused_prep(
     starts=None,
     erase=None,
     sub_chunk_size: int | None = None,
+    gate_fn: GateFn = GateFn(GateKind.SOFTPLUS),
+    erase_input: EraseInput = EraseInput.GATE,
 ) -> ChunkPrep:
     """Fused Pallas prep on model-layout ``(B, L, H, d)`` inputs; per-chunk outputs ``(G, n, ...)``."""
     return fused_chunk_prep(
@@ -516,6 +521,8 @@ def _fused_prep(
         mm_dtype=jnp.float32 if mm_dtype is None else mm_dtype,
         sub_chunk_size=sub_chunk_size,
         gate=gate,
+        gate_fn=gate_fn,
+        erase_input=erase_input,
         doc_starts=starts,
         erase=erase,
         use_qk_l2norm=use_qk_l2norm,
@@ -624,14 +631,17 @@ def kda_fused(
     beta: Float[Array, "B L H"],
     *,
     gate: tuple[Float[Array, "H Dk"], Float[Array, "H Dk"]] | None = None,
+    gate_fn: GateFn = GateFn(GateKind.SOFTPLUS),
     segment_ids: Int[Array, "B L"] | None = None,
     erase: Float[Array, "B L H Dk"] | None = None,
+    erase_input: EraseInput = EraseInput.GATE,
     chunk_size: int = 64,
     sub_chunk_size: int | None = None,
     use_qk_l2norm: bool = True,
     matmul_dtype: jnp.dtype = jnp.bfloat16,
     interpret: bool = False,
     save_chunk_states: bool = False,
+    state_grads: StateGrads = StateGrads.XLA,
 ) -> Float[Array, "B L H Dv"]:
     """Fused-kernel KDA in the model's ``(batch, seq, heads, head_dim)`` layout (GPU).
 
@@ -641,19 +651,24 @@ def kda_fused(
     state; the final state is not returned. ``interpret`` runs the Pallas interpreter.
 
     Grouped-query k/v (``M`` heads dividing ``H``; query head h uses kv head
-    ``h // (H/M)``) are read in place. With ``gate = (rate, bias)`` (each ``(H, d_k)``),
-    ``g`` is the gate pre-activation and the log-decay ``rate * softplus(g + bias)`` is
-    computed on-chip (Kimi Linear's gate with ``rate = -exp(A_log)``).
+    ``h // (H/M)``) are read in place. With ``gate = (p, bias)`` (each ``(H, d_k)``), ``g`` is
+    the gate pre-activation and the log-decay is computed on-chip as ``gate_fn``: by default
+    ``p * softplus(g + bias)`` (Kimi Linear's gate with ``p = -exp(A_log)``), or with
+    ``GateFn(GateKind.SIGMOID, floor)`` Kimi K3's ``-floor * sigmoid(p * (g + bias))``
+    (``p = exp(A_log)``), so no fp32 log-decay tensor is materialized; ``g``'s cotangent comes
+    back in ``g.dtype``.
 
     ``segment_ids`` (``(B, L)``) packs documents: the state is hard-reset at every
     document start (see :func:`recurrent_kda`). ``erase`` (``(B, L, H, d_k)``) is the channel-wise
-    erase gate of :func:`recurrent_kda`, applied on-chip. ``save_chunk_states`` keeps the state pass's
+    erase gate of :func:`recurrent_kda`, applied on-chip; with ``erase_input=EraseInput.LOGITS`` it
+    holds logits ``z`` and the gate ``2 * sigmoid(z)`` is formed on-chip. ``save_chunk_states`` keeps the state pass's
     per-chunk states for the backward (see :func:`chunk_state_pass`).
 
     ``sub_chunk_size`` (see :func:`fused_chunk_prep`) references the intra-chunk decay of every tile of
     that many rows at the tile's middle token, which keeps long chunks exact under strong decay: with
     the -5 per-token log-decay floor, ``chunk_size=32, sub_chunk_size=32`` (the fastest exact setting
     on H100) and ``chunk_size=64, sub_chunk_size=32`` are as exact as ``chunk_size=16``.
+    ``state_grads`` picks where the state pass's backward forms its d_v-contracting cotangents.
     """
     b, length, heads, _ = q.shape
     pad = (-length) % chunk_size
@@ -680,6 +695,8 @@ def kda_fused(
         starts=starts,
         erase=erase,
         sub_chunk_size=sub_chunk_size,
+        gate_fn=gate_fn,
+        erase_input=erase_input,
     )
     state = jnp.zeros((b * heads, q.shape[-1], v.shape[-1]), jnp.float32)
     out, _ = chunk_state_pass(
@@ -694,5 +711,6 @@ def kda_fused(
         out_dtype=v.dtype,
         interpret=interpret,
         save_states=save_chunk_states,
+        grads=state_grads,
     )
     return out[:, :length] if pad else out

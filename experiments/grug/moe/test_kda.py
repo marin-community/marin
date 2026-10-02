@@ -16,6 +16,8 @@ import numpy as np
 import pytest
 
 from experiments.grug.moe.kda import chunk_kda, kda_fused, recurrent_kda
+from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind
+from experiments.grug.moe.kda_state_pallas import StateGrads
 
 jax.config.update("jax_default_matmul_precision", "float32")
 
@@ -670,3 +672,80 @@ def test_mid_referenced_chunks_with_bf16_matmuls_track_the_recurrence():
 
     want = jnp.swapaxes(_per_document(run, [jnp.swapaxes(x, 1, 2) for x in args], _FLOOR_DOCS), 1, 2)
     np.testing.assert_allclose(np.asarray(out), np.asarray(want), atol=1e-2 * float(jnp.max(jnp.abs(want))))
+
+
+@pytest.mark.parametrize("sub_chunk_size", [None, 32])
+@pytest.mark.parametrize("packed", [False, True])
+def test_on_chip_sigmoid_gate_and_erase_logits_match_xla_gates(packed, sub_chunk_size):
+    """Kimi K3's gate g = -5 sigmoid(exp(A_log) (a + dt_bias)) and the erase gate 2 sigmoid(z) formed
+    on-chip from bf16 pre-activations give the values and gradients (a, A_log, dt_bias, z and the rest)
+    of computing both in JAX first, with and without packed documents."""
+    rng = np.random.RandomState(40)
+    b, length, heads, d = 1, 64, 2, 32
+    q, k, v = (jnp.asarray(rng.randn(b, length, heads, d), jnp.float32) for _ in range(3))
+    a = jnp.asarray(rng.randn(b, length, heads, d), jnp.bfloat16)
+    z = jnp.asarray(rng.randn(b, length, heads, d), jnp.bfloat16)
+    beta = jnp.asarray(rng.rand(b, length, heads), jnp.float32)
+    a_log = jnp.asarray(rng.randn(heads) * 0.3, jnp.float32)
+    dt_bias = jnp.asarray(rng.randn(heads, d), jnp.float32)
+    w = jnp.asarray(rng.randn(b, length, heads, d), jnp.float32)
+    seg = jnp.asarray(np.repeat(np.arange(3), [9, 40, 15])[None], jnp.int32) if packed else None
+    kw = dict(chunk_size=32, sub_chunk_size=sub_chunk_size, matmul_dtype=jnp.float32, interpret=True, segment_ids=seg)
+
+    def fused(q, k, v, a, z, beta, a_log, dt_bias):
+        p = jnp.broadcast_to(jnp.exp(a_log)[:, None], dt_bias.shape)
+        out = kda_fused(
+            q,
+            k,
+            v,
+            a,
+            beta,
+            gate=(p, dt_bias),
+            gate_fn=GateFn(GateKind.SIGMOID, 5.0),
+            erase=z,
+            erase_input=EraseInput.LOGITS,
+            **kw,
+        )
+        return jnp.sum(w * out)
+
+    def xla_gates(q, k, v, a, z, beta, a_log, dt_bias):
+        g = -5.0 * jax.nn.sigmoid(jnp.exp(a_log)[:, None] * (a.astype(jnp.float32) + dt_bias))
+        erase = 2.0 * jax.nn.sigmoid(z.astype(jnp.float32))
+        return jnp.sum(w * kda_fused(q, k, v, g, beta, erase=erase, **kw))
+
+    args = (q, k, v, a, z, beta, a_log, dt_bias)
+    np.testing.assert_allclose(float(fused(*args)), float(xla_gates(*args)), rtol=1e-5)
+    got = jax.grad(fused, argnums=tuple(range(8)))(*args)
+    want = jax.grad(xla_gates, argnums=tuple(range(8)))(*args)
+    for x, y in zip(got, want, strict=True):
+        assert x.dtype == y.dtype
+        tol = 1e-2 if x.dtype == jnp.bfloat16 else 1e-4  # bf16 cotangents: one rounding apart at most
+        np.testing.assert_allclose(np.asarray(x, np.float32), np.asarray(y, np.float32), rtol=tol, atol=tol)
+
+
+@pytest.mark.parametrize("save_chunk_states", [False, True])
+def test_fused_state_cotangents_match_xla_einsums(save_chunk_states):
+    """StateGrads.PALLAS forms the state pass's d_v-contracting cotangents in one kernel per chunk
+    and gives the gradients of the XLA einsums (fp32), with a d_v walked in several column blocks."""
+    rng = np.random.RandomState(41)
+    q, k, v = (jnp.asarray(rng.randn(1, 96, 2, 64), jnp.float32) for _ in range(3))
+    g = -0.3 * jnp.abs(jnp.asarray(rng.randn(1, 96, 2, 64), jnp.float32))
+    beta = jnp.asarray(rng.rand(1, 96, 2), jnp.float32)
+    w = jnp.asarray(rng.randn(1, 96, 2, 64), jnp.float32)
+
+    def loss(state_grads, *args):
+        out = kda_fused(
+            *args,
+            chunk_size=32,
+            matmul_dtype=jnp.float32,
+            interpret=True,
+            save_chunk_states=save_chunk_states,
+            state_grads=state_grads,
+        )
+        return jnp.sum(w * out)
+
+    argnums = tuple(range(1, 6))
+    got = jax.grad(loss, argnums=argnums)(StateGrads.PALLAS, q, k, v, g, beta)
+    want = jax.grad(loss, argnums=argnums)(StateGrads.XLA, q, k, v, g, beta)
+    for x, y in zip(got, want, strict=True):
+        np.testing.assert_allclose(np.asarray(x), np.asarray(y), rtol=1e-5, atol=1e-5)
