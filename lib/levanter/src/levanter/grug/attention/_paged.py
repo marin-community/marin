@@ -35,6 +35,7 @@ def ragged_paged_attention(
     implementation: PagedAttentionImplementation | None = None,
     gpu_kv_splits: int = 8,
     gpu_av_precision: GpuPagedAvPrecision = "ieee",
+    tpu_dma_buffers: int = 1,
 ) -> jax.Array:
     """Attend to cached prefixes and new tokens in a mixed prefill/decode batch.
 
@@ -52,6 +53,7 @@ def ragged_paged_attention(
         gpu_kv_splits: Maximum split-K partitions for GPU decode (8 or 16).
         implementation: TPU Pallas, opt-in GPU Pallas decode, or portable reference.
             Defaults to TPU on TPU and reference elsewhere.
+        tpu_dma_buffers: One serial or two overlapping page DMA buffers for TPU decode.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. The TPU path uses JAX's existing ragged kernel
@@ -79,7 +81,7 @@ def ragged_paged_attention(
 
     backend = {
         "tpu": _tpu_attention,
-        "tpu_fp32_tiles": _tpu_decode_attention,
+        "tpu_fp32_tiles": partial(_tpu_decode_attention, dma_buffers=tpu_dma_buffers),
         "reference": _reference_attention,
         "gpu_pallas": _gpu_attention,
     }
@@ -316,7 +318,7 @@ def _gpu_attention(
 
 
 def _tpu_decode_attention(
-    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap
+    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap, dma_buffers
 ):
     reference = partial(
         _reference_attention,
@@ -340,6 +342,6 @@ def _tpu_decode_attention(
     metadata = _decode_metadata(q, kv_lens, page_indices, cu_q_lens, num_seqs, sliding_window)
     return jax.lax.cond(
         metadata.decode_only,
-        lambda: tpu_paged_decode(q, kv_pages, metadata.pages, metadata.bounds, sm_scale),
+        lambda: tpu_paged_decode(q, kv_pages, metadata.pages, metadata.bounds, sm_scale, dma_buffers=dma_buffers),
         reference,
     )
