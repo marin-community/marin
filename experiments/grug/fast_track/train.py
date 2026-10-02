@@ -1232,7 +1232,7 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
         }
 
     @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
-    def attribute(params, prev, dprev, fast, fast_prev, slow):
+    def attribute(params, prev, dprev, fast, fast_prev, slow, batch):
         def logp(p):
             compute_params = _cast_to_compute(mp, p)
             loss, _, _, _ = compute_params.position_predictions(
@@ -1292,7 +1292,7 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
                 carry["prev"], carry["dprev"], carry["fast_prev"] = initial(info.model, fast)
                 return
             value, dots, carry["prev"], carry["dprev"], carry["fast_prev"] = attribute(
-                info.model, carry["prev"], carry["dprev"], fast, carry["fast_prev"], slow
+                info.model, carry["prev"], carry["dprev"], fast, carry["fast_prev"], slow, batch
             )
         host = multihost_utils.process_allgather({"value": value, "dots": dots}, tiled=True)
         if jax.process_index() == 0:
