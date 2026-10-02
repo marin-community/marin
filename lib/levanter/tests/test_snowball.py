@@ -211,6 +211,7 @@ def test_snowball_state_dict_roundtrip_is_exact(individual_experts, prefix):
         for name, weight in canonical.items():
             if individual_experts and ".mlp.experts." in name:
                 stem, projection = name.split(".mlp.experts.")
+                weight = np.asarray(weight)
                 sd.update({f"{stem}.mlp.experts.{i}.{projection}": weight[i] for i in range(cfg.num_experts)})
             else:
                 sd[name] = weight
