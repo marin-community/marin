@@ -185,7 +185,7 @@ jobs:
           node-version: "22"
 
       - name: Install dependencies
-        run: uv sync --package marin-levanter --dev --group test --frozen --extra torch_test --no-install-package torch
+        run: uv sync --package marin-levanter --dev --group test --frozen --extra torch_test --extra serve --no-install-package torch
 
       - name: Install locked CPU torch wheel
         run: |
