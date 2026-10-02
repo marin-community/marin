@@ -10,6 +10,11 @@ from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequ
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import DatasetRecipe, HFSource, ImportRejection, IntendedUse, RawRow, ReviewRubric
 
+AIME24_DATASET = "HuggingFaceH4/aime_2024"
+AIME24_REVISION = "2fe88a2f1091d5048c0f36abc874fb997b3dd99a"
+SVAMP_DATASET = "ChilleD/SVAMP"
+SVAMP_REVISION = "5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef"
+
 
 def normalize_aime24(row: RawRow) -> TaskSpec | ImportRejection:
     problem, answer = row.data.get("problem"), row.data.get("answer")
@@ -30,10 +35,10 @@ def normalize_aime24(row: RawRow) -> TaskSpec | ImportRejection:
 AIME24_RECIPE = DatasetRecipe(
     name="aime24",
     version="aime24-v1",
-    source=HFSource("HuggingFaceH4/aime_2024", "2fe88a2f1091d5048c0f36abc874fb997b3dd99a", "default", "train"),
+    source=HFSource(AIME24_DATASET, AIME24_REVISION, "default", "train"),
     inputs=hub_inputs(
-        "HuggingFaceH4/aime_2024",
-        "2fe88a2f1091d5048c0f36abc874fb997b3dd99a",
+        AIME24_DATASET,
+        AIME24_REVISION,
         SourceFiles(("data/train-*.parquet",), SourceFormat.PARQUET),
     ),
     normalize=normalize_aime24,
@@ -75,10 +80,10 @@ def normalize_svamp(row: RawRow) -> TaskSpec | ImportRejection:
 SVAMP_RECIPE = DatasetRecipe(
     name="svamp",
     version="svamp-v1",
-    source=HFSource("ChilleD/SVAMP", "5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef", "default", "train"),
+    source=HFSource(SVAMP_DATASET, SVAMP_REVISION, "default", "train"),
     inputs=hub_inputs(
-        "ChilleD/SVAMP",
-        "5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef",
+        SVAMP_DATASET,
+        SVAMP_REVISION,
         SourceFiles(("data/train-*.parquet",), SourceFormat.PARQUET),
     ),
     normalize=normalize_svamp,

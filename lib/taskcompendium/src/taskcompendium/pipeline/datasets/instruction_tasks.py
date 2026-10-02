@@ -27,6 +27,14 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
+NEMOTRON_IF_SOURCE = HFSource(
+    "nvidia/Llama-Nemotron-Post-Training-Dataset",
+    "ab2a40d258a6a4d9d4c277d702aeea445081766c",
+    "default",
+    "instruction_following",
+)
+RLVR_IFEVAL_SOURCE = HFSource("allenai/RLVR-IFeval", "47c03c73621c4aab2b824b7818681117d662770e", "default", "train")
+
 VERIFIER_REVISION = "bb6494e678ffaa1e6bd3967e221d1a67b038757e"
 EVALUATOR = "MarinSkyRL:skyrl_gym.envs.ifeval.utils.compute_score"
 
@@ -106,31 +114,26 @@ RECIPES = {
     "nemotron_if": DatasetRecipe(
         name="nemotron_if",
         version="nemotron_if-v1",
-        source=HFSource(
-            "nvidia/Llama-Nemotron-Post-Training-Dataset",
-            "ab2a40d258a6a4d9d4c277d702aeea445081766c",
-            "default",
-            "instruction_following",
-        ),
+        source=NEMOTRON_IF_SOURCE,
         normalize=normalize_nemotron_if,
         rubric=ReviewRubric("nemotron_if-answerability", "1", CRITERIA),
         intended_use=IntendedUse.TRAIN,
         inputs=hub_inputs(
-            "nvidia/Llama-Nemotron-Post-Training-Dataset",
-            "ab2a40d258a6a4d9d4c277d702aeea445081766c",
+            NEMOTRON_IF_SOURCE.dataset,
+            NEMOTRON_IF_SOURCE.revision,
             SourceFiles(("RL/instruction_following/instruction_following.jsonl",), SourceFormat.JSONL),
         ),
     ),
     "rlvr_ifeval": DatasetRecipe(
         name="rlvr_ifeval",
         version="rlvr_ifeval-v1",
-        source=HFSource("allenai/RLVR-IFeval", "47c03c73621c4aab2b824b7818681117d662770e", "default", "train"),
+        source=RLVR_IFEVAL_SOURCE,
         normalize=normalize_rlvr_ifeval,
         rubric=ReviewRubric("rlvr_ifeval-answerability", "1", CRITERIA),
         intended_use=IntendedUse.TRAIN,
         inputs=hub_inputs(
-            "allenai/RLVR-IFeval",
-            "47c03c73621c4aab2b824b7818681117d662770e",
+            RLVR_IFEVAL_SOURCE.dataset,
+            RLVR_IFEVAL_SOURCE.revision,
             SourceFiles(("data/train-00000-of-00001.parquet",), SourceFormat.PARQUET),
         ),
     ),

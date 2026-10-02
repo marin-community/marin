@@ -311,13 +311,7 @@ SOURCES = {
             criteria=(
                 "Check that the public Python API, filenames, return values, and exception behavior "
                 "agree with the private tests.",
-                "Check parameter meanings and essential transition rules against the tests and oracle; an algorithmic "
-                "constraint missing from the public request is a defect even when the oracle passes.",
-                "Do not equate a quantity, rate, time limit, and lower bound; identify concrete parameter mismatches.",
-                "Flag undefined behavior, missing fixtures, unavailable dependencies, and contradictory examples.",
-                "Private tests and oracle solutions are review evidence and must remain hidden from the solving actor.",
-                "A passing oracle shows test compatibility, not specification coverage; cite a concrete defect when "
-                "rejecting.",
+                *PYMETHODS_COMMON_CRITERIA,
             ),
         ),
     ),

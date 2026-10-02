@@ -82,7 +82,7 @@ def test_numeric_scope_and_tolerance_survive_delivery_normalization():
 
 
 @pytest.mark.parametrize("name", ["knowledge_mcqa", "web_search_mcqa"])
-def test_mcqa_keeps_choices_and_key_private_after_replacing_submission_wrapper(name):
+def test_mcqa_keeps_choices_public_and_key_private_after_replacing_submission_wrapper(name):
     instruction = "Write to a file.\n---\n\nWhich option equals two?\nA: one\nB: two\nC: three"
     task = atlas_math_qa.normalize(
         row(name, instruction, {"expected_answer": "B", "output_regex": atlas_math_qa.MCQ_REGEX}), name

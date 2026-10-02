@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fresh positive, negative, alternate and reset controls for executable tasks."""
+"""Opt-in episode controls for mock calendar and shell runtime checks.
+
+Tests and prototypes call these controls explicitly; the pinned source graph
+does not use them.
+"""
 
 import asyncio
 from dataclasses import dataclass, replace

@@ -125,9 +125,9 @@ revision. Task provenance IDs are canonicalized out of cached review queries.
 Changing only catalog layout does not require GLM inference; changing a prompt,
 rubric, model or supplied environment inventory creates a different query.
 
-An unfinished mapper may submit an in-flight batch again. The pipeline does not
-claim durable resumption of an acknowledged remote batch. Separate attempt evidence
-preserves requests, responses and failures without overwriting earlier attempts.
+A failed mapper can submit its unfinished review batch again. The audit records
+the final result for each task. Earlier attempt files are debug logs; they do not
+create extra rejected rows after a successful retry.
 
 ## Outputs
 

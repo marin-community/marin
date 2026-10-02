@@ -10,6 +10,9 @@ from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import DatasetRecipe, HFSource, ImportRejection, IntendedUse, RawRow, ReviewRubric
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
+DATASET = "Idavidrein/gpqa"
+REVISION = "83022cefff930aea54f654c0b282e74b9eeda5c6"
+
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     question = row.data.get("Question")
@@ -43,10 +46,10 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
 recipe = DatasetRecipe(
     name="gpqa",
     version="gpqa-v1",
-    source=HFSource("Idavidrein/gpqa", "83022cefff930aea54f654c0b282e74b9eeda5c6", "gpqa_diamond", "train"),
+    source=HFSource(DATASET, REVISION, "gpqa_diamond", "train"),
     inputs=hub_inputs(
-        "Idavidrein/gpqa",
-        "83022cefff930aea54f654c0b282e74b9eeda5c6",
+        DATASET,
+        REVISION,
         SourceFiles(("gpqa_diamond.csv",), SourceFormat.CSV),
     ),
     normalize=normalize,

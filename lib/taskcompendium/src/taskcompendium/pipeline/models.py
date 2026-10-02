@@ -236,6 +236,27 @@ class RewriteRecord(BaseModel):
     detail: str
 
 
+class RewriteIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    tasks_sha256: str
+    rubric: ReviewRubric
+    model: str
+    model_revision: str
+    max_tokens: int
+    max_prompt_characters: int
+    instructions_sha256: str
+
+
+class RewriteLineage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    task_id: str
+    parent_id: str
+    parent_sha256: str
+    candidate_sha256: str
+    rewrite: RewriteIdentity
+    original_audit: dict[str, Any] | None = None
+
+
 class TaskAudit(BaseModel):
     """One source row and all observations retained before the accepted export."""
 
@@ -250,6 +271,6 @@ class TaskAudit(BaseModel):
     decision: Decision | None
     original: TaskSpec | None = None
     cleanup: RewriteRecord | None = None
-    lineage: dict[str, Any] | None = None
+    lineage: RewriteLineage | None = None
     normalization_changes: tuple[NormalizationChange, ...] = ()
     intended_use: IntendedUse | None = None

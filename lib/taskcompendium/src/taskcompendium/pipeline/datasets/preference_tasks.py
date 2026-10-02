@@ -37,6 +37,7 @@ PREFERENCE_CRITERIA = (
     "The reward model is unbound; unavailable execution alone is not a content-quality defect.",
 )
 
+HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
 HH_TURN = re.compile(r"\n\n(Human|Assistant):")
 HH_ROLES = {"Human": "user", "Assistant": "assistant"}
 
@@ -129,7 +130,7 @@ def recipe(
 SOURCES = {
     "hh_harmless_base": SourceDefinition(
         dataset="Anthropic/hh-rlhf",
-        revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        revision=HH_REVISION,
         config="harmless-base",
         split="train",
         files=SourceFiles(patterns=("harmless-base/train.jsonl.gz",), format=SourceFormat.JSONL),
@@ -147,7 +148,7 @@ SOURCES = {
     ),
     "hh_helpful_base": SourceDefinition(
         dataset="Anthropic/hh-rlhf",
-        revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        revision=HH_REVISION,
         config="helpful-base",
         split="train",
         files=SourceFiles(patterns=("helpful-base/train.jsonl.gz",), format=SourceFormat.JSONL),
@@ -165,7 +166,7 @@ SOURCES = {
     ),
     "hh_helpful_online": SourceDefinition(
         dataset="Anthropic/hh-rlhf",
-        revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        revision=HH_REVISION,
         config="helpful-online",
         split="train",
         files=SourceFiles(patterns=("helpful-online/train.jsonl.gz",), format=SourceFormat.JSONL),
@@ -183,7 +184,7 @@ SOURCES = {
     ),
     "hh_helpful_rejection_sampled": SourceDefinition(
         dataset="Anthropic/hh-rlhf",
-        revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        revision=HH_REVISION,
         config="helpful-rejection-sampled",
         split="train",
         files=SourceFiles(patterns=("helpful-rejection-sampled/train.jsonl.gz",), format=SourceFormat.JSONL),

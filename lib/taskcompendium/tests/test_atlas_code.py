@@ -5,7 +5,6 @@
 
 import base64
 
-import pytest
 from verifyit.spec import StdioSpec, spec_to_table
 
 from taskcompendium.models import ResourceVisibility, Source, TaskSpec
@@ -14,8 +13,7 @@ from taskcompendium.pipeline.models import RawRow
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier
 
 
-@pytest.mark.parametrize("name", ["code_contests", "codenet"])
-def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle(name):
+def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle():
     payloads = {
         "tests/cases/input_0.txt": b"3 4\r\n",
         "tests/cases/output_0.txt": b"7\n",

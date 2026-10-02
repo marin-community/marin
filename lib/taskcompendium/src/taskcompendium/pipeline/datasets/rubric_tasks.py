@@ -198,12 +198,7 @@ SOURCES = {
             id="codereview-answerability",
             version="1",
             criteria=(
-                "Require a complete public request and any code, prior turns, or external passages needed to answer it.",
-                "Check each private criterion against the public request; flag invented constraints or incorrect "
-                "premises.",
-                "The source uses one holistic numeric judge over four criteria and has no gold answer; its runtime "
-                "judge "
-                "is unbound.",
+                *STACK_EXCHANGE_COMMON_CRITERIA,
                 "Require the code under review and its intended behavior; inspect flattened source for lost "
                 "comparisons, "
                 "markup, links, and abrupt truncation before judging it complete.",
@@ -217,12 +212,7 @@ SOURCES = {
             id="glaive_code-answerability",
             version="1",
             criteria=(
-                "Require a complete public request and any code, prior turns, or external passages needed to answer it.",
-                "Check each private criterion against the public request; flag invented constraints or incorrect "
-                "premises.",
-                "The source uses one holistic numeric judge over four criteria and has no gold answer; its runtime "
-                "judge "
-                "is unbound.",
+                *STACK_EXCHANGE_COMMON_CRITERIA,
                 "Check required code, table schemas, input, output, dependencies, and runtime assumptions; generic "
                 "programming questions can be answerable, but references to absent specific inputs are defects.",
             ),

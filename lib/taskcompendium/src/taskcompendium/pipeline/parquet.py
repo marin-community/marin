@@ -118,7 +118,7 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
         "cleanup_reason": proposal.reason if proposal is not None else None,
         "cleanup_edits": [edit.model_dump(mode="json") for edit in proposal.edits] if proposal is not None else [],
         "cleanup_detail": cleanup.detail if cleanup is not None else None,
-        "cleanup_lineage_json": json.dumps(audit.lineage, ensure_ascii=False) if audit.lineage is not None else None,
+        "cleanup_lineage_json": audit.lineage.model_dump_json(exclude_none=True) if audit.lineage is not None else None,
     }
 
 

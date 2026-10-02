@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory calendar tools with a new state for every episode."""
+"""In-memory calendar tools for the generated mock episode task.
+
+Importing this module does not start an episode. CalendarFactory creates fresh
+state when an explicit episode check runs.
+"""
 
 import json
 from dataclasses import dataclass, field

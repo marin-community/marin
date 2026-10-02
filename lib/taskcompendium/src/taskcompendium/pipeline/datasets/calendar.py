@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generated stateful scheduling tasks with postcondition-based grading."""
+"""Generated calendar episodes for runtime tests and prototyping.
+
+This mock task is separate from the TaskTrove calendar sources, which request
+a final JSON schedule without interactive tools.
+"""
 
 import json
 from collections.abc import Iterator

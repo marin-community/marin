@@ -13,6 +13,12 @@ from taskcompendium.pipeline.datasets.direct_contracts import contract_task
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import DatasetRecipe, HFSource, ImportRejection, IntendedUse, RawRow, ReviewRubric
 
+APPS_SOURCE = HFSource("codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", "default", "train")
+EURUS2_CODE_SOURCE = HFSource("PRIME-RL/Eurus-2-RL-Data", "9776b13264b5aaa0b16495fcf086a0a8d86fd655", "default", "train")
+VERIFIABLE_CODE_SOURCE = HFSource(
+    "open-r1/verifiable-coding-problems-python", "b761a24a95fa03289a231d2d31c183636ffb9833", "default", "train"
+)
+
 APPS_RUBRIC = ReviewRubric(
     id="apps-quality",
     version="1",
@@ -123,41 +129,39 @@ RECIPES = {
     "apps": DatasetRecipe(
         name="apps",
         version="apps-v1",
-        source=HFSource("codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", "default", "train"),
+        source=APPS_SOURCE,
         normalize=normalize_apps,
         intended_use=IntendedUse.TRAIN,
         rubric=APPS_RUBRIC,
         inputs=hub_inputs(
-            "codeparrot/apps",
-            "21e74ddf8de1a21436da12e3e653065c5213e9d1",
+            APPS_SOURCE.dataset,
+            APPS_SOURCE.revision,
             SourceFiles(("train.jsonl",), SourceFormat.JSONL),
         ),
     ),
     "eurus2_code": DatasetRecipe(
         name="eurus2_code",
         version="eurus2_code-v1",
-        source=HFSource("PRIME-RL/Eurus-2-RL-Data", "9776b13264b5aaa0b16495fcf086a0a8d86fd655", "default", "train"),
+        source=EURUS2_CODE_SOURCE,
         normalize=normalize_eurus2_code,
         intended_use=IntendedUse.TRAIN,
         rubric=EURUS2_CODE_RUBRIC,
         inputs=hub_inputs(
-            "PRIME-RL/Eurus-2-RL-Data",
-            "9776b13264b5aaa0b16495fcf086a0a8d86fd655",
+            EURUS2_CODE_SOURCE.dataset,
+            EURUS2_CODE_SOURCE.revision,
             SourceFiles(("train.parquet",), SourceFormat.PARQUET, selector=select_eurus_code),
         ),
     ),
     "verifiable_code": DatasetRecipe(
         name="verifiable_code",
         version="verifiable_code-v1",
-        source=HFSource(
-            "open-r1/verifiable-coding-problems-python", "b761a24a95fa03289a231d2d31c183636ffb9833", "default", "train"
-        ),
+        source=VERIFIABLE_CODE_SOURCE,
         normalize=normalize_verifiable_code,
         intended_use=IntendedUse.TRAIN,
         rubric=VERIFIABLE_CODE_RUBRIC,
         inputs=hub_inputs(
-            "open-r1/verifiable-coding-problems-python",
-            "b761a24a95fa03289a231d2d31c183636ffb9833",
+            VERIFIABLE_CODE_SOURCE.dataset,
+            VERIFIABLE_CODE_SOURCE.revision,
             SourceFiles(("data/train-*.parquet",), SourceFormat.PARQUET),
         ),
     ),

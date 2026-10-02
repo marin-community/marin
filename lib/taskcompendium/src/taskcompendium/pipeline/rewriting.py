@@ -7,7 +7,7 @@ import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -32,6 +32,8 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     ReviewStatus,
     RewriteAction,
+    RewriteIdentity,
+    RewriteLineage,
     RewriteProposal,
     RewriteRecord,
     TaskAudit,
@@ -80,18 +82,19 @@ def write_rewrite_audit(
         raise ValueError("Cleanup records do not account for every original task")
     candidates = [TaskSpec.model_validate(row) for row in read_jsonl(output_path / "candidates.jsonl")]
     candidates_by_id = {candidate.id: candidate for candidate in candidates}
-    lineage = {row["parent_id"]: row for row in read_jsonl(output_path / "lineage.jsonl")}
+    lineage = {
+        item.parent_id: item
+        for item in (RewriteLineage.model_validate(row) for row in read_jsonl(output_path / "lineage.jsonl"))
+    }
     reviews_by_id = {review.task_id: review for review in reviews}
     decisions_by_id = {decision.task_id: decision for decision in decisions}
-    effective_ids = {
-        lineage[original.id]["task_id"] if original.id in lineage else original.id for original in originals
-    }
+    effective_ids = {lineage[original.id].task_id if original.id in lineage else original.id for original in originals}
     if decisions and (len(decisions_by_id) != len(decisions) or set(decisions_by_id) != effective_ids):
         raise ValueError("Final cleanup decisions must account for every effective task exactly once")
     audits = []
     for original in originals:
         parent_lineage = lineage.get(original.id)
-        candidate = candidates_by_id[parent_lineage["task_id"]] if parent_lineage is not None else None
+        candidate = candidates_by_id[parent_lineage.task_id] if parent_lineage is not None else None
         effective = candidate if candidate is not None else original
         audits.append(
             TaskAudit(
@@ -195,18 +198,18 @@ class BatchRewriter:
 
     def rewrite(self, tasks: Sequence[TaskSpec], rubric: ReviewRubric, output_path: Path) -> list[RewriteRecord]:
         """Save originals, proposals, candidate lineage, and raw inference evidence."""
-        identity = {
-            "tasks_sha256": canonical_sha256({"tasks": [task.model_dump(mode="json") for task in tasks]}),
-            "rubric": asdict(rubric),
-            "model": self.model,
-            "model_revision": self.model_revision,
-            "max_tokens": self.max_tokens,
-            "max_prompt_characters": self.max_prompt_characters,
-            "instructions_sha256": canonical_sha256({"instructions": REWRITE_INSTRUCTIONS}),
-        }
+        identity = RewriteIdentity(
+            tasks_sha256=canonical_sha256({"tasks": [task.model_dump(mode="json") for task in tasks]}),
+            rubric=rubric,
+            model=self.model,
+            model_revision=self.model_revision,
+            max_tokens=self.max_tokens,
+            max_prompt_characters=self.max_prompt_characters,
+            instructions_sha256=canonical_sha256({"instructions": REWRITE_INSTRUCTIONS}),
+        )
         output_path.mkdir(parents=True, exist_ok=True)
         config_path = output_path / "run-config.json"
-        config_text = json.dumps(identity, indent=2)
+        config_text = json.dumps(identity.model_dump(mode="json"), indent=2)
         if config_path.exists() and config_path.read_text() != config_text:
             raise ValueError("Output directory belongs to another rewrite run")
         config_path.write_text(config_text)
@@ -288,18 +291,20 @@ class BatchRewriter:
                 continue
             candidates.append(candidate)
             lineage.append(
-                {
-                    "task_id": candidate.id,
-                    "parent_id": original.id,
-                    "parent_sha256": canonical_sha256(original.model_dump(mode="json")),
-                    "candidate_sha256": canonical_sha256(candidate.model_dump(mode="json")),
-                    "rewrite": identity,
-                }
+                RewriteLineage(
+                    task_id=candidate.id,
+                    parent_id=original.id,
+                    parent_sha256=canonical_sha256(original.model_dump(mode="json")),
+                    candidate_sha256=canonical_sha256(candidate.model_dump(mode="json")),
+                    rewrite=identity,
+                )
             )
         (output_path / "candidates.jsonl").write_text(
             "".join(candidate.model_dump_json() + "\n" for candidate in candidates)
         )
-        (output_path / "lineage.jsonl").write_text("".join(json.dumps(row) + "\n" for row in lineage))
+        (output_path / "lineage.jsonl").write_text(
+            "".join(row.model_dump_json(exclude_none=True) + "\n" for row in lineage)
+        )
         (output_path / "proposals.jsonl").write_text("".join(record.model_dump_json() + "\n" for record in validated))
         write_rewrite_audit(output_path, checks={}, reviews=(), decisions=())
         return validated
@@ -337,8 +342,11 @@ def rewrite_audit_source(
         candidates_by_id = {
             task.id: task for task in (TaskSpec.model_validate(row) for row in read_jsonl(work / "candidates.jsonl"))
         }
-        lineage = {row["parent_id"]: row for row in read_jsonl(work / "lineage.jsonl")}
-        candidates = {parent: candidates_by_id[item["task_id"]] for parent, item in lineage.items()}
+        lineage = {
+            item.parent_id: item
+            for item in (RewriteLineage.model_validate(row) for row in read_jsonl(work / "lineage.jsonl"))
+        }
+        candidates = {parent: candidates_by_id[item.task_id] for parent, item in lineage.items()}
         checks = {}
         for parent, candidate in candidates.items():
             if recipe.check_suite is None:
@@ -403,7 +411,7 @@ def rewrite_audit_source(
                     normalized=candidate,
                     normalization_rejection=None,
                     cleanup=proposal,
-                    lineage={**lineage[parent], "original_audit": row},
+                    lineage=lineage[parent].model_copy(update={"original_audit": row}),
                     checks=list(candidate_checks),
                     review=review,
                     decision=decision,

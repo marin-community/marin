@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Preserve competitive-coding source cases, including legitimate public examples."""
+"""Convert archived competitive problems to stdin/stdout grading cases."""
 
 from tasktrove_verify.spec import Compare, StdioSpec
 
@@ -16,7 +16,7 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTI
 
 
 def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
-    """Keep aligned stdin/stdout pairs without treating ordinary samples as leaked gold."""
+    """Bind the source input/output pairs to its solution command and exact comparator."""
     data = verifier_data(task)
     inputs, outputs = data.get("inputs"), data.get("outputs")
     if not isinstance(inputs, list) or not isinstance(outputs, list) or len(inputs) != len(outputs) or not inputs:
