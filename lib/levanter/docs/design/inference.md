@@ -349,6 +349,7 @@ environment, passing the fixture's `--engine-args`, `--provenance`, the same
 `--prefixes`, and an `--output` path. It records next-token top-20 logprobs from a
 single prefill. The native diagnostic records full-vocabulary logits from both
 a single prefill and the original prefill followed by forced one-token steps.
-It also records a diagnostic-only variant with FP32 router weights and highest
-matmul precision; this does not change the model's training or serving defaults.
+It independently varies BF16/FP32 router weights and baseline/highest matmul
+precision, recording all four combinations for each input mode. These diagnostic
+interventions do not change the model's training or serving defaults.
 These passes are numerical diagnostics and do not produce throughput claims.

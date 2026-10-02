@@ -18,11 +18,13 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.models.snowball import SnowballConfig
 
+DIAGNOSTIC_PAGE_SIZE = 128
+
 
 def prefix_logits(model, sequences: list[list[int]], prefill_length: int) -> np.ndarray:
     """Return final paged logits after a prefill and optional teacher-forced decode steps."""
     batch, length = len(sequences), len(sequences[0])
-    page_size = 128
+    page_size = DIAGNOSTIC_PAGE_SIZE
     cache = model.initial_cache(PageTableSpec(num_pages=batch, page_size=page_size), dtype=jnp.bfloat16)
     run = hax.named_jit(lambda m, ids, state, info, positions: m.decode(ids, state, info, positions))
     phases = [(0, prefill_length), *((i, 1) for i in range(prefill_length, length))]
@@ -64,8 +66,14 @@ def main():
     inputs = json.loads(args.prefixes.read_text())
     sequences = inputs["sequences"]
     lengths = {len(row) for row in sequences}
-    if len(lengths) != 1 or not 0 < inputs["prefill_length"] <= len(sequences[0]) <= 128 or len(sequences) > 8:
-        raise ValueError("Diagnostic requires at most eight equal-length prefixes of at most128 tokens")
+    if (
+        len(lengths) != 1
+        or not 0 < inputs["prefill_length"] <= len(sequences[0]) <= DIAGNOSTIC_PAGE_SIZE
+        or len(sequences) > 8
+    ):
+        raise ValueError(
+            f"Diagnostic requires at most eight equal-length prefixes of at most {DIAGNOSTIC_PAGE_SIZE} tokens"
+        )
     if args.expert_axis_size != jax.device_count():
         raise ValueError("Diagnostic requires EP over every visible device, TP1/data1")
     converter = HFCheckpointConverter.from_hf(str(args.fixture / "checkpoint"))
@@ -81,19 +89,27 @@ def main():
             tuple(block.mlp.router.astype(jnp.float32) for block in model.transformer.blocks),
         )
         results = {}
-        for name, variant in (("baseline", model), ("fp32_router_highest", fp32_router)):
-            with jax.default_matmul_precision(
-                "highest" if name == "fp32_router_highest" else jax.config.jax_default_matmul_precision
+        baseline_precision = jax.config.jax_default_matmul_precision
+        for router_name, variant in (("bf16_router", model), ("fp32_router", fp32_router)):
+            for precision_name, precision in (
+                ("baseline_precision", baseline_precision),
+                ("highest_precision", "highest"),
             ):
-                for mode, prefill in (("single_prefill", len(sequences[0])), ("incremental", inputs["prefill_length"])):
-                    logits = prefix_logits(variant, sequences, prefill)
-                    logprobs = np.asarray(jax.nn.log_softmax(jnp.asarray(logits), axis=-1))
-                    top_ids = np.argsort(-logprobs, axis=-1)[:, :20]
-                    results[f"{name}_{mode}"] = {
-                        "logits": logits.tolist(),
-                        "top_token_ids": top_ids.tolist(),
-                        "top_logprobs": np.take_along_axis(logprobs, top_ids, axis=-1).tolist(),
-                    }
+                with jax.default_matmul_precision(precision):
+                    for mode, prefill in (
+                        ("single_prefill", len(sequences[0])),
+                        ("incremental", inputs["prefill_length"]),
+                    ):
+                        logits = prefix_logits(variant, sequences, prefill)
+                        logprobs = np.asarray(jax.nn.log_softmax(jnp.asarray(logits), axis=-1))
+                        top_ids = np.argsort(-logprobs, axis=-1)[:, :20]
+                        results[f"{router_name}_{precision_name}_{mode}"] = {
+                            "router_dtype": str(variant.transformer.blocks[0].mlp.router.dtype),
+                            "matmul_precision": precision,
+                            "logits": logits.tolist(),
+                            "top_token_ids": top_ids.tolist(),
+                            "top_logprobs": np.take_along_axis(logprobs, top_ids, axis=-1).tolist(),
+                        }
     result = {
         "checkpoint": json.loads((args.fixture / "manifest.json").read_text())["checkpoint"],
         "prefixes": inputs,
