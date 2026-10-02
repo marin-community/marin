@@ -10,6 +10,8 @@ harness lives on the marin side (``tests/test_snowball_grug_parity.py``) to resp
 levanter -> experiments dependency direction.
 """
 
+from collections.abc import Callable
+import dataclasses
 import subprocess
 import sys
 import textwrap
@@ -25,6 +27,8 @@ from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -657,3 +661,103 @@ def test_snowball_paged_decode_expert_skew_matches_across_mesh_layouts():
         """,
         device_count=2,
     )
+
+
+class _ObservedSnowball(eqx.Module):
+    model: SnowballLMHeadModel
+    observe: Callable = eqx.field(static=True)
+
+    @property
+    def Vocab(self):
+        return self.model.Vocab
+
+    @property
+    def Pos(self):
+        return self.model.Pos
+
+    def initial_cache(self, spec, *, dtype):
+        return self.model.initial_cache(spec, dtype=dtype)
+
+    def decode(self, tokens, cache, batch_info, positions):
+        logits, cache = self.model.decode(tokens, cache, batch_info, positions)
+        # Observe the actual logits passed to the sampler, without a second model forward.
+        jax.debug.callback(self.observe, positions.array, logits.array)
+        return logits, cache
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_snowball_rollout_capture_matches_sampled_forward_through_abort(dtype):
+    cfg = _tiny_config(num_layers=2, inference_attention_implementation="reference")
+    recorded = []
+
+    def observe(positions, logits):
+        recorded.extend(
+            (int(position), np.asarray(row, dtype=np.float64))
+            for position, row in zip(positions, logits, strict=True)
+            if position >= 0
+        )
+
+    def check_scores(result, prompt_length):
+        jax.effects_barrier()
+        for tokens, chosen, ids, scores in zip(
+            result.tokens, result.logprobs, result.top_token_ids, result.top_logprobs, strict=True
+        ):
+            assert len(tokens) == len(chosen) == len(ids) == len(scores)
+            for offset, (token, logprob, candidate_ids, candidate_scores) in enumerate(
+                zip(tokens, chosen, ids, scores, strict=True)
+            ):
+                rows = [row for position, row in recorded if position == prompt_length - 1 + offset]
+                matches = []
+                for row in rows:
+                    expected = row - row.max() - np.log(np.exp(row - row.max()).sum())
+                    expected_ids = np.argsort(-row, kind="stable")[:3]
+                    matches.append(
+                        np.array_equal(candidate_ids, expected_ids)
+                        and np.allclose(candidate_scores, expected[expected_ids], rtol=1e-6, atol=1e-6)
+                        and np.isclose(logprob, expected[token], rtol=1e-6, atol=1e-6)
+                    )
+                assert any(matches), (offset, token, candidate_ids, candidate_scores)
+
+    count = jax.device_count()
+    service = InferenceEngineConfig(
+        max_seq_len=16,
+        page_size=2,
+        max_pages=24 * count,
+        max_seqs=4 * count,
+        max_seqs_in_prefill=2 * count,
+        max_prefill_size=8 * count,
+        max_queued_tokens=4 * count,
+        max_tokens_per_round=4 * count,
+        max_rounds=1,
+        max_stop_seqs=0,
+        max_stop_tokens=0,
+        compute_dtype=dtype,
+        max_logprobs=3,
+        logprobs_mode="raw_logprobs",
+    )
+    prompt = [2, 8, 3, 7]
+    params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(8, jnp.int32))
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(17))
+        model = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, model)
+        engine = InferenceEngine.from_model_with_config(_ObservedSnowball(model, observe), None, service)
+        abort = False
+
+        def cancel_first(_round):
+            nonlocal abort
+            abort = True
+
+        result = engine.generate(
+            [Request(prompt, 0, params, 2), Request(prompt, 1, params, 1)],
+            step_callback=cancel_first,
+            should_abort=lambda request_id: abort and request_id == 0,
+        )
+        assert result.finish_reasons == [FinishReason.ABORT, FinishReason.ABORT, FinishReason.LENGTH]
+        assert result.tokens[0] == result.tokens[1]
+        assert 0 < len(result.tokens[0]) < len(result.tokens[2]) == 4
+        check_scores(result, len(prompt))
+        partial = result.tokens[0]
+        recorded.clear()
+        resumed = engine.generate([Request(prompt + partial, 2, params, 1)])
+        check_scores(resumed, len(prompt) + len(partial))
+        assert partial + resumed.tokens[0] == result.tokens[2]
