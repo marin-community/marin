@@ -31,6 +31,7 @@ learn.
 
 import inspect
 import json
+import logging
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final, Generic, TypeVar, cast
@@ -38,7 +39,9 @@ from typing import Any, Final, Generic, TypeVar, cast
 from rigging.filesystem.cluster_config import marin_prefix, marin_region
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
+from rigging.log_setup import configure_logging
 from rigging.provenance import Provenance
+from rigging.timing import log_time
 
 from marin.execution.artifact import (
     EXPECTED_FINGERPRINT_KEY,
@@ -421,10 +424,15 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
     separate read. Provenance is captured once, so every artifact built records the same launch.
     ``force_run_failed`` reruns a previously-FAILED step instead of raising.
     """
-    provenance = Provenance.capture()
+    if not logging.getLogger().handlers:
+        configure_logging(level=logging.INFO)
+    with log_time("execution/provenance"):
+        provenance = Provenance.capture()
     memo: dict[int, StepSpec] = {}
+    with log_time("execution/lower"):
+        steps = [_lower(h, provenance, memo) for h in handles]
     StepRunner().run(
-        [_lower(h, provenance, memo) for h in handles],
+        steps,
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )
@@ -437,7 +445,12 @@ def lower(handle: "ArtifactStep") -> StepSpec:
     Captures provenance once and threads it through the graph; for the
     ``StepRunner().run([lower(step) for step in steps])`` idiom.
     """
-    return _lower(handle, Provenance.capture())
+    if not logging.getLogger().handlers:
+        configure_logging(level=logging.INFO)
+    with log_time("execution/provenance"):
+        provenance = Provenance.capture()
+    with log_time("execution/lower"):
+        return _lower(handle, provenance)
 
 
 def resolve(handle: "ArtifactStep[T]", *, max_concurrent: int = 8) -> T:

@@ -29,6 +29,7 @@ from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 from marin.execution.artifact import (
     FINGERPRINT_KEY,
@@ -324,7 +325,9 @@ class StepRunner:
 
         scheduled: set[str] = set()
         for raw_step in steps:
-            for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
+            with log_time("execution/expand"):
+                expanded = _expand_unseen(raw_step, scheduled, is_built, pruned)
+            for step in expanded:
                 path_to_name[step.output_path] = step.name_with_hash
 
                 _harvest()
