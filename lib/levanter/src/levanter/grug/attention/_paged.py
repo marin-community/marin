@@ -129,9 +129,8 @@ def _reference_attention(
         allowed &= key_position < kv_lens[seq, None]
         if sliding_window is not None:
             allowed &= key_position > position[:, None] - sliding_window
-        scores = jnp.einsum(
-            "thgd,tshd->thgs", q.astype(jnp.float32) * sm_scale, k, precision=jax.lax.Precision.HIGHEST
-        )
+        scores = jnp.einsum("thgd,tshd->thgs", q.astype(jnp.float32), k, precision=jax.lax.Precision.HIGHEST)
+        scores = scores * sm_scale
         if soft_cap is not None:
             # TPU tanh uses an approximation that can flip BF16 output rounding.
             scaled = scores / soft_cap
