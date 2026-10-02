@@ -23,15 +23,6 @@ class _PagedCase(NamedTuple):
     num_seqs: jax.Array
 
 
-class _PagedCase(NamedTuple):
-    q: jax.Array
-    kv_pages: jax.Array
-    kv_lens: jax.Array
-    page_indices: jax.Array
-    cu_q_lens: jax.Array
-    num_seqs: jax.Array
-
-
 def _mixed_case(dtype):
     rng = np.random.default_rng(12)
     # Noncontiguous physical pages, partial final pages, inactive sequence and query padding.

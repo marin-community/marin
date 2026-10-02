@@ -61,6 +61,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--av-precision", choices=["ieee", "bf16_3x"], default="ieee")
     parser.add_argument("--profile-device", action="store_true")
+    parser.add_argument("--check-reference", action="store_true")
     parser.add_argument("--kv-splits", type=int, choices=[8, 16], default=8)
     parser.add_argument("--baseline", choices=["flashinfer_xqa", "tpu_vllm_rpa", "tpu_vllm_rpa_fp32"])
     args = parser.parse_args()
@@ -95,6 +96,24 @@ def main():
     measurements = _measure_jax(fn, inputs, args.repeats)
     actual = measurements.output
     elapsed = measurements.steady_state_time
+    error = None
+    if args.check_reference:
+        reference = jax.jit(
+            partial(
+                ragged_paged_attention,
+                sm_scale=args.head_dim**-0.5,
+                sliding_window=args.window,
+                implementation="reference",
+            )
+        )(*inputs)
+        difference = jnp.abs(actual.astype(jnp.float32) - reference.astype(jnp.float32))
+        tolerance = 1e-4 + 1e-4 * jnp.abs(reference.astype(jnp.float32))
+        error = {
+            "max_abs_vs_reference": float(difference.max()),
+            "mean_abs_vs_reference": float(difference.mean()),
+            "elements_outside_atol_rtol_1e4": int(jnp.sum(difference > tolerance)),
+            "elements": actual.size,
+        }
     device_profile = None
     if args.profile_device:
         profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
@@ -131,7 +150,7 @@ def main():
                 "compile_time": measurements.compile_time,
                 "first_run_time": measurements.first_run_time,
                 "steady_state_time": elapsed,
-                "error": None,
+                "error": error,
                 "device_profile": device_profile,
                 "git_sha": launch_provenance().base_commit,
                 "xla_flags": os.environ.get("XLA_FLAGS", ""),
@@ -228,7 +247,8 @@ def _tpu_vllm_baseline(inputs, expected, args):
     accumulator_dtype = jnp.float32 if args.baseline == "tpu_vllm_rpa_fp32" else jnp.bfloat16
 
     def attend(q, cache, lengths, table, offsets, num_seqs):
-        query = q.reshape(args.batch_size, args.kv_heads * args.groups, args.head_dim)
+        # RPA reuses its query DMA buffers for output, so their packing must match.
+        query = q.astype(accumulator_dtype).reshape(args.batch_size, args.kv_heads * args.groups, args.head_dim)
         current_kv = jnp.zeros((args.batch_size, args.kv_heads, args.head_dim), cache.dtype)
         shape = rpa.get_kv_cache_shape(cache.shape[0], args.page_size, args.kv_heads, args.head_dim, cache.dtype)
         output, _ = rpa.ragged_paged_attention(
@@ -258,7 +278,11 @@ def _tpu_vllm_baseline(inputs, expected, args):
         "implementation": args.baseline,
         "shape": vars(args),
         "dtype": args.dtype,
-        "accumulator_dtype": str(accumulator_dtype),
+        "accumulator_dtype": str(jnp.dtype(accumulator_dtype)),
+        "query_dtype": str(jnp.dtype(accumulator_dtype)),
+        "cache_dtype": args.dtype,
+        "kernel_output_dtype": str(jnp.dtype(accumulator_dtype)),
+        "compared_output_dtype": args.dtype,
         "backend": "tpu",
         "device_type": jax.devices()[0].device_kind,
         "device_count": 1,
