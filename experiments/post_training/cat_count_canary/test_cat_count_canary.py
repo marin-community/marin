@@ -138,11 +138,12 @@ def test_upstream_model_uri_resolves_as_the_hf_snapshot(tmp_path: Path, monkeypa
     assert config.model.uri.rstrip("/") == QWEN_SOURCE.rstrip("/")
 
 
-def test_remote_result_round_trips_at_the_run_output_prefix(tmp_path, monkeypatch):
+@pytest.mark.parametrize("export", (False, True))
+def test_remote_result_round_trips_at_the_run_output_prefix(tmp_path, monkeypatch, export):
     output = tmp_path / "canary-run"
     result = SkyRLRun(
         path=str(output / "terminal.json"),
-        hf_model_uri=None,
+        hf_model_uri=str(output / "hf_model") if export else None,
         global_step=None,
         tokenizer_uri="Qwen/Qwen2.5-0.5B-Instruct",
         tokenizer_revision="7ae557604adf67be50417f59c2c2f167def9a775",
@@ -152,13 +153,18 @@ def test_remote_result_round_trips_at_the_run_output_prefix(tmp_path, monkeypatc
         iris_job_id="/atqamar/canary-test",
     )
     monkeypatch.setattr("experiments.post_training.cat_count_canary.launcher.run_skyrl", lambda _config: result)
-    run = build_run(version="2026.10.01", export=True)
+    run = build_run(version="2026.10.01", preset="gate", export=export)
     config = run.build_config(
         StepContext.for_run(output_path=str(output), prefix=str(tmp_path), runtime_args=run.runtime_args, deps=run.deps)
     )
     recipe = yaml.safe_load(config.launch_config_yaml)["skyrl"]
-    assert recipe["trainer"]["ckpt_interval"] > 0
-    assert {callback["type"] for callback in recipe["trainer"]["callbacks"]} >= {"checkpoint", "hf_model_save"}
+    callbacks = {callback["type"] for callback in recipe["trainer"]["callbacks"]}
+    if export:
+        assert recipe["trainer"]["ckpt_interval"] > 0
+        assert callbacks >= {"checkpoint", "hf_model_save"}
+    else:
+        assert recipe["trainer"]["ckpt_interval"] == -1
+        assert callbacks.isdisjoint({"checkpoint", "hf_model_save"})
     run.run(config)
     loaded = SkyRLRun.raw_load(str(output))
     assert loaded.result_payload() == result.result_payload()

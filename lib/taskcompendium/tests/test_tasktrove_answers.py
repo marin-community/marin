@@ -11,8 +11,8 @@ import tarfile
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.grade import grade as source_grade
-from tasktrove_verify.spec import McqSpec
+from verifyit.grade import grade as source_grade
+from verifyit.spec import McqSpec
 
 from taskcompendium.grading import Outcome
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive

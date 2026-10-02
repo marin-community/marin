@@ -14,7 +14,7 @@ its fail-open exit-code path removed and its grader dependencies installed in th
 import json
 import re
 
-from tasktrove_verify.spec import PytestSpec, ScriptSpec
+from verifyit.spec import PytestSpec, ScriptSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
@@ -49,7 +49,7 @@ uv run --no-progress pytest --ctrf /logs/verifier/ctrf.json test_state.py -rA
 """
 _NORMALIZED_GRADER_BLOCK = """\
 /opt/tasktrove-legacy-grader/bin/python -m pytest -p no:cacheprovider \\
-    --ctrf /logs/verifier/ctrf.json "$TASKTROVE_TESTS_DIR/test_state.py" -rA
+    --ctrf /logs/verifier/ctrf.json "$VERIFYIT_TESTS_DIR/test_state.py" -rA
 """
 _FAIL_OPEN_BLOCK = """    # Fallback: if parser found *no* tests at all (statuses empty) AND
     # the test command exited 0 AND there were no FAIL_TO_PASS/PASS_TO_PASS
@@ -80,7 +80,7 @@ _EXIT_CODE_READER = """def _read_exit_code(path="/logs/test_exit_code.txt"):
 _TEST_STATE_CALL = 'report = evaluate_test_results("/logs/test_output.log")'
 _NORMALIZED_TEST_STATE_CALL = 'report = evaluate_test_results("/logs/verifier/test_output.log")'
 _SOURCE_REWARD_PATH = "/logs/verifier/reward.txt"
-_NORMALIZED_REWARD_PATH = '"$TASKTROVE_LOGS_DIR/reward.txt"'
+_NORMALIZED_REWARD_PATH = '"$VERIFYIT_LOGS_DIR/reward.txt"'
 _SOURCE_TEST_OUTPUT_PATH = "/logs/test_output.log"
 _NORMALIZED_TEST_OUTPUT_PATH = "/logs/verifier/test_output.log"
 _EXIT_CODE_COMMENT = """# We capture the exit status — it's used by test_state.py as a fallback

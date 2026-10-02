@@ -28,6 +28,7 @@ from levanter.kernels.pallas.splash_attention import (
 
 GrugAttentionImplementation = Literal[
     "reference",
+    "xla_flash",  # Levanter's pure-JAX flash attention; runs on any backend.
     "tpu_splash",
     "gpu_fa4_cute",
     "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
@@ -438,6 +439,10 @@ def attention(
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if implementation == "xla_flash":
+        from levanter.grug.attention._xla_flash import xla_flash_attention  # noqa: PLC0415
+
+        return xla_flash_attention(q, k, v, mask)
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
