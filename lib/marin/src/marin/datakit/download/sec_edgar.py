@@ -178,7 +178,7 @@ def download_sec_edgar_step() -> StepSpec:
         fn=remote(
             download_sec_edgar,
             resources=ResourceConfig(cpu=1, ram="2g"),
-            pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
+            pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
         ),
         hash_attrs={
             "hf_dataset_id": HF_DATASET_ID,
