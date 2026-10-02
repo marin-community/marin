@@ -64,7 +64,7 @@ def build_steps(endpoint_name: str, partition_index: int = 0, partition_count: i
                     output_path, normalized_path, endpoint_name
                 ),
                 resources=ResourceConfig(cpu=2, ram="8g", disk="8g"),
-                pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
+                pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
             ),
         )
         for source_name, normalized in sources
