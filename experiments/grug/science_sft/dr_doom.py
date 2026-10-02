@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import logging
+import time
 
 from levanter.tokenizers import load_tokenizer
 from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store
@@ -79,9 +80,23 @@ def prepare(snapshot_root: str, output_path: str, num_shards: int, max_workers: 
     return store
 
 
-def launch(store_path: str, version: str) -> None:
+def launch(store_path: str, snapshot_root: str, version: str, wait_for_store_minutes: int) -> None:
     configure_coreweave_s3()
+    if wait_for_store_minutes < 1:
+        raise ValueError("wait_for_store_minutes must be positive")
+    record = StoragePath(prefix_join(store_path, ".artifact.json"))
+    deadline = time.monotonic() + wait_for_store_minutes * 60
+    while not record.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"SFT token store did not finish within {wait_for_store_minutes} minutes: {store_path}")
+        time.sleep(30)
     store = SftTokenStore.raw_load(store_path)
+    manifest = json.loads(StoragePath(prefix_join(snapshot_root, "snapshot-manifest.json")).read_text())
+    counts = store.sources[SOURCE_NAME]
+    if counts.conversations != manifest["conversations"] or counts.overlength_conversations:
+        raise ValueError("Packed SFT store does not cover every conversation in the frozen snapshot")
+    if counts.assistant_tokens == 0 or store.packed_sequences < 1:
+        raise ValueError("Packed SFT store has no assistant targets or sequences")
     template = pinned_chat_template()
     if store.chat_template != template:
         raise ValueError("SFT store chat template differs from the pinned Dr Doom model")
@@ -105,13 +120,15 @@ def main() -> None:
     prep.add_argument("--max-workers", type=int, required=True)
     train = subparsers.add_parser("train")
     train.add_argument("--store-path", required=True)
+    train.add_argument("--snapshot-root", required=True)
     train.add_argument("--version", required=True)
+    train.add_argument("--wait-for-store-minutes", type=int, required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     if args.command == "prepare":
         prepare(args.snapshot_root, args.output_path, args.num_shards, args.max_workers)
     else:
-        launch(args.store_path, args.version)
+        launch(args.store_path, args.snapshot_root, args.version, args.wait_for_store_minutes)
 
 
 if __name__ == "__main__":
