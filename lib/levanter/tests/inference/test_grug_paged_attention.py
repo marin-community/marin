@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +12,15 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention
 from levanter.grug.attention._paged_gpu import gpu_paged_attention
+
+
+class _PagedCase(NamedTuple):
+    q: jax.Array
+    kv_pages: jax.Array
+    kv_lens: jax.Array
+    page_indices: jax.Array
+    cu_q_lens: jax.Array
+    num_seqs: jax.Array
 
 
 def _mixed_case(dtype):
@@ -23,7 +33,7 @@ def _mixed_case(dtype):
     lengths = np.array([7, 10, -1], np.int32)
     offsets = np.array([0, 3, 4, -1], np.int32)
     args = (q, pages, lengths, indices, offsets, np.array(2, np.int32))
-    return tuple(jnp.asarray(x, dtype if i < 2 else None) for i, x in enumerate(args))
+    return _PagedCase(*(jnp.asarray(x, dtype if i < 2 else None) for i, x in enumerate(args)))
 
 
 def _dense_oracle(args, window, cap, scale):
@@ -54,13 +64,13 @@ def _dense_oracle(args, window, cap, scale):
 def test_grug_paged_attention_mixed_prefixes_match_dense(window, cap, dtype):
     args = _mixed_case(dtype)
     scale = 0.17
-    expected = _dense_oracle(args, window, cap, scale).astype(np.asarray(args[0]).dtype)
+    expected = _dense_oracle(args, window, cap, scale).astype(np.asarray(args.q).dtype)
     fn = jax.jit(partial(ragged_paged_attention, sliding_window=window, soft_cap=cap, implementation="reference"))
     actual = fn(*args, sm_scale=jnp.array(scale))
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-5, rtol=1e-5)
     assert np.max(np.abs(np.asarray(actual, np.float32) - np.asarray(expected, np.float32))) < 1e-5
-    empty = fn(*args[:-1], jnp.array(0, jnp.int32), sm_scale=jnp.array(scale))
-    np.testing.assert_array_equal(empty, jnp.zeros_like(args[0]))
+    empty = fn(*args._replace(num_seqs=jnp.array(0, jnp.int32)), sm_scale=jnp.array(scale))
+    np.testing.assert_array_equal(empty, jnp.zeros_like(args.q))
 
 
 def test_grug_paged_attention_explicit_head_sharding_matches_dense():
@@ -93,7 +103,7 @@ def _decode_case(dtype):
     rng = np.random.default_rng(41)
     q = jnp.asarray(rng.normal(size=(4, 2, 3, 32)), dtype)
     pages = jnp.asarray(rng.normal(size=(7, 16, 4, 32)), dtype).at[0].set(jnp.nan)
-    return (
+    return _PagedCase(
         q,
         pages,
         jnp.array([37, 18, -1], jnp.int32),
@@ -129,9 +139,9 @@ def test_grug_gpu_paged_attention_decode_matches_dense(window, dtype):
     actual = compiled(*args)
     expected = jnp.asarray(_dense_oracle(args, window, None, 0.17), dtype).astype(jnp.float32)
     np.testing.assert_allclose(actual.astype(jnp.float32), expected, atol=1e-4, rtol=1e-4)
-    empty = compiled(*args[:-1], jnp.array(0, jnp.int32))
-    np.testing.assert_array_equal(empty, jnp.zeros_like(args[0]))
-    prefill_args = (*args[:4], jnp.array([0, 2, 4, -1], jnp.int32), args[-1])
+    empty = compiled(*args._replace(num_seqs=jnp.array(0, jnp.int32)))
+    np.testing.assert_array_equal(empty, jnp.zeros_like(args.q))
+    prefill_args = args._replace(cu_q_lens=jnp.array([0, 2, 4, -1], jnp.int32))
     prefill = compiled(*prefill_args)
     expected_prefill = jnp.asarray(_dense_oracle(prefill_args, window, None, 0.17), dtype).astype(jnp.float32)
     np.testing.assert_allclose(prefill.astype(jnp.float32), expected_prefill, atol=1e-4, rtol=1e-4)
