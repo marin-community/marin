@@ -1106,10 +1106,15 @@ def _fact_probe_hook(
         if jax.process_index() == 0:
             writer.add(kind, count, span_loss, top_ids, top_probs, row_mean_loss(np.asarray(loss), weights))
 
+    scored: set[int] = set()
+
     def hook(info, force: bool = False) -> None:
         count = info.next_step
-        if info.model is None or (count % trainer_cfg.fact_probe_every != 0 and count != last_step):
+        # The forced end-of-run callback pass revisits the last step; score each step once.
+        due = count % trainer_cfg.fact_probe_every == 0 or count == last_step
+        if info.model is None or count in scored or not due:
             return
+        scored.add(count)
         with set_mesh(probe_mesh):
             score(RAW, info.model, count)
             if count > ema_start_step and trainer_cfg.ema_beta is not None:
