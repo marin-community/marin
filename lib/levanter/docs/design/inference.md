@@ -104,8 +104,8 @@ This supports chunked prefill, incremental decode, and kernels wider than a page
 partial page receives independent convolution history. Padding does not update
 the rings. The implementation uses a JAX scan and matches the existing
 short-convolution reference's lag-ordered arithmetic. CPU FP32/BF16 parity covers
-mixed request order, page crossings, clone divergence, and reset. This component
-has not yet been integrated into a native Hero model or validated on accelerators.
+mixed request order, page crossings, clone divergence, and reset. The native Hero model uses this history for incremental decode; accelerator
+validation remains pending.
 
 ### Native Hero schema-v2 model
 
@@ -129,3 +129,130 @@ nonidentity convolution taps, both RoPE conventions, packed documents, and both
 checkpoint layouts. Mixed-request incremental tests compare against full forward
 across page and sliding-window boundaries. Full-checkpoint accelerator throughput
 and matched vLLM performance remain unmeasured.
+## Reproducible batch benchmarks
+
+`levanter.main.inference_benchmark` measures the native batch engine with fixed
+prompt token IDs, greedy sampling, and a fixed number of generated tokens. The
+checked-in small Snowball workload exercises both short and long attention
+layers with random weights:
+
+```bash
+RAGGED_DOT_IMPL=xla uv run --package marin-levanter python -m levanter.main.inference_benchmark \
+  --model-config lib/levanter/config/inference/snowball_tiny.json \
+  --workload lib/levanter/config/inference/tiny_workload.json \
+  --dtype bfloat16 --hardware-label v5p-8 --output /tmp/snowball-v5p.json
+```
+
+Use the hardware label for the actual provisioned slice. The driver supports a
+single host and records every visible device, mesh dimensions, engine settings,
+model configuration, seed, dtype, code revision, and selected XLA environment
+flags. Source bundles inherit Iris launch provenance through `MARIN_PROVENANCE`;
+`--source-revision` and `--source-dirty` can supply it explicitly. Without source
+metadata the revision and dirty state are null. `--model-axis-size` defaults to 1; the remaining local devices occupy the
+Grug data axis. Before changing tensor parallelism, check head divisibility:
+production Snowball has 20 query heads and 5 KV heads, so an 8-way head partition
+is invalid. The native driver requires Snowball's paged `decode` implementation.
+
+The output retains raw samples and hashes the complete token workload. Model
+initialization and cache setup are timed separately. The first batch includes
+compilation and execution; subsequent warmup batches are separate from measured
+batches. `compile_only` is null because the harness does not isolate compiler
+time. Persistent compiler caches can change first-batch latency.
+
+All prompts must fit in one prefill. Native first-token time is observed after
+prefill and host extraction, immediately before the first decode callback. The
+JSON records batch output throughput and mean time from first token to batch
+completion per remaining output token. This amortized measure includes host
+scheduling, synchronization, and extraction; it is not a distribution of device
+kernel or per-token latencies. Incomplete generations fail instead of producing
+a throughput number. The OpenAI server currently renders streaming events from
+a finished response, so its HTTP first event cannot measure native prefill time.
+
+### Checkpoint-backed comparison
+
+Replace `--model-config` with `--checkpoint` to load the same Snowball HF export
+used by vLLM. Supply `--revision` for a Hub revision and `--checkpoint-identity`
+with the immutable export identity or weight digest from the baseline manifest.
+The existing HF converter reads the checkpoint's model config and tokenizer;
+Schema-v1 Snowball and schema-v2 Hero exports select their respective native model. The result
+records the checkpoint location, identity, requested revision, full HF config,
+and tokenizer vocabulary hash. Export identities for object-storage paths are
+operator-supplied; the driver does not rehash multi-gigabyte weight files.
+
+```bash
+python -m levanter.main.inference_benchmark \
+  --checkpoint /regional/snowball-hf-export \
+  --checkpoint-identity exported-training-step-and-weight-digest \
+  --workload workload.json --dtype bfloat16 \
+  --hardware-label H100-8 --output /tmp/levanter-checkpoint.json
+```
+
+Keep checkpoints in the accelerator's region. Model loading remains outside the
+measured generation samples. Compare checkpoint-backed results only when the
+weight/config identities, token workload hash, dtype, accelerator count,
+topology, and parallelism match.
+
+### vLLM baseline
+
+Run `levanter.main.vllm_inference_benchmark` in the vLLM serving environment with
+three JSON files:
+
+- `--workload`: the identical prompt token IDs and output count used by Levanter.
+- `--engine-args`: keyword arguments for vLLM `EngineArgs`, including `model`, an
+  immutable `revision` when loading from the Hub, `dtype`, tensor parallelism,
+  context and batch capacity. Prefix caching must be disabled.
+- `--provenance`: `checkpoint` (immutable revision or weight digest), the complete
+  `model_config`, `dtype`, and `hardware_label` including accelerator count and
+  topology. These fields are supplied by the operator and retained alongside
+  actual runtime versions, visible CUDA devices, and engine arguments.
+
+```bash
+python -m levanter.main.vllm_inference_benchmark \
+  --engine-args vllm-engine.json --provenance checkpoint-manifest.json \
+  --workload lib/levanter/config/inference/tiny_workload.json \
+  --output /tmp/vllm-result.json
+```
+
+This uses the public [LLMEngine step interface](https://docs.vllm.ai/en/v0.10.2/api/vllm/engine/llm_engine.html)
+and cumulative output token IDs. First-token observations include admission and
+scheduling. If vLLM admits requests across multiple prefills, its first-token
+and decode overlap differs from Levanter's single-prefill measurement. Compare
+end-to-end throughput with that scheduling difference recorded. The adapter
+requires validation against the deployed vLLM version, including the Marin
+GrugMoE model registration. It has not been validated on a TPU vLLM runtime.
+
+### Coverage and remaining model work
+
+No accelerator measurements are checked in with this harness. Random-weight
+Snowball measurements characterize execution only. They cannot establish a
+speedup over the checkpoint-backed vLLM baseline. A matched model comparison
+also requires identical weight/config
+identities, tokenizer provenance for the token workload, dtype, prompt/output
+lengths, concurrency, accelerator count, topology, and parallelism. Compare
+output hashes or token arrays and investigate differences before reporting a
+speed ratio. Production checkpoint loading and real serving latency remain separate
+validation steps.
+
+| Target | Native Snowball benchmark | Native Hero benchmark | vLLM comparison |
+| --- | --- | --- | --- |
+| H100 | Driver available; unmeasured | Driver available; unmeasured | Baseline adapter; unmeasured |
+| GB200 | Driver available; unmeasured | Driver available; unmeasured | Baseline adapter; unmeasured |
+| TPU v4 | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
+| TPU v5p | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
+| TPU v6e | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
+
+Hero's `experiments/grug/moe_hero_ep/heuristic.py:HERO_MODEL` uses 48 layers,
+width 6144, 384 experts with top-8 routing, two shared experts, latent dimension
+3072, short convolutions, and 12 local / 6 global KV heads. Snowball pins the
+June recipe with 26 layers, width 2560, 256 experts with top-4 routing, one shared
+expert, and 5 KV heads. Both export `model_type=grug_moe`; that name does not
+establish architectural equivalence. The native adapters preserve their distinct schema versions and architectures.
+For a random-weight Hero smoke benchmark, use `config/inference/hero_tiny.json`
+with the same token workload and driver arguments as Snowball. Synthetic results
+measure the tiny configuration, not the production Hero model.
+
+For checkpoint-scale comparisons, set `--model-axis-size` and
+`--expert-axis-size` to match the vLLM tensor and expert parallel configuration.
+The remaining local devices partition the data axis; the result records the
+complete effective mesh and device list. Both drivers must use the same
+checkpoint identity, tokens, dtype, and device allocation.
