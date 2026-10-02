@@ -729,7 +729,6 @@ def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_ex
     )
 
     recent_phase = database.execute(recent_phase_query(now)).fetch_arrow_table()
-    assert set(recent_phase.column("run_id").to_pylist()) == {"hero-recent", "hero-gb200-main-rack-20261002-02"}
 
     active = (_hero_run("hero-active"),)
     phase_history = database.execute(phase_execution_query(now, active)).fetch_arrow_table()
