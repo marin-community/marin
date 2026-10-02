@@ -5,6 +5,7 @@
 
 import argparse
 import json
+import importlib
 import os
 import statistics
 import time
@@ -29,6 +30,8 @@ def main():
     parser.add_argument("--window", type=int)
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     parser.add_argument("--repeats", type=int, default=20)
+    parser.add_argument("--kv-splits", type=int, choices=[8, 16], default=8)
+    parser.add_argument("--baseline", choices=["flashinfer_xqa"])
     args = parser.parse_args()
     dtype = jnp.dtype(args.dtype)
     pages_per_sequence = (args.context + args.page_size - 1) // args.page_size
@@ -51,13 +54,14 @@ def main():
             sm_scale=args.head_dim**-0.5,
             sliding_window=args.window,
             implementation=args.implementation,
+            gpu_kv_splits=args.kv_splits,
         )
     )
     start = time.perf_counter()
     compiled = fn.lower(*inputs).compile()
     compile_time = time.perf_counter() - start
     start = time.perf_counter()
-    compiled(*inputs).block_until_ready()
+    actual = compiled(*inputs).block_until_ready()
     first_run_time = time.perf_counter() - start
     for _ in range(3):
         compiled(*inputs).block_until_ready()
@@ -67,6 +71,9 @@ def main():
         compiled(*inputs).block_until_ready()
         times.append(time.perf_counter() - start)
     elapsed = statistics.median(times)
+    if args.baseline is not None:
+        baseline = _flashinfer_baseline(inputs, actual, args)
+        print(json.dumps(baseline), flush=True)
     visible = args.context if args.window is None else min(args.context, args.window)
     kv_bytes = 2 * args.batch_size * visible * args.kv_heads * args.head_dim * dtype.itemsize
     flops = 4 * args.batch_size * visible * args.kv_heads * args.groups * args.head_dim
@@ -74,6 +81,7 @@ def main():
         json.dumps(
             {
                 "kernel": "grug_paged_decode",
+                "timing_boundary": "host_submit_and_synchronize",
                 "implementation": args.implementation,
                 "shape": vars(args),
                 "dtype": args.dtype,
@@ -81,7 +89,7 @@ def main():
                 "device_type": jax.devices()[0].device_kind,
                 "device_count": 1,
                 "block_sizes": (
-                    {"page_size": args.page_size, "kv_splits": min(8, pages_per_sequence)}
+                    {"page_size": args.page_size, "kv_splits": min(args.kv_splits, pages_per_sequence)}
                     if args.implementation == "gpu_pallas"
                     else None
                 ),
@@ -99,6 +107,71 @@ def main():
             }
         )
     )
+
+
+def _flashinfer_baseline(inputs, expected, args):
+    # FlashInfer is optional and installed only in the isolated GPU benchmark environment.
+    torch = importlib.import_module("torch")
+    flashinfer = importlib.import_module("flashinfer")
+    if jax.default_backend() != "gpu" or args.dtype != "bfloat16":
+        raise ValueError("The FlashInfer XQA comparison requires a GPU and BF16 inputs")
+    q, cache, lengths, table, _, _ = inputs
+    query = torch.from_dlpack(q).reshape(args.batch_size, args.kv_heads * args.groups, args.head_dim)
+    cache_torch = torch.from_dlpack(cache)
+    keys, values = cache_torch[:, :, 0::2, :], cache_torch[:, :, 1::2, :]
+    block_tables, seq_lens = torch.from_dlpack(table), torch.from_dlpack(lengths)
+    workspace = torch.zeros(128 * 1024 * 1024, dtype=torch.uint8, device=query.device)
+    output = torch.empty_like(query)
+    fn = partial(
+        flashinfer.decode.xqa_batch_decode_with_kv_cache,
+        query,
+        (keys, values),
+        workspace,
+        block_tables,
+        seq_lens,
+        args.context,
+        bmm1_scale=args.head_dim**-0.5,
+        window_left=-1 if args.window is None else args.window - 1,
+        kv_layout="NHD",
+        out=output,
+    )
+    torch.cuda.synchronize()
+    start = time.perf_counter()
+    fn()
+    torch.cuda.synchronize()
+    first_run = time.perf_counter() - start
+    for _ in range(3):
+        fn()
+    torch.cuda.synchronize()
+    times = []
+    for _ in range(args.repeats):
+        start = time.perf_counter()
+        fn()
+        torch.cuda.synchronize()
+        times.append(time.perf_counter() - start)
+    expected_torch = torch.from_dlpack(expected).reshape_as(output)
+    difference = (output.float() - expected_torch.float()).abs()
+    return {
+        "kernel": "flashinfer_xqa",
+        "implementation": "flashinfer_xqa",
+        "shape": vars(args),
+        "dtype": args.dtype,
+        "device_type": torch.cuda.get_device_name(),
+        "device_count": 1,
+        "backend": "cuda",
+        "block_sizes": {"page_size": args.page_size},
+        "compile_time": None,
+        "xla_flags": os.environ.get("XLA_FLAGS", ""),
+        "backend_env": {"CUDA_HOME": os.environ.get("CUDA_HOME", "")},
+        "timing_boundary": "host_submit_and_synchronize",
+        "steady_state_time": statistics.median(times),
+        "first_run_including_jit_time": first_run,
+        "error": {"max_abs_vs_grug": difference.max().item(), "mean_abs_vs_grug": difference.mean().item()},
+        "flashinfer_version": flashinfer.__version__,
+        "torch_version": torch.__version__,
+        "git_sha": launch_provenance().base_commit,
+        "cache_layout": "interleaved_strided_views_no_copy",
+    }
 
 
 if __name__ == "__main__":
