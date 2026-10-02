@@ -135,6 +135,13 @@ class InferenceEngineConfig:
         return self.max_tokens_per_round if self.max_tokens_per_round is not None else self.max_seqs
 
     @property
+    def eagle3_token_capacity(self) -> int:
+        """Bound verification rows by live slots, preserving decode sharding divisibility."""
+        decode_capacity = self.imputed_max_tokens_per_round
+        required = self.max_seqs * (self.num_eagle3_tokens + 1)
+        return ((required + decode_capacity - 1) // decode_capacity) * decode_capacity
+
+    @property
     def max_pages_per_seq(self) -> int:
         return (self.max_seq_len + self.page_size - 1) // self.page_size
 
@@ -1511,7 +1518,7 @@ class InferenceEngine:
                     self.sampler,
                     self.config.num_eagle3_tokens,
                     self.config.imputed_max_tokens_per_round,
-                    self.config.imputed_max_tokens_per_round * (self.config.num_eagle3_tokens + 1),
+                    self.config.eagle3_token_capacity,
                 )
             else:
                 future_state, decode_outputs = _run_generation_loop(
