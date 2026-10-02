@@ -38,7 +38,7 @@ from levanter.layers.kv_cache import PageCache, KvPageCache, ListCache
 from levanter.layers.paged_short_conv import ShortConvPageCache, paged_short_conv
 from levanter.models.hero import HeroConfig
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.snowball import RMSNorm, GatedNorm, rms_norm
+from levanter.models.snowball import RMSNorm, GatedNorm, rms_norm, _init_weight
 from levanter.sharding import partition_spec_of
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -384,10 +384,6 @@ def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
     return (((layer_indices + 1) % global_every) == 0) | (layer_indices == num_layers - 1)
 
 
-def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
-    return std * random.truncated_normal(key, -3, 3, shape)
-
-
 class HeroMoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
@@ -450,15 +446,12 @@ class HeroMoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
         token_valid_flat = reshard(rearrange(token_valid, "b s -> (b s)"), _token_spec())
-        # Choose experts and compute sigmoid combine weights in fp32.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + unshard(self.router_bias)
-        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         selected_experts = selected_experts[:, :-1]
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)

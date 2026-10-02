@@ -199,13 +199,25 @@ def test_snowball_state_dict_key_and_shape_manifest():
         assert tuple(sd[key].shape) == shape, f"{key}: {tuple(sd[key].shape)} != {shape}"
 
 
-def test_snowball_state_dict_roundtrip_is_exact():
+@pytest.mark.parametrize("individual_experts", [False, True])
+@pytest.mark.parametrize("prefix", [None, "policy"])
+def test_snowball_state_dict_roundtrip_is_exact(individual_experts, prefix):
     cfg = _tiny_config()
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         src = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(1))
         dst = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(2))
-        sd = src.to_state_dict()
-        dst = dst.from_state_dict(sd)
+        canonical = src.to_state_dict(prefix=prefix)
+        sd = {}
+        for name, weight in canonical.items():
+            if individual_experts and ".mlp.experts." in name:
+                stem, projection = name.split(".mlp.experts.")
+                weight = np.asarray(weight)
+                sd.update({f"{stem}.mlp.experts.{i}.{projection}": weight[i] for i in range(cfg.num_experts)})
+            else:
+                sd[name] = weight
+        dst = hax.named_jit(lambda m, state: m.from_state_dict(state, prefix=prefix))(dst, sd)
+        for name, weight in dst.to_state_dict(prefix=prefix).items():
+            np.testing.assert_array_equal(np.asarray(weight), np.asarray(canonical[name]), err_msg=name)
 
         ids = _device_batched_ids(cfg.vocab_size, 10)
         run = hax.named_jit(lambda m, x: m(x))

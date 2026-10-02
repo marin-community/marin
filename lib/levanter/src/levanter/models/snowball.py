@@ -458,24 +458,7 @@ class SnowballAttention(eqx.Module):
         mask: AttentionMask,
         disable_rope: bool = False,
     ) -> Float[Array, "B S D"]:
-        head_dim = self.cfg.inferred_head_dim
-        seq_len = x.shape[1]
-
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
-
-        q = rms_norm(q)
-        k = rms_norm(k)
-        # Half-RoPE: rotary on the first half of head_dim only (second half is rope-free).
-        if not disable_rope:
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-            )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        q = q * self.cfg.qk_mult
+        q, k, v = self._project_qkv(x, disable_rope=disable_rope)
         context = _context_axis()
         local_v = v
         if context is not None:
@@ -489,6 +472,32 @@ class SnowballAttention(eqx.Module):
         if context is not None:
             attn_out = _reshard_sequence(attn_out, context)
         return self._project_output(x, attn_out, local_v)
+
+    def _project_qkv(
+        self, x: jax.Array, *, disable_rope: bool, position_ids: jax.Array | None = None
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        head_dim = self.cfg.inferred_head_dim
+
+        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+
+        q = rms_norm(q)
+        k = rms_norm(k)
+        # Half-RoPE: rotary on the first half of head_dim only (second half is rope-free).
+        if not disable_rope:
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half],
+                k[..., :half],
+                seq_len=x.shape[1],
+                head_dim=half,
+                rope=self.cfg.rope,
+                position_ids=position_ids,
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        return q * self.cfg.qk_mult, k, v
 
     def _project_output(self, x: jax.Array, attn_out: jax.Array, v: jax.Array) -> jax.Array:
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -520,28 +529,13 @@ class SnowballAttention(eqx.Module):
         """Attend a flat batch of serving tokens with the June attention recipe."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
-        q = (x @ self.w_q).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
-        k = (x @ self.w_k).reshape(x.shape[0], 1, cfg.num_kv_heads, head_dim)
-        v = (x @ self.w_v).reshape(x.shape[0], 1, cfg.num_kv_heads, head_dim)
-        q, k = rms_norm(q), rms_norm(k)
-        if not use_long:
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half],
-                k[..., :half],
-                seq_len=1,
-                head_dim=half,
-                rope=cfg.rope,
-                position_ids=pos_ids[:, None],
-            )
-            q = jnp.concatenate((q_rot, q[..., half:]), axis=-1)
-            k = jnp.concatenate((k_rot, k[..., half:]), axis=-1)
+        q, k, v = self._project_qkv(x, disable_rope=use_long, position_ids=pos_ids[:, None])
         token_axis = batch_info.new_token_dests.axes[0]
         kv_axes = (token_axis, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", head_dim))
         cache_k = reshard(k[:, 0], P(None, "model", None))
         cache_v = reshard(v[:, 0], P(None, "model", None))
         cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
-        q = (q * cfg.qk_mult).reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
+        q = q.reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
         q = reshard(q, P(None, "model", None, None))
         implementation = cfg.inference_attention_implementation
         if implementation is None and cfg.attention_implementation == "reference":
@@ -997,6 +991,20 @@ def _get(state_dict: StateDict, prefix: Optional[str], name: str) -> jax.Array:
     return jnp.asarray(state_dict[_with_prefix(prefix, name)])
 
 
+def _get_expert_bank(
+    state_dict: StateDict, prefix: str | None, layer: str, projection: str, num_experts: int
+) -> jax.Array:
+    name = f"{layer}.mlp.experts.{projection}.weight"
+    if _with_prefix(prefix, name) in state_dict:
+        return _get(state_dict, prefix, name)
+    return jnp.stack(
+        [
+            _get(state_dict, prefix, f"{layer}.mlp.experts.{expert}.{projection}.weight")
+            for expert in range(num_experts)
+        ]
+    )
+
+
 def snowball_embeddings_from_state_dict(
     template: SnowballTransformer, state_dict: StateDict, prefix: Optional[str] = None
 ) -> SnowballTransformer:
@@ -1071,17 +1079,19 @@ def snowball_block_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_gate,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(
+            _T(_get_expert_bank(state_dict, prefix, p, "gate_proj", m.mlp.cfg.num_experts)), _EXPERT_GATE_UP_SPEC
+        ),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_up,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(_T(_get_expert_bank(state_dict, prefix, p, "up_proj", m.mlp.cfg.num_experts)), _EXPERT_GATE_UP_SPEC),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_down,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
+        _reshard(_T(_get_expert_bank(state_dict, prefix, p, "down_proj", m.mlp.cfg.num_experts)), _EXPERT_DOWN_SPEC),
     )
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,
