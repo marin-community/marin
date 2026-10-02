@@ -38,7 +38,17 @@ class BatchMeasurement:
     tokens: list[list[int]]
 
 
-def summarize_batch(workload: TokenWorkload, measurement: BatchMeasurement) -> dict:
+@dataclass(frozen=True)
+class BatchSummary:
+    elapsed: float
+    first_token: list[float]
+    all_first_tokens: float
+    output_tokens_per_second: float
+    mean_time_after_first_token_per_output_token: float
+    output_sha256: str
+
+
+def summarize_batch(workload: TokenWorkload, measurement: BatchMeasurement) -> BatchSummary:
     """Reject partial outputs and summarize throughput without counting prompt tokens."""
     if len(measurement.tokens) != len(workload.prompts) or any(
         len(tokens) != workload.output_tokens for tokens in measurement.tokens
@@ -51,16 +61,16 @@ def summarize_batch(workload: TokenWorkload, measurement: BatchMeasurement) -> d
     # Batch decode starts only after every request has a first token. With chunked admission,
     # decode can overlap later prefills, so only end-to-end throughput is directly comparable.
     all_first = max(measurement.first_token)
-    return {
-        "elapsed": measurement.elapsed,
-        "first_token": measurement.first_token,
-        "all_first_tokens": all_first,
-        "output_tokens_per_second": len(workload.prompts) * workload.output_tokens / measurement.elapsed,
-        "mean_time_after_first_token_per_output_token": statistics.mean(
+    return BatchSummary(
+        elapsed=measurement.elapsed,
+        first_token=measurement.first_token,
+        all_first_tokens=all_first,
+        output_tokens_per_second=len(workload.prompts) * workload.output_tokens / measurement.elapsed,
+        mean_time_after_first_token_per_output_token=statistics.mean(
             (measurement.elapsed - first) / (workload.output_tokens - 1) for first in measurement.first_token
         ),
-        "output_sha256": hashlib.sha256(json.dumps(measurement.tokens).encode()).hexdigest(),
-    }
+        output_sha256=hashlib.sha256(json.dumps(measurement.tokens).encode()).hexdigest(),
+    )
 
 
 def measure_batches(
@@ -82,8 +92,8 @@ def measure_batches(
         "workload": dataclasses.asdict(workload),
         "workload_sha256": workload.sha256,
         "compile_only": None,
-        "first_batch_including_compile": cold,
-        "warmup": warmup,
-        "samples": samples,
-        "median_output_tokens_per_second": statistics.median(row["output_tokens_per_second"] for row in samples),
+        "first_batch_including_compile": dataclasses.asdict(cold),
+        "warmup": [dataclasses.asdict(row) for row in warmup],
+        "samples": [dataclasses.asdict(row) for row in samples],
+        "median_output_tokens_per_second": statistics.median(row.output_tokens_per_second for row in samples),
     }
