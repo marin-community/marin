@@ -36,6 +36,12 @@ class BroadcastSource:
             raise RuntimeError(result)
         return result
 
+    def stop(self) -> None:
+        """Signal sender teardown before the receiving rank destroys its NCCL group."""
+        if not self.connection.closed:
+            self.connection.send(None)
+            self.connection.close()
+
     def broadcast(self, dtype: str, values: list) -> None:
         self.connection.send((dtype, values))
         assert self.receive() is None
@@ -76,10 +82,11 @@ def broadcast_source(
         )
     child_connection.close()
     try:
-        yield BroadcastSource(connection, port, timeout)
+        source = BroadcastSource(connection, port, timeout)
+        yield source
     finally:
         if process.poll() is None:
-            connection.send(None)
+            source.stop()
         try:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
