@@ -16,8 +16,9 @@ from taskcompendium.pipeline.datasets import calendar, nemo_actions, shell_files
 from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.pipeline.review import BatchReviewer
 from taskcompendium.pipeline.verification import PLAIN, verify_task
-from taskcompendium.runtime.calendar import CalendarFactory
-from taskcompendium.runtime.checks import calendar_controls, check_episodes, episode_suite, tool_turn
+from taskcompendium.runtime.calendar import CalendarFactory, calendar_controls
+from taskcompendium.runtime.checks import check_episodes, episode_suite
+from taskcompendium.runtime.controls import tool_turn
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.models import ActorTask, RolloutRecord, Termination
 from taskcompendium.runtime.shell import ShellFactory

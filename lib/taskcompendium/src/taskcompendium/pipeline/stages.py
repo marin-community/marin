@@ -5,47 +5,51 @@
 
 import hashlib
 import json
-import shutil
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from functools import partial
 from math import ceil
 from pathlib import Path
-from tempfile import SpooledTemporaryFile, TemporaryDirectory
+from tempfile import TemporaryDirectory
 from typing import Any, Literal
 from uuid import uuid4
 
-import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.transfer import copy
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.input_file import InputFileSpec
-from zephyr.readers import load_parquet
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.filtering import task_decision
-from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.inputs import SourceFiles
 from taskcompendium.pipeline.models import (
     CheckResult,
     DatasetRecipe,
-    Decision,
-    Disposition,
     FilterPolicy,
-    ImportRejection,
-    NormalizedTask,
-    RawRow,
-    ReviewRecord,
+    NormalizationChange,
+    ReviewRubric,
     TaskAudit,
 )
-from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.review import BASE_RUBRIC, DEFAULT_PROMPT_CHARACTERS, BatchReviewer, Reviewer
+from taskcompendium.pipeline.rewriting import BatchRewriter
 from taskcompendium.pipeline.sources import staged_file_rows, staged_files
+from taskcompendium.pipeline.transforms import (
+    canonical_merge_record,
+    canonical_representative_order,
+    canonicalize_group,
+    deduplicate_group,
+    filter_row,
+    is_accepted,
+    normalize_row,
+    public_group_key,
+    selected_view,
+    source_locator_order,
+)
 from taskcompendium.pipeline.verification import verify_task
 
-GROUP_MEMORY_BYTES = 1024 * 1024
 AUDIT_SHARDS = 64
 OUTPUT_SHARD_ROWS = 100000
 
@@ -82,69 +86,6 @@ def _read_json(path: StoragePath) -> Any:
         return json.load(stream)
 
 
-def _merge_record(row: dict[str, Any]) -> dict[str, Any]:
-    task = TaskSpec.model_validate_json(row["task_json"]) if row["task_json"] is not None else None
-    return {
-        "public_key": deduplication_key(task) if task is not None else row["task_id"],
-        "semantic_key": semantic_digest(task, include_reference=True) if task is not None else row["task_id"],
-        "row": row,
-    }
-
-
-def _representative_order(record: dict[str, Any]) -> str:
-    row = record["row"]
-    return json.dumps(
-        [
-            int(row["intended_use"] != "eval"),
-            row["source_dataset"],
-            row["source_revision"],
-            row["source_row"],
-            row["task_id"],
-        ]
-    )
-
-
-def _canonical_group(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Choose a deterministic accepted representative and retain every audit row."""
-    references = set()
-    representative = None
-    has_eval = False
-    with SpooledTemporaryFile(max_size=GROUP_MEMORY_BYTES, mode="w+t") as spool:
-        for record in records:
-            row = record["row"]
-            has_eval |= row["intended_use"] == "eval"
-            if row["filter_status"] == "keep":
-                if len(references) < 2:
-                    references.add(record["semantic_key"])
-                if representative is None:
-                    representative = row["task_id"]
-            spool.write(json.dumps(record) + "\n")
-        spool.seek(0)
-        for line in spool:
-            row = json.loads(line)["row"]
-            if row["filter_status"] == "keep":
-                reason = None
-                if len(references) > 1:
-                    reason = "cross_source_conflicting_verifier_contracts"
-                elif has_eval and row["intended_use"] != "eval":
-                    reason = "evaluation_overlap"
-                elif row["task_id"] != representative:
-                    reason = "cross_source_exact_duplicate"
-                    row["duplicate_of"] = representative
-                if reason is not None:
-                    row["filter_status"] = "reject"
-                    row["filter_reasons"] = [*row["filter_reasons"], reason]
-            yield row
-
-
-def _selected_view(row: dict[str, Any], view: str) -> bool:
-    if row["filter_status"] != "keep":
-        return False
-    if view == "executable":
-        return row["grader_readiness"] == "ready"
-    return view == "accepted" or row["intended_use"] == view
-
-
 def canonicalize_sources(merged_path: str, output_path: str) -> dict[str, Any]:
     """Deduplicate a merged audit, exclude evaluation overlap, and export curated views."""
     source, output = StoragePath(merged_path), StoragePath(output_path)
@@ -152,11 +93,11 @@ def canonicalize_sources(merged_path: str, output_path: str) -> dict[str, Any]:
     dataset = (
         Dataset.from_files(str(source / "data/*.parquet"))
         .load_parquet()
-        .map(_merge_record)
+        .map(canonical_merge_record)
         .group_by(
-            _public_key,
-            reducer=_canonical_group,
-            sort_by=_representative_order,
+            public_group_key,
+            reducer=canonicalize_group,
+            sort_by=canonical_representative_order,
             num_output_shards=max(1, ceil(expected / OUTPUT_SHARD_ROWS)),
         )
         .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
@@ -167,11 +108,11 @@ def canonicalize_sources(merged_path: str, output_path: str) -> dict[str, Any]:
             context.execute(
                 Dataset.from_files(str(output / "audit/*.parquet"))
                 .load_parquet()
-                .filter(partial(_selected_view, view=view))
+                .filter(partial(selected_view, view=view))
                 .write_parquet(str(output / view / "part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
             )
     manifest = {
-        **_manifest(output),
+        **manifest_counts(output),
         "merged_source": str(source),
         "deduplication_scope": "cross-source exact public and verifier semantics",
         "representative_policy": "evaluation first, then source dataset, revision, row and task ID",
@@ -183,110 +124,9 @@ def canonicalize_sources(merged_path: str, output_path: str) -> dict[str, Any]:
     return manifest
 
 
-def _normalize(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
-    source = Source(
-        dataset=recipe.source.dataset,
-        revision=recipe.source.revision,
-        row=f"{recipe.source.config}:{recipe.source.split}:{record['locator']}",
-        importer_revision=recipe.version,
-    )
-    task_id = f"{recipe.name}-{canonical_sha256(source.model_dump())}"
-    raw = {
-        "task_id": task_id,
-        "source": source.model_dump(),
-        "raw_sha256": canonical_sha256(record["data"]),
-        "data": record["data"],
-    }
-    result = recipe.normalize(RawRow(task_id, source, record["data"]))
-    audit = TaskAudit(
-        task_id=task_id,
-        source=source,
-        raw=raw,
-        normalized=None,
-        normalization_rejection=None,
-        checks=[],
-        review=None,
-        decision=None,
-        intended_use=recipe.intended_use,
-    )
-    public_key, semantic_key = task_id, task_id
-    if isinstance(result, NormalizedTask):
-        audit = audit.model_copy(update={"normalization_changes": result.changes})
-        result = result.task
-    if isinstance(result, ImportRejection):
-        audit = audit.model_copy(
-            update={
-                "normalization_rejection": result,
-                "decision": Decision(
-                    task_id=task_id,
-                    disposition=Disposition.REJECT,
-                    reasons=[f"normalize:{result.reason}", result.detail],
-                ),
-            }
-        )
-    else:
-        if result.id != task_id or result.source != source:
-            raise ValueError("A converter must retain its supplied task identity and source provenance")
-        audit = audit.model_copy(update={"normalized": result})
-        public_key = deduplication_key(result)
-        semantic_key = semantic_digest(result, include_reference=True)
-    return {
-        "locator": record["locator"],
-        "public_key": public_key,
-        "semantic_key": semantic_key,
-        "audit": audit.model_dump(mode="json"),
-    }
-
-
-def _public_key(record: dict[str, Any]) -> str:
-    return record["public_key"]
-
-
-def _locator(record: dict[str, Any]) -> str:
-    path, index = record["locator"].rsplit(":", 1)
-    return f"{path}:{int(index):020d}"
-
-
-def _deduplicate(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Cut every conflicting reference and keep the first identical row in source order."""
-    # Spooling prevents a frequently repeated prompt from filling worker memory.
-    references = set()
-    with SpooledTemporaryFile(max_size=GROUP_MEMORY_BYTES, mode="w+t") as spool:
-        for record in records:
-            if len(references) < 2:
-                references.add(record["semantic_key"])
-            spool.write(json.dumps(record) + "\n")
-        spool.seek(0)
-        first_id = None
-        for line in spool:
-            record = json.loads(line)
-            audit = record["audit"]
-            if audit["decision"] is None:
-                if len(references) > 1:
-                    audit["decision"] = Decision(
-                        task_id=audit["task_id"], disposition=Disposition.REJECT, reasons=["conflicting_references"]
-                    ).model_dump(mode="json")
-                elif first_id is not None:
-                    audit["decision"] = Decision(
-                        task_id=audit["task_id"],
-                        disposition=Disposition.REJECT,
-                        reasons=["exact_semantic_duplicate"],
-                        duplicate_of=first_id,
-                    ).model_dump(mode="json")
-                else:
-                    first_id = audit["task_id"]
-            yield audit
-
-
 def persist_evidence(local_path: Path, remote_path: StoragePath) -> None:
-    """Copy an attempt's local files to their matching durable paths."""
-    for file in local_path.rglob("*"):
-        if file.is_file():
-            with (
-                file.open("rb") as source,
-                (remote_path / file.relative_to(local_path).as_posix()).open("wb", auto_mkdir=True) as destination,
-            ):
-                shutil.copyfileobj(source, destination)
+    """Copy one attempt's evidence tree to its unique durable path."""
+    copy(str(local_path), str(remote_path), recursive=True)
 
 
 def _audit_batch(
@@ -340,24 +180,52 @@ def _audit_batch(
             persist_evidence(local, evidence)
 
 
-def _manifest(path: StoragePath) -> dict[str, Any]:
-    counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0)
+def _count_manifest_rows(rows: Iterator[dict[str, Any]]) -> dict[str, Any]:
+    counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0, rewritten_rows=0)
     dispositions: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
-    for file in (path / "audit/*.parquet").glob():
-        for row in load_parquet(
-            InputFileSpec(
-                str(file),
-                columns=["normalization_reason", "review_status", "filter_status", "filter_reasons"],
-            )
-        ):
-            counts["input_rows"] += 1
-            counts["normalized_rows"] += row["normalization_reason"] is None
-            counts["reviewed_rows"] += row["review_status"] == "reviewed"
-            if row["filter_status"] is not None:
-                dispositions[row["filter_status"]] += 1
-            reasons.update(row["filter_reasons"])
+    for row in rows:
+        counts["input_rows"] += 1
+        counts["normalized_rows"] += row["normalization_reason"] is None
+        counts["reviewed_rows"] += row["review_status"] == "reviewed"
+        counts["rewritten_rows"] += row["parent_id"] is not None and row["task_id"] != row["parent_id"]
+        if row["filter_status"] is not None:
+            dispositions[row["filter_status"]] += 1
+        reasons.update(row["filter_reasons"])
     return {**counts, "dispositions": dict(dispositions), "reasons": dict(reasons)}
+
+
+def _combine_manifest_counts(partials: Iterator[dict[str, Any]]) -> dict[str, Any]:
+    counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0, rewritten_rows=0)
+    dispositions: Counter[str] = Counter()
+    reasons: Counter[str] = Counter()
+    for part in partials:
+        counts.update(
+            {name: part[name] for name in ("input_rows", "normalized_rows", "reviewed_rows", "rewritten_rows")}
+        )
+        dispositions.update(part["dispositions"])
+        reasons.update(part["reasons"])
+    return {**counts, "dispositions": dict(dispositions), "reasons": dict(reasons)}
+
+
+def manifest_counts(path: StoragePath) -> dict[str, Any]:
+    """Reduce audit row counts and decisions across completed Parquet shards."""
+    dataset = (
+        Dataset.from_files(str(path / "audit/*.parquet"))
+        .load_parquet(
+            columns=[
+                "task_id",
+                "parent_id",
+                "normalization_reason",
+                "review_status",
+                "filter_status",
+                "filter_reasons",
+            ]
+        )
+        .reduce(_count_manifest_rows, _combine_manifest_counts)
+    )
+    with ZephyrContext(name="task-audit-manifest") as context:
+        return context.execute(dataset).results[0]
 
 
 def audit_source(
@@ -397,8 +265,10 @@ def audit_source(
         selected = selected.take_per_shard(limit)
     dataset = (
         selected.reshard(AUDIT_SHARDS)
-        .map(partial(_normalize, recipe=recipe))
-        .group_by(_public_key, reducer=_deduplicate, sort_by=_locator, num_output_shards=AUDIT_SHARDS)
+        .map(partial(normalize_row, recipe=recipe))
+        .group_by(
+            public_group_key, reducer=deduplicate_group, sort_by=source_locator_order, num_output_shards=AUDIT_SHARDS
+        )
         .window(execution.review_batch_size)
         .flat_map(partial(_audit_batch, recipe=recipe, reviewer=reviewer, output_path=output))
         .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA, skip_existing=True)
@@ -406,7 +276,7 @@ def audit_source(
     with ZephyrContext(max_workers=execution.max_workers, name=f"audit-{recipe.name}") as context:
         context.execute(dataset)
     manifest = {
-        **_manifest(output),
+        **manifest_counts(output),
         "recipe": recipe.name,
         "recipe_version": recipe.version,
         "review": asdict(review),
@@ -417,48 +287,6 @@ def audit_source(
     return manifest
 
 
-def _filter_row(row: dict[str, Any], policy: FilterPolicy) -> dict[str, Any]:
-    if (
-        row["normalization_reason"] is not None
-        or row["duplicate_of"] is not None
-        or "conflicting_references" in row["filter_reasons"]
-    ):
-        return row
-    verdict = None
-    if row["review_quality"] is not None:
-        verdict = {
-            "task_id": row["task_id"],
-            "quality": row["review_quality"],
-            "confidence": row["review_confidence"],
-            "reference_status": row["review_reference_status"],
-            "defects": row["review_defects"],
-            "evidence": row["review_evidence"],
-        }
-    review = ReviewRecord.model_validate_json(
-        json.dumps(
-            {
-                "task_id": row["task_id"],
-                "status": row["review_status"] or "unavailable",
-                "verdict": verdict,
-                "detail": row["review_detail"] or "No quality assessment available",
-            }
-        )
-    )
-    decision = task_decision(
-        row["task_id"], [CheckResult.model_validate(check) for check in row["checks"]], review, policy
-    )
-    return {
-        **row,
-        "filter_status": decision.disposition.value,
-        "filter_reasons": decision.reasons,
-        "duplicate_of": decision.duplicate_of,
-    }
-
-
-def _is_accepted(row: dict[str, Any]) -> bool:
-    return row["filter_status"] == Disposition.KEEP.value
-
-
 def filter_source(audit_path: str, output_path: str, policy: FilterPolicy) -> dict[str, Any]:
     """Commit binary decisions from saved observations, preserving the complete audit."""
     source = StoragePath(audit_path)
@@ -466,7 +294,7 @@ def filter_source(audit_path: str, output_path: str, policy: FilterPolicy) -> di
     annotated = (
         Dataset.from_files(str(source / "audit/*.parquet"))
         .load_parquet()
-        .map(partial(_filter_row, policy=policy))
+        .map(partial(filter_row, policy=policy))
         .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
     )
     with ZephyrContext(name="filter-tasks") as context:
@@ -474,11 +302,11 @@ def filter_source(audit_path: str, output_path: str, policy: FilterPolicy) -> di
         accepted = (
             Dataset.from_files(str(output / "audit/*.parquet"))
             .load_parquet()
-            .filter(_is_accepted)
+            .filter(is_accepted)
             .write_parquet(str(output / "accepted/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
         )
         context.execute(accepted)
-    manifest: dict[str, Any] = {**_manifest(output), "policy": asdict(policy), "audited_source": str(source)}
+    manifest: dict[str, Any] = {**manifest_counts(output), "policy": asdict(policy), "audited_source": str(source)}
     audited_manifest = _read_json(source / "manifest.json")
     if manifest["input_rows"] != audited_manifest["input_rows"]:
         raise ValueError("Filtering lost rows from the complete audit ledger")
@@ -508,10 +336,9 @@ def concat_sources(input_paths: Sequence[str], output_path: str, view: Literal["
     )
     with ZephyrContext(name=f"concat-{view}") as context:
         context.execute(dataset)
-    actual = 0
-    for file in (output / "data/*.parquet").glob():
-        with file.open("rb") as stream:
-            actual += pq.ParquetFile(stream).metadata.num_rows
+        actual = context.execute(
+            Dataset.from_files(str(output / "data/*.parquet")).load_parquet(columns=["task_id"]).count()
+        ).results[0]
     if actual != expected:
         raise ValueError(f"Merged output contains {actual} rows; source manifests declare {expected}")
     manifest = {
@@ -520,5 +347,170 @@ def concat_sources(input_paths: Sequence[str], output_path: str, view: Literal["
         "input_rows": expected,
         "deduplication_scope": "within each source",
     }
+    _write_json(output / "manifest.json", manifest)
+    return manifest
+
+
+def _selected_rewrite_row(row: dict[str, Any], selected: frozenset[str]) -> bool:
+    return row["task_id"] in selected
+
+
+def _rewrite_window(
+    rows: list[dict[str, Any]],
+    *,
+    selected: frozenset[str],
+    recipe: DatasetRecipe,
+    policy: FilterPolicy,
+    rewrite_rubric: ReviewRubric,
+    rewriter: BatchRewriter,
+    reviewer: Reviewer,
+    output: StoragePath,
+) -> Iterator[dict[str, Any]]:
+    selected_rows = [row for row in rows if row["task_id"] in selected]
+    if not selected_rows:
+        yield from rows
+        return
+    originals = {row["task_id"]: TaskSpec.model_validate_json(row["task_json"]) for row in selected_rows}
+    evidence_id = canonical_sha256({"task_ids": sorted(originals)})
+    evidence = output / "evidence" / evidence_id / f"attempt-{uuid4().hex}"
+    with TemporaryDirectory(prefix="task-curation-rewrite-") as directory:
+        work = Path(directory)
+        try:
+            result = rewriter.rewrite(list(originals.values()), rewrite_rubric, work)
+            proposals = {record.task_id: record for record in result.records}
+            lineage = {record.parent_id: record for record in result.lineage}
+            candidates_by_id = {task.id: task for task in result.candidates}
+            candidates = {parent: candidates_by_id[item.task_id] for parent, item in lineage.items()}
+            if len(result.records) != len(originals) or set(proposals) != set(originals):
+                raise ValueError("Cleanup records do not account for every selected task")
+            checks = {}
+            for parent, candidate in candidates.items():
+                checks[parent] = (
+                    verify_task(candidate) if recipe.check_suite is None else recipe.check_suite.run(candidate).checks
+                )
+            reviews = (
+                reviewer.review(
+                    list(candidates.values()),
+                    recipe.rubric,
+                    work / "candidate-review",
+                    originals={candidate.id: originals[parent] for parent, candidate in candidates.items()},
+                )
+                if candidates
+                else []
+            )
+            reviews_by_id = {record.task_id: record for record in reviews}
+            if len(reviews_by_id) != len(reviews) or set(reviews_by_id) != {task.id for task in candidates.values()}:
+                raise ValueError("Candidate reviews do not account for every rewritten task")
+            for row in rows:
+                parent = row["task_id"]
+                proposal = proposals.get(parent)
+                if proposal is None:
+                    yield row
+                    continue
+                candidate = candidates.get(parent)
+                if candidate is None:
+                    yield {
+                        **row,
+                        "original_task_json": row["task_json"],
+                        "parent_id": parent,
+                        "cleanup_status": proposal.status.value,
+                        "cleanup_action": proposal.proposal.action.value if proposal.proposal else None,
+                        "cleanup_reason": proposal.proposal.reason if proposal.proposal else None,
+                        "cleanup_edits": (
+                            [edit.model_dump(mode="json") for edit in proposal.proposal.edits]
+                            if proposal.proposal
+                            else []
+                        ),
+                        "cleanup_detail": proposal.detail,
+                    }
+                    continue
+                original = originals[parent]
+                candidate_checks = checks[parent]
+                review = reviews_by_id[candidate.id]
+                audit = TaskAudit(
+                    task_id=candidate.id,
+                    source=original.source,
+                    raw=json.loads(row["raw_json"]),
+                    original=original,
+                    normalized=candidate,
+                    normalization_rejection=None,
+                    cleanup=proposal,
+                    lineage=lineage[parent].model_copy(update={"original_audit": row}),
+                    checks=list(candidate_checks),
+                    review=review,
+                    decision=task_decision(candidate.id, candidate_checks, review, policy),
+                    intended_use=recipe.intended_use,
+                    normalization_changes=tuple(
+                        NormalizationChange.model_validate(change) for change in row["normalization_changes"]
+                    ),
+                )
+                yield audit_columns(audit)
+        finally:
+            persist_evidence(work, evidence)
+
+
+def rewrite_audit_source(
+    source_path: str,
+    output_path: str,
+    recipe: DatasetRecipe,
+    policy: FilterPolicy,
+    rewrite_rubric: ReviewRubric,
+    rewriter: BatchRewriter,
+    reviewer: Reviewer,
+    selected_task_ids: tuple[str, ...],
+    review_batch_size: int,
+    max_workers: int,
+) -> dict[str, Any]:
+    """Rewrite selected audit rows in resumable Zephyr windows and export final decisions."""
+    if review_batch_size < 1 or max_workers < 1:
+        raise ValueError("Rewrite worker and batch counts must be positive")
+    selected = frozenset(selected_task_ids)
+    if len(selected) != len(selected_task_ids):
+        raise ValueError("Selected rewrite task IDs must be unique")
+    source, output = StoragePath(source_path), StoragePath(output_path)
+    input_pattern = str(source / "audit/*.parquet")
+    membership = (
+        Dataset.from_files(input_pattern)
+        .load_parquet(columns=["task_id", "task_json"])
+        .filter(partial(_selected_rewrite_row, selected=selected))
+    )
+    with ZephyrContext(max_workers=max_workers, name="rewrite-selection") as context:
+        selected_rows = context.execute(membership).results
+    if len(selected_rows) != len(selected) or {row["task_id"] for row in selected_rows} != selected:
+        raise ValueError("Selected rewrite tasks must all occur exactly once in the source audit")
+    for row in selected_rows:
+        if row["task_json"] is None:
+            raise ValueError(f"Selected task {row['task_id']} has no normalized task")
+    dataset = (
+        Dataset.from_files(input_pattern)
+        .load_parquet()
+        .window(review_batch_size)
+        .flat_map(
+            partial(
+                _rewrite_window,
+                selected=selected,
+                recipe=recipe,
+                policy=policy,
+                rewrite_rubric=rewrite_rubric,
+                rewriter=rewriter,
+                reviewer=reviewer,
+                output=output,
+            )
+        )
+        .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA, skip_existing=True)
+    )
+    with ZephyrContext(max_workers=max_workers, name=f"rewrite-{recipe.name}") as context:
+        context.execute(dataset)
+        context.execute(
+            Dataset.from_files(str(output / "audit/*.parquet"))
+            .load_parquet()
+            .filter(is_accepted)
+            .write_parquet(str(output / "accepted/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
+        )
+    manifest: dict[str, Any] = {**manifest_counts(output), "selected_rows": len(selected)}
+    if manifest["input_rows"] != _read_json(source / "manifest.json")["input_rows"]:
+        raise ValueError("Rewriting lost rows from the complete audit ledger")
+    if sum(manifest["dispositions"].values()) != manifest["input_rows"]:
+        raise ValueError("Every rewritten audit row must retain a final decision")
     _write_json(output / "manifest.json", manifest)
     return manifest

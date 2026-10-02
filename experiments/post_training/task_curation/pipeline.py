@@ -25,20 +25,21 @@ from pydantic import TypeAdapter
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
 from taskcompendium.pipeline.models import DatasetRecipe, EnvironmentInventory, FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.review import DEFAULT_PROMPT_CHARACTERS, BatchReviewer
-from taskcompendium.pipeline.rewriting import BatchRewriter, rewrite_audit_source
+from taskcompendium.pipeline.rewriting import REWRITE_INSTRUCTIONS, BatchRewriter
 from taskcompendium.pipeline.sources import source_files_identity
-from taskcompendium.pipeline.zephyr import (
+from taskcompendium.pipeline.stages import (
     AuditExecution,
     ReviewConfig,
+    rewrite_audit_source,
 )
-from taskcompendium.pipeline.zephyr import (
+from taskcompendium.pipeline.stages import (
     audit_source as audit_source_rows,
 )
-from taskcompendium.pipeline.zephyr import canonicalize_sources as canonicalize_source_rows
-from taskcompendium.pipeline.zephyr import (
+from taskcompendium.pipeline.stages import canonicalize_sources as canonicalize_source_rows
+from taskcompendium.pipeline.stages import (
     concat_sources as concatenate_source_rows,
 )
-from taskcompendium.pipeline.zephyr import (
+from taskcompendium.pipeline.stages import (
     filter_source as filter_source_rows,
 )
 
@@ -104,6 +105,8 @@ class RewriteStageConfig:
     output_path: str
     identity: dict[str, Any]
     recipe_identity: dict[str, Any]
+    max_workers: int
+    review_batch_size: int
     resources: ResourceConfig
 
 
@@ -227,7 +230,8 @@ def rewrite_source(
         "policy": policy,
         "model": binding.review.model,
         "model_revision": binding.review.model_revision,
-        "rewrite_revision": "instruction-edits-v1",
+        "rewrite_revision": "instruction-edits-v2",
+        "instructions_sha256": hashlib.sha256(REWRITE_INSTRUCTIONS.encode()).hexdigest(),
     }
 
     def config(ctx: StepContext) -> RewriteStageConfig:
@@ -236,6 +240,8 @@ def rewrite_source(
             output_path=ctx.output_path,
             identity=identity,
             recipe_identity=recipe_identity(binding.recipe),
+            max_workers=ctx.runtime_arg("max_workers"),
+            review_batch_size=ctx.runtime_arg("review_batch_size"),
             resources=ctx.runtime_arg("resources"),
         )
 
@@ -258,6 +264,8 @@ def rewrite_source(
             ),
             reviewer=execution.reviewer,
             selected_task_ids=binding.rewrite.task_ids,
+            review_batch_size=values.review_batch_size,
+            max_workers=values.max_workers,
         )
 
     return ArtifactStep(
@@ -267,7 +275,11 @@ def rewrite_source(
         run=execute,
         build_config=config,
         deps=(filtered,),
-        runtime_args={"resources": resources},
+        runtime_args={
+            "max_workers": execution.max_workers,
+            "review_batch_size": execution.review_batch_size,
+            "resources": resources,
+        },
     )
 
 

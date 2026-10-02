@@ -34,7 +34,7 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
 )
 from taskcompendium.pipeline.rewriting import BatchRewriter
-from taskcompendium.pipeline.zephyr import AuditExecution, ReviewConfig
+from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.pipeline import RewriteSelection, SourceBinding, build_workflow, main

@@ -4,7 +4,9 @@
 """Curation contracts exercised through persisted outputs and a fake batch API."""
 
 import hashlib
+import io
 import json
+import tarfile
 from dataclasses import dataclass, field, replace
 
 import pyarrow as pa
@@ -25,8 +27,11 @@ from taskcompendium.models import (
     VerifierSpec,
     task_resource,
 )
+from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.datasets import gpqa, instruction_following, preference_tasks, rubric_tasks
+from taskcompendium.pipeline.datasets.math_answers import recipe_asdiv
 from taskcompendium.pipeline.datasets.numeric_answers import SVAMP_RECIPE, normalize_aime24, normalize_svamp
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_files
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -46,17 +51,16 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
     TaskAudit,
 )
-from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.review import BatchReviewer, review_records
 from taskcompendium.pipeline.sources import staged_file_rows
-from taskcompendium.pipeline.verification import verify_task, verify_witness
-from taskcompendium.pipeline.zephyr import (
+from taskcompendium.pipeline.stages import (
     AuditExecution,
     ReviewConfig,
     audit_source,
     canonicalize_sources,
     filter_source,
 )
+from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.verifiers.atlas_answers import MathAnswerVerifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
@@ -570,6 +574,34 @@ def test_staged_source_reaches_end_across_files(tmp_path, apple_row):
     snapshot.write_text("".join(json.dumps({**apple_row, "position": index}) + "\n" for index in range(1003)))
     records = list(staged_file_rows(str(tmp_path), "source.jsonl", SourceFiles(("*.jsonl",), SourceFormat.JSONL)))
     assert [row["data"]["position"] for row in records] == list(range(1003))
+
+
+def test_family_source_hooks_preserve_tasktrove_archive_and_asdiv_xml_records(tmp_path):
+    archive_bytes = io.BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w") as archive:
+        for name, content in {
+            "instruction.md": b"Solve the task",
+            "tests/verifier_data.json": b'{"answer": "42"}',
+        }.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    config_dir = tmp_path / "sample"
+    config_dir.mkdir()
+    pq.write_table(
+        pa.table({"path": ["sample/task-1"], "task_binary": [archive_bytes.getvalue()]}), config_dir / "tasks.parquet"
+    )
+    tasktrove_row = next(staged_file_rows(str(tmp_path), "sample/tasks.parquet", tasktrove_files("sample")))
+    assert tasktrove_row["data"]["instruction"] == "Solve the task"
+    assert tasktrove_row["data"]["verifier_data"] == {"answer": "42"}
+    assert tasktrove_row["data"]["archive_sha256"] == hashlib.sha256(archive_bytes.getvalue()).hexdigest()
+
+    (tmp_path / "ASDiv.xml").write_text(
+        '<Dataset><Problem ID="1"><Body>Two plus two</Body><Question>How many?</Question>'
+        "<Answer>4 (things)</Answer></Problem></Dataset>"
+    )
+    asdiv_row = next(staged_file_rows(str(tmp_path), "ASDiv.xml", recipe_asdiv().inputs.files))
+    assert asdiv_row["data"] == {"ID": "1", "Body": "Two plus two", "Question": "How many?", "Answer": "4 (things)"}
 
 
 def test_audit_limit_counts_selected_input_across_files_before_normalization(tmp_path, apple_row):

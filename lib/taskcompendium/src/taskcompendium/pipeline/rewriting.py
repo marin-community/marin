@@ -4,32 +4,18 @@
 """Propose instruction-only repairs; each candidate must pass curation again."""
 
 import json
-from collections import Counter
 from collections.abc import Mapping, Sequence
-from contextlib import ExitStack
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from uuid import uuid4
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-from rigging.filesystem.storage_path import StoragePath
-from zephyr.readers import load_jsonl
-from zephyr.writers import write_jsonl_file, write_parquet_file
+from zephyr.writers import write_jsonl_file
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
-from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
-    DatasetRecipe,
-    Decision,
-    FilterPolicy,
-    NormalizationChange,
-    ReviewRecord,
     ReviewRubric,
     ReviewStatus,
     RewriteAction,
@@ -37,13 +23,9 @@ from taskcompendium.pipeline.models import (
     RewriteLineage,
     RewriteProposal,
     RewriteRecord,
-    TaskAudit,
 )
-from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns, write_task_parquet
-from taskcompendium.pipeline.review import CHAT_ENDPOINT, Reviewer
+from taskcompendium.pipeline.review import CHAT_ENDPOINT
 from taskcompendium.pipeline.review_transport import BatchClient, batch_output, typed_batch_records
-from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.pipeline.zephyr import persist_evidence
 
 TOOL_NAME = "propose_rewrite"
 REWRITE_INSTRUCTIONS = """Propose a minimal repair to the supplied task instruction.
@@ -62,59 +44,6 @@ Do not copy or edit an authoritative contract or a public schema. Leave those
 sections byte-for-byte unchanged. Rewrite only the confusing surrounding prose.
 Keep the task_id unchanged. Call propose_rewrite exactly once.
 """
-
-
-def write_rewrite_audit(
-    output_path: Path,
-    *,
-    checks: Mapping[str, Sequence[CheckResult]],
-    reviews: Sequence[ReviewRecord],
-    decisions: Sequence[Decision],
-) -> pa.Table:
-    """Join saved cleanup attempts with their subsequent checks and filter decisions.
-
-    Call with empty assessments after proposals. Before exporting accepted tasks,
-    supply candidate assessments and retained original assessments for other inputs.
-    """
-    originals = [TaskSpec.model_validate(row) for row in load_jsonl(str(output_path / "originals.jsonl"))]
-    records = [
-        RewriteRecord.model_validate_json(json.dumps(row)) for row in load_jsonl(str(output_path / "proposals.jsonl"))
-    ]
-    records_by_id = {record.task_id: record for record in records}
-    if len(records) != len(originals) or set(records_by_id) != {task.id for task in originals}:
-        raise ValueError("Cleanup records do not account for every original task")
-    candidates = [TaskSpec.model_validate(row) for row in load_jsonl(str(output_path / "candidates.jsonl"))]
-    candidates_by_id = {candidate.id: candidate for candidate in candidates}
-    lineage = {
-        item.parent_id: item
-        for item in (RewriteLineage.model_validate(row) for row in load_jsonl(str(output_path / "lineage.jsonl")))
-    }
-    reviews_by_id = {review.task_id: review for review in reviews}
-    decisions_by_id = {decision.task_id: decision for decision in decisions}
-    effective_ids = {lineage[original.id].task_id if original.id in lineage else original.id for original in originals}
-    if decisions and (len(decisions_by_id) != len(decisions) or set(decisions_by_id) != effective_ids):
-        raise ValueError("Final cleanup decisions must account for every effective task exactly once")
-    audits = []
-    for original in originals:
-        parent_lineage = lineage.get(original.id)
-        candidate = candidates_by_id[parent_lineage.task_id] if parent_lineage is not None else None
-        effective = candidate if candidate is not None else original
-        audits.append(
-            TaskAudit(
-                task_id=effective.id,
-                source=original.source,
-                raw=None,
-                original=original,
-                normalization_rejection=None,
-                cleanup=records_by_id[original.id],
-                normalized=effective,
-                lineage=parent_lineage,
-                checks=list(checks.get(effective.id, ())),
-                review=reviews_by_id.get(effective.id),
-                decision=decisions_by_id.get(effective.id),
-            )
-        )
-    return write_task_parquet(output_path / "audit.parquet", audits)
 
 
 def rewrite_records(output: str, task_ids: Sequence[str]) -> list[RewriteRecord]:
@@ -191,6 +120,13 @@ def protected_text_checks(candidate: TaskSpec, spans: Mapping[str, str]) -> list
 
 
 @dataclass(frozen=True)
+class RewriteResult:
+    records: list[RewriteRecord]
+    candidates: list[TaskSpec]
+    lineage: list[RewriteLineage]
+
+
+@dataclass(frozen=True)
 class BatchRewriter:
     client: BatchClient
     model: str
@@ -199,7 +135,7 @@ class BatchRewriter:
     max_prompt_characters: int = 64000
     poll_seconds: float = 5.0
 
-    def rewrite(self, tasks: Sequence[TaskSpec], rubric: ReviewRubric, output_path: Path) -> list[RewriteRecord]:
+    def rewrite(self, tasks: Sequence[TaskSpec], rubric: ReviewRubric, output_path: Path) -> RewriteResult:
         """Save originals, proposals, candidate lineage, and raw inference evidence."""
         identity = RewriteIdentity(
             tasks_sha256=canonical_sha256({"tasks": [task.model_dump(mode="json") for task in tasks]}),
@@ -309,140 +245,4 @@ class BatchRewriter:
             (row.model_dump(mode="json", exclude_none=True) for row in lineage), str(output_path / "lineage.jsonl")
         )
         write_jsonl_file((record.model_dump(mode="json") for record in validated), str(output_path / "proposals.jsonl"))
-        write_rewrite_audit(output_path, checks={}, reviews=(), decisions=())
-        return validated
-
-
-def rewrite_audit_source(
-    source_path: str,
-    output_path: str,
-    recipe: DatasetRecipe,
-    policy: FilterPolicy,
-    rewrite_rubric: ReviewRubric,
-    rewriter: BatchRewriter,
-    reviewer: Reviewer,
-    selected_task_ids: tuple[str, ...],
-) -> dict[str, object]:
-    """Rewrite selected audited tasks and recheck candidates before exporting decisions."""
-    source, output = StoragePath(source_path), StoragePath(output_path)
-    files = sorted((source / "audit/*.parquet").glob(), key=str)
-    selected = set(selected_task_ids)
-    originals = {}
-    for file in files:
-        with file.open("rb") as stream:
-            for row in pq.read_table(stream, columns=["task_id", "task_json"]).to_pylist():
-                if row["task_id"] in selected:
-                    if row["task_json"] is None:
-                        raise ValueError(f"Selected task {row['task_id']} has no normalized task")
-                    originals[row["task_id"]] = TaskSpec.model_validate_json(row["task_json"])
-    if set(originals) != selected:
-        raise ValueError("Selected rewrite tasks must all occur in the source audit")
-    with TemporaryDirectory(prefix="task-curation-rewrite-") as directory, ExitStack() as evidence_stack:
-        work = Path(directory)
-        evidence = output / "evidence" / f"attempt-{uuid4().hex}"
-        evidence_stack.callback(persist_evidence, work, evidence)
-        proposals = rewriter.rewrite(list(originals.values()), rewrite_rubric, work)
-        candidates_by_id = {
-            task.id: task
-            for task in (TaskSpec.model_validate(row) for row in load_jsonl(str(work / "candidates.jsonl")))
-        }
-        lineage = {
-            item.parent_id: item
-            for item in (RewriteLineage.model_validate(row) for row in load_jsonl(str(work / "lineage.jsonl")))
-        }
-        candidates = {parent: candidates_by_id[item.task_id] for parent, item in lineage.items()}
-        checks = {}
-        for parent, candidate in candidates.items():
-            if recipe.check_suite is None:
-                checks[parent] = verify_task(candidate)
-            else:
-                checks[parent] = recipe.check_suite.run(candidate).checks
-        reviews = (
-            reviewer.review(
-                list(candidates.values()),
-                recipe.rubric,
-                work / "candidate-review",
-                originals={candidate.id: originals[parent] for parent, candidate in candidates.items()},
-            )
-            if candidates
-            else []
-        )
-        reviews_by_id = {record.task_id: record for record in reviews}
-        if set(reviews_by_id) != {candidate.id for candidate in candidates.values()}:
-            raise ValueError("Candidate reviews do not account for every rewritten task")
-        proposals_by_id = {record.task_id: record for record in proposals}
-        counts: Counter[str] = Counter(input_rows=0, normalized_rows=0, reviewed_rows=0)
-        dispositions: Counter[str] = Counter()
-        reasons: Counter[str] = Counter()
-        for index, file in enumerate(files):
-            with file.open("rb") as stream:
-                rows = pq.read_table(stream).to_pylist()
-            updated = []
-            for row in rows:
-                parent = row["task_id"]
-                proposal = proposals_by_id.get(parent)
-                if proposal is None:
-                    updated.append(row)
-                    continue
-                original = originals[parent]
-                candidate = candidates.get(parent)
-                if candidate is None:
-                    updated.append(
-                        {
-                            **row,
-                            "original_task_json": row["task_json"],
-                            "parent_id": parent,
-                            "cleanup_status": proposal.status.value,
-                            "cleanup_action": proposal.proposal.action.value if proposal.proposal else None,
-                            "cleanup_reason": proposal.proposal.reason if proposal.proposal else None,
-                            "cleanup_edits": (
-                                [edit.model_dump(mode="json") for edit in proposal.proposal.edits]
-                                if proposal.proposal
-                                else []
-                            ),
-                            "cleanup_detail": proposal.detail,
-                        }
-                    )
-                    continue
-                review = reviews_by_id[candidate.id]
-                candidate_checks = checks[parent]
-                decision = task_decision(candidate.id, candidate_checks, review, policy)
-                audit = TaskAudit(
-                    task_id=candidate.id,
-                    source=original.source,
-                    raw=json.loads(row["raw_json"]),
-                    original=original,
-                    normalized=candidate,
-                    normalization_rejection=None,
-                    cleanup=proposal,
-                    lineage=lineage[parent].model_copy(update={"original_audit": row}),
-                    checks=list(candidate_checks),
-                    review=review,
-                    decision=decision,
-                    intended_use=recipe.intended_use,
-                    normalization_changes=tuple(
-                        NormalizationChange.model_validate(change) for change in row["normalization_changes"]
-                    ),
-                )
-                updated.append(audit_columns(audit))
-            for row in updated:
-                counts["input_rows"] += 1
-                counts["normalized_rows"] += row["normalization_reason"] is None
-                counts["reviewed_rows"] += row["review_status"] == "reviewed"
-                dispositions[row["filter_status"]] += 1
-                reasons.update(row["filter_reasons"])
-            target = output / "audit" / f"part-{index:05d}.parquet"
-            write_parquet_file(updated, str(target), schema=TASK_SCHEMA)
-            accepted = [row for row in updated if row["filter_status"] == "keep"]
-            accepted_path = output / "accepted" / f"part-{index:05d}.parquet"
-            write_parquet_file(accepted, str(accepted_path), schema=TASK_SCHEMA)
-        manifest: dict[str, object] = {
-            **counts,
-            "dispositions": dict(dispositions),
-            "reasons": dict(reasons),
-            "rewritten_rows": len(candidates),
-            "selected_rows": len(selected),
-        }
-        with (output / "manifest.json").open("wt", auto_mkdir=True) as stream:
-            json.dump(manifest, stream, indent=2)
-        return manifest
+        return RewriteResult(records=validated, candidates=candidates, lineage=lineage)

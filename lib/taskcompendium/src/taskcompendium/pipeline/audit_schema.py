@@ -4,12 +4,9 @@
 """Columnar task annotations for curation exports."""
 
 import json
-from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
-from zephyr.writers import write_parquet_file
 
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import TaskAudit
@@ -119,10 +116,3 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
         "cleanup_detail": cleanup.detail if cleanup is not None else None,
         "cleanup_lineage_json": audit.lineage.model_dump_json(exclude_none=True) if audit.lineage is not None else None,
     }
-
-
-def write_task_parquet(path: Path, audits: Sequence[TaskAudit]) -> pa.Table:
-    """Persist every annotated task, including rejected rows and incomplete attempts."""
-    table = pa.Table.from_pylist([audit_columns(audit) for audit in audits], schema=TASK_SCHEMA)
-    write_parquet_file(table.to_batches(), str(path), schema=TASK_SCHEMA)
-    return table

@@ -15,6 +15,8 @@ from taskcompendium.models import FunctionCall, ResourceVisibility, TaskSpec
 from taskcompendium.runtime.models import RuntimeEvidence
 
 INTERFACE = "shell:v1"
+OUTPUT_PATH = "/output/command_capture.txt"
+CONTROL_PATH = "/controls/reference.sh"
 MISSING_CAPTURE_EXIT_CODE = 44
 
 

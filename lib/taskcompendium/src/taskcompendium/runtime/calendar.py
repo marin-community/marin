@@ -12,11 +12,46 @@ from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
-from taskcompendium.models import FunctionCall, TaskSpec
+from taskcompendium.models import AssistantToolCalls, FunctionCall, TaskSpec
+from taskcompendium.runtime.controls import Control, tool_turn
 from taskcompendium.runtime.models import RuntimeEvidence
-from taskcompendium.verifiers.runtime import CalendarEvent, CalendarState
+from taskcompendium.verifiers.runtime import CalendarEvent, CalendarState, CalendarStateVerifier
 
 INTERFACE = "calendar:v1"
+
+
+def calendar_controls(verifier: CalendarStateVerifier) -> tuple[Control, ...]:
+    """Choose valid and invalid schedule actions for the calendar episode check."""
+    slots = []
+    for start in range(verifier.earliest, verifier.latest - verifier.duration + 1):
+        if all(
+            not set(verifier.participants).intersection(event.participants)
+            or start >= event.end
+            or event.start >= start + verifier.duration
+            for event in verifier.original_events
+        ):
+            slots.append(start)
+    if not slots:
+        raise ValueError("Calendar task has no feasible slot")
+
+    def schedule(start: int) -> AssistantToolCalls:
+        return tool_turn(
+            "create_event",
+            {
+                "title": verifier.title,
+                "participants": list(verifier.participants),
+                "start": start,
+                "end": start + verifier.duration,
+            },
+        )
+
+    return (
+        Control("noop", (), 0.0),
+        Control("reference", (schedule(slots[0]),), 1.0),
+        Control("perturbed", (schedule(verifier.latest),), 0.0),
+        Control("alternate", (schedule(slots[-1]),), 1.0),
+        Control("reset", (schedule(slots[0]),), 1.0),
+    )
 
 
 @dataclass

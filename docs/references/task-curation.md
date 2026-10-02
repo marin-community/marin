@@ -133,11 +133,20 @@ A failed mapper can submit its unfinished review batch again. The audit records
 the final result for each task. Earlier attempt files are debug logs; they do not
 create extra rejected rows after a successful retry.
 
-Zephyr forms review windows and writes completed audit shards. The provider
-protocol lives in `pipeline/review_transport.py`; it submits requests and saves
-responses without a separate local resume mechanism. JSONL and Parquet exports
-use Zephyr writers. The optional rewrite stage still scans source files itself;
-it uses the shared writers but does not yet use Zephyr shard execution.
+`pipeline/stages.py` runs audit, filtering, rewriting and merge datasets through
+Zephyr. Row normalization and duplicate policy live in `transforms.py`; the audit
+schema and column projection live in `audit_schema.py`. Manifests use a shared
+Zephyr reduction, and evidence files are copied with Rigging.
+
+Rewrite selection is validated before inference. Proposals and candidate review
+run inside Zephyr windows; completed audit shards skip both on retry. The rewriter
+returns candidates and lineage directly, while JSONL files retain their evidence.
+The rewrite prompt digest is part of artifact identity. Dataset decoders belong
+to their families, including TaskTrove archives and ASDiv XML.
+
+The provider protocol lives in `pipeline/review_transport.py`; it submits requests
+and saves responses without a separate local resume mechanism. Zephyr forms
+windows and writes JSONL and Parquet. FineStore retains exact-query completions.
 
 ## Outputs
 

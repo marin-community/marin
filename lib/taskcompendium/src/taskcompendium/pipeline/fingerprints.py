@@ -11,7 +11,7 @@ from taskcompendium.pipeline.models import DatasetRecipe
 
 NORMALIZATION_STAGE_REVISION = "2"
 VERIFICATION_STAGE_REVISION = "1"
-REVIEW_STAGE_REVISION = "1"
+REVIEW_STAGE_REVISION = "2"
 
 
 def recipe_code_identity(recipe: DatasetRecipe) -> dict[str, str]:

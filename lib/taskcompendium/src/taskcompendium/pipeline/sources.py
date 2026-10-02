@@ -3,13 +3,8 @@
 
 """Decode records from pinned source files staged by an acquisition artifact."""
 
-import base64
 import csv
-import hashlib
-import io
 import json
-import tarfile
-import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, is_dataclass
 from typing import Any, cast
@@ -75,10 +70,6 @@ def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[di
     elif source_format == SourceFormat.CSV:
         with path.open("rt", encoding="utf-8-sig") as stream:
             yield from csv.DictReader(stream)
-    elif source_format == SourceFormat.XML:
-        with path.open("rb") as stream:
-            root = ET.parse(stream).getroot()
-        yield from ({**item.attrib, **{child.tag: child.text or "" for child in item}} for item in root.iter("Problem"))
     else:
         raise ValueError(f"Unsupported staged source format: {source_format}")
 
@@ -97,26 +88,3 @@ def staged_file_rows(path: str, relative_file: str, spec: SourceFiles) -> Iterat
             continue
         data = spec.decoder(row, root) if spec.decoder is not None else row
         yield {"index": index, "locator": f"{relative_file}:{index}", "data": data}
-
-
-def unpack_task_binary(row: dict[str, Any], _staged_root: StoragePath) -> dict[str, Any]:
-    """Expose Harbor task files in the form consumed by task converters."""
-    blob = row["task_binary"]
-    if not isinstance(blob, bytes):
-        raise ValueError("Task binary must contain archived bytes")
-    files: dict[str, bytes] = {}
-    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:*") as archive:
-        for member in archive:
-            if member.isfile():
-                handle = archive.extractfile(member)
-                if handle is not None:
-                    files[member.name.removeprefix("./")] = handle.read()
-    prepared = {
-        "path": row["path"],
-        "instruction": files["instruction.md"].decode(),
-        "files": {name: base64.b64encode(data).decode() for name, data in files.items()},
-        "archive_sha256": hashlib.sha256(blob).hexdigest(),
-    }
-    if "tests/verifier_data.json" in files:
-        prepared["verifier_data"] = json.loads(files["tests/verifier_data.json"])
-    return prepared

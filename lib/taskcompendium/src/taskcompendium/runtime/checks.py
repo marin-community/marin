@@ -8,68 +8,19 @@ does not use them.
 """
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from taskcompendium.grading import GradingAttempt, Outcome
-from taskcompendium.models import (
-    AssistantMessage,
-    AssistantToolCalls,
-    ConversationToolCall,
-    ResourceVisibility,
-    TaskSpec,
-)
-from taskcompendium.pipeline.datasets.shell_files import CONTROL_PATH, OUTPUT_PATH
+from taskcompendium.models import ResourceVisibility, TaskSpec
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, CheckSuite, VerificationReport
 from taskcompendium.pipeline.verification import PLAIN
+from taskcompendium.runtime.calendar import calendar_controls
+from taskcompendium.runtime.controls import Control, tool_turn
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.models import EnvironmentFactory, Termination
-from taskcompendium.runtime.shell import ShellFactory
+from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH, ShellFactory
 from taskcompendium.verifier_registry import resolve_verifier
 from taskcompendium.verifiers.runtime import CalendarStateVerifier, CaptureOutputVerifier
-
-
-@dataclass(frozen=True)
-class Control:
-    name: str
-    responses: tuple[AssistantMessage, ...]
-    expected_reward: float
-
-
-def tool_turn(name: str, arguments: dict) -> AssistantToolCalls:
-    return AssistantToolCalls(calls=(ConversationToolCall(call_id=f"control-{name}", name=name, arguments=arguments),))
-
-
-def calendar_controls(verifier: CalendarStateVerifier) -> tuple[Control, ...]:
-    slots = []
-    for start in range(verifier.earliest, verifier.latest - verifier.duration + 1):
-        if all(
-            not set(verifier.participants).intersection(event.participants)
-            or start >= event.end
-            or event.start >= start + verifier.duration
-            for event in verifier.original_events
-        ):
-            slots.append(start)
-    if not slots:
-        raise ValueError("Calendar task has no feasible slot")
-
-    def schedule(start: int) -> AssistantToolCalls:
-        return tool_turn(
-            "create_event",
-            {
-                "title": verifier.title,
-                "participants": list(verifier.participants),
-                "start": start,
-                "end": start + verifier.duration,
-            },
-        )
-
-    return (
-        Control("noop", (), 0.0),
-        Control("reference", (schedule(slots[0]),), 1.0),
-        Control("perturbed", (schedule(verifier.latest),), 0.0),
-        Control("alternate", (schedule(slots[-1]),), 1.0),
-        Control("reset", (schedule(slots[0]),), 1.0),
-    )
 
 
 async def check_episodes(task: TaskSpec, factory: EnvironmentFactory, *, max_steps: int) -> VerificationReport:

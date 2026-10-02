@@ -29,10 +29,9 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
+from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH
 from taskcompendium.verifiers.runtime import CaptureOutputVerifier
 
-OUTPUT_PATH = "/output/command_capture.txt"
-CONTROL_PATH = "/controls/reference.sh"
 BASH = FunctionDefinition(
     name="Bash",
     description="Run a shell command in /workspace",

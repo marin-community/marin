@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 
 import pyarrow.parquet as pq
 import pytest
-from zephyr.readers import load_jsonl
+from zephyr.writers import write_parquet_file
 
 from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.datasets import instruction_following, structured_output
-from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     Confidence,
     Decision,
@@ -27,14 +27,12 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
     TaskAudit,
 )
-from taskcompendium.pipeline.parquet import write_task_parquet
 from taskcompendium.pipeline.rewriting import (
     BatchRewriter,
     protected_text_checks,
-    rewrite_audit_source,
     rewrite_records,
-    write_rewrite_audit,
 )
+from taskcompendium.pipeline.stages import rewrite_audit_source
 from taskcompendium.pipeline.verification import verify_witness
 
 
@@ -149,7 +147,7 @@ def test_rewrite_retry_resubmits_batch_and_retains_lineage(tmp_path, structured_
     rubric = ReviewRubric("repair", "1", ("Preserve the schema.",))
     with pytest.raises(TimeoutError):
         rewriter.rewrite([structured_task], rubric, tmp_path / "failed-attempt")
-    rewriter.rewrite([structured_task], rubric, tmp_path)
+    result = rewriter.rewrite([structured_task], rubric, tmp_path)
     assert len(service.batches) == 2
     assert json.loads((tmp_path / "failed-attempt/batch-submission.json").read_text())["batch_id"] == "batch-0"
     assert json.loads((tmp_path / "batch-submission.json").read_text())["batch_id"] == "batch-1"
@@ -165,79 +163,10 @@ def test_rewrite_retry_resubmits_batch_and_retains_lineage(tmp_path, structured_
     lineage = json.loads((tmp_path / "lineage.jsonl").read_text())
     assert lineage["parent_id"] == original.id and lineage["task_id"] == candidate.id
     assert lineage["parent_sha256"] != lineage["candidate_sha256"]
-    audit = pq.read_table(tmp_path / "audit.parquet").to_pylist()[0]
-    assert TaskSpec.model_validate_json(audit["original_task_json"]) == original
-    assert TaskSpec.model_validate_json(audit["task_json"]) == candidate
-    assert audit["cleanup_edits"] == [{"old_text": old_text, "replacement": "Generate a schema-valid instance."}]
-    assert audit["cleanup_reason"]
-    assert json.loads(audit["cleanup_lineage_json"]) == lineage
-    assert audit["filter_status"] is None  # A proposal has not yet passed the final filter.
-
-
-@pytest.mark.parametrize("action", ["unchanged", "unrepairable"])
-def test_final_rewrite_audit_keeps_original_decision_and_rejects_failed_candidate(tmp_path, structured_task, action):
-    original = structured_task.model_copy(update={"id": "original-task"})
-    edits = [{"old_text": "Parse the document and recover all values.", "replacement": "Generate an instance."}]
-    service = RewriteService(
-        [rewrite_response(structured_task.id, "rewrite", edits), rewrite_response(original.id, action, [])],
-        interrupted=False,
-    )
-    BatchRewriter(service, "model", "deployment").rewrite(
-        [structured_task, original], ReviewRubric("repair", "1", ()), tmp_path
-    )
-    candidate = TaskSpec.model_validate(next(load_jsonl(str(tmp_path / "candidates.jsonl"))))
-    checks = verify_witness(candidate, '{"count": 0}', "__invalid__")
-    review = ReviewRecord(task_id=candidate.id, status=ReviewStatus.UNAVAILABLE, verdict=None, detail="No review")
-    decision = task_decision(candidate.id, checks, review, FilterPolicy())
-    original_checks = verify_witness(original, '{"count": 2}', '{"count": 0}')
-    original_review = ReviewRecord(
-        task_id=original.id,
-        status=ReviewStatus.REVIEWED,
-        verdict=ReviewVerdict(
-            task_id=original.id,
-            quality=Quality.GOOD,
-            confidence=Confidence.HIGH,
-            reference_status=ReferenceStatus.CONSISTENT,
-            defects=[],
-            evidence="The generation contract admits any integer count greater than zero.",
-        ),
-        detail="",
-    )
-    original_decision = task_decision(original.id, original_checks, original_review, FilterPolicy())
-    write_rewrite_audit(
-        tmp_path,
-        checks={candidate.id: checks, original.id: original_checks},
-        reviews=[review, original_review],
-        decisions=[decision, original_decision],
-    )
-    audit = pq.read_table(tmp_path / "audit.parquet").to_pylist()
-    assert [row["parent_id"] for row in audit] == [structured_task.id, original.id]
-    assert audit[0]["task_id"] == candidate.id
-    assert TaskSpec.model_validate_json(audit[0]["task_json"]) == candidate
-    assert audit[0]["cleanup_edits"] == edits
-    assert audit[0]["filter_status"] == "reject"
-    assert audit[0]["filter_reasons"] == ["check:witness"]
-    assert audit[0]["checks"][1]["status"] == "fail"
-    assert audit[1]["cleanup_action"] == action
-    assert TaskSpec.model_validate_json(audit[1]["task_json"]) == original
-    assert audit[1]["filter_status"] == "keep"
-    assert audit[1]["review_evidence"] == original_review.verdict.evidence
-    assert audit[1]["checks"] == [check.model_dump(mode="json") for check in original_checks]
-
-
-@pytest.mark.parametrize("fault", ["missing", "duplicate"])
-def test_final_rewrite_decisions_cannot_omit_or_repeat_an_effective_task(tmp_path, structured_task, fault):
-    second = structured_task.model_copy(update={"id": "second-task"})
-    service = RewriteService(
-        [rewrite_response(task.id, "unchanged", []) for task in (structured_task, second)], interrupted=False
-    )
-    BatchRewriter(service, "model", "deployment").rewrite(
-        [structured_task, second], ReviewRubric("repair", "1", ()), tmp_path
-    )
-    decision = Decision(task_id=structured_task.id, disposition=Disposition.KEEP, reasons=[])
-    decisions = [decision] if fault == "missing" else [decision, decision]
-    with pytest.raises(ValueError, match="every effective task exactly once"):
-        write_rewrite_audit(tmp_path, checks={}, reviews=(), decisions=decisions)
+    assert result.candidates == [candidate]
+    assert result.lineage[0].model_dump(mode="json", exclude_none=True) == lineage
+    assert result.records[0].proposal is not None
+    assert result.records[0].proposal.edits[0].old_text == old_text
 
 
 @pytest.mark.parametrize("action", ["unchanged", "unrepairable"])
@@ -246,7 +175,8 @@ def test_rewriter_retains_non_rewritten_tasks_without_candidates(tmp_path, struc
     records = BatchRewriter(service, "model", "deployment").rewrite(
         [structured_task], ReviewRubric("repair", "1", ()), tmp_path
     )
-    assert records[0].proposal.action.value == action
+    assert records.records[0].proposal is not None
+    assert records.records[0].proposal.action.value == action
     assert not (tmp_path / "candidates.jsonl").read_text()
     assert TaskSpec.model_validate_json((tmp_path / "originals.jsonl").read_text()) == structured_task
 
@@ -320,7 +250,8 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
     )
     source = tmp_path / "filtered"
     (source / "audit").mkdir(parents=True)
-    write_task_parquet(source / "audit/part-00000.parquet", [original])
+    write_parquet_file([audit_columns(original)], str(source / "audit/part-00000.parquet"), schema=TASK_SCHEMA)
+    (source / "manifest.json").write_text(json.dumps({"input_rows": 1}))
     service = RewriteService(
         [
             rewrite_response(
@@ -338,11 +269,16 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
     )
 
     class CandidateReviewer:
+        calls = 0
+
         @property
         def identity(self):
             return {"model": "fixture"}
 
         def review(self, tasks, rubric, output_path, *, originals=None):
+            self.calls += 1
+            if self.calls > 1:
+                raise AssertionError("Completed rewrite shard called the reviewer again")
             assert originals is not None
             assert {task.id for task in tasks} == set(originals)
             return [
@@ -363,6 +299,7 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
             ]
 
     output = tmp_path / "rewritten"
+    reviewer = CandidateReviewer()
     manifest = rewrite_audit_source(
         str(source),
         str(output),
@@ -370,8 +307,10 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
         FilterPolicy(),
         ReviewRubric("repair", "1", ("Preserve the schema.",)),
         BatchRewriter(service, "model", "deployment"),
-        CandidateReviewer(),
+        reviewer,
         (structured_task.id,),
+        review_batch_size=1,
+        max_workers=1,
     )
     row = pq.read_table(output / "audit/part-00000.parquet").to_pylist()[0]
     assert manifest["dispositions"] == {"keep": 1}
@@ -381,6 +320,146 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
     lineage = json.loads(row["cleanup_lineage_json"])
     assert lineage["original_audit"]["filter_reasons"] == ["review:bad"]
     assert pq.read_table(output / "accepted/part-00000.parquet").num_rows == 1
+    submitted = len(service.batches)
+    service.interrupted = True
+    repeated = rewrite_audit_source(
+        str(source),
+        str(output),
+        structured_output.recipe(),
+        FilterPolicy(),
+        ReviewRubric("repair", "1", ("Preserve the schema.",)),
+        BatchRewriter(service, "model", "deployment"),
+        reviewer,
+        (structured_task.id,),
+        review_batch_size=1,
+        max_workers=1,
+    )
+    assert repeated == manifest
+    assert pq.read_table(output / "audit/part-00000.parquet").to_pylist()[0] == row
+    assert len(service.batches) == submitted
+    assert reviewer.calls == 1
+
+
+def test_rewrite_stage_rejects_candidate_with_unavailable_review(tmp_path, structured_task):
+    original = TaskAudit(
+        task_id=structured_task.id,
+        source=structured_task.source,
+        raw={"data": {"instruction": structured_task.context.events[0].content}},
+        normalized=structured_task,
+        normalization_rejection=None,
+        checks=[],
+        review=None,
+        decision=Decision(task_id=structured_task.id, disposition=Disposition.REJECT, reasons=["review:bad"]),
+    )
+    source = tmp_path / "filtered"
+    write_parquet_file([audit_columns(original)], str(source / "audit/part-00000.parquet"), schema=TASK_SCHEMA)
+    (source / "manifest.json").write_text(json.dumps({"input_rows": 1}))
+    service = RewriteService(
+        [
+            rewrite_response(
+                structured_task.id,
+                "rewrite",
+                [
+                    {
+                        "old_text": "Parse the document and recover all values.",
+                        "replacement": "Generate a schema-valid instance.",
+                    }
+                ],
+            )
+        ],
+        interrupted=False,
+    )
+
+    class UnavailableReviewer:
+        @property
+        def identity(self):
+            return {"model": "fixture"}
+
+        def review(self, tasks, rubric, output_path, *, originals=None):
+            assert originals is not None and set(originals) == {task.id for task in tasks}
+            return [
+                ReviewRecord(task_id=task.id, status=ReviewStatus.UNAVAILABLE, verdict=None, detail="No review")
+                for task in tasks
+            ]
+
+    output = tmp_path / "rewritten"
+    manifest = rewrite_audit_source(
+        str(source),
+        str(output),
+        structured_output.recipe(),
+        FilterPolicy(),
+        ReviewRubric("repair", "1", ()),
+        BatchRewriter(service, "model", "deployment"),
+        UnavailableReviewer(),
+        (structured_task.id,),
+        review_batch_size=1,
+        max_workers=1,
+    )
+    row = pq.read_table(output / "audit/part-00000.parquet").to_pylist()[0]
+    assert row["task_id"] != structured_task.id
+    assert row["filter_status"] == "reject"
+    assert row["review_status"] == "unavailable"
+    assert manifest["rewritten_rows"] == 1 and manifest["dispositions"] == {"reject": 1}
+    assert json.loads(row["cleanup_lineage_json"])["original_audit"]["filter_reasons"] == ["review:bad"]
+
+
+@pytest.mark.parametrize("action", ["unchanged", "unrepairable"])
+def test_rewrite_stage_preserves_original_decisions_without_a_candidate(tmp_path, structured_task, action):
+    selected = TaskAudit(
+        task_id=structured_task.id,
+        source=structured_task.source,
+        raw={"data": {"instruction": structured_task.context.events[0].content}},
+        normalized=structured_task,
+        normalization_rejection=None,
+        checks=[],
+        review=None,
+        decision=Decision(task_id=structured_task.id, disposition=Disposition.REJECT, reasons=["review:bad"]),
+    )
+    other_task = structured_task.model_copy(update={"id": "unselected-task"})
+    unselected = selected.model_copy(
+        update={
+            "task_id": other_task.id,
+            "normalized": other_task,
+            "decision": Decision(task_id=other_task.id, disposition=Disposition.KEEP, reasons=[]),
+        }
+    )
+    source = tmp_path / "filtered"
+    write_parquet_file(
+        [audit_columns(selected), audit_columns(unselected)],
+        str(source / "audit/part-00000.parquet"),
+        schema=TASK_SCHEMA,
+    )
+    (source / "manifest.json").write_text(json.dumps({"input_rows": 2}))
+    service = RewriteService([rewrite_response(structured_task.id, action, [])], interrupted=False)
+
+    class UnusedReviewer:
+        @property
+        def identity(self):
+            return {"model": "fixture"}
+
+        def review(self, tasks, rubric, output_path, *, originals=None):
+            raise AssertionError("No candidate should be reviewed")
+
+    output = tmp_path / "rewritten"
+    manifest = rewrite_audit_source(
+        str(source),
+        str(output),
+        structured_output.recipe(),
+        FilterPolicy(),
+        ReviewRubric("repair", "1", ()),
+        BatchRewriter(service, "model", "deployment"),
+        UnusedReviewer(),
+        (structured_task.id,),
+        review_batch_size=1,
+        max_workers=1,
+    )
+    rows = {row["task_id"]: row for row in pq.read_table(output / "audit/part-00000.parquet").to_pylist()}
+    assert manifest["input_rows"] == 2 and manifest["rewritten_rows"] == 0
+    assert rows[structured_task.id]["cleanup_action"] == action
+    assert rows[structured_task.id]["filter_status"] == "reject"
+    assert rows[structured_task.id]["filter_reasons"] == ["review:bad"]
+    assert rows[other_task.id]["parent_id"] is None
+    assert rows[other_task.id]["filter_status"] == "keep"
 
 
 @pytest.mark.parametrize(
@@ -398,8 +477,8 @@ def test_invalid_literal_edits_remain_recorded_without_candidates(tmp_path, stru
     records = BatchRewriter(service, "model", "deployment").rewrite(
         [structured_task], ReviewRubric("repair", "1", ()), tmp_path
     )
-    assert records[0].status == ReviewStatus.INVALID
-    assert records[0].proposal is None
+    assert records.records[0].status == ReviewStatus.INVALID
+    assert records.records[0].proposal is None
     assert not (tmp_path / "candidates.jsonl").read_text()
 
 

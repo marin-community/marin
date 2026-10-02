@@ -5,11 +5,13 @@
 
 import json
 import re
-from collections.abc import Callable
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterator
 from dataclasses import replace
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import JsonValue
+from rigging.filesystem.storage_path import StoragePath
 from verifyit.modes.extract import extract_boxed
 
 from taskcompendium.models import (
@@ -276,6 +278,13 @@ def normalize_asdiv(row: RawRow) -> TaskSpec | ImportRejection:
     return math_task(row, (TextMessage(role="user", content=f"{body}\n\n{question}"),), expected, evidence)
 
 
+def asdiv_rows(path: StoragePath) -> Iterator[dict[str, Any]]:
+    """Read ASDiv Problem elements into the fields used by its converter."""
+    with path.open("rb") as stream:
+        root = ET.parse(stream).getroot()
+    yield from ({**item.attrib, **{child.tag: child.text or "" for child in item}} for item in root.iter("Problem"))
+
+
 def recipe_asdiv() -> DatasetRecipe:
     return math_recipe(
         "asdiv",
@@ -283,7 +292,10 @@ def recipe_asdiv() -> DatasetRecipe:
         normalize_asdiv,
         IntendedUse.TRAIN,
         ASDIV_RUBRIC,
-        RecipeInputs(SourceFiles(("ASDiv.xml",), SourceFormat.XML), (UrlDownload(ASDIV_SOURCE_FILE, "ASDiv.xml"),)),
+        RecipeInputs(
+            SourceFiles(("ASDiv.xml",), SourceFormat.XML, reader=asdiv_rows),
+            (UrlDownload(ASDIV_SOURCE_FILE, "ASDiv.xml"),),
+        ),
     )
 
 
