@@ -1380,7 +1380,7 @@ def _schedules_dispatch_overlap(cfg: GrugModelConfig) -> bool:
     The dispatch overlap orders the ragged transports for XLA's latency-hiding scheduler with one
     collective in flight, which the launcher enables only with the carry offload. Other
     configurations keep the plain path. Neither path is safe under XLA's default scheduler alone,
-    which can start two transports together.
+    which can start two transports together; the launcher makes collectives synchronous there.
     """
     return (
         resolve_moe_implementation(cfg.moe_implementation) == RAGGED_MOE_IMPLEMENTATION
