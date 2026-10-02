@@ -419,6 +419,7 @@ def build_h100_ladder_run(
     train_batch_dump_steps: tuple[int, ...] = (),
     train_text_count_patterns: tuple[str, ...] = (),
     fact_probe_input: str | None = None,
+    weight_attribution_window: tuple[int, ...] = (),
     fact_probe_every: int = 1,
     fact_probe_ema_every: int = 50,
 ) -> ArtifactStep[ThroughputResult]:
@@ -536,6 +537,7 @@ def build_h100_ladder_run(
         train_batch_dump_steps=train_batch_dump_steps,
         train_text_count_patterns=train_text_count_patterns,
         fact_probe_input=fact_probe_input,
+        weight_attribution_window=weight_attribution_window,
         fact_probe_every=fact_probe_every,
         fact_probe_ema_every=fact_probe_ema_every,
     )
@@ -895,6 +897,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     default=None,
     help="npz of probe rows and fact spans (fact_probe.write_fact_probe_input) to score through training.",
 )
+@click.option(
+    "--weight-attribution",
+    default="",
+    help="START,END step counts: attribute each step's change in log p at the --fact-probe-input spot to the "
+    "parameter updates (weight_attribution.py); results in <output>/fact_probe/.",
+)
 @click.option("--fact-probe-every", default=1, show_default=True, help="Score the fact probe every N steps.")
 @click.option("--fact-probe-ema-every", default=50, show_default=True, help="Score the live EMA weights every N steps.")
 @click.option(
@@ -1002,6 +1010,7 @@ def main(
     dump_train_batches: str,
     count_train_text: tuple[str, ...],
     fact_probe_input: str | None,
+    weight_attribution: str,
     fact_probe_every: int,
     fact_probe_ema_every: int,
     router_tie_class: tuple[str, ...],
@@ -1059,6 +1068,7 @@ def main(
         train_batch_dump_steps=tuple(int(step) for step in dump_train_batches.split(",") if step),
         train_text_count_patterns=tuple(count_train_text),
         fact_probe_input=fact_probe_input,
+        weight_attribution_window=tuple(int(step) for step in weight_attribution.split(",") if step),
         fact_probe_every=fact_probe_every,
         fact_probe_ema_every=fact_probe_ema_every,
         router_tie_specs=router_tie_specs,

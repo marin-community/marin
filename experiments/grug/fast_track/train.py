@@ -102,6 +102,7 @@ from experiments.grug.fast_track.muon_probe import MuonProbe
 from experiments.grug.fast_track.optimizer import expert_consistency_metrics, magma_metrics, optimizer_diagnostics
 from experiments.grug.fast_track.snr_probe import SnrProbe
 from experiments.grug.fast_track.stiefel import _msign
+from experiments.grug.fast_track.weight_attribution import AttributionWriter, leaf_name, per_layer_sum, rails_by_name
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -320,6 +321,12 @@ class GrugTrainerConfig:
     # ``<fact_probe_dir>/train_text_counts.npz`` and stop before training.
     train_text_count_patterns: tuple[str, ...] = ()
     fact_probe_input: str | None = None
+    # Weight attribution (``weight_attribution.py``): for step counts in ``weight_attribution_window`` (start, end),
+    # attribute each step's change in log p at ``fact_probe_input``'s spot to the parameter updates, per tensor and
+    # layer, with the Bi-Maxwell rails, into ``fact_probe_dir``. Tensors matching ``weight_attribution_exclude`` are
+    # skipped (the probe keeps previous-step copies of the rest).
+    weight_attribution_window: tuple[int, ...] = ()
+    weight_attribution_exclude: str = r"token_embed2"
     fact_probe_every: int = 1
     fact_probe_ema_every: int = 50
     fact_probe_dir: str | None = None
@@ -1193,6 +1200,111 @@ def _count_train_text(config: GrugRunConfig, train_loader: DataLoader, num_steps
                 step,
                 dict(zip(patterns, np.sum(counts, axis=0).tolist(), strict=True)),
             )
+
+
+def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) -> Callable[..., None]:
+    """The ``weight_attribution_window`` hook (see ``weight_attribution.py``). Runs on the train mesh, so log p
+    uses the training MoE path; ``logp`` is recorded so the first-order sums can be checked against it."""
+    trainer_cfg = config.trainer
+    start, end = trainer_cfg.weight_attribution_window
+    if trainer_cfg.fact_probe_input is None or trainer_cfg.fact_probe_dir is None:
+        raise ValueError("weight_attribution_window needs fact_probe_input (with a spot) and fact_probe_dir")
+    probe = FactProbeInput.load(trainer_cfg.fact_probe_input)
+    if not len(probe.spot):
+        raise ValueError("weight_attribution_window needs a spot in fact_probe_input")
+    row, position = int(probe.spot[0]), int(probe.spot[1])
+    host_example = probe.example(config.data.the_tokenizer.eos_token_id)
+    with set_mesh(mesh):
+        rows = NamedSharding(mesh, P(_BATCH_AXES))
+        batch = jax.tree.map(
+            lambda leaf: jax.device_put(leaf, rows) if isinstance(leaf, np.ndarray) else leaf, host_example
+        )
+    exclude = re.compile(trainer_cfg.weight_attribution_exclude)
+    writer = AttributionWriter(trainer_cfg.fact_probe_dir)
+
+    def selected(tree) -> dict[str, jax.Array]:
+        return {
+            leaf_name(path): leaf
+            for path, leaf in jax.tree_util.tree_leaves_with_path(tree)
+            if isinstance(leaf, jax.Array)
+            and jnp.issubdtype(leaf.dtype, jnp.floating)
+            and not exclude.search(leaf_name(path))
+        }
+
+    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
+    def attribute(params, prev, dprev, fast, fast_prev, slow):
+        def logp(p):
+            compute_params = _cast_to_compute(mp, p)
+            loss, _, _, _ = compute_params.position_predictions(
+                batch.tokens, jnp.asarray([[row, position]], jnp.int32), mask=batch.attn_mask, k=1
+            )
+            return -loss[0]
+
+        value, grads = jax.value_and_grad(logp)(params)
+        g_all, p_all = selected(grads), selected(params)
+        dots = {}
+        new_prev, new_dprev, new_fast_prev = {}, {}, {}
+        for name, theta in p_all.items():
+            g = g_all[name].astype(jnp.float32)
+            d = theta.astype(jnp.float32) - prev[name]
+            rec = {
+                "Gd": per_layer_sum(name, g * d),
+                "Gdp": per_layer_sum(name, g * dprev[name]),
+                "ddp": per_layer_sum(name, d * dprev[name]),
+                "dd": per_layer_sum(name, d * d),
+                "GG": per_layer_sum(name, g * g),
+            }
+            zero = jnp.zeros_like(rec["Gd"])
+            if name in fast:
+                rec["Gf"] = per_layer_sum(name, g * fast[name].astype(jnp.float32))
+                rec["Gfp"] = per_layer_sum(name, g * fast_prev[name])
+                rec["Gs"] = per_layer_sum(name, g * slow[name].astype(jnp.float32))
+                new_fast_prev[name] = fast[name].astype(jnp.float32) + 0.0
+            else:
+                rec["Gf"] = rec["Gfp"] = rec["Gs"] = zero
+            dots[name] = rec
+            new_prev[name] = theta.astype(jnp.float32) + 0.0
+            new_dprev[name] = d
+        return value, dots, new_prev, new_dprev, new_fast_prev
+
+    @jax.jit
+    def initial(params, fast):
+        p_all = selected(params)
+        prev = {n: x.astype(jnp.float32) + 0.0 for n, x in p_all.items()}
+        return (
+            prev,
+            {n: jnp.zeros_like(x) for n, x in prev.items()},
+            {n: x.astype(jnp.float32) + 0.0 for n, x in fast.items()},
+        )
+
+    carry: dict[str, dict] = {}
+
+    def hook(info, force: bool = False) -> None:
+        count = info.next_step
+        if info.model is None or not start <= count <= end or count in carry.get("seen", set()):
+            return
+        carry.setdefault("seen", set()).add(count)
+        fast, slow = rails_by_name(info.opt_state)
+        fast = {n: x for n, x in fast.items() if not exclude.search(n)}
+        slow = {n: x for n, x in slow.items() if not exclude.search(n)}
+        with set_mesh(mesh), _pgle_disabled():
+            if "prev" not in carry:
+                carry["prev"], carry["dprev"], carry["fast_prev"] = initial(info.model, fast)
+                return
+            value, dots, carry["prev"], carry["dprev"], carry["fast_prev"] = attribute(
+                info.model, carry["prev"], carry["dprev"], fast, carry["fast_prev"], slow
+            )
+        host = multihost_utils.process_allgather({"value": value, "dots": dots}, tiled=True)
+        if jax.process_index() == 0:
+            writer.add(
+                count,
+                float(host["value"]),
+                {n: {k: np.asarray(v) for k, v in r.items()} for n, r in host["dots"].items()},
+            )
+            if count == end:
+                writer.flush()
+
+    return hook
 
 
 def _host_batch(batch) -> tuple[np.ndarray, np.ndarray]:
@@ -2112,7 +2224,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
-        if config.trainer.fact_probe_input is not None:
+        if config.trainer.weight_attribution_window:
+            state_callbacks.add_hook(_weight_attribution_hook(config, mesh, trainer.mp), every=1)
+        if config.trainer.fact_probe_input is not None and not config.trainer.weight_attribution_window:
             state_callbacks.add_hook(
                 _fact_probe_hook(config, mesh, trainer.mp, ema_start_step, trainer.num_train_steps), every=1
             )
