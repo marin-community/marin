@@ -21,7 +21,6 @@ import pytest
 from haliax.state_dict import flatten_modules_for_export, to_state_dict
 
 from levanter.inference.engine import InferenceEngineConfig
-from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.weight_reload import WeightTransferConfig
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.testing.helpers import skip_if_no_torch
@@ -31,6 +30,7 @@ try:
     import torch
     import torch.distributed as dist
     from fastapi.testclient import TestClient
+    from levanter.inference.openai import InferenceServer, InferenceServerConfig
     from torch.distributed.distributed_c10d import _new_process_group_helper, _world
 except ImportError:
     pytest.skip("Torch and serving dependencies are required", allow_module_level=True)
