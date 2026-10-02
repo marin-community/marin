@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -10,6 +11,15 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention
+
+
+class _PagedCase(NamedTuple):
+    q: jax.Array
+    kv_pages: jax.Array
+    kv_lens: jax.Array
+    page_indices: jax.Array
+    cu_q_lens: jax.Array
+    num_seqs: jax.Array
 
 
 def _mixed_case(dtype):
@@ -22,7 +32,7 @@ def _mixed_case(dtype):
     lengths = np.array([7, 10, -1], np.int32)
     offsets = np.array([0, 3, 4, -1], np.int32)
     args = (q, pages, lengths, indices, offsets, np.array(2, np.int32))
-    return tuple(jnp.asarray(x, dtype if i < 2 else None) for i, x in enumerate(args))
+    return _PagedCase(*(jnp.asarray(x, dtype if i < 2 else None) for i, x in enumerate(args)))
 
 
 def _dense_oracle(args, window, cap, scale):
@@ -53,13 +63,13 @@ def _dense_oracle(args, window, cap, scale):
 def test_grug_paged_attention_mixed_prefixes_match_dense(window, cap, dtype):
     args = _mixed_case(dtype)
     scale = 0.17
-    expected = _dense_oracle(args, window, cap, scale).astype(np.asarray(args[0]).dtype)
+    expected = _dense_oracle(args, window, cap, scale).astype(np.asarray(args.q).dtype)
     fn = jax.jit(partial(ragged_paged_attention, sliding_window=window, soft_cap=cap, implementation="reference"))
     actual = fn(*args, sm_scale=jnp.array(scale))
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-5, rtol=1e-5)
     assert np.max(np.abs(np.asarray(actual, np.float32) - np.asarray(expected, np.float32))) < 1e-5
-    empty = fn(*args[:-1], jnp.array(0, jnp.int32), sm_scale=jnp.array(scale))
-    np.testing.assert_array_equal(empty, jnp.zeros_like(args[0]))
+    empty = fn(*args._replace(num_seqs=jnp.array(0, jnp.int32)), sm_scale=jnp.array(scale))
+    np.testing.assert_array_equal(empty, jnp.zeros_like(args.q))
 
 
 def test_grug_paged_attention_explicit_head_sharding_matches_dense():
@@ -79,10 +89,12 @@ def test_grug_paged_attention_explicit_head_sharding_matches_dense():
 @pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
 @pytest.mark.parametrize("window", [None, 5])
 @pytest.mark.parametrize("runtime_scale", [False, True])
-def test_grug_tpu_paged_attention_matches_dense(window, runtime_scale):
-    args = _mixed_case(jnp.float32)
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_grug_tpu_paged_attention_matches_dense(window, runtime_scale, dtype):
+    args = _mixed_case(dtype)
     fn = partial(ragged_paged_attention, sliding_window=window, implementation="tpu")
     actual = (
         jax.jit(fn)(*args, sm_scale=jnp.array(0.17)) if runtime_scale else jax.jit(partial(fn, sm_scale=0.17))(*args)
     )
-    np.testing.assert_allclose(actual, _dense_oracle(args, window, None, 0.17), atol=1e-4, rtol=1e-4)
+    expected = _dense_oracle(args, window, None, 0.17).astype(np.asarray(args[0]).dtype)
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
