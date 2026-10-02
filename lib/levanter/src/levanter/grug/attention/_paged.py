@@ -113,7 +113,9 @@ def _reference_attention(
         allowed &= key_position < kv_lens[seq, None]
         if sliding_window is not None:
             allowed &= key_position > position[:, None] - sliding_window
-        scores = jnp.einsum("thgd,tshd->thgs", q.astype(jnp.float32) * sm_scale, k)
+        scores = jnp.einsum(
+            "thgd,tshd->thgs", q.astype(jnp.float32) * sm_scale, k, precision=jax.lax.Precision.HIGHEST
+        )
         if soft_cap is not None:
             scores = soft_cap * jnp.tanh(scores / soft_cap)
         scores = jnp.where(allowed[:, None, None, :], scores, -jnp.inf)
@@ -123,7 +125,9 @@ def _reference_attention(
         probabilities = jnp.exp(scores - safe_maximum[..., None])
         # Unallocated slots can contain NaNs; masked values must not leak through 0 * NaN.
         v = jnp.where(allowed[:, :, None, None], v, 0)
-        output = output * correction[..., None] + jnp.einsum("thgs,tshd->thgd", probabilities, v)
+        output = output * correction[..., None] + jnp.einsum(
+            "thgs,tshd->thgd", probabilities, v, precision=jax.lax.Precision.HIGHEST
+        )
         denominator = denominator * correction + jnp.sum(probabilities, axis=-1)
         return output, denominator, next_maximum
 
@@ -138,17 +142,19 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
     pages_padded = jnp.pad(kv_pages, ((0, 0), (0, 0), (0, 0), (0, padding)))
     # Scaling q keeps runtime scales out of the kernel's static argument list.
     q_flat = (q_padded * sm_scale).reshape(q.shape[0], -1, q_padded.shape[-1])
-    output = tpu_ragged_paged_attention(
-        q_flat,
-        pages_padded,
-        jnp.maximum(kv_lens, 0),
-        jnp.maximum(page_indices, 0),
-        cu_q_lens,
-        jnp.maximum(num_seqs, 0).reshape(1),
-        sm_scale=1.0,
-        sliding_window=sliding_window,
-        soft_cap=soft_cap,
-    )
+    # TPU default float32 dots truncate operands to BF16, including softmax weights.
+    with jax.default_matmul_precision("highest"):
+        output = tpu_ragged_paged_attention(
+            q_flat,
+            pages_padded,
+            jnp.maximum(kv_lens, 0),
+            jnp.maximum(page_indices, 0),
+            cu_q_lens,
+            jnp.maximum(num_seqs, 0).reshape(1),
+            sm_scale=1.0,
+            sliding_window=sliding_window,
+            soft_cap=soft_cap,
+        )
     output = output.reshape(q_padded.shape)[..., :original_dim]
     _, _, valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
     return jnp.where(valid[:, None, None, None], output, 0)
