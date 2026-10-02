@@ -103,6 +103,12 @@ def _query_metadata(q, kv_lens, cu_q_lens, num_seqs) -> _QueryMetadata:
     return _QueryMetadata(seq, position, valid)
 
 
+class _ReferenceState(NamedTuple):
+    output: jax.Array
+    denominator: jax.Array
+    maximum: jax.Array
+
+
 def _reference_attention(
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap
 ):
@@ -110,7 +116,7 @@ def _reference_attention(
     metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
     seq, position, valid = metadata.sequence, metadata.position, metadata.valid
     page_size = kv_pages.shape[1]
-    initial = (
+    initial = _ReferenceState(
         jnp.zeros(q.shape, jnp.float32),
         jnp.zeros(q.shape[:-1], jnp.float32),
         jnp.full(q.shape[:-1], -jnp.inf, jnp.float32),
@@ -141,7 +147,7 @@ def _reference_attention(
             "thgs,tshd->thgd", probabilities, v, precision=jax.lax.Precision.HIGHEST
         )
         denominator = denominator * correction + jnp.sum(probabilities, axis=-1)
-        return output, denominator, next_maximum
+        return _ReferenceState(output, denominator, next_maximum)
 
     output, denominator, _ = jax.lax.fori_loop(0, page_indices.shape[1], attend_page, initial)
     return (output / jnp.where(denominator > 0, denominator, 1)[..., None]).astype(q.dtype)
