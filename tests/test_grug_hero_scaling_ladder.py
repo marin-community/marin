@@ -16,6 +16,9 @@ from experiments.grug.moe_hero_ep.launch_scaling_ladder import build_ladder_run
 from experiments.grug.moe_hero_ep.optimizer import _gate_router_decay_mask, _scale_by_adam_gate_router_decay
 from experiments.grug.moe_hero_ep.train import FlopsBaseline
 
+# Steps in the d6144 hero's full schedule.
+HERO_SCHEDULE_STEPS = 390_251
+
 # A miniature stacked-hero parameter tree: the two decay targets plus leaves that must be left alone.
 _MOCK_PARAMS = {
     "token_embed": jnp.ones((5, 4)),
@@ -33,14 +36,17 @@ def test_gate_router_decay_state_matches_plain_adam():
     # The decay must not change the optimizer-state tree, so a checkpoint written without it restores
     # unchanged (moments + step count preserved) when the decay is switched on for a continuation.
     plain = optax.scale_by_adam(0.9, 0.95, 1e-8).init(_MOCK_PARAMS)
-    decayed = _scale_by_adam_gate_router_decay(0.9, 0.95, 1e-8, 0.05, 390_251).init(_MOCK_PARAMS)
+    decayed = _scale_by_adam_gate_router_decay(0.9, 0.95, 1e-8, 0.05, HERO_SCHEDULE_STEPS).init(_MOCK_PARAMS)
     assert type(decayed) is type(plain)
     assert jtu.tree_structure(decayed) == jtu.tree_structure(plain)
 
 
-@pytest.mark.parametrize(("count", "expected_wd"), [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / 390_251)), (390_251, 0.0)])
+@pytest.mark.parametrize(
+    ("count", "expected_wd"),
+    [(0, 0.05), (54_000, 0.05 * (1 - 54_000 / HERO_SCHEDULE_STEPS)), (HERO_SCHEDULE_STEPS, 0.0)],
+)
 def test_gate_router_decay_anneals_from_the_step_count(count, expected_wd):
-    total_steps = 390_251
+    total_steps = HERO_SCHEDULE_STEPS
     adam = optax.scale_by_adam(0.9, 0.95, 1e-8)
     decay = _scale_by_adam_gate_router_decay(0.9, 0.95, 1e-8, 0.05, total_steps)
     grads = jax.tree.map(lambda x: jnp.full_like(x, 0.01), _MOCK_PARAMS)
@@ -93,7 +99,7 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         run_id="test-diagnostic",
         dp_racks=1,
         num_steps=1,
-        schedule_steps=390_251,
+        schedule_steps=HERO_SCHEDULE_STEPS,
         version="dev",
         gc_interval=100,
     )
@@ -168,7 +174,7 @@ def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
 
 def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():
     step = build_ladder_run(
-        seq_len=4096, run_id="test-d6144-ckpt", size="d6144", num_steps=390_251, version="2026.08.18"
+        seq_len=4096, run_id="test-d6144-ckpt", size="d6144", num_steps=HERO_SCHEDULE_STEPS, version="2026.08.18"
     )
     ctx = StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps)
     keep = step.build_config(ctx).trainer.trainer.checkpointer.keep
@@ -189,7 +195,7 @@ def test_context_switch_preserves_optimizer_updates_and_training_budget(seq_len)
     child_step = build_ladder_run(run_id="context-child", size="d6144", seq_len=seq_len, qk_mult=1.48, version="dev")
     parent = parent_step.build_config(StepContext.for_fingerprint(parent_step.runtime_args, parent_step.deps))
     child = child_step.build_config(StepContext.for_fingerprint(child_step.runtime_args, child_step.deps))
-    assert parent.trainer.trainer.num_train_steps == child.trainer.trainer.num_train_steps == 390_251
+    assert parent.trainer.trainer.num_train_steps == child.trainer.trainer.num_train_steps == HERO_SCHEDULE_STEPS
     assert (
         parent.trainer.trainer.train_batch_size * parent.model.max_seq_len
         == child.trainer.trainer.train_batch_size * child.model.max_seq_len
@@ -202,11 +208,11 @@ def test_context_switch_preserves_optimizer_updates_and_training_budget(seq_len)
     assert child.trainer.trainer.checkpointer.keep == parent.trainer.trainer.checkpointer.keep
     steps = jnp.array([0, 3902, 180_000, 195_125, 312_192, 390_250])
     np.testing.assert_array_equal(
-        jax.vmap(child.optimizer.lr_scheduler(390_251))(steps),
-        jax.vmap(parent.optimizer.lr_scheduler(390_251))(steps),
+        jax.vmap(child.optimizer.lr_scheduler(HERO_SCHEDULE_STEPS))(steps),
+        jax.vmap(parent.optimizer.lr_scheduler(HERO_SCHEDULE_STEPS))(steps),
     )
-    parent_optimizer = parent.optimizer.build(390_251)
-    child_optimizer = child.optimizer.build(390_251)
+    parent_optimizer = parent.optimizer.build(HERO_SCHEDULE_STEPS)
+    child_optimizer = child.optimizer.build(HERO_SCHEDULE_STEPS)
     grads = jax.tree.map(lambda param: jnp.full_like(param, 0.01), _MOCK_PARAMS)
     state = parent_optimizer.init(_MOCK_PARAMS)
     # A checkpoint carries counts at the handoff as well as nonzero moments.
@@ -229,7 +235,7 @@ def test_small_rehearsal_preserves_parent_optimizer_with_explicit_reference_batc
         run_id="rehearsal",
         dp_racks=1,
         num_steps=180_100,
-        schedule_steps=390_251,
+        schedule_steps=HERO_SCHEDULE_STEPS,
         max_seq_len=16384,
         batch_size=256,
         optimizer_tokens_per_step=46_137_344,
