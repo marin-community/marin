@@ -84,6 +84,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 [project.optional-dependencies]
 gpu = [
   "jax[cuda13]==0.11.1",
+  # Match Marin GPU serving: PyPI Torch omits the CUDA runtime dependencies.
+  "torch==2.11.0; sys_platform == 'linux'",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
@@ -187,6 +189,14 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.ruff]
 line-length = 119
