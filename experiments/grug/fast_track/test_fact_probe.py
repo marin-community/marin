@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import experiments.grug.fast_track.test_kda_local as t
-from experiments.grug.fast_track.fact_probe import RAW, FactProbeInput, FactProbeWriter
+from experiments.grug.fast_track.fact_probe import RAW, FactProbeInput, FactProbeWriter, count_text_patterns
 
 _EOS = 1
 
@@ -58,3 +58,10 @@ def test_position_predictions_match_the_training_loss():
     assert np.all(np.diff(probs, axis=1) <= 0)
     assert np.all(probs[:, 0] >= np.exp(-np.asarray(loss)) - 1e-6)
     assert top_ids.shape == (4, 3)
+
+
+def test_text_counts_match_whole_words_per_row():
+    words = {0: "India", 1: " Indiana", 2: " India", 3: "'s"}
+    tokens = np.array([[0, 3, 1, 2], [1, 1, 2, 2]])
+    counts = count_text_patterns(tokens, lambda ids: "".join(words[i] for i in ids), (r"\bIndia\b", r"Indiana"))
+    np.testing.assert_array_equal(counts, [4, 3])

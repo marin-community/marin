@@ -71,9 +71,12 @@ from experiments.grug.fast_track.fact_probe import (
     RAW,
     TOP_K,
     TRAIN_BATCH_DUMP_FILE,
+    TRAIN_TEXT_COUNTS_FILE,
     FactProbeInput,
     FactProbeWriter,
+    count_text_patterns,
     row_mean_loss,
+    write_text_counts,
     write_train_batch,
 )
 from experiments.grug.fast_track.grad_capture import CaptureWriter, add_to_captured, capture_matrices, capture_steps
@@ -308,6 +311,9 @@ class GrugTrainerConfig:
     # ``<fact_probe_dir>/train_batch_step<N>.npz`` and stop before training. ``fact_probe_input``: score its rows
     # every ``fact_probe_every`` steps (the EMA weights every ``fact_probe_ema_every``) into ``fact_probe_dir``.
     train_batch_dump_steps: tuple[int, ...] = ()
+    # Decode every train batch up to ``num_train_steps``, count each regex per step into
+    # ``<fact_probe_dir>/train_text_counts.npz`` and stop before training.
+    train_text_count_patterns: tuple[str, ...] = ()
     fact_probe_input: str | None = None
     fact_probe_every: int = 1
     fact_probe_ema_every: int = 50
@@ -1126,6 +1132,32 @@ def _fact_probe_hook(
     return hook
 
 
+def _count_train_text(config: GrugRunConfig, train_loader: DataLoader, num_steps: int) -> None:
+    """The ``train_text_count_patterns`` scan: decode each step's train batch and count every pattern (process 0
+    writes, every 200 steps and at the end)."""
+    patterns = config.trainer.train_text_count_patterns
+    tokenizer = config.data.the_tokenizer
+    assert config.trainer.fact_probe_dir is not None
+    path = f"{config.trainer.fact_probe_dir.rstrip('/')}/{TRAIN_TEXT_COUNTS_FILE}"
+    steps: list[int] = []
+    counts: list[np.ndarray] = []
+    for step, batch in enumerate(train_loader.iter_from_step(0)):
+        if step >= num_steps:
+            break
+        tokens, _ = _host_batch(batch)
+        if jax.process_index() != 0:
+            continue
+        steps.append(step)
+        counts.append(count_text_patterns(tokens, tokenizer.decode, patterns))
+        if (step + 1) % 200 == 0 or step + 1 == num_steps:
+            write_text_counts(path, patterns, steps, counts)
+            logger.info(
+                "text counts through step %d: %s",
+                step,
+                dict(zip(patterns, np.sum(counts, axis=0).tolist(), strict=True)),
+            )
+
+
 def _host_batch(batch) -> tuple[np.ndarray, np.ndarray]:
     gather = functools.partial(multihost_utils.process_allgather, tiled=True)
     return np.asarray(gather(batch.tokens)), np.asarray(gather(batch.loss_weight))
@@ -1887,6 +1919,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     path = f"{config.trainer.fact_probe_dir.rstrip('/')}/{TRAIN_BATCH_DUMP_FILE.format(step=dump_step)}"
                     write_train_batch(path, dump_step, tokens, weights)
             logger.info("train batches dumped; stopping before training")
+            return
+        if config.trainer.train_text_count_patterns:
+            if config.trainer.fact_probe_dir is None:
+                raise ValueError("train_text_count_patterns needs fact_probe_dir")
+            _count_train_text(config, train_loader, trainer.num_train_steps)
             return
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)

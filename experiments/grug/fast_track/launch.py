@@ -416,6 +416,7 @@ def build_h100_ladder_run(
     muon_probe_steps: tuple[int, ...] = (),
     snr_probe_steps: tuple[int, ...] = (),
     train_batch_dump_steps: tuple[int, ...] = (),
+    train_text_count_patterns: tuple[str, ...] = (),
     fact_probe_input: str | None = None,
     fact_probe_every: int = 1,
     fact_probe_ema_every: int = 50,
@@ -532,6 +533,7 @@ def build_h100_ladder_run(
         muon_probe_steps=muon_probe_steps,
         snr_probe_steps=snr_probe_steps,
         train_batch_dump_steps=train_batch_dump_steps,
+        train_text_count_patterns=train_text_count_patterns,
         fact_probe_input=fact_probe_input,
         fact_probe_every=fact_probe_every,
         fact_probe_ema_every=fact_probe_ema_every,
@@ -626,7 +628,9 @@ def build_h100_ladder_run(
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
                 fact_probe_dir=(
-                    prefix_join(ctx.output_path, "fact_probe") if train_batch_dump_steps or fact_probe_input else None
+                    prefix_join(ctx.output_path, "fact_probe")
+                    if train_batch_dump_steps or train_text_count_patterns or fact_probe_input
+                    else None
                 ),
                 grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
                 muon_probe_path=(
@@ -887,6 +891,11 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Comma-separated steps whose train batches go to <output>/fact_probe/; the run then stops before training.",
 )
 @click.option(
+    "--count-train-text",
+    multiple=True,
+    help="Repeatable regex counted in every decoded train batch up to --num-steps (<output>/fact_probe/); then stops.",
+)
+@click.option(
     "--fact-probe-input",
     default=None,
     help="npz of probe rows and fact spans (fact_probe.write_fact_probe_input) to score through training.",
@@ -996,6 +1005,7 @@ def main(
     muon_probe_steps: str,
     snr_probe_steps: str,
     dump_train_batches: str,
+    count_train_text: tuple[str, ...],
     fact_probe_input: str | None,
     fact_probe_every: int,
     fact_probe_ema_every: int,
@@ -1052,6 +1062,7 @@ def main(
         muon_probe_steps=tuple(int(step) for step in muon_probe_steps.split(",") if step),
         snr_probe_steps=tuple(int(step) for step in snr_probe_steps.split(",") if step),
         train_batch_dump_steps=tuple(int(step) for step in dump_train_batches.split(",") if step),
+        train_text_count_patterns=tuple(count_train_text),
         fact_probe_input=fact_probe_input,
         fact_probe_every=fact_probe_every,
         fact_probe_ema_every=fact_probe_ema_every,

@@ -21,6 +21,8 @@ count from ``data_step`` to ``data_step + 1``.
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import fsspec
@@ -31,6 +33,7 @@ from levanter.data.text.examples import GrugLmExample, causal_example_on_host
 logger = logging.getLogger(__name__)
 
 TRAIN_BATCH_DUMP_FILE = "train_batch_step{step}.npz"
+TRAIN_TEXT_COUNTS_FILE = "train_text_counts.npz"
 FACT_PROBE_CHUNK_FILE = "fact_probe_{kind}_{index:04d}.npz"
 TOP_K = 5
 RAW = "raw"
@@ -142,3 +145,20 @@ class FactProbeWriter:
 
 def row_mean_loss(loss: np.ndarray, weight: np.ndarray) -> np.ndarray:
     return (loss * weight).sum(axis=1) / weight.sum(axis=1)
+
+
+def count_text_patterns(tokens: np.ndarray, decode: Callable[[list[int]], str], patterns: tuple[str, ...]) -> np.ndarray:
+    """Matches of each regex in the decoded rows of ``tokens`` [B, S] (special tokens kept, so a match never spans a
+    document boundary unnoticed)."""
+    compiled = [re.compile(pattern) for pattern in patterns]
+    counts = np.zeros(len(patterns), np.int64)
+    for row in tokens:
+        text = decode(row.tolist())
+        for index, regex in enumerate(compiled):
+            counts[index] += sum(1 for _ in regex.finditer(text))
+    return counts
+
+
+def write_text_counts(path: str, patterns: tuple[str, ...], steps: list[int], counts: list[np.ndarray]) -> None:
+    with fsspec.open(path, "wb") as f:
+        np.savez(f, patterns=np.asarray(patterns), steps=np.asarray(steps, np.int64), counts=np.stack(counts))
