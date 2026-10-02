@@ -13,10 +13,11 @@ from jax.experimental.pallas.ops.tpu.ragged_paged_attention import ragged_paged_
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import get_min_heads_per_blk
 from jax.sharding import PartitionSpec as P
 
+from levanter.grug.attention._paged_gpu import GpuPagedAvPrecision, gpu_paged_attention
 from levanter.grug.attention._paged_tpu import TPU_HEAD_ALIGNMENT, TPU_PAGE_ALIGNMENT, tpu_paged_decode
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
-PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32_tiles"]
+PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32_tiles", "gpu_pallas", "gpu_pallas_bf16_3x"]
 _TPU_KV_HEAD_GROUP = 8
 
 
@@ -32,6 +33,8 @@ def ragged_paged_attention(
     sliding_window: int | None = None,
     soft_cap: float | None = None,
     implementation: PagedAttentionImplementation | None = None,
+    gpu_kv_splits: int = 8,
+    gpu_av_precision: GpuPagedAvPrecision = "ieee",
     tpu_dma_buffers: int = 1,
 ) -> jax.Array:
     """Attend to cached prefixes and new tokens in a mixed prefill/decode batch.
@@ -46,19 +49,28 @@ def ragged_paged_attention(
         sm_scale: Query/key logit multiplier.
         sliding_window: Number of visible tokens, including the query itself.
         soft_cap: Optional tanh logit cap, applied before masking.
+        gpu_av_precision: GPU AV dot algorithm; BF16 three-component mode is opt-in.
+        gpu_kv_splits: Maximum split-K partitions for GPU decode (8 or 16).
         tpu_dma_buffers: One serial or two overlapping page DMA buffers for TPU decode.
-        implementation: TPU Pallas or portable reference; defaults to TPU on TPU.
+        implementation: TPU Pallas, opt-in GPU Pallas decode, or portable reference.
+            Defaults to TPU on TPU and reference elsewhere.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. The TPU path uses JAX's existing ragged kernel
     for FP32 inputs; lower-precision inputs use the reference to preserve accuracy.
-    ``tpu_fp32_tiles`` also promotes BF16 cache tiles to FP32 inside the TPU kernel,
-    preserving the cache's storage dtype. GPU and CPU default to the reference.
+    ``tpu_fp32_tiles`` uses accurate softmax and FP32 VMEM tiles for decode, preserving
+    cache storage. Mixed/prefill batches and soft-capped attention use the reference.
+    GPU and CPU default to the reference implementation. The opt-in ``gpu_pallas``
+    backend accelerates decode-only batches and uses the reference for prefill.
+    ``gpu_pallas_bf16_3x`` selects the same backend with three-component BF16 AV dots.
     Only the KV-head axis is partitioned; sequence metadata and pages are replicated.
     """
     if implementation is None:
         implementation = "tpu" if jax.default_backend() == "tpu" else "reference"
-    if implementation not in ("tpu", "tpu_fp32_tiles", "reference"):
+    if implementation == "gpu_pallas_bf16_3x":
+        implementation = "gpu_pallas"
+        gpu_av_precision = "bf16_3x"
+    if implementation not in ("tpu", "tpu_fp32_tiles", "reference", "gpu_pallas"):
         raise ValueError(f"Unknown paged attention implementation: {implementation}")
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError("sliding_window must be positive")
@@ -71,13 +83,16 @@ def ragged_paged_attention(
         "tpu": _tpu_attention,
         "tpu_fp32_tiles": partial(_tpu_decode_attention, dma_buffers=tpu_dma_buffers),
         "reference": _reference_attention,
-    }
+        "gpu_pallas": _gpu_attention,
+    }[implementation]
     fn = partial(
-        backend[implementation],
+        backend,
         sm_scale=sm_scale,
         sliding_window=sliding_window,
         soft_cap=soft_cap,
     )
+    if implementation == "gpu_pallas":
+        fn = partial(fn, kv_splits=gpu_kv_splits, av_precision=gpu_av_precision)
     q_sharding = named_sharding_of(q)
     if q_sharding is not None and not q_sharding.mesh.empty:
         q_spec = tuple(q_sharding.spec) + (None,) * (q.ndim - len(q_sharding.spec))
@@ -108,6 +123,23 @@ def _query_metadata(q, kv_lens, cu_q_lens, num_seqs) -> _QueryMetadata:
     valid = jnp.any(belongs, axis=0)
     position = kv_lens[seq] - (cu_q_lens[seq + 1] - cu_q_lens[seq]) + token - cu_q_lens[seq]
     return _QueryMetadata(seq, position, valid)
+
+
+class _DecodeMetadata(NamedTuple):
+    pages: jax.Array
+    bounds: jax.Array
+    decode_only: jax.Array
+
+
+def _decode_metadata(q, kv_lens, page_indices, cu_q_lens, num_seqs, sliding_window) -> _DecodeMetadata:
+    metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+    upper = jnp.where(metadata.valid, metadata.position + 1, 0)
+    lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
+    bounds = jnp.stack((lower, upper), axis=-1)
+    token_pages = jnp.maximum(page_indices[metadata.sequence], 0)
+    active = jnp.arange(kv_lens.shape[0]) < num_seqs.reshape(())
+    decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
+    return _DecodeMetadata(token_pages, bounds, decode_only)
 
 
 class _ReferenceState(NamedTuple):
@@ -244,6 +276,47 @@ def _tpu_kernel_attention(
     return jnp.where(valid[:, None, None, None], output, 0)
 
 
+def _gpu_attention(
+    q,
+    kv_pages,
+    kv_lens,
+    page_indices,
+    cu_q_lens,
+    num_seqs,
+    *,
+    sm_scale,
+    sliding_window,
+    soft_cap,
+    kv_splits,
+    av_precision,
+):
+    metadata = _decode_metadata(q, kv_lens, page_indices, cu_q_lens, num_seqs, sliding_window)
+    return jax.lax.cond(
+        metadata.decode_only,
+        lambda: gpu_paged_attention(
+            q,
+            kv_pages,
+            metadata.pages,
+            metadata.bounds,
+            sm_scale,
+            soft_cap=soft_cap,
+            kv_splits=kv_splits,
+            av_precision=av_precision,
+        ),
+        lambda: _reference_attention(
+            q,
+            kv_pages,
+            kv_lens,
+            page_indices,
+            cu_q_lens,
+            num_seqs,
+            sm_scale=sm_scale,
+            sliding_window=sliding_window,
+            soft_cap=soft_cap,
+        ),
+    )
+
+
 def _tpu_decode_attention(
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap, dma_buffers
 ):
@@ -266,15 +339,9 @@ def _tpu_decode_attention(
         or q.shape[-1] % TPU_HEAD_ALIGNMENT
     ):
         return reference()
-    metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
-    upper = jnp.where(metadata.valid, metadata.position + 1, 0)
-    lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
-    bounds = jnp.stack((lower, upper), axis=-1)
-    token_pages = jnp.maximum(page_indices[metadata.sequence], 0)
-    active = jnp.arange(kv_lens.shape[0]) < num_seqs.reshape(())
-    decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
+    metadata = _decode_metadata(q, kv_lens, page_indices, cu_q_lens, num_seqs, sliding_window)
     return jax.lax.cond(
-        decode_only,
-        lambda: tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale, dma_buffers=dma_buffers),
+        metadata.decode_only,
+        lambda: tpu_paged_decode(q, kv_pages, metadata.pages, metadata.bounds, sm_scale, dma_buffers=dma_buffers),
         reference,
     )
