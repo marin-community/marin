@@ -12,6 +12,9 @@ from pathlib import Path
 from levanter.inference.benchmark import BATCH_TIMING_BOUNDARY, TokenWorkload
 from levanter.models.snowball import GRUG_MOE_CANONICAL_CONFIG_FIELDS
 
+MANIFEST_FILENAME = "manifest.json"
+WORKLOAD_FILENAME = "workload.json"
+
 _EXECUTION_CONFIG_FIELDS = {"inference_attention_implementation"}
 _HF_METADATA_FIELDS = {"_name_or_path", "transformers_version", "torch_dtype", "dtype"}
 
@@ -184,8 +187,8 @@ def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, 
 
 def compare_fixture(root: Path) -> dict:
     """Write a paired report, refusing incompatible inputs and withholding invalid ratios."""
-    manifest = json.loads((root / "manifest.json").read_text())
-    workload = TokenWorkload(**json.loads((root / "workload.json").read_text()))
+    manifest = json.loads((root / MANIFEST_FILENAME).read_text())
+    workload = TokenWorkload(**json.loads((root / WORKLOAD_FILENAME).read_text()))
     reports = {name: json.loads((root / f"{name}-result.json").read_text()) for name in ("native", "vllm")}
     result = compare_reports(manifest, workload, reports)
     (root / "comparison.json").write_text(json.dumps(result, indent=2) + "\n")

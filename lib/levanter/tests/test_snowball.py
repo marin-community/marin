@@ -654,7 +654,7 @@ def test_snowball_paged_decode_matches_full_forward(sliding_window):
 
 
 @pytest.mark.timeout(180)
-def test_snowball_paged_decode_sharding_and_expert_skew_match_unsharded():
+def test_snowball_paged_decode_expert_skew_matches_across_mesh_layouts():
     run_on_cpu_devices(
         """
         import equinox as eqx
