@@ -156,6 +156,7 @@ def run_vllm(
     expert_axis_size: int,
     kv_cache_memory_bytes: int,
     compile_workers: int,
+    flashinfer_jit_cache_wheel: str | None,
 ) -> None:
     """Measure the exported checkpoint using the promoted Marin CUDA fork."""
     if compile_workers < 1:
@@ -202,9 +203,18 @@ def run_vllm(
         "--measured-batches",
         "3",
     )
+    command = launcher.python_command(args)
+    if flashinfer_jit_cache_wheel is not None:
+        if "#sha256=" not in flashinfer_jit_cache_wheel:
+            raise ValueError("The precompiled FlashInfer cache wheel requires an explicit SHA256 URL fragment")
+        command[1:1] = ["--with", f"flashinfer-jit-cache @ {flashinfer_jit_cache_wheel}"]
+        manifest["flashinfer_jit_cache_wheel"] = flashinfer_jit_cache_wheel
     repo = Path(__file__).resolve().parents[2]
     paths = [str(repo / "lib/levanter/src"), str(repo / "lib/rigging/src")]
     environment = {**os.environ, **launcher.env()}
+    if flashinfer_jit_cache_wheel is not None:
+        # Fail on a missing/incompatible precompiled module instead of starting another long build.
+        environment["FLASHINFER_DISABLE_JIT"] = "1"
     environment["MAX_JOBS"] = str(compile_workers)
     environment["FLASHINFER_NVCC_THREADS"] = "1"
     manifest["compiler_parallelism"] = {"ninja_workers": compile_workers, "nvcc_threads": 1}
@@ -218,7 +228,7 @@ def run_vllm(
         }
         environment["TRITON_CACHE_DIR"] = cache
         provenance.write_text(json.dumps(manifest, indent=2) + "\n")
-        subprocess.run(launcher.python_command(args), env=environment, check=True)
+        subprocess.run(command, env=environment, check=True)
     print(output.read_text(), flush=True)
 
 
@@ -237,6 +247,10 @@ def main() -> None:
             run.add_argument("--execution-mode", choices=["eager", "compiled"], default="eager")
             run.add_argument("--kv-cache-memory-bytes", type=int, default=_TINY_KV_CACHE_BYTES)
             run.add_argument("--compile-workers", type=int, default=2)
+            run.add_argument(
+                "--flashinfer-jit-cache-wheel",
+                help="Exact compatible cache wheel URL with SHA256; requires precompiled modules and disables JIT",
+            )
     compare = commands.add_parser("compare")
     compare.add_argument("--fixture", type=Path, required=True)
     args = parser.parse_args()
@@ -254,6 +268,7 @@ def main() -> None:
             args.expert_axis_size,
             args.kv_cache_memory_bytes,
             args.compile_workers,
+            args.flashinfer_jit_cache_wheel,
         )
 
 

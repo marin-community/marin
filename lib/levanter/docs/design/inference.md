@@ -300,6 +300,16 @@ cache so inherited JAX cache settings cannot disable vLLM kernel compilation.
 FlashInfer builds use two Ninja workers by default (`--compile-workers`) and one
 nvcc thread per command. These limits and the effective execution modes are
 recorded in the report; eager inference can still compile CUDA kernels during startup.
+For the GB200 SM100 startup gate, `--flashinfer-jit-cache-wheel URL#sha256=DIGEST`
+installs an explicit compatible precompiled cache in the isolated runtime. It
+loads and hashes `fused_moe_100.so` before engine initialization and records its
+path, package versions, and successful load. JIT compilation is disabled for
+this gate: missing or incompatible precompiled modules fail instead of starting
+a long build. FlashInfer 0.6.18.post1's installer selects its CUDA 13.0 cache for
+CUDA 13.2, and the official ARM64 wheel contains this MoE library. This cache
+selection preserves the backend and autotuning configuration; accelerator
+validation is still required for a given wheel/runtime pair.
+
 The async vLLM client distributes requests across data-parallel ranks when
 configured, while preserving per-request first-token timestamps. Larger
 workloads require a separate benchmark configuration.
