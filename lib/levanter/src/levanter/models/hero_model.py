@@ -35,7 +35,7 @@ from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import PageCache, KvPageCache, ListCache
-from levanter.layers.paged_short_conv import ShortConvPageCache, paged_short_conv
+from levanter.layers.paged_short_conv import ShortConvSequenceCache, paged_short_conv
 from levanter.models.hero import HeroConfig
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.snowball import RMSNorm, GatedNorm, rms_norm, _init_weight
@@ -684,7 +684,7 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
         def conv_cache(site, channels):
             if not cfg.sconv or site not in cfg.sconv_sites or cfg.sconv_kernel == 1:
                 return None
-            return ShortConvPageCache.init(spec, Axis("channel", channels), cfg.sconv_kernel, dtype)
+            return ShortConvSequenceCache.init(spec, Axis("channel", channels), cfg.sconv_kernel, dtype)
 
         caches = []
         for _ in range(cfg.num_layers):
@@ -819,16 +819,19 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
 
 class HeroLayerCache(PageCache):
     kv: KvPageCache
-    k_history: ShortConvPageCache | None
-    attn_history: ShortConvPageCache | None
-    mlp_history: ShortConvPageCache | None
+    k_history: ShortConvSequenceCache | None
+    attn_history: ShortConvSequenceCache | None
+    mlp_history: ShortConvSequenceCache | None
 
     def copy_page(self, src_page: int, dst_page: int) -> "HeroLayerCache":
+        return dataclasses.replace(self, kv=self.kv.copy_page(src_page, dst_page))
+
+    def copy_sequence(self, src_slot: int, dst_slot: int) -> "HeroLayerCache":
         return HeroLayerCache(
-            self.kv.copy_page(src_page, dst_page),
-            None if self.k_history is None else self.k_history.copy_page(src_page, dst_page),
-            None if self.attn_history is None else self.attn_history.copy_page(src_page, dst_page),
-            None if self.mlp_history is None else self.mlp_history.copy_page(src_page, dst_page),
+            self.kv,
+            None if self.k_history is None else self.k_history.copy_sequence(src_slot, dst_slot),
+            None if self.attn_history is None else self.attn_history.copy_sequence(src_slot, dst_slot),
+            None if self.mlp_history is None else self.mlp_history.copy_sequence(src_slot, dst_slot),
         )
 
     def reset(self) -> "HeroLayerCache":
@@ -843,7 +846,7 @@ class HeroLayerCache(PageCache):
 def _decode_convolution(
     conv: ShortConv | None,
     x: jax.Array,
-    history: ShortConvPageCache | None,
+    history: ShortConvSequenceCache | None,
     info: PageBatchInfo,
     positions: NamedArray,
 ):

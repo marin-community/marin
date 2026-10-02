@@ -94,18 +94,32 @@ The inference server is built around a `GenerationService` that encapsulates:
 ## Paged short-convolution history
 
 `levanter.layers.paged_short_conv` provides the causal history needed by Hero's
-key-projection, attention-output, and MoE-output convolutions. It uses the
-attention page allocation and keeps `min(page_size, kernel_size - 1)` input rows
-per physical page. A page-local ring updates in packed token order; each token
-reads its own request's preceding positions before overwriting a ring entry.
-This supports chunked prefill, incremental decode, and kernels wider than a page.
+key-projection, attention-output, and MoE-output convolutions. Each persistent
+request slot stores the last `kernel_size - 1` input rows. Packed tokens select
+history through `PageBatchInfo.slot_ids`, so request order and KV page allocation
+do not change history ownership. New position-zero prompts clear reused slots;
+padding does not write history.
 
-`ShortConvPageCache` implements `PageCache.copy_page` and `reset`, so a cloned
-partial page receives independent convolution history. Padding does not update
-the rings. The implementation uses a JAX scan and matches the existing
-short-convolution reference's lag-ordered arithmetic. CPU FP32/BF16 parity covers
-mixed request order, page crossings, clone divergence, and reset. The native Hero model uses this history for incremental decode; accelerator
-validation remains pending.
+`ShortConvSequenceCache.copy_sequence` copies the current processed prefix when
+the engine clones a request, including clones at complete KV page boundaries.
+KV pages retain their existing copy-on-write behavior. Global reset clears both
+KV and convolution state. Earlier-prefix replay must recompute convolution
+history; KV page reuse alone does not restore an earlier recurrent state.
+
+The JAX scan preserves the reference convolution's lag-ordered arithmetic.
+FP32/BF16 tests cover packed request reordering, kernels wider than a page,
+chunked prefill, clone divergence, padding, and slot reuse. Actual Hero engine
+tests compare cloned tokens and logprobs with independent generation and reuse
+freed slots for queued requests.
+
+For the 48-layer Hero configuration with hidden width 6144, stored KV width
+1536, and three four-tap convolutions per layer, BF16 history occupies 3,981,312
+bytes (3.796875 MiB) per request slot. A 4096-token request with 128-token pages
+previously reserved 121.5 MiB of history across its 32 pages. CPU evaluation of
+the actual cache initializer's shapes gives 1,211,940,864 bytes total after this
+change, including 1,207,959,552 unchanged KV bytes: a 117.703125 MiB reduction.
+These are logical allocation sizes; accelerator memory and latency measurements
+for request-owned history remain pending.
 
 ### Native Hero schema-v2 model
 

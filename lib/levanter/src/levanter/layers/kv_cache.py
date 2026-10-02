@@ -25,6 +25,10 @@ class PageCache(eqx.Module):
         """Return a copy of this cache with ``src_page`` cloned into ``dst_page``."""
         raise NotImplementedError
 
+    def copy_sequence(self, src_slot: int, dst_slot: int) -> Self:
+        """Clone request-owned state; page-only caches have no such state."""
+        return self
+
     def reset(self) -> Self:
         """Return a reset version of this cache."""
         raise NotImplementedError
@@ -129,6 +133,9 @@ class ListCache(PageCache, Generic[PageCacheT]):
 
     def copy_page(self, src_page: int, dst_page: int) -> "ListCache[PageCacheT]":
         return ListCache(tuple(cache.copy_page(src_page, dst_page) for cache in self.caches))
+
+    def copy_sequence(self, src_slot: int, dst_slot: int) -> "ListCache[PageCacheT]":
+        return ListCache(tuple(cache.copy_sequence(src_slot, dst_slot) for cache in self.caches))
 
     def replace(self, idx: int, value: PageCacheT) -> "ListCache[PageCacheT]":
         caches = list(self.caches)

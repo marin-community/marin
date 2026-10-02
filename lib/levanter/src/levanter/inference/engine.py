@@ -355,6 +355,7 @@ def _clone_sequence(
         return state.cache
 
     cache = jax.lax.cond((src_len % page_size != 0) & (src_len > 0), _copy, _identity, None)
+    cache = cache.copy_sequence(parent_local_id, child_local_id)
 
     new_state = dataclasses.replace(state, decode_state=decode_state, cache=cache)
     return new_state, child_local_id
@@ -503,42 +504,42 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     num_new = work.new_num_seqs.astype(jnp.int32)
     max_slots = work.new_slot_ids.array.shape[0]
 
-    def body(i: int, state: GenState) -> GenState:
-        slot_val = work.new_slot_ids.array[i]
+    def primary(i: int, state: GenState) -> GenState:
+        slot = work.new_slot_ids.array[i]
 
-        def process(gs: GenState) -> GenState:
-            parent_val = work.clone_targets.array[i]
-            seq_params = _seq_params_from_work(work, i)
+        def assign(gs: GenState) -> GenState:
+            decode_state, _ = gs.decode_state.reserve_slot(slot)
+            decode_state = decode_state.assign_seq(
+                local_slot_id=slot,
+                tokens=work.prompt_tokens["seq", i],
+                seq_len=work.prompt_lengths.array[i].astype(jnp.int32),
+                kv_pages=None,
+                page_indices=None,
+                seq_params=_seq_params_from_work(work, i),
+            )
+            return dataclasses.replace(gs, decode_state=decode_state)
 
-            def do_clone(gs_clone: GenState) -> GenState:
-                new_state, _ = gs_clone.clone_sequence(
-                    parent_val,
-                    child_local_id=slot_val,
-                    seq_params=seq_params,
-                )
-                return new_state
+        is_primary = (i < num_new) & is_valid(slot) & ~is_valid(work.clone_targets.array[i])
+        return jax.lax.cond(is_primary, assign, lambda gs: gs, state)
 
-            def do_primary(gs_primary: GenState) -> GenState:
-                decode_state = gs_primary.decode_state
-                decode_state, assigned = decode_state.reserve_slot(slot_val)
-                # Get the prompt length for this sequence
-                prompt_len = work.prompt_lengths.array[i].astype(jnp.int32)
-                decode_state = decode_state.assign_seq(
-                    local_slot_id=slot_val,
-                    tokens=work.prompt_tokens["seq", i],
-                    seq_len=prompt_len,
-                    kv_pages=None,  # Will be allocated later in allocate_for_seq
-                    page_indices=None,  # Will be set during page allocation
-                    seq_params=seq_params,
-                )
-                return dataclasses.replace(gs_primary, decode_state=decode_state)
+    def clone(i: int, state: GenState) -> GenState:
+        slot = work.new_slot_ids.array[i]
+        parent = work.clone_targets.array[i]
 
-            return jax.lax.cond(is_valid(parent_val), do_clone, do_primary, gs)
+        def assign(gs: GenState) -> GenState:
+            cloned, _ = gs.clone_sequence(parent, child_local_id=slot, seq_params=_seq_params_from_work(work, i))
+            return cloned
 
-        should_process = (i < num_new) & is_valid(slot_val)
-        return jax.lax.cond(should_process, process, lambda gs: gs, state)
+        is_clone = (i < num_new) & is_valid(slot) & is_valid(parent)
+        return jax.lax.cond(is_clone, assign, lambda gs: gs, state)
 
-    return jax.lax.fori_loop(0, max_slots, body, gen_state)
+    gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
+    # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
+    decode_state, _ = gen_state.decode_state.allocate_for_seq(
+        token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
+    )
+    gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
+    return jax.lax.fori_loop(0, max_slots, clone, gen_state)
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
@@ -647,6 +648,7 @@ def _handle_clones(
             return cache
 
         cache = jax.lax.cond((src_len % size != 0) & (src_len > 0), _copy, _identity, None)
+        cache = cache.copy_sequence(src_slot_id, dst_slot_id)
         return decode_state, cache
 
     decode_state, cache = jax.lax.fori_loop(0, num_new, copy_pages_for_updated_seq, (decode_state, cache))
