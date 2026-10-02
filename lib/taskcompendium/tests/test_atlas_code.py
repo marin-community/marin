@@ -23,10 +23,9 @@ def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle(name):
         "tests/cases/output_1.txt": b"-2\n",
     }
     oracle = b"printf 'print(sum(map(int,input().split())))' > /app/solution.py\n"
-    dataset = atlas_code.recipe_for_source(name, "sha256:local", timeout=30.0, memory_mb=256)
     row = RawRow(
         id="sum",
-        source=Source(dataset=dataset.source.dataset, revision=dataset.source.revision, row="1", importer_revision="1"),
+        source=Source(dataset="open-thoughts/TaskTrove", revision=atlas_code.REVISION, row="1", importer_revision="1"),
         data={
             "converted": {
                 "instruction": "Read two integers and print their sum. Write /app/solution.py.",
@@ -36,7 +35,7 @@ def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle(name):
             }
         },
     )
-    normalized = dataset.normalize(row)
+    normalized = atlas_code.normalize(row, "sha256:local", 30.0, 256)
     assert isinstance(normalized, TaskSpec)
     task = TaskSpec.model_validate_json(normalized.model_dump_json())
     public = [resource for resource in task.resources if resource.visibility == ResourceVisibility.AGENT]

@@ -20,6 +20,7 @@ from taskcompendium.models import (
     VerifierSpec,
     task_resource,
 )
+from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     GeneratedSource,
@@ -122,6 +123,7 @@ recipe = DatasetRecipe(
     name="shell-files-mock",
     version="shell-files-v1",
     source=GeneratedSource("mock/shell-files", "1", "default", "train", __name__),
+    inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
     normalize=normalize,
     rubric=RUBRIC,
     intended_use=IntendedUse.TRAIN,

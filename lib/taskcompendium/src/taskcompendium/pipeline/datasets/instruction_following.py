@@ -16,6 +16,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -121,6 +122,7 @@ def recipe() -> DatasetRecipe:
         name="tasktrove-ifeval",
         version="tasktrove-ifeval-v1",
         source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
+        inputs=tasktrove_inputs(CONFIG, REVISION),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

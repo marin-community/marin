@@ -70,8 +70,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "aime_1983_2024",
-        "normalizer_module": "taskcompendium.pipeline.datasets.aime_1983_2024",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_aime_1983_2024"
       },
       "bound_source": {
         "dataset": "di-zhang-fdu/AIME_1983_2024",
@@ -106,11 +106,11 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "taskcompendium.pipeline.datasets.aime24",
-        "factory": "recipe",
-        "key": null,
-        "normalizer_module": "taskcompendium.pipeline.datasets.aime24",
-        "normalizer_function": "normalize"
+        "module": "taskcompendium.pipeline.datasets.numeric_answers",
+        "factory": "RECIPES",
+        "key": "aime24",
+        "normalizer_module": "taskcompendium.pipeline.datasets.numeric_answers",
+        "normalizer_function": "normalize_aime24"
       },
       "bound_source": {
         "dataset": "HuggingFaceH4/aime_2024",
@@ -148,8 +148,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "apps",
-        "normalizer_module": "taskcompendium.pipeline.datasets.apps",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.code_contracts",
+        "normalizer_function": "normalize_apps"
       },
       "bound_source": {
         "dataset": "codeparrot/apps",
@@ -187,8 +187,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "asdiv",
-        "normalizer_module": "taskcompendium.pipeline.datasets.asdiv",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_asdiv"
       },
       "bound_source": {
         "dataset": "chaochun/nlu-asdiv-dataset",
@@ -226,8 +226,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "dapo_math",
-        "normalizer_module": "taskcompendium.pipeline.datasets.dapo_math",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_dapo_math"
       },
       "bound_source": {
         "dataset": "BytedTsinghua-SIA/DAPO-Math-17k",
@@ -265,8 +265,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "deepscaler",
-        "normalizer_module": "taskcompendium.pipeline.datasets.deepscaler",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_deepscaler"
       },
       "bound_source": {
         "dataset": "agentica-org/DeepScaleR-Preview-Dataset",
@@ -304,8 +304,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "eurus2_code",
-        "normalizer_module": "taskcompendium.pipeline.datasets.eurus2_code",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.code_contracts",
+        "normalizer_function": "normalize_eurus2_code"
       },
       "bound_source": {
         "dataset": "PRIME-RL/Eurus-2-RL-Data",
@@ -421,8 +421,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "gsm8k",
-        "normalizer_module": "taskcompendium.pipeline.datasets.gsm8k",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_gsm8k"
       },
       "bound_source": {
         "dataset": "openai/gsm8k",
@@ -460,8 +460,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "hardmath",
-        "normalizer_module": "taskcompendium.pipeline.datasets.hardmath",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_hardmath"
       },
       "bound_source": {
         "dataset": "pafitis/HARDMath_processed_training",
@@ -499,8 +499,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "hendrycks_math",
-        "normalizer_module": "taskcompendium.pipeline.datasets.hendrycks_math",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_hendrycks_math"
       },
       "bound_source": {
         "dataset": "EleutherAI/hendrycks_math",
@@ -802,8 +802,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "math500",
-        "normalizer_module": "taskcompendium.pipeline.datasets.math500",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_math500"
       },
       "bound_source": {
         "dataset": "HuggingFaceH4/MATH-500",
@@ -841,8 +841,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_if",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron.instruction_following",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.instruction_tasks",
+        "normalizer_function": "normalize_nemotron_if"
       },
       "bound_source": {
         "dataset": "nvidia/Llama-Nemotron-Post-Training-Dataset",
@@ -3880,8 +3880,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "numina_math",
-        "normalizer_module": "taskcompendium.pipeline.datasets.numina_math",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_numina_math"
       },
       "bound_source": {
         "dataset": "AI-MO/NuminaMath-CoT",
@@ -3997,8 +3997,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "rlvr_ifeval",
-        "normalizer_module": "taskcompendium.pipeline.datasets.rlvr_ifeval",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.instruction_tasks",
+        "normalizer_function": "normalize_rlvr_ifeval"
       },
       "bound_source": {
         "dataset": "allenai/RLVR-IFeval",
@@ -4036,8 +4036,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "rlvr_math",
-        "normalizer_module": "taskcompendium.pipeline.datasets.rlvr_math",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.math_answers",
+        "normalizer_function": "normalize_rlvr_math"
       },
       "bound_source": {
         "dataset": "allenai/RLVR-MATH",
@@ -4072,11 +4072,11 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "taskcompendium.pipeline.datasets.svamp",
-        "factory": "recipe",
-        "key": null,
-        "normalizer_module": "taskcompendium.pipeline.datasets.svamp",
-        "normalizer_function": "normalize"
+        "module": "taskcompendium.pipeline.datasets.numeric_answers",
+        "factory": "RECIPES",
+        "key": "svamp",
+        "normalizer_module": "taskcompendium.pipeline.datasets.numeric_answers",
+        "normalizer_function": "normalize_svamp"
       },
       "bound_source": {
         "dataset": "ChilleD/SVAMP",
@@ -4114,8 +4114,8 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "verifiable_code",
-        "normalizer_module": "taskcompendium.pipeline.datasets.verifiable_code",
-        "normalizer_function": "normalize"
+        "normalizer_module": "taskcompendium.pipeline.datasets.code_contracts",
+        "normalizer_function": "normalize_verifiable_code"
       },
       "bound_source": {
         "dataset": "open-r1/verifiable-coding-problems-python",

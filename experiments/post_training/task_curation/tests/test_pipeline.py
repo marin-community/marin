@@ -20,7 +20,8 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.datasets import svamp
+from taskcompendium.pipeline.datasets.numeric_answers import RECIPES
+from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     Confidence,
     FilterPolicy,
@@ -33,7 +34,6 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
 )
 from taskcompendium.pipeline.rewriting import BatchRewriter
-from taskcompendium.pipeline.sources import SourceFiles, SourceFormat
 from taskcompendium.pipeline.zephyr import AuditExecution, ReviewConfig
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
@@ -187,14 +187,18 @@ def bindings(tmp_path):
         text = "".join(json.dumps(row) + "\n" for row in rows)
         snapshot.write_text(text)
         source = HFSource(f"fixture/{name}", "a" * 40, "default", "train")
-        recipe = replace(svamp.recipe, name=name, source=source)
+        recipe = replace(
+            RECIPES["svamp"],
+            name=name,
+            source=source,
+            inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
+        )
         bindings.append(
             SourceBinding(
                 name,
                 "2026.10.01.1",
                 recipe,
                 ArtifactStep.adopt(name=f"fixture/{name}", version="2026.10.02.1", source=str(directory), kind=Artifact),
-                SourceFiles(patterns=("*.jsonl",), format=SourceFormat.JSONL),
                 ReviewConfig("fixture", "model-v1"),
                 10,
             )

@@ -7,6 +7,7 @@ from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.datasets.calendar_tasks import normalize as normalize_calendar
 from taskcompendium.pipeline.datasets.calendar_tasks import verification_report
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
@@ -63,6 +64,7 @@ def recipe() -> DatasetRecipe:
         name="tasktrove-if_calendar",
         version="tasktrove-if_calendar-v1",
         source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
+        inputs=tasktrove_inputs(CONFIG, REVISION),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

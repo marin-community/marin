@@ -18,6 +18,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     GeneratedSource,
@@ -114,6 +115,7 @@ recipe = DatasetRecipe(
     name="calendar-mock",
     version="calendar-v1",
     source=GeneratedSource("mock/calendar", "1", "default", "train", __name__),
+    inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
     normalize=normalize,
     rubric=ReviewRubric(
         "calendar-state",

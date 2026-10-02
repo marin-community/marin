@@ -27,6 +27,7 @@ from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
+from taskcompendium.pipeline.inputs import SourceFiles
 from taskcompendium.pipeline.models import (
     CheckResult,
     DatasetRecipe,
@@ -41,7 +42,7 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.review import BASE_RUBRIC, DEFAULT_PROMPT_CHARACTERS, BatchReviewer, Reviewer
-from taskcompendium.pipeline.sources import SourceFiles, staged_file_rows, staged_files
+from taskcompendium.pipeline.sources import staged_file_rows, staged_files
 from taskcompendium.pipeline.verification import verify_task
 
 GROUP_MEMORY_BYTES = 1024 * 1024

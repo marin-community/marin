@@ -6,7 +6,8 @@
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets.executable_tasks import REVISION, normalize
 from taskcompendium.pipeline.datasets.executable_tasks import verification_report as executable_verification_report
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_source
+from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -39,7 +40,16 @@ def verification_report(task: TaskSpec, name: str) -> VerificationReport:
     return report
 
 
-def recipe(name: str, image: str, *, rubric: ReviewRubric, timeout: float, memory_mb: int) -> DatasetRecipe:
+def recipe(
+    name: str,
+    image: str,
+    *,
+    rubric: ReviewRubric,
+    converter: RawConverter,
+    converter_revision: str,
+    timeout: float,
+    memory_mb: int,
+) -> DatasetRecipe:
     """Bind a converted source to static quality review and sandbox diagnostics."""
 
     def normalize_row(row: RawRow) -> TaskSpec | ImportRejection:
@@ -48,13 +58,14 @@ def recipe(name: str, image: str, *, rubric: ReviewRubric, timeout: float, memor
     def checks(task: TaskSpec) -> VerificationReport:
         return verification_report(task, name)
 
-    return DatasetRecipe(
+    source_recipe = DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
         source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIGS[name], "train"),
         normalize=normalize_row,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,
+        inputs=tasktrove_inputs(CONFIGS[name], REVISION),
         check_suite=CheckSuite(
             id="isolated-executable-controls",
             revision="1",
@@ -62,6 +73,7 @@ def recipe(name: str, image: str, *, rubric: ReviewRubric, timeout: float, memor
             run=checks,
         ),
     )
+    return with_raw_converter(source_recipe, converter, converter_revision)
 
 
 SOURCES = {
@@ -106,6 +118,22 @@ SOURCES = {
 }
 
 
-def recipe_for_source(name: str, image: str, *, timeout: float, memory_mb: int) -> DatasetRecipe:
+def recipe_for_source(
+    name: str,
+    image: str,
+    *,
+    converter: RawConverter,
+    converter_revision: str,
+    timeout: float,
+    memory_mb: int,
+) -> DatasetRecipe:
     source = SOURCES[name]
-    return recipe(name, image, rubric=source.rubric, timeout=timeout, memory_mb=memory_mb)
+    return recipe(
+        name,
+        image,
+        rubric=source.rubric,
+        converter=converter,
+        converter_revision=converter_revision,
+        timeout=timeout,
+        memory_mb=memory_mb,
+    )

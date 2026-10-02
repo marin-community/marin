@@ -5,7 +5,7 @@
 
 from taskcompendium.pipeline.datasets import atlas_math_qa
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_source
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
@@ -70,6 +70,7 @@ def recipe(name: str, *, config: str, revision: str, rubric: ReviewRubric) -> Da
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
         source=HFSource("open-thoughts/TaskTrove", revision, config, "train"),
+        inputs=tasktrove_inputs(config, revision),
         normalize=normalize,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,

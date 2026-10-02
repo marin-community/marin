@@ -14,6 +14,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat, UrlDownload
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -140,6 +141,10 @@ def recipe() -> DatasetRecipe:
         name="reasoning_gym_generated",
         version="reasoning-gym-direct-v1",
         source=HFSource(DATASET, REVISION, "generated", "generated"),
+        inputs=RecipeInputs(
+            files=SourceFiles(("generator.tar.gz",), SourceFormat.GENERATED),
+            downloads=(UrlDownload(f"https://api.github.com/repos/{DATASET}/tarball/{REVISION}", "generator.tar.gz"),),
+        ),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

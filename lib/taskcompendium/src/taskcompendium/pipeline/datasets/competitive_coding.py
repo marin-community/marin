@@ -10,6 +10,7 @@ from verifyit.modes.extract import collapse_whitespace
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import python_tasks
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
+from taskcompendium.pipeline.datasets.raw_conversion import RawConverter
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, DatasetRecipe, ReviewRubric, VerificationReport
 
 CONFIG = "laion__nemotron-gym-competitive-coding-v2"
@@ -28,13 +29,22 @@ RUBRIC = ReviewRubric(
 )
 
 
-def recipe(image: str, *, timeout: float, memory_mb: int) -> DatasetRecipe:
+def recipe(
+    image: str,
+    *,
+    converter: RawConverter,
+    converter_revision: str,
+    timeout: float,
+    memory_mb: int,
+) -> DatasetRecipe:
     source_recipe = python_tasks.recipe(
         "competitive_coding",
         image,
         config=CONFIG,
         revision=REVISION,
         rubric=RUBRIC,
+        converter=converter,
+        converter_revision=converter_revision,
         timeout=timeout,
         memory_mb=memory_mb,
     )

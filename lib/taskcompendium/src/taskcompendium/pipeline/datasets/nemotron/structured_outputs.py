@@ -20,6 +20,8 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
+from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs
 from taskcompendium.pipeline.datasets.structured_output import verification_report as schema_verification_report
 from taskcompendium.pipeline.models import (
     CheckSuite,
@@ -123,18 +125,20 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     return NormalizedTask(task, changes)
 
 
-def recipe() -> DatasetRecipe:
-    return DatasetRecipe(
+def recipe(*, converter: RawConverter, converter_revision: str) -> DatasetRecipe:
+    source_recipe = DatasetRecipe(
         name="tasktrove-structured_outputs",
         version="tasktrove-structured_outputs-v2",
         source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,
+        inputs=tasktrove_inputs(CONFIG, REVISION),
         check_suite=CheckSuite(
             id="structured-format-contract-and-controls", revision="2", parameters={}, run=verification_report
         ),
     )
+    return with_raw_converter(source_recipe, converter, converter_revision)
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:

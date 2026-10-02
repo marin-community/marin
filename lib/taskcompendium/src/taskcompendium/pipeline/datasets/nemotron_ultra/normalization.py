@@ -26,14 +26,10 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.datasets.nemotron.placeholders import restore_placeholder
 from taskcompendium.pipeline.models import (
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     NormalizationChange,
     NormalizedTask,
     RawRow,
-    ReviewRubric,
 )
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
@@ -199,17 +195,3 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
         verifier=VerifierSpec(kind=VerifierKind.SOURCE_CONTRACT, parameters_json=verifier.model_dump_json()),
     )
     return NormalizedTask(task, (*placeholder_changes, *changes))
-
-
-def recipe(name: str, blend: str, selector: str, family: str, rubric: ReviewRubric, *, component: str) -> DatasetRecipe:
-    def normalize_row(row: RawRow) -> NormalizedTask | ImportRejection:
-        return normalize(row, selector, family)
-
-    return DatasetRecipe(
-        name=name,
-        version=name + "-v1",
-        source=HFSource(DATASET, REVISION, f"{blend}/{component}", "train"),
-        normalize=normalize_row,
-        rubric=rubric,
-        intended_use=IntendedUse.TRAIN,
-    )

@@ -6,18 +6,20 @@
 import json
 
 from taskcompendium.models import ResourceVisibility, Source, TaskSpec, task_resource
-from taskcompendium.pipeline.datasets.svamp import normalize, recipe
+from taskcompendium.pipeline.datasets.numeric_answers import SVAMP_RECIPE, normalize_svamp
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.review import completion_body
 
 
 def test_review_can_inspect_private_text_without_changing_task_bytes():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = normalize(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = normalize_svamp(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     resource = task_resource("/tests/cases.json", b'{"input":"two","output":"2"}', ResourceVisibility.VERIFIER)
     task = task.model_copy(update={"resources": (resource,)})
-    payload = json.loads(completion_body(task, recipe.rubric, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(completion_body(task, SVAMP_RECIPE.rubric, "reviewer", 100)["messages"][1]["content"])
     assert payload["resources"][0]["text"] == '{"input":"two","output":"2"}'
     assert payload["resources"][0]["visibility"] == "verifier"
     assert task.resources[0].data() == resource.data()
@@ -25,11 +27,13 @@ def test_review_can_inspect_private_text_without_changing_task_bytes():
 
 def test_review_marks_omitted_fixture_content_and_retains_full_task():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = normalize(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = normalize_svamp(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     resource = task_resource("/tests/large.txt", b"a" * 100_000, ResourceVisibility.VERIFIER)
     task = task.model_copy(update={"resources": (resource,)})
-    payload = json.loads(completion_body(task, recipe.rubric, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(completion_body(task, SVAMP_RECIPE.rubric, "reviewer", 100)["messages"][1]["content"])
     preview = payload["resources"][0]
     assert preview["truncated"] and preview["byte_count"] == 100_000
     assert 0 < len(preview["text"]) < preview["byte_count"]
@@ -38,7 +42,9 @@ def test_review_marks_omitted_fixture_content_and_retains_full_task():
 
 def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = normalize(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = normalize_svamp(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     resources = (
         *(task_resource(f"/tests/case-{index}.txt", b"case", ResourceVisibility.VERIFIER) for index in range(300)),
@@ -46,7 +52,7 @@ def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
         task_resource("/solution/solve.sh", b"Private oracle", ResourceVisibility.CONTROL),
     )
     task = task.model_copy(update={"resources": resources})
-    body = completion_body(task, recipe.rubric, "reviewer", 100)
+    body = completion_body(task, SVAMP_RECIPE.rubric, "reviewer", 100)
     payload = json.loads(body["messages"][1]["content"])
     previews = {resource["path"]: resource["text"] for resource in payload["resources"]}
     assert previews["/input.txt"] == "Public input"
@@ -57,7 +63,9 @@ def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
 
 def test_review_exposes_late_small_cases_that_can_violate_the_public_domain():
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = normalize(RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"}))
+    task = normalize_svamp(
+        RawRow("fixture", source, {"Body": "I have 2 apples.", "Question": "How many?", "Answer": "2"})
+    )
     assert isinstance(task, TaskSpec)
     resources = tuple(
         resource
@@ -68,7 +76,7 @@ def test_review_exposes_late_small_cases_that_can_violate_the_public_domain():
         )
     )
     task = task.model_copy(update={"resources": resources})
-    payload = json.loads(completion_body(task, recipe.rubric, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(completion_body(task, SVAMP_RECIPE.rubric, "reviewer", 100)["messages"][1]["content"])
     previews = {resource["path"]: resource["text"] for resource in payload["resources"]}
     assert previews["/tests/input_80.txt"] == "0"
     assert previews["/tests/output_80.txt"] == "1"

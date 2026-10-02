@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Preserve direct SkyRL instruction contracts without substituting TaskTrove checkers."""
+"""Direct SkyRL instruction sources and their canonical constraint contracts."""
 
 import json
-from collections.abc import Callable
 
 from pydantic import ValidationError
 
@@ -17,6 +16,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     HFSource,
@@ -51,7 +51,7 @@ CRITERIA = (
 )
 
 
-def normalize(row: RawRow, messages_key: str, constraints_key: str) -> TaskSpec | ImportRejection:
+def _normalize(row: RawRow, messages_key: str, constraints_key: str) -> TaskSpec | ImportRejection:
     try:
         messages = tuple(TextMessage.model_validate(message) for message in row.data[messages_key])
         context = ConversationInput(events=messages)
@@ -94,20 +94,44 @@ def normalize(row: RawRow, messages_key: str, constraints_key: str) -> TaskSpec 
     )
 
 
-def recipe(
-    name: str,
-    *,
-    dataset: str,
-    revision: str,
-    split: str,
-    rubric: ReviewRubric,
-    normalize_row: Callable[[RawRow], TaskSpec | ImportRejection],
-) -> DatasetRecipe:
-    return DatasetRecipe(
-        name=name,
-        version=f"{name}-v1",
-        source=HFSource(dataset, revision, "default", split),
-        normalize=normalize_row,
-        rubric=rubric,
+def normalize_nemotron_if(row: RawRow) -> TaskSpec | ImportRejection:
+    return _normalize(row, "input", "args")
+
+
+def normalize_rlvr_ifeval(row: RawRow) -> TaskSpec | ImportRejection:
+    return _normalize(row, "messages", "ground_truth")
+
+
+RECIPES = {
+    "nemotron_if": DatasetRecipe(
+        name="nemotron_if",
+        version="nemotron_if-v1",
+        source=HFSource(
+            "nvidia/Llama-Nemotron-Post-Training-Dataset",
+            "ab2a40d258a6a4d9d4c277d702aeea445081766c",
+            "default",
+            "instruction_following",
+        ),
+        normalize=normalize_nemotron_if,
+        rubric=ReviewRubric("nemotron_if-answerability", "1", CRITERIA),
         intended_use=IntendedUse.TRAIN,
-    )
+        inputs=hub_inputs(
+            "nvidia/Llama-Nemotron-Post-Training-Dataset",
+            "ab2a40d258a6a4d9d4c277d702aeea445081766c",
+            SourceFiles(("RL/instruction_following/instruction_following.jsonl",), SourceFormat.JSONL),
+        ),
+    ),
+    "rlvr_ifeval": DatasetRecipe(
+        name="rlvr_ifeval",
+        version="rlvr_ifeval-v1",
+        source=HFSource("allenai/RLVR-IFeval", "47c03c73621c4aab2b824b7818681117d662770e", "default", "train"),
+        normalize=normalize_rlvr_ifeval,
+        rubric=ReviewRubric("rlvr_ifeval-answerability", "1", CRITERIA),
+        intended_use=IntendedUse.TRAIN,
+        inputs=hub_inputs(
+            "allenai/RLVR-IFeval",
+            "47c03c73621c4aab2b824b7818681117d662770e",
+            SourceFiles(("data/train-00000-of-00001.parquet",), SourceFormat.PARQUET),
+        ),
+    ),
+}

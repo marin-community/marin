@@ -19,6 +19,7 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.source_definitions import SourceDefinition
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     HFSource,
@@ -27,7 +28,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
-from taskcompendium.pipeline.sources import SourceFiles, SourceFormat
 from taskcompendium.verifiers.preference import BinaryPreference, PairwisePreference, PreferenceEvidenceVerifier
 
 PREFERENCE_CRITERIA = (
@@ -112,12 +112,14 @@ def recipe(
     revision: str,
     config: str,
     rubric: ReviewRubric,
+    files: SourceFiles,
     normalize: Callable[[RawRow], TaskSpec | ImportRejection],
 ) -> DatasetRecipe:
     return DatasetRecipe(
         name=name,
         version=f"{name}-v1",
         source=HFSource(dataset, revision, config, "train"),
+        inputs=hub_inputs(dataset, revision, files),
         normalize=normalize,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,
@@ -229,5 +231,6 @@ def recipe_for_source(
         revision=source.revision,
         config=source.config,
         rubric=source.rubric,
+        files=source.files,
         normalize=normalize_binary if name == "kto_mix" else normalize_hh,
     )

@@ -65,8 +65,27 @@ fail the stage with file context.
 
 A source does not need its own Python module. Sources sharing conversion and
 review structure belong together, with source-specific criteria beside their
-metadata. Examples include `python_tasks`, `preference_tasks`, `tasktrove_math`,
-`rubric_tasks` and the `nemotron/` and `nemotron_ultra/` packages.
+metadata. Each `DatasetRecipe` owns its `RecipeInputs`, normalizer, rubric, intended
+use and check suite. `RecipeInputs` declares staged file selection and pinned
+`HubDownload` or `UrlDownload` inputs, including auxiliary reference files. The
+experiment translates those declarations into artifacts without source-name
+acquisition switches.
+
+| Family | Shared contract |
+|---|---|
+| `math_answers` | Ten typed-math sources, including MATH-500 and Hendrycks MATH; named extraction functions retain schema differences |
+| `numeric_answers` | AIME24 and SVAMP exact-numeric answers |
+| `instruction_tasks` | Direct Nemotron IF and RLVR IFEval records |
+| `code_contracts` | APPS, Eurus2 and VerifiableCode with retained test contracts |
+| `python_tasks`, `atlas_code`, `executable_tasks` | Archived executable tasks with shared runtime checks |
+| `preference_tasks`, `repository_tasks`, `rubric_tasks` | Related source schemas with explicit source-specific criteria |
+| `nemotron_ultra/` | Seventy-five selections grouped by reward family; pinned blend and auxiliary inputs |
+
+Family `RECIPES` mappings contain static recipes. Factories remain for sources
+that need runtime images or converter adapters. Existing TaskTrove conversion
+adapters are supplied by the experiment; library families compose them with
+normalization and preserve conversion edits. Shared graders and format readers
+remain separate. SQL and structured tool actions retain their distinct contracts.
 
 For example, the Python-test family owns the `pymethods` and `pymethods_large`
 source definitions. Both use the same converter and common privacy/test criteria.

@@ -5,6 +5,7 @@
 
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets.direct_contracts import contract_task
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     HFSource,
@@ -58,4 +59,5 @@ def recipe() -> DatasetRecipe:
         normalize=normalize,
         intended_use=IntendedUse.TRAIN,
         rubric=RUBRIC,
+        inputs=hub_inputs(DATASET, REVISION, SourceFiles((SOURCE_FILE,), SourceFormat.PARQUET)),
     )

@@ -12,7 +12,8 @@ import sys
 from taskcompendium.models import ConversationInput, TextMessage, VerifierSpec
 from taskcompendium.pipeline.datasets.executable_tasks import normalize, verification_report
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_source
+from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
@@ -117,6 +118,8 @@ def recipe(
     config: str,
     revision: str,
     rubric: ReviewRubric,
+    converter: RawConverter,
+    converter_revision: str,
     timeout: float,
     memory_mb: int,
 ) -> DatasetRecipe:
@@ -125,13 +128,14 @@ def recipe(
     def normalize_row(row: RawRow) -> NormalizedTask | ImportRejection:
         return normalize_python(row, image, timeout, memory_mb)
 
-    return DatasetRecipe(
+    source_recipe = DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
         source=HFSource("open-thoughts/TaskTrove", revision, config, "train"),
         normalize=normalize_row,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,
+        inputs=tasktrove_inputs(config, revision),
         check_suite=CheckSuite(
             id="isolated-executable-controls",
             revision="1",
@@ -139,6 +143,7 @@ def recipe(
             run=verification_report,
         ),
     )
+    return with_raw_converter(source_recipe, converter, converter_revision)
 
 
 PYMETHODS_COMMON_CRITERIA = (
@@ -319,7 +324,15 @@ SOURCES = {
 }
 
 
-def recipe_for_source(name: str, image: str, *, timeout: float, memory_mb: int) -> DatasetRecipe:
+def recipe_for_source(
+    name: str,
+    image: str,
+    *,
+    converter: RawConverter,
+    converter_revision: str,
+    timeout: float,
+    memory_mb: int,
+) -> DatasetRecipe:
     source = SOURCES[name]
     return recipe(
         name,
@@ -327,6 +340,8 @@ def recipe_for_source(name: str, image: str, *, timeout: float, memory_mb: int) 
         config=source.config,
         revision=source.revision,
         rubric=source.rubric,
+        converter=converter,
+        converter_revision=converter_revision,
         timeout=timeout,
         memory_mb=memory_mb,
     )

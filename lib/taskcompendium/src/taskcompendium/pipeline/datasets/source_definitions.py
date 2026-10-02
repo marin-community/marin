@@ -5,8 +5,9 @@
 
 from dataclasses import dataclass
 
+from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import ReviewRubric
-from taskcompendium.pipeline.sources import SourceFiles, SourceFormat, unpack_task_binary
+from taskcompendium.pipeline.sources import unpack_task_binary
 
 
 @dataclass(frozen=True)
@@ -30,4 +31,13 @@ def tasktrove_source(config: str, revision: str, rubric: ReviewRubric) -> Source
         files=SourceFiles(
             patterns=(f"{config}/tasks.parquet",), format=SourceFormat.PARQUET, decoder=unpack_task_binary
         ),
+    )
+
+
+def tasktrove_inputs(config: str, revision: str) -> RecipeInputs:
+    """Declare the pinned archive consumed by a TaskTrove recipe."""
+    return hub_inputs(
+        "open-thoughts/TaskTrove",
+        revision,
+        SourceFiles((f"{config}/tasks.parquet",), SourceFormat.PARQUET, decoder=unpack_task_binary),
     )

@@ -8,6 +8,7 @@ from jsonschema.validators import validator_for
 
 from taskcompendium.importers.nemo_predicted_action import DATASET, REVISION, canonical_sha256, import_row
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -78,5 +79,6 @@ recipe = DatasetRecipe(
         ),
     ),
     intended_use=IntendedUse.TRAIN,
+    inputs=hub_inputs(DATASET, REVISION, SourceFiles(("train.jsonl",), SourceFormat.JSONL)),
     check_suite=CheckSuite(id="next-action-schema-and-controls", revision="1", parameters={}, run=verification_report),
 )

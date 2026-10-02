@@ -26,7 +26,7 @@ from taskcompendium.pipeline.fingerprints import recipe_code_identity
 from taskcompendium.pipeline.models import DatasetRecipe, EnvironmentInventory, FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.review import DEFAULT_PROMPT_CHARACTERS, BatchReviewer
 from taskcompendium.pipeline.rewriting import BatchRewriter, rewrite_audit_source
-from taskcompendium.pipeline.sources import SourceFiles, source_files_identity
+from taskcompendium.pipeline.sources import source_files_identity
 from taskcompendium.pipeline.zephyr import (
     AuditExecution,
     ReviewConfig,
@@ -66,7 +66,6 @@ class SourceBinding:
     version: str
     recipe: DatasetRecipe
     downloaded: ArtifactStep[Artifact]
-    files: SourceFiles
     review: ReviewConfig
     limit: int | None
     rewrite: RewriteSelection | None = None
@@ -144,7 +143,7 @@ def audit_source(
         "recipe": recipe_config,
         "review": binding.review,
         "downloaded": (downloaded.name, downloaded.version),
-        "files": source_files_identity(binding.files),
+        "files": source_files_identity(binding.recipe.inputs.files),
         "limit": binding.limit,
     }
 
@@ -153,7 +152,7 @@ def audit_source(
             source_path=ctx.artifact_path(downloaded),
             output_path=ctx.output_path,
             recipe_identity=recipe_config,
-            files_identity=source_files_identity(binding.files),
+            files_identity=source_files_identity(binding.recipe.inputs.files),
             limit=binding.limit,
             review=binding.review,
             max_workers=ctx.runtime_arg("max_workers"),
@@ -172,7 +171,7 @@ def audit_source(
             output_path=config.output_path,
             recipe=binding.recipe,
             review=config.review,
-            files=binding.files,
+            files=binding.recipe.inputs.files,
             limit=config.limit,
             execution=replace(execution, max_workers=config.max_workers, review_batch_size=config.review_batch_size),
         )
@@ -398,8 +397,8 @@ def main(
     bindings = []
     for name in source_names:
         recipe = source_recipe(name, image)
-        downloaded, files = source_download(name, resources, recipe)
-        bindings.append(SourceBinding(name, version, recipe, downloaded, files, review, row_limit))
+        downloaded = source_download(recipe, resources)
+        bindings.append(SourceBinding(name, version, recipe, downloaded, review, row_limit))
     inventories = {
         name: TypeAdapter(EnvironmentInventory).validate_json(path.read_bytes())
         for name, path in environment_inventories

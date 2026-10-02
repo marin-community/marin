@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from taskcompendium.models import Source, TaskSpec
+from taskcompendium.pipeline.inputs import RecipeInputs
 from taskcompendium.runtime.models import RolloutRecord
 
 
@@ -29,15 +30,6 @@ class GeneratedSource:
     config: str
     split: str
     module: str
-
-
-@dataclass(frozen=True)
-class SnapshotSource:
-    dataset: str
-    revision: str
-    config: str
-    split: str
-    path: str
 
 
 @dataclass(frozen=True)
@@ -95,10 +87,11 @@ class NormalizedTask:
 class DatasetRecipe:
     name: str
     version: str
-    source: HFSource | GeneratedSource | SnapshotSource
+    source: HFSource | GeneratedSource
     normalize: Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
     rubric: ReviewRubric
     intended_use: IntendedUse
+    inputs: RecipeInputs
     check_suite: "CheckSuite | None" = None
 
 

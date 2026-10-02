@@ -11,9 +11,9 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import DatasetRecipe, FilterPolicy
 from taskcompendium.pipeline.review import BatchReviewer
-from taskcompendium.pipeline.sources import SourceFiles, SourceFormat
 from taskcompendium.pipeline.zephyr import AuditExecution, ReviewConfig, audit_source, filter_source
 
 
