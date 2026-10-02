@@ -202,7 +202,7 @@ def test_grug_gpu_full_shape_bf16_decode_matches_float64():
 
 
 @pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
-@pytest.mark.parametrize("heads,groups", [(3, 4), (5, 1), (6, 8), (12, 4)])
+@pytest.mark.parametrize("heads,groups", [(3, 4), (5, 1), (5, 4), (6, 8), (12, 4)])
 def test_grug_tpu_bf16_unaligned_heads_match_float64(heads, groups):
     rng = np.random.default_rng(38)
     q = jnp.asarray(rng.normal(size=(2, heads, groups, 128)), jnp.bfloat16)
