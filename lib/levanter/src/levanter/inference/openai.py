@@ -12,6 +12,7 @@ drop-in replacements for OpenAI models.
 import asyncio
 import collections
 import collections.abc
+from contextlib import contextmanager
 import logging
 import queue
 import threading
@@ -325,19 +326,12 @@ class InferenceContext:
                     raise ValueError(f"Expected model version {expected_version}, serving {self.model_version}")
                 if self.engine.draft is not current_draft:
                     raise ValueError("Draft changed while target weights were staged")
-            was_paused = self.pause_event.is_set()
-            self.pause_generation()
-            try:
-                with self.model_lock, self.admission_lock:
-                    jax.block_until_ready(self.engine.gen_state)
-                    self.model = candidate
-                    self.engine.model = candidate
-                    self.engine.draft = candidate_draft
-                    self.model_version += 1
-                    installed_version = self.model_version
-            finally:
-                if not was_paused:
-                    self.resume_generation()
+            with self._paused_model_update():
+                self.model = candidate
+                self.engine.model = candidate
+                self.engine.draft = candidate_draft
+                self.model_version += 1
+                installed_version = self.model_version
         return installed_version
 
     def snapshot_draft(self) -> tuple[Eagle3Draft, int]:
@@ -370,12 +364,18 @@ class InferenceContext:
             with self.admission_lock:
                 if expected_version != self.model_version or self.engine.draft is not current:
                     raise ValueError("Target or draft changed while draft weights were staged")
+            with self._paused_model_update():
+                self.engine.draft = candidate
+
+    @contextmanager
+    def _paused_model_update(self) -> collections.abc.Iterator[None]:
+        with self.lifecycle_lock:
             was_paused = self.pause_event.is_set()
             self.pause_generation()
             try:
                 with self.model_lock, self.admission_lock:
                     jax.block_until_ready(self.engine.gen_state)
-                    self.engine.draft = candidate
+                    yield
             finally:
                 if not was_paused:
                     self.resume_generation()
