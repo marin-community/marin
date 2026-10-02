@@ -112,6 +112,8 @@ class InferenceDelta:
     finish_reason: FinishReason
     model_version: int
     prompt_tokens: list[int]
+    top_token_ids: list[list[int]] = field(default_factory=list)
+    top_logprobs: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -145,6 +147,8 @@ class InferenceResponse:
     finish_reason: FinishReason
     model_version: int
     logprobs: Optional[List[float]] = None
+    top_token_ids: list[list[int]] = field(default_factory=list)
+    top_logprobs: list[list[float]] = field(default_factory=list)
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
 
@@ -540,6 +544,8 @@ class InferenceContext:
                         choice.finish_reason,
                         self.model_version,
                         req.prompt_tokens,
+                        choice.top_token_ids[count:].copy(),
+                        choice.top_logprobs[count:].copy(),
                     )
                     req.future.get_loop().call_soon_threadsafe(req.on_delta, delta)
                     published[index, choice.choice] = (len(choice.token_list), stable_text, choice.finish_reason)
@@ -560,6 +566,8 @@ class InferenceContext:
                             text=self.tokenizer.decode(tokens, skip_special_tokens=True),
                             tokens=tokens,
                             logprobs=choice.logprobs.copy(),
+                            top_token_ids=choice.top_token_ids.copy(),
+                            top_logprobs=choice.top_logprobs.copy(),
                             prompt_tokens=len(req.prompt_tokens),
                             completion_tokens=len(tokens),
                             finish_reason=choice.finish_reason,
@@ -596,6 +604,29 @@ class InferenceContext:
 def _health_check() -> dict:
     """Health check endpoint."""
     return {"status": "healthy", "service": "levanter-inference"}
+
+
+def _rollout_top_logprobs(
+    tokenizer: MarinTokenizer,
+    token_ids: list[list[int]],
+    logprobs: list[list[float]],
+    count: int,
+    return_tokens_as_token_ids: bool,
+) -> list[dict[str, float]] | None:
+    if not count:
+        return None
+    # OpenAI/vLLM represents filtered candidates with this finite wire floor.
+    return [
+        {
+            (
+                f"{TOKEN_ID_PREFIX}{token}"
+                if return_tokens_as_token_ids
+                else cast(str, tokenizer.convert_ids_to_tokens(token))
+            ): max(score, -9999.0)
+            for token, score in zip(ids[:count], scores[:count], strict=True)
+        }
+        for ids, scores in zip(token_ids, logprobs, strict=True)
+    ]
 
 
 def _sse_event(payload: str) -> str:
@@ -704,6 +735,11 @@ async def _create_completion(
     try:
         if request.echo and request.logprobs == 0:
             raise HTTPException(status_code=400, detail="Echo logprobs require a positive logprobs count")
+        if not request.echo and request.logprobs is not None and request.logprobs > ctx.config.service.max_logprobs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Requested logprobs exceeds configured capture capacity {ctx.config.service.max_logprobs}",
+            )
         prompt_token_lists = _completion_prompt_ids(request.prompt, ctx.tokenizer)
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
@@ -815,7 +851,13 @@ async def _create_completion(
                             tokens=tokens,
                             token_logprobs=token_logprobs,
                             text_offset=None,
-                            top_logprobs=None,
+                            top_logprobs=_rollout_top_logprobs(
+                                ctx.tokenizer,
+                                generation.top_token_ids,
+                                generation.top_logprobs,
+                                request.logprobs,
+                                request.return_tokens_as_token_ids,
+                            ),
                         )
 
                 choices.append(
@@ -1103,7 +1145,18 @@ def _delta_events(
                 )
                 for token in delta.tokens
             ]
-            logprobs = Logprobs(tokens=token_text, token_logprobs=delta.logprobs, text_offset=None, top_logprobs=None)
+            logprobs = Logprobs(
+                tokens=token_text,
+                token_logprobs=delta.logprobs,
+                text_offset=None,
+                top_logprobs=_rollout_top_logprobs(
+                    tokenizer,
+                    delta.top_token_ids,
+                    delta.top_logprobs,
+                    request.logprobs,
+                    request.return_tokens_as_token_ids,
+                ),
+            )
         content = CompletionChoice(index=delta.index, text=delta.text, finish_reason="length", logprobs=logprobs)
         choice_extra: dict[str, Any] = {**extra, "finish_reason": finish_reason}
         if request.return_token_ids:

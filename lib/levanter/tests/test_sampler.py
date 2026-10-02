@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -61,3 +63,41 @@ def test_full_distribution_sampling_keeps_tail_probabilities(temperature):
     np.testing.assert_allclose(log_probs.array[0], expected, rtol=1e-6, atol=1e-7)
     # Another sequence in the same batch still uses nucleus sampling.
     assert float(log_probs.array[1]) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("mode", ["raw_logprobs", "processed_logprobs"])
+@pytest.mark.parametrize("top_p", [0.6, 1.0])
+def test_rollout_candidates_match_reporting_distribution_without_changing_sampling(mode, top_p):
+    vocab = hax.Axis("vocab", 4)
+    logits = hax.named(jnp.log(jnp.array([0.4, 0.3, 0.2, 0.1])), vocab)
+    sampler = Sampler(vocab, logprobs_mode=mode, max_logprobs=3)
+    tokens, chosen, ids, scores = jax.jit(sampler.sample_with_candidates)(
+        logits, 0.5, top_ps=top_p, key=jax.random.key(2)
+    )
+    baseline, _ = Sampler(vocab)(logits, 0.5, top_ps=top_p, key=jax.random.key(2))
+    assert int(tokens.array) == int(baseline.array)
+    # At temperature 1/2 the probabilities are [16,9,4,1]/30. A 0.6
+    # nucleus retains the first two and renormalizes them to [16,9]/25.
+    probabilities = np.array([0.4, 0.3, 0.2, 0.1])
+    if mode == "processed_logprobs":
+        probabilities = np.array([16, 9, 4, 1]) / 30 if top_p == 1 else np.array([16, 9, 0, 0]) / 25
+    with np.errstate(divide="ignore"):
+        expected = np.log(probabilities)
+    np.testing.assert_array_equal(ids.array, [0, 1, 2])
+    np.testing.assert_allclose(scores.array, expected[:3], atol=1e-6)
+    np.testing.assert_allclose(chosen.array, expected[int(tokens.array)], atol=1e-6)
+
+
+def test_disabled_candidate_capture_has_no_candidate_outputs_or_top_k_work():
+    vocab = hax.Axis("vocab", 4)
+    logits = hax.named(jnp.array([3.0, 2.0, 1.0, 0.0]), vocab)
+    sampler = Sampler(vocab)
+    call = lambda x: sampler.sample_with_candidates(x, 0.0, key=jax.random.key(0))
+    tokens, logprobs, ids, scores = jax.jit(call)(logits)
+    assert int(tokens.array) == 0
+    assert float(logprobs.array) == pytest.approx(-math.log(sum(math.exp(-i) for i in range(4))), abs=1e-6)
+    assert ids is scores is None
+    # Capture is a static resource option: disabling it removes the top-K
+    # primitive and candidate result arrays from the compiled computation.
+    assert "top_k" not in str(jax.make_jaxpr(call)(logits))
+    assert len(jax.tree.leaves(jax.eval_shape(call, logits))) == 2

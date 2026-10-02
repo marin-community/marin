@@ -70,7 +70,7 @@ class CompletionRequest(BaseModel):
     echo: bool | None = None
     frequency_penalty: float | None = None
     logit_bias: dict[str, int] | None = None
-    logprobs: int | None = None
+    logprobs: int | None = Field(default=None, ge=0)
     max_tokens: int = Field(default=1024, ge=0, description="Maximum number of tokens to generate")
     n: int | None = None
     presence_penalty: float | None = None

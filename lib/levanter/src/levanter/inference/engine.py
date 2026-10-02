@@ -36,7 +36,7 @@ from levanter.inference.page_table import PageTable
 from levanter.inference.utils import INVALID, is_valid
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
-from levanter.layers.sampler import Sampler
+from levanter.layers.sampler import LogprobsMode, Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
@@ -69,6 +69,11 @@ class InferenceEngineConfig:
     """Maximum number of stop sequences per active sequence. 0 disables stop tokens."""
     max_stop_tokens: int = 16
     """Maximum tokens per stop sequence (position axis length)."""
+
+    max_logprobs: int = 0
+    """Static rollout top-K capture capacity. Zero disables candidate buffers and computation."""
+    logprobs_mode: LogprobsMode = "processed_logprobs"
+    """Raw model scores or scores after temperature and nucleus filtering."""
 
     # Default PRNG seed for building per-request keys (optional convenience)
     seed: int = 0
@@ -103,6 +108,10 @@ class InferenceEngineConfig:
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
     def __post_init__(self):
+        if self.max_logprobs < 0:
+            raise ValueError("max_logprobs must be nonnegative")
+        if self.logprobs_mode not in ("raw_logprobs", "processed_logprobs"):
+            raise ValueError(f"Unsupported logprobs_mode: {self.logprobs_mode}")
         # this one is only required because of clones. If we really care, we could relax this
         if self.max_queued_tokens < self.max_seqs:
             raise ValueError("max_queued_tokens must be >= max_seqs")
@@ -254,6 +263,8 @@ class DecodeResult:
     tokens_decoded: int = 0
     finish_reason: FinishReason = FinishReason.RUNNING
     logprobs: list[float] = field(default_factory=list)
+    top_token_ids: list[list[int]] = field(default_factory=list)
+    top_logprobs: list[list[float]] = field(default_factory=list)
 
     @property
     def done(self) -> bool:
@@ -456,7 +467,9 @@ def _prefill_kernel(
     temps = decode_state.temperature["seq", new_slot_ids]
     top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs, top_ids, top_logprobs = hax.vmap(sampler.sample_with_candidates, "position")(
+        logits_at_samples, temps, top_ps=top_ps, key=prng_keys
+    )
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -466,8 +479,11 @@ def _prefill_kernel(
         max_tokens=decode_state.max_seqs * 2,
         max_seqs=decode_state.max_seqs,
         with_logprobs=True,
+        max_logprobs=sampler.max_logprobs,
     )
-    outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
+    outputs = outputs.append(
+        new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons, top_ids, top_logprobs
+    )
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
@@ -624,7 +640,9 @@ def _handle_clones(
     top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs, top_ids, top_logprobs = hax.vmap(sampler.sample_with_candidates, "position")(
+        logits_this_time, temps, top_ps=top_ps, key=prng_keys
+    )
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
@@ -663,7 +681,9 @@ def _handle_clones(
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state, cache=cache)
 
     # Append clone outputs
-    outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finish_reasons)
+    outputs = outputs.append(
+        new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finish_reasons, top_ids, top_logprobs
+    )
 
     # Device-side release of finished sequences (jit-safe)
     return gen_state, outputs
@@ -724,7 +744,9 @@ def _run_generation_loop(
         temps = decode_state.temperature["seq", new_slot_ids]
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+        new_tokens, log_probs, top_ids, top_logprobs = hax.vmap(sampler.sample_with_candidates, "position")(
+            logits_at_samples, temps, top_ps=top_ps, key=prng_keys
+        )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -732,7 +754,9 @@ def _run_generation_loop(
         # Update the gen_state with all the new components
         new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
         # Append non-stateful outputs for host-side extraction
-        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons)
+        outputs = outputs.append(
+            new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finish_reasons, top_ids, top_logprobs
+        )
 
         # jax.debug.print(
         #     "[gen] step={step} outputs_size={size} queued_after={queued}",
@@ -747,6 +771,7 @@ def _run_generation_loop(
         max_tokens=max(max_tokens_per_round * max_rounds, 1),
         max_seqs=gen_state.decode_state.max_seqs,
         with_logprobs=True,
+        max_logprobs=sampler.max_logprobs,
     )
     init_state = (gen_state, outputs_buf, jnp.array(0, dtype=jnp.int32))
     final_gen_state, final_outputs, _ = jax.lax.while_loop(cond, body, init_state)
@@ -760,6 +785,8 @@ class GenerationResult:
     logprobs: list[list[float]] | None
     total_generated: int
     finish_reasons: list[FinishReason]
+    top_token_ids: list[list[list[int]]] = field(default_factory=list)
+    top_logprobs: list[list[list[float]]] = field(default_factory=list)
 
 
 FIRST_TOKEN_LOGPROB = 0.0
@@ -898,7 +925,9 @@ class InferenceEngine:
             max_queued_tokens=config.max_queued_tokens,
         )
         vocab_axis = model.Vocab
-        sampler = Sampler(vocab_axis)
+        if config.max_logprobs > model.Vocab.size:
+            raise ValueError("max_logprobs exceeds vocabulary size")
+        sampler = Sampler(vocab_axis, logprobs_mode=config.logprobs_mode, max_logprobs=config.max_logprobs)
         return cls(
             model=model,
             tokenizer=tokenizer,
@@ -1296,6 +1325,8 @@ class InferenceEngine:
         outputs_list: list[list[int]] = []
         logprobs_list: list[list[float]] = []
         finish_reasons: list[FinishReason] = []
+        top_ids_list: list[list[list[int]]] = []
+        top_logprobs_list: list[list[list[float]]] = []
         total_prompt_tokens = 0
         for r in requests:
             rid = int(r.request_id)
@@ -1304,6 +1335,8 @@ class InferenceEngine:
             for k in range(int(r.n_generations)):
                 dr = kid_map[k]
                 finish_reasons.append(dr.finish_reason)
+                top_ids_list.append(dr.top_token_ids)
+                top_logprobs_list.append(dr.top_logprobs)
                 outputs_list.append(dr.token_list)
                 logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
             self.results[rid] = kid_map
@@ -1318,7 +1351,12 @@ class InferenceEngine:
         if FinishReason.ABORT in finish_reasons:
             self.reset()
         return GenerationResult(
-            tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated, finish_reasons=finish_reasons
+            tokens=outputs_list,
+            logprobs=logprobs_list,
+            total_generated=total_generated,
+            finish_reasons=finish_reasons,
+            top_token_ids=top_ids_list,
+            top_logprobs=top_logprobs_list,
         )
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
@@ -1411,6 +1449,9 @@ class InferenceEngine:
             dr.token_list.append(tok)
             if pending_outputs.logprobs is not None:
                 dr.logprobs.append(float(pending_outputs.logprobs.array[i]))
+            if pending_outputs.top_token_ids is not None:
+                dr.top_token_ids.append(pending_outputs.top_token_ids.array[i].tolist())
+                dr.top_logprobs.append(pending_outputs.top_logprobs.array[i].tolist())
             dr.tokens_decoded += 1
             appended += 1
 

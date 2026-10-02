@@ -81,6 +81,30 @@ with an `abort` finish reason. Other groups in the batch continue; the cancelled
 response does not wait for them to finish. Disconnecting a client cancels its group
 and releases the request ID. No separate remote cancellation endpoint is exposed.
 
+### Rollout candidate capture
+
+Set `service.max_logprobs` to a positive static capacity and request completion
+`logprobs=K` at or below that capacity. Candidates come from the same paged
+prefill/decode forward pass as each sampled token, including cloned choices;
+they remain aligned through streaming, stopping, and partial aborts. The default
+capacity is zero, which omits candidate buffers and top-K computation. Requests
+above capacity fail before generation. `logprobs=0` still returns sampled-token
+scores. Echo scoring uses a separate full-sequence path and is unaffected.
+
+`service.logprobs_mode=raw_logprobs` reports full-vocabulary scores before
+temperature and nucleus filtering, as required by SkyRL's raw behavior evidence.
+The default `processed_logprobs` preserves existing scores after temperature and
+nucleus filtering; temperature zero uses temperature one for reporting. Neither
+mode changes sampling. Filtered candidates use vLLM's finite `-9999` OpenAI wire
+floor. Set `return_tokens_as_token_ids=true` to retain exact candidate identities
+when different vocabulary IDs decode to the same text.
+
+The paired SkyRL remote client maps these completions to `student_topk_indices`
+and `behavior_topk_logprobs`; its retry coordinator concatenates partial evidence.
+This does not enable remote FTPO recipes or change their existing local-vLLM
+requirement. Chat candidate capture and student-selected teacher scoring remain
+unsupported.
+
 ### Teacher scoring
 
 Completion requests with `max_tokens=0` return no generated tokens. With `echo=true`
