@@ -111,7 +111,7 @@ def export_fixture(root: Path, recipe: str) -> None:
     print(json.dumps({"fixture": str(root), "checkpoint_identity": identity}), flush=True)
 
 
-def run_native(root: Path, hardware_label: str) -> None:
+def run_native(root: Path, hardware_label: str, expert_axis_size: int) -> None:
     """Measure exactly the fixture's checkpoint and token workload in Levanter."""
     manifest = json.loads((root / "manifest.json").read_text())
     output = root / "native-result.json"
@@ -132,6 +132,8 @@ def run_native(root: Path, hardware_label: str) -> None:
             manifest["dtype"],
             "--hardware-label",
             hardware_label,
+            "--expert-axis-size",
+            str(expert_axis_size),
             "--warmup-batches",
             "2",
             "--measured-batches",
@@ -142,7 +144,7 @@ def run_native(root: Path, hardware_label: str) -> None:
     print(output.read_text(), flush=True)
 
 
-def run_vllm(root: Path, hardware_label: str, execution_mode: str) -> None:
+def run_vllm(root: Path, hardware_label: str, execution_mode: str, expert_axis_size: int) -> None:
     """Measure the exported checkpoint using the promoted Marin CUDA fork."""
     manifest = json.loads((root / "manifest.json").read_text())
     manifest["hardware_label"] = hardware_label
@@ -154,6 +156,9 @@ def run_vllm(root: Path, hardware_label: str, execution_mode: str) -> None:
                 "model": str(root / "checkpoint"),
                 "dtype": "bfloat16",
                 "tensor_parallel_size": 1,
+                "data_parallel_size": expert_axis_size,
+                "data_parallel_size_local": expert_axis_size,
+                "enable_expert_parallel": expert_axis_size > 1,
                 "max_model_len": 128,
                 "max_num_seqs": 2,
                 "max_num_batched_tokens": 256,
@@ -210,15 +215,16 @@ def main() -> None:
         run = commands.add_parser(backend)
         run.add_argument("--fixture", type=Path, required=True)
         run.add_argument("--hardware-label", required=True)
+        run.add_argument("--expert-axis-size", type=int, default=1)
         if backend == "vllm":
             run.add_argument("--execution-mode", choices=["eager", "cuda-graph"], default="eager")
     args = parser.parse_args()
     if args.command == "export":
         export_fixture(args.output.resolve(), args.recipe)
     elif args.command == "native":
-        run_native(args.fixture.resolve(), args.hardware_label)
+        run_native(args.fixture.resolve(), args.hardware_label, args.expert_axis_size)
     else:
-        run_vllm(args.fixture.resolve(), args.hardware_label, args.execution_mode)
+        run_vllm(args.fixture.resolve(), args.hardware_label, args.execution_mode, args.expert_axis_size)
 
 
 if __name__ == "__main__":
