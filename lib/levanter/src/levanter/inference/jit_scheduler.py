@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from enum import IntEnum
+from enum import IntEnum, auto
 
 import equinox as eqx
 import haliax as hax
@@ -28,8 +28,8 @@ class FinishReason(IntEnum):
     """Per-sequence state retained from device termination through host results."""
 
     RUNNING = 0
-    STOP = 1
-    LENGTH = 2
+    STOP = auto()
+    LENGTH = auto()
 
 
 class PackedSequence(eqx.Module):
