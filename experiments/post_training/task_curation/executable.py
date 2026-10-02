@@ -8,7 +8,7 @@ import hashlib
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from tasktrove_verify.spec import PytestSpec, spec_to_table
+from verifyit.spec import PytestSpec, spec_to_table
 
 from experiments.post_training.tasktrove.converters.codeforces import convert_codeforces
 from experiments.post_training.tasktrove.converters.converted_task import ConvertedTask, Rejected
@@ -22,12 +22,6 @@ CONVERTERS: dict[str, Callable[[TaskFiles], ConvertedTask | Rejected]] = {
     "taco": convert_taco,
     "codeforces": convert_codeforces,
     "unitsyn": convert_unitsyn,
-}
-
-CHECKER_ENVIRONMENT_NAMES = {
-    b"TASKTROVE_TESTS_DIR": b"VERIFYIT_TESTS_DIR",
-    b"TASKTROVE_WORKSPACE": b"VERIFYIT_WORKSPACE",
-    b"TASKTROVE_LOGS_DIR": b"VERIFYIT_LOGS_DIR",
 }
 
 
@@ -65,26 +59,10 @@ def converted_row(
                 "replacement": converted.instruction,
             }
         )
-    data_files = {}
-    for path, content in converted.data_files.items():
-        replacement = content
-        if path.startswith("tests/") and path.endswith((".py", ".sh")):
-            for original_name, canonical_name in CHECKER_ENVIRONMENT_NAMES.items():
-                replacement = replacement.replace(original_name, canonical_name)
-        if replacement != content:
-            changes.append(
-                {
-                    "field": f"data_files/{path}",
-                    "reason": "Normalize standalone checker environment references to verifyit",
-                    "original": base64.b64encode(content).decode(),
-                    "replacement": base64.b64encode(replacement).decode(),
-                }
-            )
-        data_files[path] = base64.b64encode(replacement).decode()
     row["converted"] = {
         "instruction": converted.instruction,
         "grader_spec": grader_spec,
-        "data_files": data_files,
+        "data_files": {path: base64.b64encode(content).decode() for path, content in converted.data_files.items()},
         "control_files": {p: base64.b64encode(b).decode() for p, b in controls.items()},
         "source_dockerfile_sha256": hashlib.sha256(converted.dockerfile.encode()).hexdigest(),
         "tags": list(converted.tags),

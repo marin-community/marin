@@ -23,7 +23,7 @@ required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_6
 
 [tool.uv.sources]
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
-verifyit = { git = "https://github.com/marin-community/verifyit.git", rev = "a398c65d851941ce8e39e2986993c6108dd2e10b" }
+verifyit = { path = "../verifyit", editable = true }
 marin-shellbox = { path = "../shellbox", editable = true }
 marin-finestore = { path = "../finestore", editable = true }
 marin-zephyr = { path = "../zephyr", editable = true }

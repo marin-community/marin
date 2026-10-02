@@ -10,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from tasktrove_verify.spec import ScriptSpec, parse_spec
+from verifyit.spec import ScriptSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
@@ -46,8 +46,8 @@ def _run_checker(checker_source: str, tests_dir: Path, output_file: Path) -> dic
     logs_dir = tests_dir.parent / "logs"
     env = {
         **os.environ,
-        "TASKTROVE_TESTS_DIR": str(tests_dir),
-        "TASKTROVE_LOGS_DIR": str(logs_dir),
+        "VERIFYIT_TESTS_DIR": str(tests_dir),
+        "VERIFYIT_LOGS_DIR": str(logs_dir),
     }
     proc = subprocess.run(
         [sys.executable, str(script), str(output_file)], cwd=tests_dir.parent, env=env, capture_output=True, text=True

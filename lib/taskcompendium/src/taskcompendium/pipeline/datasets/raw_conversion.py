@@ -39,7 +39,7 @@ def with_raw_converter(recipe: DatasetRecipe, converter: RawConverter, revision:
     assert suite is not None
     return replace(
         recipe,
-        version=f"{recipe.version}-raw-conversion-v1",
+        version=f"{recipe.version}-raw-conversion-v2",
         normalize=normalize_raw,
         check_suite=replace(suite, parameters={**suite.parameters, "converter_revision": revision}),
     )

@@ -6,11 +6,11 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal
 
 from pydantic import JsonValue, model_validator
 from verifyit.grade import Status, grade
-from verifyit.spec import ExactSpec, MathSpec, MathType, ReasoningGymSpec, Spec
+from verifyit.modes.grade_puzzle import PuzzleAnswerType, puzzle_spec
+from verifyit.spec import ReasoningGymSpec, Spec
 
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
 from taskcompendium.submission import extract_answer
@@ -59,7 +59,7 @@ class ReasoningGymVerifier(Verifier):
 
 class PuzzleAnswerVerifier(Verifier):
     expected: str
-    answer_type: Literal["choice", "exact", "ordered_list", "number", "coords"]
+    answer_type: PuzzleAnswerType
 
     @model_validator(mode="after")
     def validate_expected(self) -> "PuzzleAnswerVerifier":
@@ -72,14 +72,4 @@ class PuzzleAnswerVerifier(Verifier):
             answer = extract_answer(attempt.conversation[-1], attempt.convention)
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        spec: Spec
-        if self.answer_type in {"number", "coords"}:
-            spec = MathSpec(expected=self.expected, math_type=MathType.SCALAR)
-        else:
-            expected = (
-                tuple(item.strip() for item in self.expected.split(",") if item.strip())
-                if self.answer_type == "ordered_list"
-                else (self.expected,)
-            )
-            spec = ExactSpec(expected=expected)
-        return grade_answer(spec, answer)
+        return grade_answer(puzzle_spec(self.expected, self.answer_type), answer)

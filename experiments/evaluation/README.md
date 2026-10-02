@@ -63,6 +63,7 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--seed` overrides the Evalchemy seed for every selected task in that launch and is stored in its record;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
@@ -234,7 +235,7 @@ verified policy version use the current shared pins in `config/external/`.
 and `max_tokens`. `runtime_extras` names optional Evalchemy dependency groups required by custom task
 packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog when omitted; an
 explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
-launcher `--limit` overrides the file limit. `record.json` stores the resulting task
+launcher `--limit` overrides the file limit while `--seed` overrides the file seed. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
 record provenance stores the exact Evalchemy requirement, including runtime extras. FinanceBench
 also requires a `judge` block with a dedicated endpoint, model, and secret reference. Marin forwards

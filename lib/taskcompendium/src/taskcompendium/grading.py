@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
-from verifyit.grade import InvalidTask, numeric_tolerance
+from verifyit.grade import InvalidTask, Reward, Status, numeric_tolerance
 from verifyit.modes.grade_exact import grade_exact_candidate
 from verifyit.modes.grade_math import grade_numeric_candidate
 from verifyit.spec import ExactSpec, NumericSpec
@@ -28,6 +28,13 @@ class GradeResult:
     status: Outcome
     reward: float | None
     error: str | None = None
+
+
+def grade_result(result: Reward) -> GradeResult:
+    """Translate a standalone scorer result into the task grading contract."""
+    if result.status != Status.SCORED:
+        return GradeResult(Outcome.INFRA_ERROR, None, result.detail.get("error"))
+    return GradeResult(Outcome.GRADED, result.reward, result.detail.get("error"))
 
 
 @dataclass(frozen=True)

@@ -7,17 +7,15 @@ import json
 import re
 from typing import Any
 
-import yaml
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 from verifyit.grade import InvalidTask
-from verifyit.modes.extract import unwrap_fence
-from verifyit.modes.grade_ifeval import resolve_checks
-from verifyit.modes.grade_json_schema import parse_candidate
+from verifyit.modes.grade_ifeval import grade_ifeval_candidate, resolve_checks
+from verifyit.modes.grade_json_schema import grade_json_schema_candidate
 from verifyit.spec import Constraint, SchemaFormat
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, grade_result
 from taskcompendium.submission import extract_answer
 
 
@@ -67,12 +65,8 @@ class IfevalVerifier(Verifier):
             text = extract_answer(attempt.conversation[-1], attempt.convention)
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        checks = resolve_checks(tuple(Constraint(c.name, c.parameters) for c in self.constraints))
-        try:
-            results = [check(text, constraint.params)[0] for constraint, check in checks]
-        except (KeyError, TypeError, ValueError) as error:
-            return GradeResult(Outcome.INFRA_ERROR, None, f"Invalid constraint parameters: {error}")
-        return GradeResult(Outcome.GRADED, float(all(results)))
+        constraints = tuple(Constraint(c.name, c.parameters) for c in self.constraints)
+        return grade_result(grade_ifeval_candidate(constraints, text))
 
 
 class JsonSchemaVerifier(Verifier):
@@ -95,11 +89,5 @@ class JsonSchemaVerifier(Verifier):
             text = extract_answer(attempt.conversation[-1], attempt.convention)
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        try:
-            instance = parse_candidate(unwrap_fence(text), self.schema_format)
-        except (ValueError, yaml.YAMLError):
-            return GradeResult(Outcome.GRADED, 0.0)
         schema = json.loads(self.document_schema_json)
-        # pyrefly: ignore[bad-instantiation, missing-argument]  # jsonschema types the concrete class as a protocol.
-        validator = validator_for(schema)(schema)
-        return GradeResult(Outcome.GRADED, float(validator.is_valid(instance)))
+        return grade_result(grade_json_schema_candidate(schema, self.schema_format, text))

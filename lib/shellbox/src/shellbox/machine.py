@@ -83,11 +83,27 @@ class ShellSimBuiltins:
 
 @dataclass(frozen=True)
 class MachineSpec:
+    """Machine inputs, with a provider startup timeout for Daytona.
+
+    Other factories do not apply startup_timeout. Callers enforce their own
+    deadline for the complete create operation.
+    """
+
     source: QemuBundle | DockerImage | PreparedImage | RegistryImage | DockerfileSource | ShellSimBuiltins
     workdir: str = "/workspace"
     env: dict[str, str] = field(default_factory=dict)
     network: NetworkPolicy = NetworkPolicy.DENY
     memory_mb: int | None = None
+    cpus: int | None = None
+    storage_mb: int | None = None
+    gpus: int = 0
+    startup_timeout: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.cpus is not None and self.cpus <= 0:
+            raise ValueError("cpus must be positive")
+        if self.storage_mb is not None and self.storage_mb <= 0:
+            raise ValueError("storage_mb must be positive")
 
 
 @dataclass(frozen=True)
@@ -98,6 +114,7 @@ class Command:
     stdin: bytes = b""
     timeout: float | None = None
     output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    user: str | None = None
 
 
 @dataclass(frozen=True)

@@ -86,8 +86,12 @@ Examples of source families:
 Family `RECIPES` mappings contain static recipes. Factories remain for sources
 that need runtime images or converter adapters. Existing TaskTrove conversion
 adapters are supplied by the experiment; library families compose them with
-normalization and preserve conversion edits. Shared graders and format readers
-remain separate. SQL and structured tool actions retain their distinct contracts.
+normalization and preserve conversion edits. Grading rules live in `lib/verifyit`: ARC grids, injection actions, schedule and
+calendar checks, capture comparison, reference/abstention gates, puzzles, IFEval
+and JSON Schema. Taskcompendium adapters extract submissions, validate private
+configuration and translate scoring results. Environment capture and isolated
+execution remain taskcompendium responsibilities. VerifyIT does not import
+TaskSpec or taskcompendium. Shared format readers remain separate. SQL and structured tool actions retain their distinct contracts.
 
 For example, the Python-test family owns the `pymethods` and `pymethods_large`
 source definitions. Both use the same converter and common privacy/test criteria.

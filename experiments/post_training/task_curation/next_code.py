@@ -6,7 +6,7 @@
 from collections.abc import Callable
 from dataclasses import replace
 
-from tasktrove_verify.spec import Compare, StdioSpec
+from verifyit.spec import Compare, StdioSpec
 
 from experiments.post_training.tasktrove.converters.code_contests import convert_code_contests
 from experiments.post_training.tasktrove.converters.codeforces import convert_codeforces

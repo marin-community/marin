@@ -4,9 +4,11 @@
 """Grade captured files and calendar postconditions without inspecting trajectories."""
 
 from pydantic import BaseModel, ConfigDict, ValidationError
+from verifyit.modes.grade_calendar import CalendarEvent as CalendarRecord
+from verifyit.modes.grade_calendar import score_calendar
 from verifyit.modes.grade_nl2bash import score_capture
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, grade_result
 from taskcompendium.runtime.models import RuntimeEvidence
 
 
@@ -38,6 +40,10 @@ class CalendarState(BaseModel):
     events: tuple[CalendarEvent, ...]
 
 
+def _calendar_record(event: CalendarEvent) -> CalendarRecord:
+    return CalendarRecord(event.id, event.title, event.start, event.end, event.participants)
+
+
 class CalendarStateVerifier(Verifier):
     title: str
     participants: tuple[str, ...]
@@ -53,26 +59,14 @@ class CalendarStateVerifier(Verifier):
             state = CalendarState.model_validate_json(attempt.environment.state_json)
         except ValidationError as error:
             return GradeResult(Outcome.INFRA_ERROR, None, str(error))
-        originals = {event.id: event for event in self.original_events}
-        current = {event.id: event for event in state.events}
-        if len(current) != len(state.events) or any(current.get(key) != event for key, event in originals.items()):
-            return GradeResult(Outcome.GRADED, 0.0, "Original events changed")
-        additions = [event for event in state.events if event.id not in originals]
-        if len(additions) != 1:
-            return GradeResult(Outcome.GRADED, 0.0, "Exactly one meeting must be added")
-        meeting = additions[0]
-        valid = (
-            meeting.title == self.title
-            and set(meeting.participants) == set(self.participants)
-            and len(meeting.participants) == len(self.participants)
-            and meeting.end - meeting.start == self.duration
-            and self.earliest <= meeting.start
-            and meeting.end <= self.latest
+        return grade_result(
+            score_calendar(
+                tuple(_calendar_record(event) for event in state.events),
+                tuple(_calendar_record(event) for event in self.original_events),
+                title=self.title,
+                participants=self.participants,
+                duration=self.duration,
+                earliest=self.earliest,
+                latest=self.latest,
+            )
         )
-        conflict = any(
-            set(meeting.participants).intersection(event.participants)
-            and meeting.start < event.end
-            and event.start < meeting.end
-            for event in self.original_events
-        )
-        return GradeResult(Outcome.GRADED, float(valid and not conflict))

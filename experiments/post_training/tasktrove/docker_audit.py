@@ -24,8 +24,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import click
-from tasktrove_verify.grade import DEFAULT_LOGS_DIR, VERDICT_JSON
-from tasktrove_verify.spec import DEFAULT_WORKSPACE
+from verifyit.grade import DEFAULT_LOGS_DIR, VERDICT_JSON
+from verifyit.spec import DEFAULT_WORKSPACE
 from zephyr.readers import load_parquet
 
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
@@ -38,9 +38,9 @@ from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task
 logger = logging.getLogger(__name__)
 
 LOCAL_TOOL_REF = "local"
-_TOOL_DIR = Path(__file__).parents[3] / "lib" / "tasktrove-verify"
+_TOOL_DIR = Path(__file__).parents[3] / "lib" / "verifyit"
 _INSTALL_LINE = re.compile(
-    r'^RUN (UV_TOOL_BIN_DIR=\S+ )?uv tool install (--python "[^"]+" )?"tasktrove-verify(\[[^\]]*\])? @ [^"]+"$',
+    r'^RUN (UV_TOOL_BIN_DIR=\S+ )?uv tool install (--python "[^"]+" )?"verifyit(\[[^\]]*\])? @ [^"]+"$',
     re.MULTILINE,
 )
 _WORKDIR_LINE = re.compile(r"^WORKDIR\s+(\S+)", re.MULTILINE | re.IGNORECASE)
@@ -81,8 +81,8 @@ def local_dockerfile(dockerfile: str) -> str:
         raise ValueError("Dockerfile has no tool install block")
     replaced, count = _INSTALL_LINE.subn(
         lambda m: (
-            "COPY tasktrove-verify /opt/tasktrove-verify\n"
-            f'RUN {m.group(1) or ""}uv tool install {m.group(2) or ""}"/opt/tasktrove-verify{m.group(3) or ""}"'
+            "COPY verifyit /opt/verifyit\n"
+            f'RUN {m.group(1) or ""}uv tool install {m.group(2) or ""}"/opt/verifyit{m.group(3) or ""}"'
         ),
         dockerfile,
     )
@@ -93,9 +93,7 @@ def local_dockerfile(dockerfile: str) -> str:
 
 def build_image(dockerfile: str, tag: str) -> None:
     with tempfile.TemporaryDirectory(prefix="tasktrove-build-") as context:
-        shutil.copytree(
-            _TOOL_DIR, Path(context) / "tasktrove-verify", ignore=shutil.ignore_patterns(".venv", "__pycache__")
-        )
+        shutil.copytree(_TOOL_DIR, Path(context) / "verifyit", ignore=shutil.ignore_patterns(".venv", "__pycache__"))
         (Path(context) / "Dockerfile").write_text(local_dockerfile(dockerfile))
         subprocess.run(["docker", "build", "-q", "-t", tag, context], check=True, capture_output=True, text=True)
 
