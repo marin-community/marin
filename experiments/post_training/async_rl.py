@@ -306,9 +306,8 @@ def check_context_budget(config: dict) -> None:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
 
 
-def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
-    """Render the RL config: the curriculum data wiring plus every setting this launcher decides."""
-    recipe = SNOWBALL_RECIPE
+def snowball_config(preset: AsyncPreset, recipe: TrainingRecipe) -> dict:
+    """Render the RL config for one recipe: the curriculum data wiring plus every setting this launcher decides."""
     plan = recipe.role_plan
     # The curriculum template supplies the data and environment sections; every other section is
     # written below in full.
@@ -443,6 +442,11 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     }
     # Let the allocator grow segments instead of fragmenting at the memory ceiling.
     config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+    return config
+
+
+def apply_settings(config: dict, settings: tuple[str, ...]) -> dict:
+    """Apply ``--set`` changes, then derive the evaluation-dependent keys and check the context budget."""
     for text in settings:
         apply_setting(config, parse_setting(text))
     trainer = config["trainer"]
@@ -451,6 +455,11 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
     check_context_budget(config)
     return config
+
+
+def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
+    """Render the Snowball RL config with ``--set`` changes applied."""
+    return apply_settings(snowball_config(preset, SNOWBALL_RECIPE), settings)
 
 
 @dataclass(frozen=True)
