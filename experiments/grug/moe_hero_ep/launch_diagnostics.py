@@ -206,6 +206,9 @@ def build_diagnostic_run(
     )
     if model.max_seq_len % context_axis_size:
         raise ValueError(f"context_axis_size={context_axis_size} must divide max_seq_len={model.max_seq_len}")
+    # The evaluator shards its own position axis over the context axis, so check it before allocation.
+    if eval_every > 0 and eval_max_seq_len is not None and eval_max_seq_len % context_axis_size:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide eval_max_seq_len={eval_max_seq_len}")
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, and one not divisible by
     # the (expert, context) storage split fails in parameter init; both are after the rack is already
     # allocated and the workspace is built. Reject them here instead.
