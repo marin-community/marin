@@ -91,14 +91,19 @@ def main():
         model = jmp.get_policy(f"params={args.dtype},compute={args.dtype},output={args.dtype}").cast_to_compute(model)
         jax.block_until_ready(model)
         batch = len(workload.prompts)
+        token_shards = jax.device_count() // args.model_axis_size
+        decode_capacity = ((batch + token_shards - 1) // token_shards) * token_shards
+        prefill_tokens = sum(map(len, workload.prompts))
+        prefill_capacity = ((prefill_tokens + token_shards - 1) // token_shards) * token_shards
         engine_config = InferenceEngineConfig(
             max_seq_len=max_seq_len,
             page_size=args.page_size,
             max_pages=batch * ((max_seq_len + args.page_size - 1) // args.page_size),
             max_seqs=batch,
             max_seqs_in_prefill=batch,
-            max_queued_tokens=batch,
-            max_prefill_size=sum(map(len, workload.prompts)),
+            max_queued_tokens=decode_capacity,
+            max_tokens_per_round=decode_capacity,
+            max_prefill_size=prefill_capacity,
             max_rounds=args.max_rounds,
             max_stop_seqs=0,
             max_stop_tokens=0,
