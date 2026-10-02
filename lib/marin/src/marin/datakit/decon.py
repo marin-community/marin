@@ -37,6 +37,7 @@ The bloom can also be built once and shared across many corpus marks via
 :func:`decon_to_parquet` as ``prebuilt_bloom_dir`` to skip the inline build.
 """
 
+import functools
 import hashlib
 import json
 import logging
@@ -206,8 +207,17 @@ class EvalBloom(BaseModel):
     n_eval_records: int = 0
 
 
+_blake2b = hashlib.blake2b
+
+
 def _bloom_hash(x: str) -> int:
-    return int.from_bytes(hashlib.blake2b(x.encode(), digest_size=8).digest(), "big")
+    return int.from_bytes(_blake2b(x.encode(), digest_size=8).digest(), "big")
+
+
+@functools.lru_cache(maxsize=2)
+def _load_bloom(bloom_path: str) -> dupekit.Bloom:
+    """Load a bloom filter once per process; bloom dirs are content-addressed step outputs."""
+    return dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
 
 
 def _has_alpha(ngram: str) -> bool:
@@ -243,7 +253,7 @@ def _extract_streaming_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
             alpha_tokens -= had_alpha
 
         start, end = match.span()
-        has_alpha = any(text[index].isalpha() for index in range(start, end))
+        has_alpha = any(map(str.isalpha, text[start:end]))
         window.append((start, end, has_alpha))
         alpha_tokens += has_alpha
 
@@ -274,7 +284,7 @@ def _short_exact_feature(text: str, n: int) -> str | None:
     if not MIN_SHORT_EXACT_TOKENS <= len(matches) < n:
         return None
     spans = [match.span() for match in matches]
-    if not any(text[index].isalpha() for start, end in spans for index in range(start, end)):
+    if not any(any(map(str.isalpha, text[start:end])) for start, end in spans):
         return None
     return " ".join(text[start:end] for start, end in spans)
 
@@ -717,8 +727,7 @@ def _make_marker(
     """
 
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
-        # Load bloom once per shard.
-        bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+        bf = _load_bloom(bloom_path)
         reservoir: list[dict[str, Any]] = []
         n_flagged = 0
         rng = random.Random(shard.shard_idx)
@@ -1551,7 +1560,7 @@ def _sample_drop_set_shard(
     first_sample_shard = next(sample_shards, None)
     if first_sample_shard is None:
         return
-    bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+    bf = _load_bloom(bloom_path)
     for sample_shard in chain((first_sample_shard,), sample_shards):
         local_counts: Counter[int] = Counter()
         global_counts: Counter[int] = Counter()
