@@ -682,6 +682,25 @@ class DecodeState(eqx.Module):
         sequences, page_table = self.sequences.free_pages_for_finished(self.page_table, finished_mask)
         return dataclasses.replace(self, sequences=sequences, page_table=page_table)
 
+    @eqx.filter_jit
+    def abort_slots(self, slot_mask: jax.Array) -> "DecodeState":
+        """Release cancelled slots and remove their queued tokens without affecting peers."""
+        queue = self.tqueue
+        slot_ids = queue.queued_slot_ids
+        cancelled_tokens = hax.named(slot_mask[jnp.maximum(slot_ids.array, 0)], slot_ids.axes)
+        cancelled_tokens = cancelled_tokens & is_valid(slot_ids)
+        remaining_slots = purge(slot_ids, cancelled_tokens)
+        queue = dataclasses.replace(
+            queue,
+            queued_slot_ids=remaining_slots,
+            queued_tokens=purge(queue.queued_tokens, cancelled_tokens),
+            queued_pos_ids=purge(queue.queued_pos_ids, cancelled_tokens),
+            num_queued_tokens=hax.sum(is_valid(remaining_slots)).scalar(),
+        )
+        reasons = hax.where(hax.named(slot_mask, self.finish_reasons.axes), FinishReason.ABORT, self.finish_reasons)
+        state = dataclasses.replace(self, tqueue=queue, finish_reasons=reasons)
+        return state.free_pages_for_finished(slot_mask)
+
     def bump_seq_len_to_next_page(self, seq_id: int) -> "DecodeState":
         sequences = self.sequences.bump_seq_len_to_next_page(seq_id)
         return dataclasses.replace(self, sequences=sequences)
