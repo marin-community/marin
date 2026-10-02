@@ -20,7 +20,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.models.snowball import SnowballConfig
 
-from experiments.benchmarks.snowball_trace import decode_with_trace
+from experiments.benchmarks.snowball_trace import DiagnosticEmbeddingGate, decode_with_trace
 
 DIAGNOSTIC_PAGE_SIZE = 128
 
@@ -101,6 +101,41 @@ def prefix_trace(model, sequences: list[list[int]], baseline_logits: np.ndarray)
     }
 
 
+def embedding_gate_interventions(model, sequences: list[list[int]]) -> dict:
+    """Vary only embedding-gate unary precision; keep every other model operation fixed."""
+    results = {}
+    for silu_dtype, sigmoid_dtype in (
+        ("bfloat16", "bfloat16"),
+        ("float32", "bfloat16"),
+        ("bfloat16", "float32"),
+        ("float32", "float32"),
+    ):
+        gate = DiagnosticEmbeddingGate(model.transformer.embed_gated_norm, silu_dtype, sigmoid_dtype)
+        variant = eqx.tree_at(lambda m: m.transformer.embed_gated_norm, model, gate)
+        logits = prefix_logits(variant, sequences, len(sequences[0]))
+        top_ids = np.argsort(-logits, axis=-1)[:, :20]
+        results[f"silu_{silu_dtype}_sigmoid_{sigmoid_dtype}"] = {
+            "changed_site": "transformer.embed_gated_norm",
+            "silu_dtype": silu_dtype,
+            "sigmoid_dtype": sigmoid_dtype,
+            "logits": logits.tolist(),
+            "top_token_ids": top_ids.tolist(),
+        }
+    return results
+
+
+def embedding_gate_weight_digests(model) -> dict[str, str]:
+    matrices = {
+        "norm": model.transformer.embed_norm.weight,
+        "down": model.transformer.embed_gated_norm.w_down.T,
+        "up": model.transformer.embed_gated_norm.w_up.T,
+    }
+    return {
+        name: hashlib.sha256(np.ascontiguousarray(value, dtype=np.float32).tobytes()).hexdigest()
+        for name, value in matrices.items()
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, required=True)
@@ -159,10 +194,14 @@ def main():
                             "top_token_ids": top_ids.tolist(),
                             "top_logprobs": np.take_along_axis(logprobs, top_ids, axis=-1).tolist(),
                         }
+        gate_interventions = embedding_gate_interventions(model, sequences)
+        gate_weights = embedding_gate_weight_digests(model)
         stage_trace = prefix_trace(
             model, sequences, np.asarray(results["bf16_router_baseline_precision_single_prefill"]["logits"])
         )
     result = {
+        "embedding_gate_weight_sha256": gate_weights,
+        "embedding_gate_interventions": gate_interventions,
         "stage_trace": stage_trace,
         "checkpoint": json.loads((args.fixture / "manifest.json").read_text())["checkpoint"],
         "prefixes": inputs,

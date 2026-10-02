@@ -17,6 +17,7 @@ from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.models.snowball import (
     _BATCH_AXES,
     _ROUTING_RENORM_SUM,
+    GatedNorm,
     _activation_reshard,
     _activation_spec,
     _long_attention_schedule,
@@ -34,6 +35,30 @@ class DecodedTrace(NamedTuple):
     logits: hax.NamedArray
     cache: ListCache[KvPageCache]
     stages: dict[str, jax.Array]
+
+
+class DiagnosticEmbeddingGate(eqx.Module):
+    gate: GatedNorm
+    silu_dtype: str = eqx.field(static=True)
+    sigmoid_dtype: str = eqx.field(static=True)
+
+    def __call__(self, inputs):
+        output, _ = embedding_gate_with_trace(self.gate, inputs, self.silu_dtype, self.sigmoid_dtype)
+        return output
+
+
+def embedding_gate_with_trace(gate, inputs, silu_dtype="bfloat16", sigmoid_dtype="bfloat16"):
+    down = jnp.einsum("...d,dr->...r", inputs, gate.w_down)
+    activated = jax.nn.silu(down.astype(silu_dtype)).astype(down.dtype)
+    up = jnp.einsum("...r,rd->...d", activated, gate.w_up)
+    sigmoid = jax.nn.sigmoid(up.astype(sigmoid_dtype)).astype(inputs.dtype)
+    output = inputs * sigmoid
+    return output, {
+        "embedding_gate_down": down[:, 0],
+        "embedding_gate_silu": activated[:, 0],
+        "embedding_gate_up": up[:, 0],
+        "embedding_gate_sigmoid": sigmoid[:, 0],
+    }
 
 
 def _moe_with_trace(mlp, hidden, token_valid):
@@ -67,7 +92,10 @@ def decode_with_trace(model, input_ids, kv_cache, batch_info, pos_ids):
     tokens = reshard(input_ids.array[:, None], P(_BATCH_AXES, None))
     hidden = model.transformer.token_embed.at[tokens].get(out_sharding=_activation_spec())
     trace = {"embedding": hidden[:, 0]}
-    hidden = model.transformer.embed_gated_norm(model.transformer.embed_norm(hidden))
+    hidden = model.transformer.embed_norm(hidden)
+    trace["embedding_norm"] = hidden[:, 0]
+    hidden, gate_stages = embedding_gate_with_trace(model.transformer.embed_gated_norm, hidden)
+    trace.update(gate_stages)
     trace["post_embed_norm_gate"] = hidden[:, 0]
     token_valid = jnp.arange(tokens.shape[0]) < batch_info.num_new_tokens
     stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *model.transformer.blocks)
