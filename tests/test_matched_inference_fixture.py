@@ -3,10 +3,13 @@
 
 import json
 
+import draccus
 import numpy as np
 import pytest
+from levanter.models.snowball import SnowballConfig
 from safetensors import safe_open
 
+from experiments.benchmarks.diagnose_embedding_generation import snowball_config_from_report
 from experiments.benchmarks.matched_inference import NormWeights, export_fixture
 
 
@@ -37,3 +40,15 @@ def test_nonunit_fixture_changes_only_norm_weights_and_roundtrips(tmp_path, reci
     assert changed == set(manifest["norm_weights"]["modified_tensors"])
     assert old_manifest["checkpoint"] != manifest["checkpoint"]
     assert json.loads((original / "workload.json").read_text()) == json.loads((nonunit / "workload.json").read_text())
+
+
+def test_native_report_concrete_config_restores_diagnostic_recipe():
+    # Match the native driver's draccus.encode(concrete_config) wire format:
+    # it carries no "type" discriminator, unlike encoding through LmConfig.
+    config = SnowballConfig(num_layers=2, hidden_dim=256, vocab_size=256, inference_attention_implementation="reference")
+    provenance = {
+        "model_config": draccus.encode(config),
+        "checkpoint": {"hf_config": config.to_hf_config(config.vocab_size).to_dict()},
+    }
+    restored = snowball_config_from_report(json.loads(json.dumps(provenance)))
+    assert restored == config

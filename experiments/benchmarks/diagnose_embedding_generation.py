@@ -21,7 +21,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.benchmark import TokenWorkload, source_provenance, summarize_batch
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
 from levanter.main.inference_benchmark import measure_levanter_batch
-from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig
 
 from experiments.benchmarks.diagnose_native_prefix import (
     DIAGNOSTIC_MAX_LAYERS,
@@ -38,6 +38,13 @@ from experiments.benchmarks.matched_comparison import (
     first_token_difference,
 )
 from experiments.benchmarks.snowball_trace import DiagnosticEmbeddingGate
+
+
+def snowball_config_from_report(provenance: dict) -> SnowballConfig:
+    """Restore concrete native config using the checkpoint's validated recipe identity."""
+    # Concrete dataclass encoding omits the draccus choice discriminator.
+    SnowballConfig.from_hf_config(GrugMoeHfConfig(**provenance["checkpoint"]["hf_config"]))
+    return draccus.decode(SnowballConfig, provenance["model_config"])
 
 
 def generation_interventions(model, workload: TokenWorkload, engine_config: InferenceEngineConfig) -> dict:
@@ -67,10 +74,9 @@ def main() -> None:
     # Validate architecture, weights, workload, and topology before interpreting any intervention.
     comparison = compare_reports(manifest, workload, reports)
     native = reports["native"]["provenance"]
-    config = draccus.decode(SnowballConfig, {k: v for k, v in native["model_config"].items() if k != "type"})
+    config = snowball_config_from_report(native)
     if (
-        native["model_config"]["type"] != "snowball"
-        or config.num_layers > DIAGNOSTIC_MAX_LAYERS
+        config.num_layers > DIAGNOSTIC_MAX_LAYERS
         or config.hidden_dim > DIAGNOSTIC_MAX_WIDTH
         or config.vocab_size > DIAGNOSTIC_MAX_VOCAB
         or len(workload.prompts) > DIAGNOSTIC_MAX_SEQUENCES
