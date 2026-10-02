@@ -4,17 +4,16 @@
 """Bounded original JSONL component sampling for the pinned Nemotron Ultra blends."""
 
 import hashlib
-import importlib
 import json
 import random
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import requests
 from taskcompendium.pipeline.datasets.nemotron_ultra import DATASET, REVISION
-from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_MODULES
+from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_SOURCES
+from taskcompendium.pipeline.datasets.nemotron_ultra_source import NemotronSource
 
 from experiments.post_training.task_curation_nemotron_placeholders import placeholder_sources
 from experiments.post_training.task_curation_prefix_sampling import (
@@ -24,39 +23,11 @@ from experiments.post_training.task_curation_prefix_sampling import (
 )
 
 
-@dataclass(frozen=True)
-class BlendComponent:
-    atlas_id: str
-    blend: str
-    selector: str
-    family: str
-    component: str
-    upstream: str
-
-
-def component_catalog() -> dict[str, BlendComponent]:
-    result = {}
-    for name in NEMOTRON_MODULES:
-        leaf = importlib.import_module("taskcompendium.pipeline.datasets." + name)
-        result[name] = BlendComponent(
-            atlas_id=leaf.ATLAS_ID,
-            blend=leaf.BLEND,
-            selector=leaf.SELECTOR,
-            family=leaf.FAMILY,
-            component=leaf.COMPONENT,
-            upstream=leaf.UPSTREAM,
-        )
-    return result
-
-
-COMPONENTS = component_catalog()
-
-
 def row_selector(row: dict) -> str:
     return row.get("dataset") or "agent:" + row["agent_ref"]["name"]
 
 
-def matches_component(row: dict, component: BlendComponent, swe_gym_ids: frozenset[str]) -> bool:
+def matches_component(row: dict, component: NemotronSource, swe_gym_ids: frozenset[str]) -> bool:
     if row_selector(row) != component.selector:
         return False
     if component.family != "swe-repo":
@@ -109,7 +80,7 @@ def sample_blend(
     is a smoke sample, not a population-uniform sample. Incomplete components
     and unresolved SWE subcorpus membership are explicit in their manifests.
     """
-    selected = {name: item for name, item in COMPONENTS.items() if item.blend == blend}
+    selected = {name: item for name, item in NEMOTRON_SOURCES.items() if item.blend == blend}
     inventory = frozenset(swe_gym_inventory.read_text().splitlines()) if swe_gym_inventory else frozenset()
     retained = {name: [] for name in selected}
     seen_offsets = {name: set() for name in selected}
@@ -189,7 +160,12 @@ def sample_blend(
         snapshot.write_text(serialized)
         unresolved = component.family == "swe-repo" and swe_gym_inventory is None
         manifest = {
-            **asdict(component),
+            "atlas_id": component.atlas_id,
+            "blend": component.blend,
+            "selector": component.selector,
+            "family": component.family,
+            "component": component.component,
+            "upstream": component.upstream,
             "name": name,
             "dataset": DATASET,
             "revision": REVISION,
@@ -275,9 +251,9 @@ def sample_source(name: str, output: Path, count: int, seed: int) -> dict:
             and manifest["complete_probe"]
         ):
             return manifest
-    manifest = sample_blend(COMPONENTS[name].blend, output, count, seed, swe_gym_inventory=swe_gym_inventory(output))[
-        name
-    ]
+    manifest = sample_blend(
+        NEMOTRON_SOURCES[name].blend, output, count, seed, swe_gym_inventory=swe_gym_inventory(output)
+    )[name]
     if not manifest["complete_probe"]:
         raise ValueError(
             f"Incomplete bounded component probe for {name}: {manifest['sample_rows']}/{count}; "

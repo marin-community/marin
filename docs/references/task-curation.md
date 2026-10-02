@@ -725,9 +725,9 @@ tasks = [TaskSpec.model_validate_json(value) for value in accepted["task_json"].
 
 ## Add sources by contract
 
-Each leaf owns its dataset pin,
-normalization binding and area rubric; family helpers share parsing only where the
-source contract agrees.
+Each source recipe specifies its dataset pin, normalization binding and area
+rubric. Modules group sources with the same template; shared helpers reuse parsing
+only where the source contract agrees.
 
 | Cohort | Source names | Shared contract |
 | --- | --- | --- |
@@ -757,8 +757,8 @@ Source manifests retain pins, positions, byte budgets and snapshot hashes.
 ### Direct and Nemotron Ultra sources
 
 The additional 95 recipes comprise 75 pinned Nemotron Ultra component selections
-and 20 direct-source recipes. Ultra leaves retain complete conversation and tool
-events, private source judge inputs and agent runtime requirements. Shared parsing
+and 20 direct-source recipes. Ultra family modules retain complete conversation
+and tool events, private source judge inputs and agent runtime requirements. Shared parsing
 does not replace their evaluators with guessed exact-answer keys. The direct
 recipes cover math, coding, science, SQL, instruction following, preference
 records and generated reasoning tasks.
@@ -766,7 +766,18 @@ records and generated reasoning tasks.
 The checked-in `experiments/post_training/task_curation_atlas_catalog.json`
 accounts for 196 atlas listings: 148 map to converters, 45 remain explicitly
 excluded and three KTO contributor selections remain unavailable. Converter
-coverage does not establish complete ingestion or runtime readiness. The canonical
+entries retain the registered source `key`; Ultra entries also identify their
+`family_module`. The canonical `NEMOTRON_SOURCES` mapping in
+`taskcompendium.pipeline.datasets.nemotron_ultra_catalog` supplies the source
+descriptor used by `recipe_for_source(source, snapshot)`.
+The fourteen modules under `datasets/nemotron_ultra_families/` keep each area's
+criteria, upstream identity and blend selectors together. For example, edit
+`math_proof.py` for Lean tasks, `arc_agi.py` for grid transformations, or
+`swe_repo.py` for repository action targets. Add another selection to the owning
+module's `SOURCES` definition; the registry supplies it to both sampling and
+pipeline binding. Source names remain independent of Python module names.
+
+Converter coverage does not establish complete ingestion or runtime readiness. The canonical
 `kto_mix` aggregate recipe is additional: its rows expose no contributor selector,
 so it does not certify the three named contributor listings. Listings and recipes
 are not one-to-one; verified aliases may share a recipe.
@@ -823,8 +834,12 @@ Neither contract manufactures a reward. GLM still makes a final quality decision
 The NeMo adapter pins the atlas's MarinSkyRL wrapper; its upstream NeMo Gym runtime
 binding remains unverified.
 
-NeMo blend recipes share request/tool-history parsing, with separate leaf selectors
-and family criteria. Sampling positions are excluded from semantic task payloads.
+NeMo blend recipes share request/tool-history parsing. Modules under
+`taskcompendium.pipeline.datasets.nemotron_ultra_families` group sources by
+template; each source retains its registered identifier, component selector,
+dataset pin and recipe. Family criteria live with the template rather than in
+repeated per-source modules. Sampling positions are excluded from semantic task
+payloads.
 Original records and normalization edits remain in the audit. Placeholder questions
 must be resolved with the pinned upstream filler and indexed source rows; an empty
 placeholder is not an ordinary solvable task. SWE subcorpus selection uses a pinned

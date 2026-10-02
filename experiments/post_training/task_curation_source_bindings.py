@@ -59,7 +59,8 @@ from taskcompendium.pipeline.datasets import (
     web_search_mcqa,
     wizard_orca,
 )
-from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_MODULES
+from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_SOURCES
+from taskcompendium.pipeline.datasets.nemotron_ultra_source import recipe_for_source
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     ImportRejection,
@@ -82,7 +83,7 @@ class SnapshotRecipeModule(Protocol):
 
 
 ADDITIONAL_SOURCE_NAMES = (
-    *NEMOTRON_MODULES,
+    *NEMOTRON_SOURCES,
     "aime_1983_2024",
     "apps",
     "asdiv",
@@ -186,6 +187,8 @@ def converter_digest() -> str:
 
 def source_recipe(name: str, snapshot: Path, image: str | None) -> DatasetRecipe:
     """Bind raw samples; executable conversion happens inside audit workers."""
+    if name in NEMOTRON_SOURCES:
+        return recipe_for_source(NEMOTRON_SOURCES[name], snapshot)
     if name in ADDITIONAL_SOURCE_NAMES:
         return cast(SnapshotRecipeModule, import_module(f"taskcompendium.pipeline.datasets.{name}")).recipe(snapshot)
     if name in SOURCE_FACTORIES:

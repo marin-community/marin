@@ -28,12 +28,12 @@ from taskcompendium.pipeline.datasets import (
     swesmith,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION as TASKTROVE_REVISION
+from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_SOURCES
 
 from experiments.post_training.task_curation_direct_sampling import SOURCES as DIRECT_SOURCES
 from experiments.post_training.task_curation_direct_sampling import sample_source as sample_direct
 from experiments.post_training.task_curation_hf_math_sampling import SHARDS as HF_MATH_SOURCES
 from experiments.post_training.task_curation_hf_math_sampling import sample_source as sample_hf_math
-from experiments.post_training.task_curation_nemotron_sampling import COMPONENTS as NEMOTRON_SOURCES
 from experiments.post_training.task_curation_nemotron_sampling import sample_source as sample_nemotron
 from experiments.post_training.task_curation_partitions import assign_partitions
 from experiments.post_training.task_curation_preference_sampling import NAMES as PREFERENCE_SOURCES
