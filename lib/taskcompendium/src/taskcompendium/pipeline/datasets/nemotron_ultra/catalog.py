@@ -3,7 +3,7 @@
 
 """Canonical Ultra source selections; family modules own metadata and rubrics."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra_families import (
+from taskcompendium.pipeline.datasets.nemotron_ultra import (
     agentic_safety,
     arc_agi,
     chemistry,
@@ -19,7 +19,7 @@ from taskcompendium.pipeline.datasets.nemotron_ultra_families import (
     swe_repo,
     tool_use,
 )
-from taskcompendium.pipeline.datasets.nemotron_ultra_source import NemotronSource
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import NemotronSource
 
 _FAMILY_SOURCES = (
     *agentic_safety.SOURCES,

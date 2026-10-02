@@ -37,7 +37,7 @@ from taskcompendium.pipeline.sources import SourceFiles, SourceFormat
 from taskcompendium.pipeline.zephyr import AuditExecution, ReviewConfig
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
-from experiments.post_training.task_curation_pipeline import RewriteSelection, SourceBinding, build_workflow, main
+from experiments.post_training.task_curation.pipeline import RewriteSelection, SourceBinding, build_workflow, main
 
 
 def offline_request(*args: Any, **kwargs: Any) -> None:

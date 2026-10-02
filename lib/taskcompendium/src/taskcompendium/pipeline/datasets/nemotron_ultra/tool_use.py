@@ -3,7 +3,7 @@
 
 """tool-use contracts and explicit pinned blend selections."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra_source import ACTION_COMPARISON_CRITERION, quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import ACTION_COMPARISON_CRITERION, quality_source
 
 FAMILY_MODULE = __name__
 CRITERIA = (

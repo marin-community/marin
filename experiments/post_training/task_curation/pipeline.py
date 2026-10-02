@@ -43,8 +43,8 @@ from taskcompendium.pipeline.zephyr import (
 )
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
-from experiments.post_training.task_curation_downloads import source_download
-from experiments.post_training.task_curation_source_bindings import SOURCE_NAMES, source_recipe
+from experiments.post_training.task_curation.downloads import source_download
+from experiments.post_training.task_curation.source_bindings import SOURCE_NAMES, source_recipe
 
 PIPELINE_VERSION = "2026.10.02.1"
 AUDIT_REVISION = "staged-source-v1"

@@ -6,7 +6,7 @@
 import re
 from dataclasses import dataclass
 
-from taskcompendium.pipeline.datasets.nemotron_ultra import recipe
+from taskcompendium.pipeline.datasets.nemotron_ultra.normalization import recipe
 from taskcompendium.pipeline.models import DatasetRecipe, ReviewRubric
 
 ACTION_COMPARISON_CRITERION = (

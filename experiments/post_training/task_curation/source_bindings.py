@@ -22,7 +22,6 @@ from taskcompendium.pipeline.datasets import (
     if_calendar,
     multichallenge,
     nemo_actions,
-    nemotron_structured_outputs,
     preference_tasks,
     python_tasks,
     qa_tasks,
@@ -31,8 +30,9 @@ from taskcompendium.pipeline.datasets import (
     rubric_tasks,
     tasktrove_math,
 )
-from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_SOURCES
-from taskcompendium.pipeline.datasets.nemotron_ultra_source import recipe_for_source
+from taskcompendium.pipeline.datasets.nemotron import instruction_following, structured_outputs
+from taskcompendium.pipeline.datasets.nemotron_ultra.catalog import NEMOTRON_SOURCES
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import recipe_for_source
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     ImportRejection,
@@ -41,9 +41,9 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 
-from experiments.post_training.task_curation_competitive import convert_competitive_coding
-from experiments.post_training.task_curation_executable import converted_row
-from experiments.post_training.task_curation_next_code import CONVERTERS as NEXT_CODE_CONVERTERS
+from experiments.post_training.task_curation.competitive import convert_competitive_coding
+from experiments.post_training.task_curation.executable import converted_row
+from experiments.post_training.task_curation.next_code import CONVERTERS as NEXT_CODE_CONVERTERS
 from experiments.post_training.tasktrove.converters.nemotron_structured_outputs import (
     convert_nemotron_structured_outputs,
 )
@@ -71,7 +71,6 @@ ADDITIONAL_SOURCE_NAMES = (
     "openscience",
     "rlvr_math",
     "verifiable_code",
-    "nemotron_if",
     "rlvr_ifeval",
     "reasoning_gym_generated",
 )
@@ -92,6 +91,7 @@ SOURCE_DEFINITIONS = (
     {name: family.SOURCES[name] for name, family in FAMILY_SOURCES.items()} | atlas_code.SOURCES | python_tasks.SOURCES
 )
 SOURCE_FACTORIES = {
+    "nemotron_if": instruction_following.recipe,
     "hardmath": hardmath.recipe,
     "hendrycks_math": hendrycks_math.recipe,
     "deepscaler": deepscaler.recipe,
@@ -129,7 +129,7 @@ def source_recipe(name: str, image: str | None) -> DatasetRecipe:
     if name in SOURCE_FACTORIES:
         return SOURCE_FACTORIES[name]()
     if name == "structured_outputs":
-        recipe = nemotron_structured_outputs.recipe()
+        recipe = structured_outputs.recipe()
         converter = convert_nemotron_structured_outputs
         converter_revision = "structured-outputs-v1"
     elif image is None or re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-fA-F]{64}", image) is None:

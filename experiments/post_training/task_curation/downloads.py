@@ -15,7 +15,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.data import hf_download, raw_download
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_SOURCES
+from taskcompendium.pipeline.datasets.nemotron_ultra.catalog import NEMOTRON_SOURCES
 from taskcompendium.pipeline.models import DatasetRecipe
 from taskcompendium.pipeline.sources import (
     PLACEHOLDER_FILES,
@@ -28,7 +28,7 @@ from taskcompendium.pipeline.sources import (
     unpack_task_binary,
 )
 
-from experiments.post_training.task_curation_source_bindings import SOURCE_DEFINITIONS
+from experiments.post_training.task_curation.source_bindings import SOURCE_DEFINITIONS
 
 DIRECT_NAMES = frozenset(
     {

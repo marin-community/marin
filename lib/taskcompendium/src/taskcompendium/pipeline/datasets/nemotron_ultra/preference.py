@@ -3,7 +3,7 @@
 
 """preference contracts and explicit pinned blend selections."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra_source import preference_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import preference_source
 
 FAMILY_MODULE = __name__
 CRITERIA = (

@@ -67,7 +67,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "aime_1983_2024",
         "normalizer_module": "taskcompendium.pipeline.datasets.aime_1983_2024",
@@ -145,7 +145,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "apps",
         "normalizer_module": "taskcompendium.pipeline.datasets.apps",
@@ -184,7 +184,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "asdiv",
         "normalizer_module": "taskcompendium.pipeline.datasets.asdiv",
@@ -223,7 +223,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "dapo_math",
         "normalizer_module": "taskcompendium.pipeline.datasets.dapo_math",
@@ -262,7 +262,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "deepscaler",
         "normalizer_module": "taskcompendium.pipeline.datasets.deepscaler",
@@ -301,7 +301,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "eurus2_code",
         "normalizer_module": "taskcompendium.pipeline.datasets.eurus2_code",
@@ -379,7 +379,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "gretel_text_to_sql",
         "normalizer_module": "taskcompendium.pipeline.datasets.gretel_text_to_sql",
@@ -418,7 +418,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "gsm8k",
         "normalizer_module": "taskcompendium.pipeline.datasets.gsm8k",
@@ -457,7 +457,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "hardmath",
         "normalizer_module": "taskcompendium.pipeline.datasets.hardmath",
@@ -496,7 +496,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "hendrycks_math",
         "normalizer_module": "taskcompendium.pipeline.datasets.hendrycks_math",
@@ -535,7 +535,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "hh_harmless_base",
         "normalizer_module": "taskcompendium.pipeline.datasets.preference_tasks",
@@ -574,7 +574,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "hh_helpful_base",
         "normalizer_module": "taskcompendium.pipeline.datasets.preference_tasks",
@@ -613,7 +613,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "hh_helpful_online",
         "normalizer_module": "taskcompendium.pipeline.datasets.preference_tasks",
@@ -652,7 +652,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "hh_helpful_rejection_sampled",
         "normalizer_module": "taskcompendium.pipeline.datasets.preference_tasks",
@@ -693,7 +693,7 @@
       "mapping_basis": "canonical_aggregate_dataset_only",
       "intended_use": "train",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "kto_mix"
       },
@@ -729,7 +729,7 @@
       "mapping_basis": "canonical_aggregate_dataset_only",
       "intended_use": "train",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "kto_mix"
       },
@@ -765,7 +765,7 @@
       "mapping_basis": "canonical_aggregate_dataset_only",
       "intended_use": "train",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "kto_mix"
       },
@@ -799,7 +799,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "math500",
         "normalizer_module": "taskcompendium.pipeline.datasets.math500",
@@ -838,10 +838,10 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_if",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_if",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron.instruction_following",
         "normalizer_function": "normalize"
       },
       "bound_source": {
@@ -877,12 +877,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_nebius_swe_rebench_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -917,12 +917,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_swe_gym_swe_gym",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -957,12 +957,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_hs3_en",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.preference"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.preference"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -997,12 +997,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_hs3_multi",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.preference"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.preference"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1037,12 +1037,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_hs3_multiturn",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.preference"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.preference"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1077,12 +1077,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_makeshn_ultra_v3_ipi_train",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.agentic_safety"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.agentic_safety"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1117,12 +1117,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_safety_en",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.preference"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.preference"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1157,12 +1157,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_swe_pivot_len40k_nebius_swe_rebench_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1197,12 +1197,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_swe_pivot_len40k_swe_gym_swe_gym",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1237,12 +1237,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_abstention",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_abstention"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_abstention"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1277,12 +1277,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_calendar_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1317,12 +1317,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_comp_coding",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.competitive_programming"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.competitive_programming"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1357,12 +1357,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_instruction_following",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1397,12 +1397,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_jailbreak",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.safety"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.safety"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1437,12 +1437,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_lean",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_proof"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_proof"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1477,12 +1477,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_math_cot",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_answer"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_answer"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1517,12 +1517,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_math_tir",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_answer"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_answer"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1557,12 +1557,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_multichallenge_len40k",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1597,12 +1597,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_nvarc_inductive",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.arc_agi"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.arc_agi"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1637,12 +1637,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_nvarc_transductive",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.arc_agi"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.arc_agi"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1677,12 +1677,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_rdkit",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.chemistry"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.chemistry"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1717,12 +1717,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_reasoning_gym",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.reasoning_gym"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.reasoning_gym"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1757,12 +1757,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_stem_mcqa",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_multiple_choice"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_multiple_choice"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1797,12 +1797,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_stem_mcqa_cot_rima_new",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_multiple_choice"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_multiple_choice"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1837,12 +1837,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_structured_outputs_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1877,12 +1877,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_sft_step3200_toolcall_schema",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.tool_use"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.tool_use"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1917,12 +1917,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_citation_format_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1957,12 +1957,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_freeform_text_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -1997,12 +1997,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_structured_outputs_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2037,12 +2037,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k_nebius_swe_rebench_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2077,12 +2077,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k_swe_gym_swe_gym",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2117,12 +2117,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_language_mixing_hs3_ultra_genrm_fmt",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.preference"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.preference"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2157,12 +2157,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_abstention",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_abstention"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_abstention"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2197,12 +2197,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_calendar_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2237,12 +2237,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_comp_coding",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.competitive_programming"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.competitive_programming"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2277,12 +2277,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_instruction_following",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2317,12 +2317,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_jailbreak",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.safety"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.safety"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2357,12 +2357,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_lean",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_proof"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_proof"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2397,12 +2397,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_cot",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_answer"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_answer"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2437,12 +2437,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_tir",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_answer"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_answer"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2477,12 +2477,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_multichallenge_len40k",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2517,12 +2517,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_inductive",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.arc_agi"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.arc_agi"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2557,12 +2557,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_transductive",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.arc_agi"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.arc_agi"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2597,12 +2597,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_reasoning_gym",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.reasoning_gym"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.reasoning_gym"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2637,12 +2637,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_multiple_choice"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_multiple_choice"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2677,12 +2677,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa_cot_rima_new",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_multiple_choice"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_multiple_choice"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2717,12 +2717,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_structured_outputs_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2757,12 +2757,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_swe_pivot_len40k_nebius_swe_rebench_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2797,12 +2797,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_swe_pivot_len40k_swe_gym_swe_gym",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2837,12 +2837,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_tau_pivot",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.tool_use"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.tool_use"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2877,12 +2877,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr1_ultra_sft_step3200_toolcall_schema",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.tool_use"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.tool_use"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2917,12 +2917,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_language_mixing_hs3_ultra_genrm_fmt",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.preference"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.preference"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2957,12 +2957,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_abstention",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_abstention"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_abstention"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -2997,12 +2997,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_calendar_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3037,12 +3037,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_comp_coding",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.competitive_programming"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.competitive_programming"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3077,12 +3077,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_ds2_freeform",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3117,12 +3117,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_ds3_citation",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3157,12 +3157,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_instruction_following",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3197,12 +3197,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_jailbreak",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.safety"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.safety"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3237,12 +3237,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_lean",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_proof"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_proof"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3277,12 +3277,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_cot",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_answer"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_answer"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3317,12 +3317,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_tir",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.math_answer"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.math_answer"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3357,12 +3357,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_multichallenge_len40k",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3397,12 +3397,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_nvarc_inductive",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.arc_agi"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.arc_agi"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3437,12 +3437,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_nvarc_transductive",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.arc_agi"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.arc_agi"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3477,12 +3477,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_rdkit",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.chemistry"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.chemistry"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3517,12 +3517,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_reasoning_gym",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.reasoning_gym"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.reasoning_gym"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3557,12 +3557,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_stem_mcqa",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_multiple_choice"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_multiple_choice"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3597,12 +3597,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_stem_mcqa_cot_rima_new",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.qa_multiple_choice"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.qa_multiple_choice"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3637,12 +3637,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_structured_outputs_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3677,12 +3677,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_structured_outputs_v3",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.instruction_following"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.instruction_following"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3717,12 +3717,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_swe_pivot_len40k_nebius_swe_rebench_v2",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3757,12 +3757,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_swe_pivot_len40k_swe_gym_swe_gym",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.swe_repo"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.swe_repo"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3797,12 +3797,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_tau_pivot",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.tool_use"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.tool_use"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3837,12 +3837,12 @@
       "disposition": "converted",
       "mapping_basis": "explicit_atlas_listing_id",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nemotron_ultra_rlvr2_ultra_sft_step3200_toolcall_schema",
-        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra",
+        "normalizer_module": "taskcompendium.pipeline.datasets.nemotron_ultra.normalization",
         "normalizer_function": "recipe.<locals>.normalize_row",
-        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra_families.tool_use"
+        "family_module": "taskcompendium.pipeline.datasets.nemotron_ultra.tool_use"
       },
       "bound_source": {
         "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
@@ -3877,7 +3877,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "numina_math",
         "normalizer_module": "taskcompendium.pipeline.datasets.numina_math",
@@ -3916,7 +3916,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "openscience",
         "normalizer_module": "taskcompendium.pipeline.datasets.openscience",
@@ -3955,7 +3955,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "reasoning_gym_generated",
         "normalizer_module": "taskcompendium.pipeline.datasets.reasoning_gym_generated",
@@ -3994,7 +3994,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "rlvr_ifeval",
         "normalizer_module": "taskcompendium.pipeline.datasets.rlvr_ifeval",
@@ -4033,7 +4033,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "rlvr_math",
         "normalizer_module": "taskcompendium.pipeline.datasets.rlvr_math",
@@ -4111,7 +4111,7 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "verifiable_code",
         "normalizer_module": "taskcompendium.pipeline.datasets.verifiable_code",
@@ -4150,10 +4150,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "nl2bash",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4227,10 +4227,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "code_contests",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4327,10 +4327,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "curriculum_easy",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4404,10 +4404,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "curriculum_medium",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4481,10 +4481,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "e2egit_large",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4558,10 +4558,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "e2egit",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4634,10 +4634,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "multifile",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4733,10 +4733,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "pymethods_large",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4810,10 +4810,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "pymethods",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4886,10 +4886,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "stack_pytest",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -4964,10 +4964,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "unitsyn_large",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -5040,10 +5040,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "unitsyn",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -5182,7 +5182,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "swe_rebench",
         "normalizer_module": "taskcompendium.pipeline.datasets.repository_tasks",
@@ -5261,7 +5261,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "all_puzzles",
         "normalizer_module": "taskcompendium.pipeline.datasets.reasoning_tasks",
@@ -5361,10 +5361,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "codeforces",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -5462,10 +5462,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "codenet",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -5890,10 +5890,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "taco",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -5969,7 +5969,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "glaive_code",
         "normalizer_module": "taskcompendium.pipeline.datasets.rubric_tasks",
@@ -6134,7 +6134,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "math_prism",
         "normalizer_module": "taskcompendium.pipeline.datasets.tasktrove_math",
@@ -6212,7 +6212,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "calendar",
         "normalizer_module": "taskcompendium.pipeline.datasets.calendar_tasks",
@@ -6310,7 +6310,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "indirect_injection",
         "normalizer_module": "taskcompendium.pipeline.datasets.atlas_arc_injection",
@@ -6408,7 +6408,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "arc_inductive",
         "normalizer_module": "taskcompendium.pipeline.datasets.atlas_arc_injection",
@@ -6484,7 +6484,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "arc_transductive",
         "normalizer_module": "taskcompendium.pipeline.datasets.atlas_arc_injection",
@@ -6583,10 +6583,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "competitive_coding",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -6705,7 +6705,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "if_calendar",
         "normalizer_module": "taskcompendium.pipeline.datasets.if_calendar",
@@ -7023,7 +7023,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "knowledge_mcqa",
         "normalizer_module": "taskcompendium.pipeline.datasets.atlas_math_qa",
@@ -7106,7 +7106,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "knowledge_openqa",
         "normalizer_module": "taskcompendium.pipeline.datasets.qa_tasks",
@@ -7184,7 +7184,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "web_search_mcqa",
         "normalizer_module": "taskcompendium.pipeline.datasets.atlas_math_qa",
@@ -7282,7 +7282,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "advanced_calculations",
         "normalizer_module": "taskcompendium.pipeline.datasets.atlas_math_qa",
@@ -7358,7 +7358,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "math_openreasoning",
         "normalizer_module": "taskcompendium.pipeline.datasets.atlas_math_qa",
@@ -7437,7 +7437,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "math_stack",
         "normalizer_module": "taskcompendium.pipeline.datasets.tasktrove_math",
@@ -7517,7 +7517,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "math_gym",
         "normalizer_module": "taskcompendium.pipeline.datasets.tasktrove_math",
@@ -7596,7 +7596,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "multichallenge",
         "normalizer_module": "taskcompendium.pipeline.datasets.multichallenge",
@@ -7695,7 +7695,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "qa_abstention",
         "normalizer_module": "taskcompendium.pipeline.datasets.atlas_math_qa",
@@ -7771,7 +7771,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "reasoning_gym",
         "normalizer_module": "taskcompendium.pipeline.datasets.reasoning_tasks",
@@ -7849,7 +7849,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "safety",
         "normalizer_module": "taskcompendium.pipeline.datasets.rubric_tasks",
@@ -7926,7 +7926,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "science_openqa",
         "normalizer_module": "taskcompendium.pipeline.datasets.qa_tasks",
@@ -8003,10 +8003,10 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "structured_outputs",
-        "normalizer_module": "experiments.post_training.task_curation_source_bindings",
+        "normalizer_module": "experiments.post_training.task_curation.source_bindings",
         "normalizer_function": "source_recipe.<locals>.normalize_raw"
       },
       "bound_source": {
@@ -8149,7 +8149,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "codereview",
         "normalizer_module": "taskcompendium.pipeline.datasets.rubric_tasks",
@@ -8225,7 +8225,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "stack_overflow",
         "normalizer_module": "taskcompendium.pipeline.datasets.rubric_tasks",
@@ -8301,7 +8301,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "superuser",
         "normalizer_module": "taskcompendium.pipeline.datasets.rubric_tasks",
@@ -8377,7 +8377,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "tezos",
         "normalizer_module": "taskcompendium.pipeline.datasets.rubric_tasks",
@@ -8454,7 +8454,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "unix",
         "normalizer_module": "taskcompendium.pipeline.datasets.rubric_tasks",
@@ -8552,7 +8552,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "swesmith",
         "normalizer_module": "taskcompendium.pipeline.datasets.repository_tasks",
@@ -8673,7 +8673,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "wizard_orca",
         "normalizer_module": "taskcompendium.pipeline.datasets.rubric_tasks",
@@ -8772,7 +8772,7 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "experiments.post_training.task_curation_source_bindings",
+        "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "math_oracle",
         "normalizer_module": "taskcompendium.pipeline.datasets.tasktrove_math",

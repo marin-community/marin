@@ -6,7 +6,7 @@ writes final decisions to Parquet. Every selected input remains in the audit,
 including rejected tasks and failed reviews.
 
 The artifact graph lives in
-[`experiments/post_training/task_curation_pipeline.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation_pipeline.py).
+[`experiments/post_training/task_curation/pipeline.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py).
 Reusable readers, normalizers, checks and review logic live under
 `lib/taskcompendium/src/taskcompendium/pipeline/`.
 
@@ -16,7 +16,7 @@ Plan a ten-record run without downloading data or contacting GLM:
 
 ```bash
 uv run --with './lib/taskcompendium[pipeline]' python -m \
-  experiments.post_training.task_curation_pipeline \
+  experiments.post_training.task_curation.pipeline \
   --source math500 --limit 10 --model-revision YOUR_GLM_REVISION
 ```
 
@@ -66,7 +66,7 @@ fail the stage with file context.
 A source does not need its own Python module. Sources sharing conversion and
 review structure belong together, with source-specific criteria beside their
 metadata. Examples include `python_tasks`, `preference_tasks`, `tasktrove_math`,
-`rubric_tasks` and the `nemotron_ultra_families` modules.
+`rubric_tasks` and the `nemotron/` and `nemotron_ultra/` packages.
 
 For example, the Python-test family owns the `pymethods` and `pymethods_large`
 source definitions. Both use the same converter and common privacy/test criteria.

@@ -24,7 +24,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
-from taskcompendium.pipeline.datasets.nemotron_placeholders import restore_placeholder
+from taskcompendium.pipeline.datasets.nemotron.placeholders import restore_placeholder
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     HFSource,

@@ -3,7 +3,7 @@
 
 """math-answer contracts and explicit pinned blend selections."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra_source import quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_source
 
 FAMILY_MODULE = __name__
 CRITERIA = (

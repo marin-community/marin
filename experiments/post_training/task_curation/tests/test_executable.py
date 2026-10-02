@@ -11,12 +11,12 @@ from pathlib import Path
 from verifyit.grade import grade
 from verifyit.spec import ScriptSpec, spec_from_table
 
-from experiments.post_training.task_curation_executable import converted_row
+from experiments.post_training.task_curation.executable import converted_row
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 
 def test_nl2bash_checker_grades_capture_and_preserves_conversion_provenance(tmp_path):
-    fixture = Path(__file__).parents[1] / "tasktrove/fixtures/nl2bash.tar.gz"
+    fixture = Path(__file__).parents[2] / "tasktrove/fixtures/nl2bash.tar.gz"
     source = read_task_binary(fixture.read_bytes()).files
     raw = {
         "instruction": source["instruction.md"].decode(),
