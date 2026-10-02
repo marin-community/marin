@@ -50,15 +50,25 @@ def snowball_config_from_report(provenance: dict) -> SnowballConfig:
 def generation_interventions(model, workload: TokenWorkload, engine_config: InferenceEngineConfig) -> dict:
     """Generate from the same weights and fresh caches without returning activation traces."""
     results = {}
-    for name in ("baseline", "embedding_fp32_silu_sigmoid"):
+    parameter_dtype = str(model.transformer.embed_gated_norm.w_down.dtype)
+    for name, silu_dtype, sigmoid_dtype in (
+        ("baseline", parameter_dtype, parameter_dtype),
+        ("embedding_fp32_silu", "float32", parameter_dtype),
+        ("embedding_fp32_sigmoid", parameter_dtype, "float32"),
+        ("embedding_fp32_silu_sigmoid", "float32", "float32"),
+    ):
         variant = model
         if name != "baseline":
-            gate = DiagnosticEmbeddingGate(model.transformer.embed_gated_norm, "float32", "float32")
+            gate = DiagnosticEmbeddingGate(model.transformer.embed_gated_norm, silu_dtype, sigmoid_dtype)
             variant = eqx.tree_at(lambda m: m.transformer.embed_gated_norm, model, gate)
         engine = InferenceEngine.from_model_with_config(variant, None, engine_config)
         measurement = measure_levanter_batch(engine, workload)
         summary = summarize_batch(workload, measurement)
-        results[name] = {"tokens": measurement.tokens, "output_sha256": summary.output_sha256}
+        results[name] = {
+            "tokens": measurement.tokens,
+            "output_sha256": summary.output_sha256,
+            "embedding_gate_unary_dtypes": {"silu": silu_dtype, "sigmoid": sigmoid_dtype},
+        }
     return results
 
 
@@ -127,8 +137,7 @@ def main() -> None:
         "embedding_gate_weight_sha256": digests,
         "intervention": {
             "site": "transformer.embed_gated_norm",
-            "silu_dtype": "float32",
-            "sigmoid_dtype": "float32",
+            "unary_precision_variants": "baseline, SiLU only, sigmoid only, both (see per-result dtypes)",
             "cast_after_each_unary": dtype,
             "remaining_math": "unchanged",
         },
