@@ -1,0 +1,335 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import dataclasses
+import json
+from typing import NamedTuple
+
+import equinox as eqx
+import haliax as hax
+import jax
+import jax.numpy as jnp
+import numpy as np
+from safetensors.numpy import save_file
+
+from levanter.grug.sharding import compact_grug_mesh
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.eagle3 import propose_eagle3
+from levanter.inference.speculative import verify_snowball_proposals
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from haliax import Axis
+from levanter.models.eagle3 import Eagle3Config, Eagle3Draft
+from levanter.testing.helpers import skip_if_no_torch
+
+
+def _checkpoint():
+    # Keys and normalization flags mirror the pinned embedding-free HF checkpoint.
+    config = {
+        "architectures": ["Eagle3DraftModel"],
+        "speculators_model_type": "eagle3",
+        "norm_before_fc": True,
+        "norm_before_residual": True,
+        "norm_output": True,
+        "fc_norm": False,
+        "tie_word_embeddings": False,
+        "target_hidden_size": None,
+        "draft_vocab_size": 8,
+        "eagle_aux_hidden_state_layer_ids": [0, 1, 2],
+        "transformer_layer_config": {
+            "model_type": "llama",
+            "num_hidden_layers": 1,
+            "hidden_act": "silu",
+            "attention_bias": False,
+            "mlp_bias": False,
+            "layer_types": ["sliding_attention"],
+            "use_sliding_window": True,
+            "hidden_size": 16,
+            "intermediate_size": 24,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "head_dim": 4,
+            "vocab_size": 32,
+            "sliding_window": 3,
+            "max_position_embeddings": 16,
+            "rms_norm_eps": 1e-5,
+            "rope_parameters": {"rope_type": "default", "rope_theta": 10000.0},
+        },
+    }
+    rng = np.random.default_rng(72)
+    targets = np.array([1, 3, 6, 8, 12, 19, 23, 31], dtype=np.int64)
+    state = {"d2t": targets - np.arange(8), "t2d": np.isin(np.arange(32), targets)}
+    shapes = {
+        "fc.weight": (16, 48),
+        "input_norm.weight": (48,),
+        "layers.0.hidden_norm.weight": (16,),
+        "layers.0.input_layernorm.weight": (16,),
+        "layers.0.post_attention_layernorm.weight": (16,),
+        "norm.weight": (16,),
+        "layers.0.self_attn.q_proj.weight": (16, 32),
+        "layers.0.self_attn.k_proj.weight": (8, 32),
+        "layers.0.self_attn.v_proj.weight": (8, 32),
+        "layers.0.self_attn.o_proj.weight": (16, 16),
+        "layers.0.mlp.gate_proj.weight": (24, 16),
+        "layers.0.mlp.up_proj.weight": (24, 16),
+        "layers.0.mlp.down_proj.weight": (16, 24),
+        "lm_head.weight": (8, 16),
+    }
+    for name, shape in shapes.items():
+        state[name] = (rng.normal(size=shape) * 0.2 + (1 if len(shape) == 1 else 0)).astype(np.float32)
+    embedding = rng.normal(size=(32, 16)).astype(np.float32)
+    return config, state, embedding
+
+
+def _torch_forward(state, embedding, token_ids, hidden, *, project):
+    import torch  # noqa: PLC0415  # optional test dependency
+    import torch.nn.functional as functional  # noqa: PLC0415
+
+    weights = {k: torch.from_numpy(np.asarray(v)) for k, v in state.items()}
+    hidden = torch.from_numpy(np.asarray(hidden).copy())
+
+    def norm(x, name):
+        return x * torch.rsqrt(x.square().mean(-1, keepdim=True) + 1e-5) * weights[name + ".weight"]
+
+    def linear(x, name):
+        return functional.linear(x, weights[name + ".weight"])
+
+    if project:
+        hidden = linear(norm(hidden, "input_norm"), "fc")
+    residual = norm(hidden, "layers.0.hidden_norm")
+    embeds = torch.from_numpy(embedding)[torch.from_numpy(np.asarray(token_ids).copy())]
+    x = torch.cat([norm(embeds, "layers.0.input_layernorm"), residual], dim=-1)
+    q = linear(x, "layers.0.self_attn.q_proj").reshape(*x.shape[:2], 4, 4)
+    k = linear(x, "layers.0.self_attn.k_proj").reshape(*x.shape[:2], 2, 4)
+    v = linear(x, "layers.0.self_attn.v_proj").reshape(*x.shape[:2], 2, 4)
+    length = x.shape[1]
+    angles = torch.arange(length)[:, None] * 10000.0 ** (-torch.arange(0, 4, 2) / 4)
+    cosine, sine = angles.cos()[None, :, None], angles.sin()[None, :, None]
+
+    def rotate(value):
+        first, second = value.chunk(2, dim=-1)
+        return torch.cat([first * cosine - second * sine, second * cosine + first * sine], dim=-1)
+
+    q = rotate(q).transpose(1, 2)
+    k = rotate(k).repeat_interleave(2, dim=2).transpose(1, 2)
+    v = v.repeat_interleave(2, dim=2).transpose(1, 2)
+    positions = torch.arange(length)
+    mask = (positions[:, None] >= positions) & (positions[:, None] - positions < 3)
+    scores = (q @ k.transpose(-1, -2)) / 2
+    probabilities = scores.masked_fill(~mask, -torch.inf).softmax(-1)
+    attended = (probabilities @ v).transpose(1, 2).reshape(*x.shape[:2], 16)
+    x = residual + linear(attended, "layers.0.self_attn.o_proj")
+    mlp_in = norm(x, "layers.0.post_attention_layernorm")
+    x = x + linear(
+        functional.silu(linear(mlp_in, "layers.0.mlp.gate_proj")) * linear(mlp_in, "layers.0.mlp.up_proj"),
+        "layers.0.mlp.down_proj",
+    )
+    hidden = norm(x, "norm")
+    return linear(hidden, "lm_head").numpy(), hidden.numpy()
+
+
+class _PackedInputs(NamedTuple):
+    tokens: hax.NamedArray
+    batch_info: PageBatchInfo
+    positions: hax.NamedArray
+
+
+def _decode_inputs(token_ids: list[int], position: int):
+    capacity = 8 * jax.device_count()
+    tokens = np.zeros(capacity, dtype=np.int32)
+    count = len(token_ids)
+    tokens[:count] = token_ids
+    positions = np.zeros(capacity, dtype=np.int32)
+    positions[:count] = np.arange(position, position + count)
+    destinations = np.full(capacity, -1, dtype=np.int32)
+    destinations[:count] = positions[:count]
+    info = PageBatchInfo(
+        slot_ids=hax.named(jnp.array([0], jnp.int32), "seq"),
+        page_indices=hax.named(jnp.arange(4, dtype=jnp.int32)[None], ("seq", "page")),
+        seq_lens=hax.named(jnp.array([position + count], jnp.int32), "seq"),
+        cu_q_lens=hax.named(jnp.array([0, count], jnp.int32), "seq"),
+        num_seqs=jnp.array(1, jnp.int32),
+        new_token_dests=hax.named(jnp.asarray(destinations), "position"),
+        page_size=2,
+    )
+    return _PackedInputs(
+        hax.named(jnp.asarray(tokens), "position"), info, hax.named(jnp.asarray(positions), "position")
+    )
+
+
+@skip_if_no_torch
+@jax.default_matmul_precision("highest")
+def test_eagle3_full_forward_matches_pinned_torch_recipe(tmp_path):
+    hf_config, state, embedding = _checkpoint()
+    count = jax.device_count()
+    tokens = np.broadcast_to(np.array([2, 4, 8, 11, 16], dtype=np.int32), (count, 5))
+    auxiliary = np.random.default_rng(9).normal(size=(count, 5, 48)).astype(np.float32)
+    expected_logits, expected_hidden = _torch_forward(state, embedding, tokens, auxiliary, project=True)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        (tmp_path / "config.json").write_text(json.dumps(hf_config))
+        save_file(state, tmp_path / "model.safetensors")
+        model = Eagle3Draft.from_checkpoint(tmp_path, target_embedding=jnp.asarray(embedding))
+        output = eqx.filter_jit(lambda m: m(jnp.asarray(tokens), jnp.asarray(auxiliary)))(model)
+        np.testing.assert_allclose(output.logits, expected_logits, rtol=1e-4, atol=1e-4)
+        np.testing.assert_allclose(output.hidden_states, expected_hidden, rtol=1e-4, atol=1e-4)
+        mapped = np.flatnonzero(state["t2d"])[expected_logits.argmax(-1)]
+        np.testing.assert_array_equal(model.greedy_tokens(output), mapped)
+
+
+@skip_if_no_torch
+@jax.default_matmul_precision("highest")
+def test_eagle3_learned_recurrent_proposals_match_full_torch_with_separate_cache():
+    hf_config, state, embedding = _checkpoint()
+    config = Eagle3Config.from_hf_config(hf_config)
+    config = dataclasses.replace(config, inference_attention_implementation="reference")
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = Eagle3Draft.from_state_dict(config, state, target_embedding=jnp.asarray(embedding))
+        cache = model.initial_cache(PageTableSpec(4, 2), dtype=jnp.float32)
+        auxiliary = jnp.asarray(np.random.default_rng(51).normal(size=(1, 48)).astype(np.float32))
+        hidden = np.asarray(model.project_target_states(auxiliary))[0]
+        token = 2
+        past_hidden, past_tokens, expected_proposals = [], [], []
+        decode = eqx.filter_jit(lambda m, t, h, c, b, p: m.decode(t, h, c, b, p))
+        for position in range(6):
+            past_tokens.append(token)
+            past_hidden.append(hidden)
+            expected_logits, expected_hidden = _torch_forward(
+                state,
+                embedding,
+                np.array(past_tokens)[None],
+                np.array(past_hidden)[None],
+                project=False,
+            )
+            tokens, info, positions = _decode_inputs([token], position)
+            hidden_buffer = np.zeros((tokens.size, 16), dtype=np.float32)
+            hidden_buffer[0] = hidden
+            result = decode(model, tokens, jnp.asarray(hidden_buffer), cache, info, positions)
+            np.testing.assert_allclose(
+                np.asarray(result.output.logits)[0], expected_logits[0, -1], rtol=1e-4, atol=1e-4
+            )
+            np.testing.assert_allclose(
+                np.asarray(result.output.hidden_states)[0], expected_hidden[0, -1], rtol=1e-4, atol=1e-4
+            )
+            token = int(model.greedy_tokens(result.output)[0])
+            assert token == np.flatnonzero(state["t2d"])[expected_logits[0, -1].argmax()]
+            expected_proposals.append(token)
+            hidden = np.asarray(result.output.hidden_states)[0]
+            cache = result.cache
+        tokens, info, positions = _decode_inputs([2], 0)
+        target_auxiliary = np.zeros((tokens.size, 48), dtype=np.float32)
+        target_auxiliary[0] = np.asarray(auxiliary)[0]
+        proposals = eqx.filter_jit(
+            lambda m, c: propose_eagle3(
+                m,
+                tokens,
+                jnp.asarray(target_auxiliary),
+                c,
+                info,
+                positions,
+                num_draft_tokens=6,
+            )
+        )(model, model.initial_cache(PageTableSpec(4, 2), dtype=jnp.float32))
+        np.testing.assert_array_equal(proposals.token_ids, [expected_proposals])
+        np.testing.assert_allclose(
+            proposals.tentative_cache.kv_pages.array, cache.kv_pages.array, rtol=1e-4, atol=1e-4
+        )
+
+
+@jax.default_matmul_precision("highest")
+def test_learned_eagle_proposals_verify_against_real_snowball_target():
+    hf_config, state, _ = _checkpoint()
+    config = dataclasses.replace(
+        Eagle3Config.from_hf_config(hf_config), inference_attention_implementation="reference"
+    )
+    target_config = SnowballConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=24,
+        shared_expert_intermediate_dim=24,
+        num_experts=4,
+        num_experts_per_token=1,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=4,
+        max_seq_len=8,
+        sliding_window=2,
+        initializer_std=0.2,
+        attention_implementation="reference",
+        inference_attention_implementation="reference",
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        target = SnowballLMHeadModel.init(Axis("vocab", 32), target_config, key=jax.random.key(13))
+        draft = Eagle3Draft.from_state_dict(config, state, target_embedding=target.transformer.token_embed)
+        prompt = _decode_inputs([2, 7, 5], 0)
+        prefilled = eqx.filter_jit(
+            lambda m, c: m.decode_with_auxiliary_states(
+                prompt.tokens,
+                c,
+                prompt.batch_info,
+                prompt.positions,
+                layers=config.auxiliary_layers,
+            )
+        )(target, target.initial_cache(PageTableSpec(4, 2), dtype=jnp.float32))
+        pending = int(np.asarray(prefilled.logits.array)[2].argmax())
+        target_states = np.asarray(prefilled.auxiliary_states.array)
+        draft_prefix = _decode_inputs([7, 5], 0)
+        projected = draft.project_target_states(jnp.asarray(target_states))
+        draft_prefilled = eqx.filter_jit(
+            lambda m, c: m.decode(
+                draft_prefix.tokens,
+                projected,
+                c,
+                draft_prefix.batch_info,
+                draft_prefix.positions,
+            )
+        )(draft, draft.initial_cache(PageTableSpec(4, 2), dtype=jnp.float32))
+        seed = _decode_inputs([pending], 2)
+        auxiliary = np.zeros_like(target_states)
+        auxiliary[0] = target_states[2]
+        proposed = eqx.filter_jit(
+            lambda m, c: propose_eagle3(
+                m,
+                seed.tokens,
+                jnp.asarray(auxiliary),
+                c,
+                seed.batch_info,
+                seed.positions,
+                num_draft_tokens=3,
+            )
+        )(draft, draft_prefilled.cache)
+
+        # Sequential target generation is independent of the learned proposal path.
+        decode_target = eqx.filter_jit(lambda m, c, a: m.decode(a.tokens, c, a.batch_info, a.positions))
+        cache = prefilled.cache
+        oracle_ids, oracle_scores, oracle_logits = [], [], []
+        token = pending
+        for step in range(5):
+            logits, cache = decode_target(target, cache, _decode_inputs([token], 3 + step))
+            row = np.asarray(logits.array, dtype=np.float64)[0]
+            token = int(row.argmax())
+            oracle_ids.append(token)
+            oracle_scores.append(row[token] - np.logaddexp.reduce(row))
+            oracle_logits.append(row)
+        block = _decode_inputs([pending, *np.asarray(proposed.token_ids)[0].tolist()], 3)
+        verified = eqx.filter_jit(
+            lambda m, c: verify_snowball_proposals(
+                m,
+                block.tokens,
+                c,
+                block.batch_info,
+                block.positions,
+                jnp.zeros(1),
+                jnp.array([5]),
+                jnp.zeros(1, dtype=bool),
+                max_draft_tokens=3,
+                auxiliary_layers=config.auxiliary_layers,
+                key=jax.random.key(19),
+                logprobs_mode="raw_logprobs",
+            )
+        )(target, prefilled.cache)
+        length = int(np.asarray(verified.tokens.lengths)[0])
+        np.testing.assert_array_equal(np.asarray(verified.tokens.token_ids)[0, :length], oracle_ids[:length])
+        np.testing.assert_allclose(np.asarray(verified.tokens.logprobs)[0, :length], oracle_scores[:length], atol=1e-5)
+        next_input = _decode_inputs([oracle_ids[length - 1]], 3 + length)
+        logits, _ = decode_target(target, verified.cache, next_input)
+        np.testing.assert_allclose(np.asarray(logits.array)[0], oracle_logits[length], rtol=1e-4, atol=1e-4)

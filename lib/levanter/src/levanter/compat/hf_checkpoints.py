@@ -434,9 +434,9 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None) -> dict:
     return d
 
 
-def _load_safe_tensors(
+def load_safetensors_state_dict(
     path,
-    dtype,
+    dtype=None,
     fs: AbstractFileSystem | None = None,
     staging_budget: HostByteBudget | None = None,
     mesh: jax.sharding.Mesh | None = None,
@@ -479,7 +479,7 @@ def _load_safetensor_shards(
     mesh = get_concrete_mesh()  # Mesh contexts are thread-local.
 
     def load(path: str) -> dict:
-        return _load_safe_tensors(path, dtype, fs=fs, staging_budget=budget, mesh=mesh)
+        return load_safetensors_state_dict(path, dtype, fs=fs, staging_budget=budget, mesh=mesh)
 
     with ThreadPoolExecutor(
         max_workers=min(MAX_CONCURRENT_HF_SHARDS, len(paths)), thread_name_prefix="hf_shard"
@@ -843,13 +843,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
         with _patch_hf_hub_download() as hf_hub_download:
             # TODO: load models from gcs etc.
             if os.path.exists(os.path.join(id, SAFE_TENSORS_MODEL)):
-                state_dict = _load_safe_tensors(os.path.join(id, SAFE_TENSORS_MODEL), dtype)
+                state_dict = load_safetensors_state_dict(os.path.join(id, SAFE_TENSORS_MODEL), dtype)
             elif os.path.exists(os.path.join(id, PYTORCH_MODEL)):
                 state_dict = _load_torch(os.path.join(id, PYTORCH_MODEL), dtype)
             else:
                 try:
                     model_path = hf_hub_download(id, SAFE_TENSORS_MODEL, revision=rev)
-                    state_dict = _load_safe_tensors(model_path, dtype)
+                    state_dict = load_safetensors_state_dict(model_path, dtype)
                 except (EntryNotFoundError, HFValidationError):
                     model_path = hf_hub_download(id, PYTORCH_MODEL, revision=rev)
                     state_dict = _load_torch(model_path, dtype)
@@ -870,7 +870,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # Keep shard order deterministic across hosts.
             shard_files = list(dict.fromkeys(index["weight_map"].values()))
             if "safetensors" in index_file:
-                loader = _load_safe_tensors
+                loader = load_safetensors_state_dict
             else:
                 loader = _load_torch
 
@@ -883,7 +883,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
                 shard_paths.append(shard_path)
 
-            if loader is _load_safe_tensors:
+            if loader is load_safetensors_state_dict:
                 return _load_safetensor_shards(shard_paths, dtype)
 
             final_state_dict = {}
@@ -906,7 +906,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             raise FileNotFoundError(f"No HF-ish checkpoint files found in {url}")
 
         shard_paths = [prefix_join(path, shard_file) for shard_file in shard_files]
-        if loader is _load_safe_tensors:
+        if loader is load_safetensors_state_dict:
             return _load_safetensor_shards(shard_paths, dtype, fs=fs)
 
         for shard_path in shard_paths:
@@ -936,7 +936,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 shard_files = list(dict.fromkeys(index["weight_map"].values()))
 
                 if "safetensors" in index_file:
-                    loader = _load_safe_tensors
+                    loader = load_safetensors_state_dict
                 else:
                     loader = _load_torch
 
@@ -950,7 +950,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     shard_files = [model_file]
 
                     if model_file == SAFE_TENSORS_MODEL:
-                        loader = _load_safe_tensors
+                        loader = load_safetensors_state_dict
                     else:
                         loader = _load_torch
 
