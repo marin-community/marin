@@ -121,7 +121,7 @@ uv run python -m infra.marina.applets.rl_data_catalog.audit_nemotron \
 ```
 
 The top line shows one data-source count, the filtered task tally, and upstream
-status. The source count counts displayed source/component rows across both
+status. The source count counts displayed source/component rows across all
 catalogs, excluding deprecated/excluded rows; an expanded parent contributes
 one count for each component and has no separate aggregate entry. It stays global when search
 filters change. Gym aliases such as `gym/aime` remain searchable, and source details
@@ -131,7 +131,8 @@ input source are omitted. Generators display **Generated** and have no fixed cou
 The task tally above the table sums known finite dataset counts in the currently filtered rows,
 including deprecated sources only when they are shown. Task Trove counts released
 Harbor tasks. MarinSkyRL counts the selected split, configuration, or source
-filter before rollout preparation and deduplication. The details panel and CSV
+filter before rollout preparation and deduplication. Registered Hugging Face
+sources count the splits named in their release registration. The details panel and CSV
 distinguish exact HF metadata counts, upstream-reported counts, and estimates.
 An estimated row and any filtered total containing it display `≈`.
 Merging gym rows removes duplicate inventory contributions. Source populations
