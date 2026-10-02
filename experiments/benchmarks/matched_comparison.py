@@ -121,13 +121,40 @@ def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, 
         raise ValueError("Hardware allocation/topology labels differ")
     mesh = native["mesh"]
     args = vllm["engine_args"]
-    expected_mesh = {"replica_dcn": 1, "data": 1, "context": 1, "expert": device_count, "model": 1}
-    if mesh != expected_mesh or not (
-        args["tensor_parallel_size"] == 1
-        and args["data_parallel_size"] == args["data_parallel_size_local"] == device_count
-        and args["enable_expert_parallel"] == (device_count > 1)
-    ):
-        raise ValueError("Requires native EP=N/data1/TP1 versus local vLLM DP=N/EP/TP1")
+    execution = vllm["effective_execution"]
+    if "tpu_sharding" in execution:
+        expected_mesh = {"replica_dcn": 1, "data": device_count, "context": 1, "expert": 1, "model": 1}
+        expected_sharding = {
+            "data_parallelism": device_count,
+            "tensor_parallelism": 1,
+            "expert_parallelism": 1,
+            "sequence_parallelism": 1,
+            "attention_data_parallelism": 1,
+            "attention_data_expert_parallelism": 1,
+            "decode_context_parallelism": 1,
+            "prefill_context_parallelism": 1,
+        }
+        if (
+            mesh != expected_mesh
+            or execution["tpu_sharding"] != expected_sharding
+            or execution["model_impl_type"] != "vllm"
+            or execution["multiprocess_dp"] != "0"
+            or execution["new_model_design"] != "1"
+            or args["tensor_parallel_size"] != 1
+            or args["data_parallel_size"] != device_count
+            or args["enable_expert_parallel"]
+        ):
+            raise ValueError("Requires native data=N/EP1/TP1 versus TPU vLLM single-process SPMD data=N/EP1/TP1")
+        parallelism = {"native_mesh": mesh, "vllm_tpu_sharding": execution["tpu_sharding"], "policy": "tpu_spmd_data"}
+    else:
+        expected_mesh = {"replica_dcn": 1, "data": 1, "context": 1, "expert": device_count, "model": 1}
+        if mesh != expected_mesh or not (
+            args["tensor_parallel_size"] == 1
+            and args["data_parallel_size"] == args["data_parallel_size_local"] == device_count
+            and args["enable_expert_parallel"] == (device_count > 1)
+        ):
+            raise ValueError("Requires native EP=N/data1/TP1 versus local vLLM DP=N/EP/TP1")
+        parallelism = {"native_mesh": mesh, "vllm_dp": device_count, "vllm_tp": 1, "vllm_ep": device_count}
     if args["enable_prefix_caching"]:
         raise ValueError("Prefix caching changes the measured workload")
     deterministic = {}
@@ -170,7 +197,7 @@ def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, 
         "dtype": manifest["dtype"],
         "hardware_label": native["hardware_label"],
         "device_kinds": native["device_kind"],
-        "parallelism": {"native_mesh": mesh, "vllm_dp": device_count, "vllm_tp": 1, "vllm_ep": device_count},
+        "parallelism": parallelism,
         "execution_config_differences": differences,
         "raw_hf_config_differences": hf_differences,
         "effective_execution": {name: report["provenance"]["effective_execution"] for name, report in reports.items()},

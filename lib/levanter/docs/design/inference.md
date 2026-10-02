@@ -367,3 +367,37 @@ and records token IDs and positions to align data-parallel rows. Both sides
 record a canonical head-weight digest. These tensors distinguish differences
 already present in the hidden state from final projection rounding; the FP64
 projection is diagnostic evidence, not a new serving precision contract.
+
+### Matched TPU fixture gate
+
+The `vllm-tpu` fixture command provisions the existing `IsolatedTpuVllm` fork
+pins, JAX 0.11.0, and libtpu 0.0.44 in a separate environment. It selects
+`MODEL_IMPL_TYPE=vllm` explicitly and uses single-process SPMD data parallelism.
+The native command uses `expert-axis-size=1`, leaving the remaining devices on
+its data axis. Set `data-parallel-size` to the actual local JAX device count;
+the driver discovers the devices in a subprocess that exits before vLLM starts.
+
+```bash
+uv run python -m experiments.benchmarks.matched_inference export \
+  --recipe snowball --output /tmp/snowball-tpu-fixture
+uv run python -m experiments.benchmarks.matched_inference native \
+  --fixture /tmp/snowball-tpu-fixture --hardware-label v6e-local4 --expert-axis-size 1
+uv run python -m experiments.benchmarks.matched_inference vllm-tpu \
+  --fixture /tmp/snowball-tpu-fixture --hardware-label v6e-local4 --data-parallel-size 4
+uv run python -m experiments.benchmarks.matched_inference compare \
+  --fixture /tmp/snowball-tpu-fixture
+```
+
+The comparison requires the same TPU allocation, native data=N/EP1/TP1 and
+vLLM SPMD data=N/EP1/TP1. Reports retain the runtime pins, discovered devices,
+effective sharding, and package versions. `enforce_eager` disables vLLM's Torch
+compilation path; TPU execution still uses JAX compilation. This is a prepared
+full-model correctness gate, not a measured TPU throughput result.
+
+Hero remains unsupported by this pinned TPU fixture. The vLLM fork at
+`70ea9ae8f2601f06d820ee9d70e3afbdc52683b1` parses schema-v2 Hero, but its
+`grug_moe_short_conv` operator has no Torchax bridge in tpu-inference
+`29548fbab663b7ea946546ca7efaa473dab55ba5`. The separate native JAX Grug model
+accepts only schema v1. A Hero TPU baseline needs a cache-preserving short-conv
+bridge and full-model parity before timing; disabling short convolutions would
+change the model.

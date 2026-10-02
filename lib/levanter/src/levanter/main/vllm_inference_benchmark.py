@@ -10,12 +10,14 @@ import hashlib
 import importlib.metadata
 import json
 import logging
+import math
 import os
 import time
 from pathlib import Path
 
 import torch
 from vllm import AsyncEngineArgs, SamplingParams
+from vllm.platforms import current_platform
 from vllm.sampling_params import RequestOutputKind
 from vllm.v1.engine.async_llm import AsyncLLM
 
@@ -115,6 +117,24 @@ def main():
     result = dataclasses.asdict(result)
     vllm_distribution = importlib.metadata.distribution("vllm")
     direct_url = vllm_distribution.read_text("direct_url.json")
+    runtime = {}
+    versions = ["vllm", "torch"]
+    if current_platform.is_tpu():
+        sharding = dataclasses.asdict(engine.vllm_config.sharding_config.sharding_strategy)
+        discovered = provenance["tpu_device_discovery"]
+        if math.prod(sharding.values()) != len(discovered):
+            raise ValueError(f"TPU engine mesh does not use the discovered allocation: {sharding}, {discovered}")
+        devices = [device["kind"] for device in discovered]
+        runtime = {
+            "tpu_sharding": sharding,
+            "tpu_platform_name": current_platform.get_device_name(),
+            "model_impl_type": os.environ["MODEL_IMPL_TYPE"],
+            "multiprocess_dp": os.environ["TPU_MULTIPROCESS_DP"],
+            "new_model_design": os.environ["NEW_MODEL_DESIGN"],
+        }
+        versions.extend(["tpu-inference", "jax", "jaxlib", "libtpu"])
+    else:
+        devices = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
     result["provenance"] = {
         **provenance,
         "backend": "vllm",
@@ -127,9 +147,10 @@ def main():
             "compilation_mode": str(engine.vllm_config.compilation_config.mode),
             "cudagraph_mode": str(engine.vllm_config.compilation_config.cudagraph_mode),
             "enforce_eager": engine.vllm_config.model_config.enforce_eager,
+            **runtime,
         },
-        "versions": {name: importlib.metadata.version(name) for name in ["vllm", "torch"]},
-        "devices": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())],
+        "versions": {name: importlib.metadata.version(name) for name in versions},
+        "devices": devices,
     }
     result["model_and_cache_setup"] = setup_elapsed
     args.output.parent.mkdir(parents=True, exist_ok=True)
