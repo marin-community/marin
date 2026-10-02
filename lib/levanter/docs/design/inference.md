@@ -289,5 +289,10 @@ uv run python -m experiments.benchmarks.matched_inference vllm \
 Use `--recipe snowball` and a separate fixture directory for Snowball. Both
 measurement commands print their result JSON for remote log retention. Compare
 workload and generated-token hashes before comparing throughput. vLLM uses eager
-execution for this startup smoke test; tuned CUDA-graph serving and larger
+execution for this startup smoke test. Pass `--execution-mode cuda-graph` to
+allow vLLM compilation and CUDA graph capture; the engine arguments and setup
+time are recorded separately. Both modes use a fresh per-invocation Triton
+cache so inherited JAX cache settings cannot disable vLLM kernel compilation.
+The async vLLM client distributes requests across data-parallel ranks when
+configured, while preserving per-request first-token timestamps. Larger
 workloads require a separate benchmark configuration.
