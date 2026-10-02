@@ -279,6 +279,7 @@ def build_workflow(
 @click.option("--max-tokens", type=int, default=4096, show_default=True)
 @click.option("--prompt-budget", type=int, default=128000, show_default=True)
 @click.option("--base-url", help="GLM batch endpoint, required with --run.")
+@click.option("--review-cache", help="Stable FineStore query cache location, shared across catalog versions.")
 @click.option("--max-workers", type=int, default=4, show_default=True)
 @click.option("--review-batch-size", type=int, default=100, show_default=True)
 @click.option("--cpu", type=int, default=4, show_default=True)
@@ -299,6 +300,7 @@ def main(
     max_tokens: int,
     prompt_budget: int,
     base_url: str | None,
+    review_cache: str | None,
     max_workers: int,
     review_batch_size: int,
     cpu: int,
@@ -321,6 +323,7 @@ def main(
             model_revision,
             max_tokens=max_tokens,
             max_prompt_characters=prompt_budget,
+            query_cache_root=review_cache,
         )
     bindings = []
     digests = dict(sample_digests)

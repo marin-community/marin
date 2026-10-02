@@ -11618,6 +11618,7 @@ dependencies = [
 [package.optional-dependencies]
 pipeline = [
     { name = "datasets" },
+    { name = "marin-finestore" },
     { name = "marin-zephyr" },
 ]
 
@@ -11625,6 +11626,7 @@ pipeline = [
 requires-dist = [
     { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
+    { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "lib/finestore" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "lib/zephyr" },
     { name = "pyarrow", specifier = ">=15.0" },

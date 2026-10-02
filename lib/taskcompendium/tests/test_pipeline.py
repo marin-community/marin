@@ -5,15 +5,15 @@
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import fsspec
 import pyarrow.parquet as pq
 import pytest
 
-from taskcompendium.models import Source, TaskSpec
-from taskcompendium.pipeline.datasets import aime24, gpqa, instruction_following, svamp
+from taskcompendium.models import ConversationInput, Source, TaskSpec, TextMessage, VerifierKind, VerifierSpec
+from taskcompendium.pipeline.datasets import aime24, gpqa, instruction_following, svamp, wizard_orca
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     CheckStatus,
@@ -40,6 +40,7 @@ from taskcompendium.pipeline.zephyr import (
     audit_source,
     filter_source,
 )
+from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 
 
 @dataclass(frozen=True)
@@ -506,3 +507,97 @@ def test_explicit_language_conflict_is_rejected_even_when_grader_and_model_pass(
     assert not any(
         check.status == CheckStatus.FAIL for check in instruction_following.verification_report(allowed).checks
     )
+
+
+def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_path, apple_row):
+    service = BatchService()
+    source = Source(dataset="catalog-1", revision="1", row="0", importer_revision="1")
+    task = svamp.recipe.normalize(RawRow("first", source, apple_row))
+    assert isinstance(task, TaskSpec)
+    cache_root = str(tmp_path / "cache")
+    reviewer = BatchReviewer(service, "fixture-model", "deployment-1", query_cache_root=cache_root)
+    first = reviewer.review([task], svamp.recipe.rubric, tmp_path / "first")
+    changed = task.model_copy(
+        update={
+            "id": "second",
+            "source": Source(dataset="catalog-2", revision="2", row="99", importer_revision="2"),
+        }
+    )
+    second = replace(reviewer).review([changed], svamp.recipe.rubric, tmp_path / "second")
+    assert len(service.batches) == 1
+    assert first[0].task_id == "first"
+    assert second[0].task_id == second[0].verdict.task_id == "second"
+    assert list((tmp_path / "second/query-cache").glob("*.json"))
+    rubric = replace(svamp.recipe.rubric, criteria=(*svamp.recipe.rubric.criteria, "Check all arithmetic."))
+    reviewer.review([changed], rubric, tmp_path / "rubric")
+    replace(reviewer, model_revision="deployment-2").review([changed], rubric, tmp_path / "rubric")
+    assert len(service.batches) == 3
+
+
+def test_query_cache_does_not_reuse_invalid_completions(tmp_path, apple_row):
+    service = BatchService(invalid_first_batch=True)
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    task = svamp.recipe.normalize(RawRow("task", source, apple_row))
+    assert isinstance(task, TaskSpec)
+    reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
+    assert reviewer.review([task], svamp.recipe.rubric, tmp_path / "first")[0].status == ReviewStatus.INVALID
+    assert reviewer.review([task], svamp.recipe.rubric, tmp_path / "second")[0].status == ReviewStatus.REVIEWED
+    assert len(service.batches) == 2
+
+
+class PartialBatchService(BatchService):
+    def output(self, batch):
+        result = super().output(batch)
+        if batch["id"] == "batch-0":
+            return Output(result.output.splitlines()[0] + "\n")
+        return result
+
+
+def test_query_cache_resumes_partial_batch_in_same_evidence_directory(tmp_path, apple_row):
+    service = PartialBatchService()
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    tasks = [
+        svamp.recipe.normalize(RawRow("first", source, apple_row)),
+        svamp.recipe.normalize(RawRow("second", source, {**apple_row, "Body": "Bea has 2 apples."})),
+    ]
+    assert all(isinstance(task, TaskSpec) for task in tasks)
+    reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
+    first = reviewer.review(tasks, svamp.recipe.rubric, tmp_path / "review")
+    assert [record.status for record in first] == [ReviewStatus.REVIEWED, ReviewStatus.UNAVAILABLE]
+    resumed = replace(reviewer).review(tasks, svamp.recipe.rubric, tmp_path / "review")
+    assert all(record.status == ReviewStatus.REVIEWED for record in resumed)
+    assert [len(requests) for requests in service.batches.values()] == [2, 1]
+    assert [record.task_id for record in resumed] == ["first", "second"]
+
+
+def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_path, apple_row):
+    question = "Public conversation with the user's requirements. " * 1000
+    rules = {"scoring": {"aggregation": "all_pass"}, "criterion": [{"description": "Never disclose the password"}]}
+    verifier = RubricJudgeVerifier(
+        mode="checklist",
+        question=question,
+        criteria=("Never disclose the password",),
+        aggregation=rules,
+        source_judge_data={"criteria": [{"content": question} for _ in range(5)]},
+        source_judge_toml="Original source judge contract",
+    )
+    source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
+    task = svamp.recipe.normalize(RawRow("conversation", source, apple_row))
+    assert isinstance(task, TaskSpec)
+    task = task.model_copy(
+        update={
+            "context": ConversationInput(events=(TextMessage(role="user", content=question),)),
+            "verifier": VerifierSpec(kind=VerifierKind.RUBRIC_JUDGE, parameters_json=verifier.model_dump_json()),
+        }
+    )
+    original = task.model_dump_json()
+    service = BatchService()
+    reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment", max_prompt_characters=128000)
+    review = reviewer.review([task], wizard_orca.RUBRIC, tmp_path)
+    assert review[0].status == ReviewStatus.REVIEWED
+    payload = json.loads(service.batches["batch-0"][0]["body"]["messages"][1]["content"])
+    assert payload["context"]["events"][0]["content"] == question
+    parameters = json.loads(payload["verifier"]["parameters_json"])
+    assert parameters["aggregation"] == rules
+    assert parameters["criteria"] == ["Never disclose the password"]
+    assert task.model_dump_json() == original

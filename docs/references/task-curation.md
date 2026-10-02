@@ -6,7 +6,7 @@ accepted views. Zephyr normalizes rows, groups duplicates and conflicting refere
 checks graders, and preserves model-review evidence. Every completed filter artifact
 assigns each input `keep` or `reject`, while retaining its reasons. Recipes support numeric, exact,
 multiple-choice, predicted-action, IFEval, JSON Schema, puzzle, Reasoning Gym,
-calendar, open QA and executable submissions. Source-specific checks bind the
+calendar, open QA, rubric judges, repository repair and executable submissions. Source-specific checks bind the
 grader and its controls; model quality review remains separate from grading.
 
 ## Build the artifact graph
@@ -690,6 +690,45 @@ accepted = pq.read_table("run/accepted.parquet")
 tasks = [TaskSpec.model_validate_json(value) for value in accepted["task_json"].to_pylist()]
 ```
 
+## Add sources by contract
+
+The three new cohorts add thirty source modules. Each leaf owns its dataset pin,
+normalization binding and area rubric; family helpers share parsing only where the
+source contract agrees.
+
+| Cohort | Source names | Shared contract |
+| --- | --- | --- |
+| Python and structured output | `curriculum_easy`, `curriculum_medium`, `e2egit`, `e2egit_large`, `multifile`, `pymethods`, `pymethods_large`, `stack_pytest`, `unitsyn_large`, `structured_outputs` | Named/multifile Python outputs and private tests; JSON-schema output. XML/YAML imports remain unsupported. |
+| Semantic judges and calendar | `glaive_code`, `codereview`, `stack_overflow`, `superuser`, `unix`, `safety`, `multichallenge`, `wizard_orca`, `tezos`, `if_calendar` | Original holistic numeric or all-pass judge contracts; calendar uses the existing schedule verifier. Semantic runtime judges remain unbound. |
+| Math, coding and repositories | `math_prism`, `math_stack`, `math_gym`, `math_oracle`, `competitive_coding`, `swe_rebench`, `swesmith`, `hardmath`, `hendrycks_math`, `deepscaler` | Typed math controls, exact stdin/stdout cases, repository checkout/test contracts and direct HF training records. Source math-comparator parity and repository execution remain unverified. |
+
+Sample and run one source using its registered name:
+
+```bash
+uv run --with fastparquet python -m experiments.post_training.task_curation_sampling \
+  --source multichallenge --count 10 --seed 6501 --output /tmp/task-samples
+
+MARIN_PREFIX=/tmp/task-artifacts uv run python -m \
+  experiments.post_training.task_curation_pipeline \
+  --sources-dir /tmp/task-samples --source multichallenge \
+  --model-revision <deployment-revision> --review-cache /tmp/task-review-cache \
+  --base-url <GLM-batch-endpoint> --run
+```
+
+TaskTrove prefix acquisition supports Snappy, Zstd and plain dictionaries across
+leading row groups. The three direct HF sources use a bounded first-row-group or
+streamed JSON prefix. These samples exercise ingestion; their ordered prefixes do
+not estimate population quality. Source manifests retain pins, positions, byte
+budgets and snapshot hashes.
+
+`RubricJudgeVerifier` retains the original question, criteria, parsed aggregation,
+raw judge JSON and TOML. The review projection includes the complete public
+conversation and parsed judge rules, replacing repeated raw copies with hashes.
+The complete originals remain in the audit. `RepositoryPatchVerifier` retains
+repository, source ref, workspace, grader paths and source environment hash.
+Both return infrastructure outcomes until their runtime is bound; neither
+manufactures a semantic reward.
+
 ## Resume and change policy
 
 Audit groups public task keys across all acquired source shards into
@@ -699,7 +738,20 @@ with `write_parquet(skip_existing=True)`. On restart, its existing writer skips
 completed shards before consuming the lazy grader and model iterator.
 Normalization and grouping may recompute. An incomplete partition repeats its
 grader and model work and may resubmit in-flight calls; saved transport files
-remain evidence. There is no per-task cache shared across sources.
+remain evidence. With `--review-cache <stable-storage-path>`, valid GLM completions
+are additionally cached by exact query using Finestore. Completed cache entries
+can be reused across sources and catalog versions.
+
+The query cache identity includes the submitted model request, source-specific
+criteria, response schema, budgets and declared model revision. Top-level task ID
+and source provenance are canonicalized before submission, then restored on the
+review record. Changed rubric content, task content or model revision misses the
+cache; changing the catalog version alone does not. Invalid, missing or truncated
+responses are not cached. Cache location and concurrency do not change identity.
+Concurrent workers can submit the same uncached query; this cache does not provide
+single-flight coordination. Transport evidence is namespaced by missing query
+batch and model revision, preventing a previous deployment's result from being
+replayed under a new revision.
 
 Repeat a bounded local run with the same directory to reuse its source sample
 and completed audit. After bounded retries, unavailable or invalid reviews yield
@@ -710,7 +762,8 @@ entire completed audit artifact and recalculates decisions without new source
 reads, verifier calls, or model requests. Changing
 the code, source, converter, rubric or model configuration requires a new
 directory. Model identity currently names a serving job, not immutable weights;
-restrict reuse to the same local pilot and an unchanged serving job. Use the
+use a stable revision for an unchanged deployment, and update it whenever the
+served weights or configuration changes. Use the
 artifact graph above for independently cached source stages and merged outputs.
 The bounded helper preserves flat local ledgers; neither path establishes a
 full-corpus release gate.

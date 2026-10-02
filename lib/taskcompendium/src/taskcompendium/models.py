@@ -43,6 +43,8 @@ class VerifierKind(StrEnum):
     PUZZLE_ANSWER = "puzzle_answer"
     SCHEDULE_ANSWER = "schedule_answer"
     REFERENCE_ANSWERS = "reference_answers"
+    RUBRIC_JUDGE = "rubric_judge"
+    REPOSITORY_PATCH = "repository_patch"
     MATH_ANSWER = "math_answer"
     ABSTENTION_ANSWERS = "abstention_answers"
     ARC_GRID = "arc_grid"

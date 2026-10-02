@@ -18,15 +18,22 @@ from taskcompendium.pipeline.datasets import (
     atlas_code,
     atlas_math_qa,
     calendar_tasks,
+    competitive_coding,
     executable_tasks,
     nemo_actions,
     qa_tasks,
     reasoning_tasks,
+    structured_outputs,
+    swe_rebench,
+    swesmith,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION as TASKTROVE_REVISION
 
+from experiments.post_training.task_curation_hf_math_sampling import SHARDS as HF_MATH_SOURCES
+from experiments.post_training.task_curation_hf_math_sampling import sample_source as sample_hf_math
 from experiments.post_training.task_curation_partitions import assign_partitions
 from experiments.post_training.task_curation_prefix_sampling import READ_BLOCK_BYTES, sample_prefix
+from experiments.post_training.task_curation_source_bindings import MATH_SOURCES, PYTHON_SOURCES, RUBRIC_SOURCES
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 CONFIGS = {
@@ -38,7 +45,15 @@ CONFIGS = {
     "science_openqa": qa_tasks.SCIENCE_CONFIG,
 }
 NEXT_CONFIGS = atlas_code.CONFIGS | atlas_math_qa.CONFIGS | atlas_arc_injection.CONFIGS
-SOURCE_CONFIGS = CONFIGS | NEXT_CONFIGS
+SOURCE_CONFIGS = (
+    CONFIGS
+    | NEXT_CONFIGS
+    | {name: module.CONFIG for name, module in PYTHON_SOURCES.items()}
+    | {"structured_outputs": structured_outputs.CONFIG}
+    | {name: module.CONFIG for name, module in RUBRIC_SOURCES.items()}
+    | {name: module.CONFIG for name, module in MATH_SOURCES.items()}
+    | {"competitive_coding": competitive_coding.CONFIG, "swe_rebench": swe_rebench.CONFIG, "swesmith": swesmith.CONFIG}
+)
 MAX_SAMPLE_BYTES = 64 * 1024 * 1024
 
 
@@ -48,6 +63,8 @@ def sample_source(name: str, output: Path, count: int, seed: int, nemo_shard: st
     Start with up to eight random groups and add groups until enough rows exist.
     Retain unsupported tasks and every sampled archive file.
     """
+    if name in HF_MATH_SOURCES:
+        return sample_hf_math(name, output, count, seed)
     if name == "nemo_actions":
         return sample_nemo(output, count, seed, nemo_shard)
     dataset = "open-thoughts/TaskTrove"
@@ -191,7 +208,7 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=100)
     parser.add_argument("--seed", type=int, default=6101)
     parser.add_argument("--nemo-shard")
-    parser.add_argument("--source", action="append", choices=(*SOURCE_CONFIGS, "nemo_actions"))
+    parser.add_argument("--source", action="append", choices=(*SOURCE_CONFIGS, *HF_MATH_SOURCES, "nemo_actions"))
     args = parser.parse_args()
     names = args.source or [*CONFIGS, "nemo_actions"]
     if "nemo_actions" in names and args.nemo_shard is None:

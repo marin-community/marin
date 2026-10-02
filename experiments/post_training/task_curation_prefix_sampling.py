@@ -17,6 +17,7 @@ from typing import BinaryIO
 import requests
 from huggingface_hub import HfFileSystem
 from huggingface_hub.hf_file_system import HfFileSystemFile
+from zstandard import ZstdDecompressor
 
 from experiments.post_training.task_curation_partitions import assign_partitions
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
@@ -148,14 +149,29 @@ def snappy_dictionary_prefix(stream: BinaryIO, count: int) -> list[bytes]:
     return values
 
 
+def plain_dictionary_prefix(stream: BinaryIO, count: int) -> list[bytes]:
+    """Read the requested prefix of decoded length-prefixed dictionary entries."""
+    values = []
+    for _ in range(count):
+        header = stream.read(4)
+        if len(header) != 4:
+            raise ValueError("Truncated dictionary entry length")
+        length = struct.unpack("<I", header)[0]
+        value = stream.read(length)
+        if len(value) != length:
+            raise ValueError("Truncated dictionary entry")
+        values.append(value)
+    return values
+
+
 def column_prefix(parquet, column, stream: BinaryIO, count: int) -> list[bytes]:
-    """Return a non-null byte-array prefix from V1 pages and Snappy dictionaries."""
+    """Return a non-null byte-array prefix from V1 pages and supported dictionary codecs."""
     from fastparquet import core, parquet_thrift  # noqa: PLC0415 -- optional page-decoding dependency.
     from fastparquet.cencoding import NumpyIO, ThriftObject  # noqa: PLC0415
 
     metadata = column.meta_data
     if count > metadata.num_values:
-        raise ValueError("The first row group has fewer rows than the requested prefix")
+        raise ValueError("The row group has fewer rows than the requested prefix")
     indexes: list[int | bytes] = []
     page_offset = metadata.data_page_offset
     while len(indexes) < count:
@@ -197,8 +213,13 @@ def column_prefix(parquet, column, stream: BinaryIO, count: int) -> list[bytes]:
     required = max(dictionary_indexes) + 1
     if metadata.codec == parquet_thrift.CompressionCodec.SNAPPY:
         dictionary = snappy_dictionary_prefix(stream, required)
+    elif metadata.codec == parquet_thrift.CompressionCodec.ZSTD:
+        with ZstdDecompressor().stream_reader(stream, read_size=READ_BLOCK_BYTES, closefd=False) as decoded:
+            dictionary = plain_dictionary_prefix(decoded, required)
+    elif metadata.codec == parquet_thrift.CompressionCodec.UNCOMPRESSED:
+        dictionary = plain_dictionary_prefix(stream, required)
     else:
-        raise ValueError("This bounded dictionary prefix reader currently supports raw Snappy only")
+        raise ValueError(f"Unsupported bounded dictionary codec: {metadata.codec}")
     return [dictionary[value] if isinstance(value, int) else value for value in indexes]
 
 
@@ -221,13 +242,21 @@ def sample_prefix(
     path = f"datasets/open-thoughts/TaskTrove@{revision}/{shard}"
     with filesystem.open(path, block_size=READ_BLOCK_BYTES, cache_type="none") as stream:
         parquet = ParquetFile(stream)
-        columns = {column.meta_data.path_in_schema[0]: column for column in parquet.row_groups[0].columns}
-        paths = column_prefix(parquet, columns["path"], stream, count)
-        binaries = column_prefix(parquet, columns["task_binary"], stream, count)
+        rows = []
+        groups = []
+        for group_index, group in enumerate(parquet.row_groups):
+            remaining = count - len(rows)
+            if remaining == 0:
+                break
+            size = min(remaining, group.num_rows)
+            columns = {column.meta_data.path_in_schema[0]: column for column in group.columns}
+            paths = column_prefix(parquet, columns["path"], stream, size)
+            binaries = column_prefix(parquet, columns["task_binary"], stream, size)
+            rows.extend((path, binary, group_index) for path, binary in zip(paths, binaries, strict=True))
+            groups.append(group_index)
         source_rows = parquet.count()
-    rows = list(zip(paths, binaries, strict=True))
     snapshots = []
-    for index, (archive_path, binary) in enumerate(rows):
+    for index, (archive_path, binary, group_index) in enumerate(rows):
         files = read_task_binary(binary).files
         instruction = files["instruction.md"].decode()
         snapshots.append(
@@ -237,7 +266,7 @@ def sample_prefix(
                 "files": {path: base64.b64encode(data).decode() for path, data in files.items()},
                 "archive_sha256": hashlib.sha256(binary).hexdigest(),
                 "sample_index": index,
-                "sample_row_group": 0,
+                "sample_row_group": group_index,
                 "sample_group": hashlib.sha256(instruction.encode()).hexdigest(),
             }
         )
@@ -256,10 +285,12 @@ def sample_prefix(
         "revision": revision,
         "shard": shard,
         "source_rows": source_rows,
+        "row_groups": groups,
         "sample_rows": len(snapshots),
         "seed": seed,
         "sampling": (
-            "First N archived rows, page-wise bounded read of row group 0; ordered prefix, not population-uniform"
+            "First N archived rows, page-wise bounded read across leading row groups; "
+            "ordered prefix, not population-uniform"
         ),
         "grouping": "SHA256 of public instruction",
         "transfer_budget_bytes": budget.maximum,
@@ -270,7 +301,7 @@ def sample_prefix(
             for partition in ("development", "holdout")
         },
         "snapshot_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
-        "reader": "fastparquet V1 dictionary/plain data pages and incremental raw-Snappy dictionary prefix",
+        "reader": "fastparquet V1 dictionary/plain data pages and bounded Snappy/Zstd/plain dictionary prefix",
     }
     (directory / "sample-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest

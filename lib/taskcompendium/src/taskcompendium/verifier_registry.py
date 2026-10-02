@@ -19,6 +19,8 @@ from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 from taskcompendium.verifiers.reasoning import PuzzleAnswerVerifier, ReasoningGymVerifier
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
+from taskcompendium.verifiers.repository_patch import RepositoryPatchVerifier
+from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 from taskcompendium.verifiers.runtime import CalendarStateVerifier, CaptureOutputVerifier
 from taskcompendium.verifiers.schedule import ScheduleAnswerVerifier
 
@@ -37,6 +39,8 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
         VerifierKind.PUZZLE_ANSWER: PuzzleAnswerVerifier,
         VerifierKind.SCHEDULE_ANSWER: ScheduleAnswerVerifier,
         VerifierKind.REFERENCE_ANSWERS: ReferenceAnswersVerifier,
+        VerifierKind.RUBRIC_JUDGE: RubricJudgeVerifier,
+        VerifierKind.REPOSITORY_PATCH: RepositoryPatchVerifier,
         VerifierKind.MATH_ANSWER: MathAnswerVerifier,
         VerifierKind.ABSTENTION_ANSWERS: AbstentionAnswersVerifier,
         VerifierKind.ARC_GRID: ArcGridVerifier,

@@ -11,7 +11,7 @@ dependencies = ["pyarrow>=15.0", "pydantic>=2.0", "verifyit[answer,judge,reasoni
 
 [project.optional-dependencies]
 harbor = ["harbor"]
-pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr"]
+pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr", "marin-finestore"]
 
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
@@ -25,6 +25,7 @@ required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_6
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
 verifyit = { git = "https://github.com/marin-community/verifyit.git", rev = "a398c65d851941ce8e39e2986993c6108dd2e10b" }
 marin-shellbox = { path = "../shellbox", editable = true }
+marin-finestore = { path = "../finestore", editable = true }
 marin-zephyr = { path = "../zephyr", editable = true }
 marin-fray = { path = "../fray", editable = true }
 marin-iris = { path = "../iris", editable = true }

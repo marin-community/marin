@@ -10,9 +10,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from taskcompendium.models import ResourceVisibility, TaskSpec
+from taskcompendium.models import ResourceVisibility, TaskSpec, VerifierKind
 from taskcompendium.pipeline.batches import BatchClient, batch_output, batch_tool_arguments
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
+from taskcompendium.pipeline.query_cache import cached_batch_output
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -95,6 +96,23 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
             "count": len(parameters["resources"]),
             "evidence": "Matching top-level resource previews; complete hashed fixtures are retained in the audit",
         }
+    if task.verifier.kind == VerifierKind.RUBRIC_JUDGE:
+        # Parsed aggregation preserves the original judge rules. Its raw files also
+        # repeat the entire conversation per criterion, overwhelming the review.
+        for field in ("source_judge_data", "source_judge_toml"):
+            encoded = json.dumps(parameters[field], sort_keys=True).encode()
+            parameters[field] = {
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+                "byte_count": len(encoded),
+                "evidence": "Original retained in task audit; full parsed judge rules appear in aggregation",
+            }
+        question = parameters["question"]
+        public_text = "\n".join(event.content for event in task.context.events if event.type == "message")
+        if question in public_text:
+            parameters["question"] = {
+                "sha256": hashlib.sha256(question.encode()).hexdigest(),
+                "evidence": "Complete question occurs in public conversation context",
+            }
     payload["verifier"]["parameters_json"] = json.dumps(parameters)
     payload["resource_preview_policy"] = (
         "Resources are private reviewer evidence, with visibility identifying what the actor sees. "
@@ -187,6 +205,7 @@ class BatchReviewer:
     max_attempts: int = 2
     retry_max_tokens: int = 8192
     retry_max_prompt_characters: int = 128000
+    query_cache_root: str | None = None
 
     @property
     def identity(self) -> dict[str, Any]:
@@ -243,23 +262,63 @@ def review_attempt(
 ) -> list[ReviewRecord]:
     """Persist one attempt, leaving retries and final filtering to their callers."""
     requests, pending = [], []
-    for task in tasks:
+    task_ids = {}
+    for supplied_task in tasks:
+        task = supplied_task
         original = originals[task.id] if originals is not None else None
+        if reviewer.query_cache_root is not None:
+            payload = task.model_dump(mode="json", exclude={"id", "source"})
+            semantic_id = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            if original is not None:
+                original = original.model_copy(update={"id": "original", "source": None})
+            task = task.model_copy(update={"id": semantic_id, "source": None})
+            body = completion_body(task, rubric, reviewer.model, reviewer.max_tokens, original)
+            query_id = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+            task = task.model_copy(update={"id": query_id})
         body = completion_body(task, rubric, reviewer.model, reviewer.max_tokens, original)
         if len(json.dumps(body)) > reviewer.max_prompt_characters:
             pending.append(
                 ReviewRecord(
-                    task_id=task.id,
+                    task_id=supplied_task.id,
                     status=ReviewStatus.UNAVAILABLE,
                     verdict=None,
                     detail="Review context exceeds configured character budget",
                 )
             )
             continue
+        if reviewer.query_cache_root is not None:
+            task_ids.setdefault(task.id, []).append(supplied_task.id)
         requests.append({"custom_id": task.id, "method": "POST", "url": CHAT_ENDPOINT, "body": body})
     if not requests:
         return pending
+    if reviewer.query_cache_root is not None:
+        output_path.mkdir(parents=True, exist_ok=True)
+        (output_path / "query-task-ids.json").write_text(json.dumps(task_ids, indent=2))
+        raw_output = cached_batch_output(
+            reviewer.client,
+            requests,
+            output_path,
+            cache_root=reviewer.query_cache_root,
+            model_revision=reviewer.model_revision,
+            poll_seconds=reviewer.poll_seconds,
+            valid_completion=valid_review_completion,
+        )
+        records = review_records(raw_output, list(task_ids))
+        return [
+            record.model_copy(
+                update={
+                    "task_id": task_id,
+                    "verdict": record.verdict.model_copy(update={"task_id": task_id}) if record.verdict else None,
+                }
+            )
+            for record in records
+            for task_id in task_ids[record.task_id]
+        ] + pending
     raw_output = batch_output(
         reviewer.client, requests, output_path, filename="task-curation.jsonl", poll_seconds=reviewer.poll_seconds
     )
     return review_records(raw_output, [row["custom_id"] for row in requests]) + pending
+
+
+def valid_review_completion(output: str, task_id: str) -> bool:
+    return review_records(output, [task_id])[0].status == ReviewStatus.REVIEWED
