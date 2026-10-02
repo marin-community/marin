@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from taskcompendium.grading import grade_answer, validate_verifier
 from taskcompendium.harbor.protocol import assistant_message
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
@@ -26,12 +27,8 @@ from taskcompendium.models import (
     AssistantToolCalls,
     ConversationToolCall,
     ConversationTrace,
-    FunctionCall,
-    ToolCallComparatorConfig,
 )
-from taskcompendium.submission import FinalAction, chat_request
-from taskcompendium.verifier_registry import grade_answer, validate_verifier
-from taskcompendium.verifiers.predicted_action import compare
+from taskcompendium.submission import AnswerFormat, FinalAction, SubmissionConvention, chat_request
 
 from .harbor_replay import run_replay_trial
 
@@ -83,7 +80,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.harbor.protocol import chat_conversation; "
         "from taskcompendium.submission import chat_request; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
@@ -92,7 +89,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
         "convention = read_submission_convention(root / 'submission_convention.json'); "
         "conversation = chat_conversation([*chat_request(specification, convention)['messages'], "
         "json.loads(sys.argv[2])]); "
-        "result = grade_answer(specification, convention, conversation, object()); "
+        "result = grade_answer(specification, convention, conversation); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -299,32 +296,6 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     assert len(requests) == 1
 
 
-def test_predicted_action_requires_exact_call_count_and_argument_types():
-    config = ToolCallComparatorConfig()
-    expected = (FunctionCall(name="lookup", arguments={"id": 1}),)
-    extra = {
-        "role": "assistant",
-        "tool_calls": [
-            {"id": "call-lookup", "type": "function", "function": {"name": "lookup", "arguments": '{"id":1}'}},
-            {"id": "call-other", "type": "function", "function": {"name": "other", "arguments": "{}"}},
-        ],
-    }
-    assert compare(expected, assistant_message(extra), config) == 0.0
-    assert compare(expected, assistant_message(_action("lookup", '{"id":true}')), config) == 0.0
-    assert compare(expected, assistant_message({"role": "assistant", "content": "different"}), config) == 0.0
-
-
-def test_predicted_action_requires_exact_strings_and_explicit_numeric_tolerance():
-    expected_text = (FunctionCall(name="respond", arguments={"note": "refund approved"}),)
-    wrong_text = assistant_message(_action("respond", '{"note":"refund denied"}'))
-    assert compare(expected_text, wrong_text, ToolCallComparatorConfig()) == 0.0
-
-    expected_number = (FunctionCall(name="set_value", arguments={"value": 1.0}),)
-    nearby_number = assistant_message(_action("set_value", '{"value":1.005}'))
-    assert compare(expected_number, nearby_number, ToolCallComparatorConfig()) == 0.0
-    assert compare(expected_number, nearby_number, ToolCallComparatorConfig(numeric_tolerance=0.01)) == 1.0
-
-
 def test_predicted_action_grades_typed_evidence_from_any_harness():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
@@ -339,7 +310,7 @@ def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = grade_answer(specification, convention, conversation, object())
+    result = grade_answer(specification, convention, conversation)
 
     assert (result.status, result.reward) == ("graded", 1.0)
 
@@ -402,9 +373,7 @@ def test_final_action_call_limit_applies_before_matching_expected_calls(call_cou
         )
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
-    result = grade_answer(
-        specification, FinalAction(id="max-two", require_call=True, max_calls=2), conversation, object()
-    )
+    result = grade_answer(specification, FinalAction(id="max-two", require_call=True, max_calls=2), conversation)
     assert (result.status, result.reward) == (status, reward)
 
 
@@ -414,7 +383,30 @@ def test_final_action_required_call_rejects_text_before_scoring(require_call, st
     specification, _ = import_row(row, canonical_sha256(row))
     final = assistant_message({"role": "assistant", "content": "No action"})
     conversation = ConversationTrace(events=(*specification.context.events, final))
-    result = grade_answer(
-        specification, FinalAction(id="call-policy", require_call=require_call), conversation, object()
-    )
+    result = grade_answer(specification, FinalAction(id="call-policy", require_call=require_call), conversation)
     assert (result.status, result.reward) == (status, reward)
+
+
+def test_final_action_cannot_bypass_call_policy_through_a_text_convention(tmp_path):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification, _ = import_row(row, canonical_sha256(row))
+    with pytest.raises(ValueError):
+        SubmissionConvention(id="bypass", answer_format=AnswerFormat.FINAL_ACTION)
+    convention = FinalAction(id="one-call", require_call=True, max_calls=1)
+    path = tmp_path / "convention.json"
+    path.write_text(convention.model_dump_json())
+    restored = read_submission_convention(path)
+    for current in (convention, restored):
+        request = chat_request(specification, current)
+        assert request["tool_choice"] == "required"
+        assert request["parallel_tool_calls"] is False
+        response = AssistantToolCalls(
+            calls=(
+                ConversationToolCall(call_id="first", name="lookup", arguments={}),
+                ConversationToolCall(call_id="second", name="lookup", arguments={}),
+            )
+        )
+        result = grade_answer(
+            specification, current, ConversationTrace(events=(*specification.context.events, response))
+        )
+        assert (result.status, result.reward) == ("extraction_error", None)

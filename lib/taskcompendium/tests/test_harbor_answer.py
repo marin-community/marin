@@ -13,8 +13,9 @@ from threading import Thread
 
 import pytest
 from harbor.models.task.task import Task
+from tasktrove_verify.spec import Mode
 
-from taskcompendium.grading import exact_answer, numeric_answer
+from taskcompendium.grading import exact_answer, grade_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -34,11 +35,9 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
-from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
 
@@ -171,7 +170,6 @@ def test_numeric_answer_uses_explicit_tolerance(specification, response, reward)
         specification,
         convention,
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-        object(),
     )
 
     assert (result.status, result.reward) == ("graded", reward)
@@ -365,11 +363,11 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
     "verifier,message",
     [
         (
-            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": 12}'),
+            VerifierSpec(kind=Mode.EXACT, parameters_json='{"expected": 12}'),
             "Invalid 'exact' verifier parameters",
         ),
         (
-            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": "12", "extra": true}'),
+            VerifierSpec(kind=Mode.EXACT, parameters_json='{"expected": "12", "extra": true}'),
             "Invalid 'exact' verifier parameters",
         ),
     ],
@@ -396,7 +394,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     )
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
@@ -404,7 +402,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
         "result = grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='12'))), object()); "
+        "TextMessage(role='assistant', content='12')))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

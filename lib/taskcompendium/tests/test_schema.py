@@ -5,12 +5,11 @@
 
 import base64
 import json
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from taskcompendium.grading import exact_answer
+from taskcompendium.grading import exact_answer, grade_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import (
@@ -18,14 +17,13 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
+    InlineFile,
     Source,
     TaskSpec,
     TextMessage,
     VerifierSpec,
 )
-from taskcompendium.parquet import read_tasks, write_tasks
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, chat_request
-from taskcompendium.verifier_registry import grade_answer
 
 
 @pytest.fixture
@@ -62,7 +60,7 @@ def specification():
         },
     ]
     + [
-        {"resources": {role: [{"path": "input.txt", "source": {"kind": "inline_text", "content": "x"}}]}}
+        {"resources": {role: [{"path": "input.txt", "source": {"kind": "inline_file", "content_base64": "eA=="}}]}}
         for role in ("all", "worker", "oracle", "verifier")
     ]
     + [
@@ -92,8 +90,7 @@ def specification():
                 "verifier": [
                     {
                         "path": "checks",
-                        "source": {"kind": "dataset_path", "path": "vendored/checks.tar.gz"},
-                        "format": "tar_gz",
+                        "source": {"kind": "dataset_path", "path": "vendored/checks"},
                         "mode": "0755",
                     }
                 ]
@@ -117,10 +114,9 @@ def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path
 
 
 @pytest.mark.parametrize("path", ["../private.txt", "/private.txt", "https://example.com/private.txt", "a/../b"])
-@pytest.mark.parametrize("digest", [None, "a" * 64])
-def test_vendored_resource_references_cannot_escape_the_dataset_reader_root(specification, path, digest):
+def test_vendored_resource_references_cannot_escape_the_dataset_reader_root(specification, path):
     wire = specification.model_dump()
-    source = {"kind": "dataset_path", "path": path, "sha256": digest}
+    source = {"kind": "dataset_path", "path": path}
     wire["resources"] = {
         "worker": [
             {
@@ -138,8 +134,8 @@ def test_vendored_resource_references_cannot_escape_the_dataset_reader_root(spec
 def test_shared_resource_destinations_cannot_overwrite_role_mounts(specification, second_path, role):
     wire = specification.model_dump()
     wire["resources"] = {
-        "all": [{"path": "data", "source": {"kind": "inline_text", "content": "shared"}}],
-        role: [{"path": second_path, "source": {"kind": "inline_text", "content": "private"}}],
+        "all": [{"path": "data", "source": {"kind": "inline_file", "content_base64": "c2hhcmVk"}}],
+        role: [{"path": second_path, "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZQ=="}}],
     }
     with pytest.raises(ValidationError):
         TaskSpec.model_validate(wire)
@@ -148,16 +144,21 @@ def test_shared_resource_destinations_cannot_overwrite_role_mounts(specification
 def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(tmp_path, specification):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
-        role: [{"path": "fixture.txt", "source": {"kind": "inline_text", "content": content}}]
+        role: [
+            {
+                "path": "fixture.txt",
+                "source": {"kind": "inline_file", "content_base64": base64.b64encode(content.encode()).decode("ascii")},
+            }
+        ]
         for role, content in (("worker", "public"), ("oracle", "gold"), ("verifier", "hidden test"))
     }
     path = tmp_path / "specification.json"
     path.write_text(json.dumps(wire))
     resources = read_specification(path).model_dump(mode="json")["resources"]
     assert resources["all"] == []
-    assert resources["worker"][0]["source"]["content"] == "public"
-    assert resources["oracle"][0]["source"]["content"] == "gold"
-    assert resources["verifier"][0]["source"]["content"] == "hidden test"
+    assert base64.b64decode(resources["worker"][0]["source"]["content_base64"]) == b"public"
+    assert base64.b64decode(resources["oracle"][0]["source"]["content_base64"]) == b"gold"
+    assert base64.b64decode(resources["verifier"][0]["source"]["content_base64"]) == b"hidden test"
 
 
 @pytest.mark.parametrize("initial_state", [None, "company-snapshot", {"inbox": [], "counter": 3}])
@@ -214,7 +215,7 @@ def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, spe
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     # This correct answer must not earn credit without the required private runtime.
     with pytest.raises(NotImplementedError):
-        grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation, object())
+        grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
 
 
 @pytest.mark.parametrize("kind", ["llm_judge", "structured_exact"])
@@ -230,7 +231,7 @@ def test_schema_only_verifiers_cannot_export_or_grade(tmp_path, specification, k
     assert not (tmp_path / "export").exists()
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     with pytest.raises(NotImplementedError):
-        grade_answer(task, convention, conversation, object())
+        grade_answer(task, convention, conversation)
 
 
 @pytest.mark.parametrize("kind", ["llm_judge", "structured_exact"])
@@ -258,8 +259,8 @@ def test_resource_groups_reject_portable_path_aliases_before_mounts_can_overwrit
 ):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
-        "all": [{"path": base_path, "source": {"kind": "inline_text", "content": "public"}}],
-        "worker": [{"path": alias, "source": {"kind": "inline_text", "content": "overwrite"}}],
+        "all": [{"path": base_path, "source": {"kind": "inline_file", "content_base64": "cHVibGlj"}}],
+        "worker": [{"path": alias, "source": {"kind": "inline_file", "content_base64": "b3ZlcndyaXRl"}}],
     }
     with pytest.raises(ValidationError):
         TaskSpec.model_validate(wire)
@@ -270,17 +271,15 @@ def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace
     wire = specification.model_dump(mode="json")
     wire["environment_requirements"] = {"capabilities": ["shell", "filesystem"], "working_directory": "/app"}
     wire["resources"] = {
-        "worker": [{"path": "project.txt", "source": {"kind": "inline_text", "content": "worker input"}}]
+        "worker": [{"path": "project.txt", "source": {"kind": "inline_file", "content_base64": "d29ya2VyIGlucHV0"}}]
     }
     task = TaskSpec.model_validate(wire)
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
-    result = grade_answer(
-        task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation, object()
-    )
+    result = grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
     assert (result.status, result.reward) == ("graded", reward)
 
 
-def test_parquet_preserves_private_schema_contracts_before_unsupported_export_is_rejected(tmp_path, specification):
+def test_reader_preserves_private_schema_contracts_before_unsupported_export_is_rejected(tmp_path, specification):
     wire = specification.model_dump(mode="json")
     wire["environment_requirements"] = {"environment_variables": {"TASK_MODE": "repair"}}
     wire["verifier"] = {
@@ -293,13 +292,13 @@ def test_parquet_preserves_private_schema_contracts_before_unsupported_export_is
         "verifier": [{"path": "checks", "source": {"kind": "dataset_path", "path": "vendored/checks"}}],
     }
     task = TaskSpec.model_validate(wire)
-    path = str(tmp_path / "tasks.parquet")
-    write_tasks(path, iter((task,)))
-    restored = list(read_tasks(path))
-    assert restored == [task]
+    path = tmp_path / "specification.json"
+    path.write_text(task.model_dump_json())
+    restored = read_specification(path)
+    assert restored == task
     with pytest.raises(NotImplementedError):
         lower_to_harbor(
-            restored[0],
+            restored,
             SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
             HarborEnvironmentConfig(),
             tmp_path / "export",
@@ -307,23 +306,24 @@ def test_parquet_preserves_private_schema_contracts_before_unsupported_export_is
     assert not (tmp_path / "export").exists()
 
 
-def test_reader_preserves_binary_archive_declaration_but_rejects_impossible_text_archive(tmp_path, specification):
-    archive = (Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz").read_bytes()
+@pytest.mark.parametrize("payload", [b"UTF-8 text: \xe2\x98\x83\n", b"\x00\xff\x80\n"])
+def test_inline_file_bytes_and_metadata_survive_json_reader(tmp_path, specification, payload):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
         "worker": [
             {
-                "path": "bundle",
-                "format": "tar_gz",
-                "source": {"kind": "inline_binary", "content_base64": base64.b64encode(archive).decode("ascii")},
+                "path": "input.dat",
+                "source": {"kind": "inline_file", "content_base64": base64.b64encode(payload).decode("ascii")},
+                "mode": "0500",
+                "mtime_ns": 1_725_555_600_123_456_789,
             }
         ]
     }
     task = TaskSpec.model_validate(wire)
     path = tmp_path / "specification.json"
     path.write_text(task.model_dump_json())
-    assert read_specification(path) == task
-    wire["resources"]["worker"][0]["source"] = {"kind": "inline_text", "content": "archive text"}
-    path.write_text(json.dumps(wire))
-    with pytest.raises(ValidationError):
-        read_specification(path)
+    restored = read_specification(path).resources.worker[0]
+    assert isinstance(restored.source, InlineFile)
+    assert base64.b64decode(restored.source.content_base64) == payload
+    assert restored.mode == "0500"
+    assert restored.mtime_ns == 1_725_555_600_123_456_789

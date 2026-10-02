@@ -6,11 +6,13 @@ from tasktrove_verify.spec import (
     Compare,
     Constraint,
     ExactSpec,
+    FunctionCall,
     IfevalSpec,
     MathSpec,
     MathType,
     McqSpec,
     NumericSpec,
+    PredictedActionSpec,
     StdioSpec,
     parse_spec,
     render_spec,
@@ -20,6 +22,10 @@ from tasktrove_verify.spec import (
 def test_round_trip_every_field_kind():
     specs = [
         McqSpec(expected="C", options=5),
+        PredictedActionSpec(
+            expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
+            numeric_tolerance=0.01,
+        ),
         MathSpec(expected="(1, 2)", math_type=MathType.TUPLE),
         NumericSpec(expected=42.0, tolerance_abs=0.1, tolerance_rel=0.01),
         ExactSpec(expected=("a", "b"), ordered=False),

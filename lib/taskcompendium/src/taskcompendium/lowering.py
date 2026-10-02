@@ -12,15 +12,17 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from taskcompendium.models import SCHEMA_VERSION, TaskSpec, unsupported_direct_chat_features
+from taskcompendium.direct_chat import unsupported_direct_chat_features
+from taskcompendium.grading import supports_verifier, validate_verifier
+from taskcompendium.models import SCHEMA_VERSION, TaskSpec
 from taskcompendium.submission import (
     AnswerFormat,
     FinalAction,
+    Submission,
     SubmissionConvention,
     render_instruction,
     submission_compatible,
 )
-from taskcompendium.verifier_registry import VERIFIERS, validate_verifier
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"
@@ -47,7 +49,7 @@ class HarborEnvironmentConfig(BaseModel):
 class LoweringCandidate:
     """A compatible submission convention and Harbor environment configuration."""
 
-    convention: SubmissionConvention
+    convention: Submission
     environment_config: HarborEnvironmentConfig
 
 
@@ -61,11 +63,11 @@ class SelectionPolicy(StrEnum):
 
 def compatible_lowerings(
     specification: TaskSpec,
-    convention_library: Sequence[SubmissionConvention],
+    convention_library: Sequence[Submission],
     environment_configs: Sequence[HarborEnvironmentConfig],
 ) -> tuple[LoweringCandidate, ...]:
     """Enumerate conventions and environments that preserve this task's contract."""
-    if unsupported_direct_chat_features(specification) or specification.verifier.kind not in VERIFIERS:
+    if unsupported_direct_chat_features(specification) or not supports_verifier(specification.verifier):
         return ()
     return tuple(
         LoweringCandidate(convention, environment_config)
@@ -125,7 +127,7 @@ def read_environment_config(path: Path) -> HarborEnvironmentConfig:
     return HarborEnvironmentConfig.model_validate_json(path.read_text())
 
 
-def read_submission_convention(path: Path) -> SubmissionConvention:
+def read_submission_convention(path: Path) -> Submission:
     data = json.loads(path.read_text())
     if data["answer_format"] == AnswerFormat.FINAL_ACTION:
         return FinalAction.model_validate(data)
@@ -134,7 +136,7 @@ def read_submission_convention(path: Path) -> SubmissionConvention:
 
 def lower_to_harbor(
     specification: TaskSpec,
-    convention: SubmissionConvention,
+    convention: Submission,
     environment_config: HarborEnvironmentConfig,
     destination: Path,
 ) -> Path:

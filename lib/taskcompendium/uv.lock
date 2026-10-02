@@ -2013,9 +2013,6 @@ dependencies = [
 harbor = [
     { name = "harbor" },
 ]
-parquet = [
-    { name = "pyarrow" },
-]
 
 [package.dev-dependencies]
 test = [
@@ -2028,11 +2025,10 @@ test = [
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
     { name = "marin-rigging", editable = "../rigging" },
-    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=17" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tasktrove-verify", editable = "../tasktrove-verify" },
 ]
-provides-extras = ["harbor", "parquet"]
+provides-extras = ["harbor"]
 
 [package.metadata.requires-dev]
 test = [

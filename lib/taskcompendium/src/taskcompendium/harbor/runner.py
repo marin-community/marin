@@ -10,6 +10,7 @@ from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from pydantic import BaseModel, ConfigDict, Field
 
+from taskcompendium.grading import validate_verifier
 from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
@@ -21,7 +22,6 @@ from taskcompendium.lowering import (
     validate_environment_config,
 )
 from taskcompendium.submission import chat_request
-from taskcompendium.verifier_registry import validate_verifier
 
 DEFAULT_CHAT_TIMEOUT = 120
 

@@ -4,9 +4,10 @@
 import json
 from pathlib import Path
 
+import pytest
 from tasktrove_verify import grade as grade_module
 from tasktrove_verify.grade import Status, main, scored
-from tasktrove_verify.spec import Mode
+from tasktrove_verify.spec import FunctionCall, Mode, PredictedActionSpec, render_spec
 
 
 def _verdict(logs: Path) -> dict:
@@ -61,3 +62,25 @@ def test_unscored_rerun_removes_prior_harbor_reward_files(tmp_path, monkeypatch)
     assert _verdict(logs)["status"] == Status.INVALID_TASK
     assert not (logs / "reward.json").exists()
     assert not (logs / "reward.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "candidate,reward",
+    [
+        ('[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"value"}]}}]', 1.0),
+        ('[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"wrong"}]}}]', 0.0),
+        ("not json", 0.0),
+    ],
+)
+def test_predicted_action_file_grading_preserves_nested_json_from_toml(tmp_path, candidate, reward):
+    spec = PredictedActionSpec(
+        expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
+        output=str(tmp_path / "answer.json"),
+    )
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(spec))
+    (tmp_path / "answer.json").write_text(candidate)
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}

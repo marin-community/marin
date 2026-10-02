@@ -4,13 +4,13 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through a private verifier registry. The complete semantic schema also represents files, workspace state, arbitrary environment state, pinned images, initial workspaces, tool providers, and private resources. Their execution requires additional runtimes; direct chat rejects their requirements before export or launch.
+The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through the shared verifier library after extracting the submission. The complete semantic schema also represents files, workspace state, arbitrary environment state, pinned images, initial workspaces, tool providers, and private resources. Their execution requires additional runtimes; direct chat rejects their requirements before export or launch.
 
 ## What does it contain?
 
 - **Task specs** describe the source problem, the required capabilities, the kind of result, and how to verify it.
 - **Submission conventions** describe how to ask for and extract a result, such as a plain answer, a JSON object, or a final function call.
-- **Harbor environment configurations** describe the capabilities and tools exposed during execution. The only configuration in this slice is direct chat, which records submission calls but does not execute tools.
+- **Harbor environment configurations** describe the capabilities and tools exposed during execution. The only configuration in the current implementation is direct chat, which records submission calls but does not execute tools.
 - **Lowering tools** find compatible convention and environment configuration pairs, select a pair, and export a runnable Harbor task package.
 - **A Harbor adapter** runs the exported task against an OpenAI-compatible chat endpoint and records a grading result. Harbor acts as the harness: it orchestrates the model and environment after lowering.
 
@@ -35,12 +35,12 @@ flowchart LR
 | `id` | Stable identity for this task. |
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
-| `final_tools` | An ordered list of functions advertised at the decision point. These definitions do not bind functions to an implementation. |
+| `final_tools` | An ordered list of functions that terminate a chat. They are not backed by a tool provider. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
-| `schema_version` | Version of the serialized spec: `0.18`. Readers reject other versions. |
-| `resources` | Files, directories, and archives grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
+| `schema_version` | Version of the serialized spec: `0.19`. Readers reject other versions. |
+| `resources` | Copied files and directories grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
 A task has one final result. Ordered steps and reward aggregation are deferred.
@@ -107,26 +107,23 @@ Oracle resources are reserved for trusted reference-solution generation. Verifie
 
 The worker mount root is `environment_requirements.working_directory` when declared; otherwise the selected runtime supplies it. For example, a resource at `project` with a working directory of `/app` appears at `/app/project`. Worker mounts are established before setup commands run in that working directory. Oracle and verifier mounts use separate private roots supplied by their runtimes.
 
-Each `TaskResource` declares one mount with these fields:
+Each `TaskResource` copies one file or directory, with these fields:
 
 | Field | Meaning |
 | --- | --- |
 | `path` | Normalized relative destination under each receiving role's runtime-owned workspace root. |
 | `source` | One discriminated content source from the table below. |
-| `format` | `copy` (default) installs literal bytes or copies a referenced file or directory at `path`; `tar_gz` explicitly extracts a gzip-compressed tar archive into the directory at `path`. |
-| `mode` | Optional Unix permission mode as a three- or four-digit octal string, such as `0644` or `0755`. An explicit mode applies to the mounted file or root directory. Omission preserves dataset permissions; inline files default to `0644`, and archive target directories default to `0755`. |
+| `mode` | Optional Unix permission mode as a three- or four-digit octal string, such as `0644` or `0755`. An explicit mode applies to the mounted file or root directory. Omission preserves dataset permissions; inline files default to `0644`. |
+| `mtime_ns` | Optional integer Unix modification timestamp in nanoseconds for the mounted file or root directory. Omission preserves dataset timestamps; inline files have no declared timestamp. |
 
 | Source `kind` | Fields |
 | --- | --- |
-| `inline_text` | `content`: literal UTF-8 text. |
-| `inline_binary` | `content_base64`: canonical base64 for binary bytes. |
-| `dataset_path` | `path`: normalized relative file or directory path vendored in the containing TaskCompendium dataset; `sha256`: optional lowercase SHA256 digest of regular-file bytes. |
+| `inline_file` | `content_base64`: canonical base64 for the exact file bytes, including UTF-8 text. |
+| `dataset_path` | `path`: normalized relative file or directory path vendored in the containing TaskCompendium dataset. |
 
-Dataset paths are relative to the containing TaskCompendium dataset from which the spec is read. `TaskSpec.source` records upstream audit provenance and does not resolve resource paths. A future trusted reader or materializer must receive an explicit containing-dataset root and pinned snapshot; it must not fetch the original upstream source or infer this root from the process working directory or an exported Harbor package's parent. Paths cannot name an arbitrary URI or request a network fetch. Paths also reject trailing dots or spaces and colons in any component to avoid aliases on portable filesystems. Schema decoding performs no filesystem inspection or I/O. An optional `sha256` adds a regular-file byte integrity check; when supplied, a materializer must require a regular file and verify its digest. There is no directory hash.
+Dataset paths are relative to the containing TaskCompendium dataset from which the spec is read. `TaskSpec.source` records upstream audit provenance and does not resolve resource paths. A future trusted reader or materializer must receive an explicit containing-dataset root and pinned snapshot; it must not fetch the original upstream source or infer this root from the process working directory or an exported Harbor package's parent. Paths cannot name an arbitrary URI or request a network fetch. Paths also reject trailing dots or spaces and colons in any component to avoid aliases on portable filesystems. Schema decoding performs no filesystem inspection or I/O.
 
-`tar_gz` rejects inline text at schema loading. It requires regular archive-file bytes and explicit extraction; it never accepts a directory or extracts an archive merely because its filename has an archive extension. The resolved source type determines `copy` behavior.
-
-Copying a directory includes the complete recursive subtree and preserves empty directories and member permissions. Archive extraction also preserves member permissions. A mount's explicit `mode` changes only its mounted file or root directory. When a member is represented by its own mount instead of mounting the containing directory, it can declare its own mode. A task need not enumerate every source file or declare the path's type. Before writing any resource, a materializer must reject moving or unresolved snapshots, unsupported or unsafe entry types, and digest mismatches.
+A directory materializer must copy the complete recursive subtree, including empty directories, and preserve member permissions and modification times. A mount's explicit `mode` and `mtime_ns` change only its mounted file or root directory. A member represented by its own mount can declare its own metadata. Archive files are copied as file bytes; they are never extracted during resource mounting. A task need not enumerate every source file or declare the path's type. Before writing any resource, a materializer must reject moving or unresolved snapshots and unsupported or unsafe entry types.
 
 For a spec read from a pinned TaskCompendium dataset snapshot, grouped resources can contain:
 
@@ -134,13 +131,18 @@ For a spec read from a pinned TaskCompendium dataset snapshot, grouped resources
 {
   "resources": {
     "all": [
-      {"path": "README.txt", "source": {"kind": "inline_text", "content": "Use the supplied project."}}
+      {
+        "path": "README.txt",
+        "source": {"kind": "inline_file", "content_base64": "VXNlIHRoZSBzdXBwbGllZCBwcm9qZWN0Lg=="},
+        "mode": "0444",
+        "mtime_ns": 1725555600000000000
+      }
     ],
     "worker": [
       {"path": "project", "source": {"kind": "dataset_path", "path": "tasks/example/project"}}
     ],
     "oracle": [
-      {"path": "answer.txt", "source": {"kind": "inline_text", "content": "private reference"}}
+      {"path": "answer.txt", "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSByZWZlcmVuY2U="}}
     ],
     "verifier": [
       {"path": "checks", "source": {"kind": "dataset_path", "path": "tasks/example/checks"}}
@@ -149,7 +151,7 @@ For a spec read from a pinned TaskCompendium dataset snapshot, grouped resources
 }
 ```
 
-Archive and directory runtimes must reject traversal, absolute paths, links, special files, and collisions, and enforce byte limits. The schema represents mounts and archive extraction, but no dataset resolver, archive extractor, or resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
+Directory materializers must reject traversal, absolute paths, links, special files, and collisions, and enforce byte limits. These are resource copy requirements; no dataset resolver or resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
 
 ## What can we import?
 
@@ -165,13 +167,15 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 ## What is a verifier?
 
-Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The verifier uses the submission convention to extract and grade a candidate answer. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
+Each spec selects a private verifier and stores its configuration in `VerifierSpec`. TaskCompendium uses the submission convention to extract a candidate answer; the selected verifier grades it. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
-`VerifierSpec.kind` is an open nonempty string. Its private typed `environment_requirements` defaults to empty and declares the capabilities, image, and workspace needed by the verifier. The harness owns these requirements. `parameters_json` is an opaque private JSON object owned by the shared scorer (`verifyit` / `tasktrove-verify`); the harness must not extract structural environment fields such as an image from it.
+`VerifierSpec.kind` is an open nonempty string. Its private typed `environment_requirements` defaults to empty and declares the capabilities, image, and workspace needed by the verifier. The harness owns these requirements. `parameters_json` is an opaque private JSON object owned by the shared verifier library (`tasktrove-verify`); the harness must not extract structural environment fields such as an image from it.
 
 `verifier` grades one acquired answer. Comparative scoring across several attempts, cohort membership, and grading phase belong to the trainer. The ordinary per-attempt grader can score an already acquired answer regardless of worker workspace requirements.
 
-Schema loading accepts descriptors without a grader implementation. Registry resolution, export, and launch validate executable configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, paths referencing `TaskSpec.resources`, or rubrics in `parameters_json`. These graders have no implementation in this package. Direct chat rejects nonempty verifier environment requirements before export or launch, including for its implemented pure graders.
+Schema loading accepts descriptors without a grader implementation. Shared verifier validation, export, and launch validate executable configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, paths referencing `TaskSpec.resources`, or rubrics in `parameters_json`. These graders have no implementation in this package. Direct chat rejects nonempty verifier environment requirements before export or launch, including for its implemented pure graders.
+
+Standard verifier contracts and pure candidate scoring live in `tasktrove-verify`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. TaskCompendium extracts submission evidence and translates shared rewards into Harbor outcomes; it has no verifier registry or separate standard verifier schema.
 
 The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` is a schema descriptor without an implementation in this package. The expected answer and grading settings stay out of the model-visible instruction.
 
@@ -179,11 +183,11 @@ The implemented canonical kinds are `exact` for normalized text, `numeric` for n
 
 A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with a Harbor environment configuration, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the environment configuration says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
 
-`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no worker or verifier environment capabilities, images, workspace initialization, tool providers, or resources; a task requiring `shell` has no candidate in this slice. File, workspace-state, arbitrary-state, and unimplemented-verifier tasks also have no direct-chat candidate. Export and launch raise `NotImplementedError` for these requirements before producing artifacts or requesting a model response. Chat request construction also rejects unsupported environment and resource requirements. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
+`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no worker or verifier environment capabilities, images, workspace initialization, tool providers, or resources; a task requiring `shell` has no candidate in the current implementation. File, workspace-state, arbitrary-state, and unimplemented-verifier tasks also have no direct-chat candidate. Export and launch raise `NotImplementedError` for these requirements before producing artifacts or requesting a model response. Chat request construction also rejects unsupported environment and resource requirements. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
 Submission conventions preserve the task’s advertised functions. Plain-text and JSON submissions keep those functions; the `answer_call` convention adds `submit_answer` and requires one call with an answer string. An existing function named `submit_answer` conflicts with that convention and is rejected. `FinalAction(require_call=True)` requests a call, and `FinalAction(max_calls=1)` disables parallel calls. Before scoring, the grading boundary rejects missing required calls or calls exceeding `max_calls` as `extraction_error` with no reward. Direct chat captures the final assistant turn without executing advertised functions.
 
-An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="shellsim"` to `select_lowerings`; it keeps only ShellSim candidates and raises if none are compatible. A `shell` capability requests an operation, while ShellSim names a concrete execution choice. This initial slice offers only direct chat, so a ShellSim request fails rather than falling back to chat. The selected environment configuration is recorded in the exported Harbor package.
+An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="shellsim"` to `select_lowerings`; it keeps only ShellSim candidates and raises if none are compatible. A `shell` capability requests an operation, while ShellSim names a concrete execution choice. The current implementation offers only direct chat, so a ShellSim request fails rather than falling back to chat. The selected environment configuration is recorded in the exported Harbor package.
 
 ```python
 from pathlib import Path
@@ -217,9 +221,13 @@ chosen = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=1234)[0]
 lower_to_harbor(spec, chosen.convention, chosen.environment_config, Path("/tmp/arithmetic-task"))
 ```
 
-## Parquet transport
+## Dataset conversion
 
-Install the `parquet` extra to use `taskcompendium.parquet.write_tasks(path, tasks)` and `read_tasks(path)`. They write and stream schema-valid TaskSpecs through the existing single `task_spec` JSON column in bounded batches. Schema transport preserves private verifier descriptors, group verifiers, and resources without requiring implemented graders or execution environments. Export and launch validate runtime support separately. StoragePath I/O occurs only when these transport functions are called; schema loading does not resolve dataset resources.
+TaskSpec defines the serialized task contract. Dataset conversion pipelines own
+storage layout and streaming I/O, using Zephyr for Parquet processing. The
+TaskCompendium package has no Parquet reader or writer. JSON decoding preserves
+valid unsupported requirements; export and launch validate runtime support
+separately.
 
 ## How does Harbor run it?
 
@@ -245,7 +253,7 @@ result = asyncio.run(
 
 Each direct-chat Harbor trial runs one `ChatAgent` using the exported submission convention. The lowering prepares the conversation and tool configuration; the agent makes one request, validates the chat protocol, and writes a typed `ConversationTrace` to `submission.json`. This trace contains the complete model-visible conversation, including submission instructions and the final assistant message. Function-call arguments are decoded objects in both source context and grading evidence. The raw provider response is retained separately in `chat-response.json` for diagnostics.
 
-The direct-chat environment exposes no filesystem or shell tools. The custom verifier reads the typed trace and passes the submission convention, conversation events, and Harbor environment handle through `GradingAttempt` to the synchronous `verifier.grade(attempt)`. Text and numeric verifiers extract an answer using the convention; the predicted-action verifier compares the final assistant turn. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
+The direct-chat environment exposes no filesystem or shell tools. The custom verifier reads the typed trace and passes the submission convention, conversation events, and Harbor environment handle to the synchronous `grade_answer` submission adapter. Text and numeric verifiers extract an answer using the convention; the predicted-action verifier compares the final assistant turn. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
 
 A valid but wrong answer receives reward `0.0`. A text, numeric, or final-action answer that violates its submission convention receives `extraction_error` with no reward. A native-action submission that satisfies its convention but differs from the expected function calls receives reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
 
@@ -256,7 +264,7 @@ TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for shared 
 Run the package tests from the repository root:
 
 ```bash
-uv run --project lib/taskcompendium --extra harbor --extra parquet --group test pytest lib/taskcompendium/tests -q
+uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskcompendium/tests -q
 
 # Type-check the package from its own project directory after installing its dependencies.
 cd lib/taskcompendium

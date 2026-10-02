@@ -152,6 +152,7 @@ Grader = Callable[[Any, Path, Path], Reward]
 # reasoning-gym, openai) that only the images needing that mode install. A missing extra
 # surfaces as an ImportError from the grader, which the CLI records as infra_error.
 MODE_MODULES: dict[Mode, str] = {
+    Mode.PREDICTED_ACTION: "grade_predicted_action",
     Mode.MCQ: "grade_mcq",
     Mode.MATH: "grade_math",
     Mode.NUMERIC: "grade_math",

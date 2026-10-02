@@ -3,12 +3,15 @@
 
 """The verifier contract: ``tests/verifier.toml`` is one flat table, ``mode`` plus that mode's fields.
 
+Predicted-action call arguments use JSON strings in TOML to preserve JSON null and nested values.
+
 Every mode is a frozen dataclass here. ``parse_spec`` builds one from TOML text and rejects unknown
 or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, ``cases``,
 ``special_judge``, ``restore``, ``path``) are relative to the directory holding ``verifier.toml``.
 """
 
 import dataclasses
+import json
 import tomllib
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
@@ -21,6 +24,7 @@ DEFAULT_WORKSPACE = "/app"
 
 
 class Mode(StrEnum):
+    PREDICTED_ACTION = "predicted_action"
     MCQ = "mcq"
     MATH = "math"
     NUMERIC = "numeric"
@@ -57,6 +61,21 @@ class Compare(StrEnum):
     EXACT = "exact"
     TOKENS = "tokens"
     FLOAT = "float"
+
+
+@dataclass(frozen=True)
+class FunctionCall:
+    """A function name and decoded JSON argument object, without a harness call ID."""
+
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PredictedActionSpec:
+    expected_calls: tuple[FunctionCall, ...]
+    numeric_tolerance: float | None = None
+    output: str = DEFAULT_OUTPUT
 
 
 @dataclass(frozen=True)
@@ -232,7 +251,8 @@ class ScriptSpec:
 
 
 Spec = (
-    McqSpec
+    PredictedActionSpec
+    | McqSpec
     | MathSpec
     | NumericSpec
     | ExactSpec
@@ -250,6 +270,7 @@ Spec = (
 )
 
 SPEC_TYPES: dict[Mode, type] = {
+    Mode.PREDICTED_ACTION: PredictedActionSpec,
     Mode.MCQ: McqSpec,
     Mode.MATH: MathSpec,
     Mode.NUMERIC: NumericSpec,
@@ -274,18 +295,35 @@ def mode_of(spec: Spec) -> Mode:
 
 
 def _coerce(name: str, annotation: Any, value: Any) -> Any:
+    if annotation == tuple[FunctionCall, ...]:
+        if not isinstance(value, list):
+            raise ValueError(f"field {name!r} expects a list of function calls")
+        calls = []
+        for call in value:
+            if not isinstance(call, dict) or set(call) != {"name", "arguments"}:
+                raise ValueError("function calls require name and arguments")
+            calls.append(FunctionCall(name=call["name"], arguments=call["arguments"]))
+        return tuple(calls)
     if annotation in (tuple[str, ...],):
         if isinstance(value, str):
             return (value,)
-        return tuple(str(v) for v in value)
+        if not isinstance(value, (list, tuple)) or any(not isinstance(v, str) for v in value):
+            raise ValueError(f"field {name!r} expects strings")
+        return tuple(value)
     if annotation == tuple[Constraint, ...]:
         return tuple(Constraint(name=c["name"], params=dict(c.get("params", {}))) for c in value)
     if isinstance(annotation, type) and issubclass(annotation, StrEnum):
         return annotation(value)
-    if annotation is float and isinstance(value, int):
+    if annotation is float and type(value) is int:
         return float(value)
     if annotation == (str | None):
         return value
+    if annotation == (float | None):
+        if value is not None and type(value) not in (int, float):
+            raise ValueError(f"field {name!r} expects a number or null")
+        return float(value) if value is not None else None
+    if annotation is int and type(value) is not int:
+        raise ValueError(f"field {name!r} expects an integer")
     if isinstance(annotation, type) and not isinstance(value, annotation):
         raise ValueError(f"field {name!r} expects {annotation.__name__}, got {type(value).__name__}")
     return value
@@ -313,7 +351,12 @@ def spec_from_table(table: dict[str, Any]) -> Spec:
 
 
 def parse_spec(text: str) -> Spec:
-    return spec_from_table(tomllib.loads(text))
+    table = tomllib.loads(text)
+    if table.get("mode") == Mode.PREDICTED_ACTION:
+        for call in table.get("expected_calls", []):
+            if isinstance(call, dict) and isinstance(call.get("arguments"), str):
+                call["arguments"] = json.loads(call["arguments"])
+    return spec_from_table(table)
 
 
 def spec_to_table(spec: Spec) -> dict[str, Any]:
@@ -332,4 +375,9 @@ def spec_to_table(spec: Spec) -> dict[str, Any]:
 
 
 def render_spec(spec: Spec) -> str:
-    return tomlkit.dumps(spec_to_table(spec))
+    table = spec_to_table(spec)
+    if isinstance(spec, PredictedActionSpec):
+        table["expected_calls"] = [
+            {"name": call.name, "arguments": json.dumps(call.arguments, allow_nan=False)} for call in spec.expected_calls
+        ]
+    return tomlkit.dumps(table)

@@ -6,7 +6,6 @@
 import base64
 import binascii
 import json
-from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
 from pathlib import PurePosixPath
@@ -15,8 +14,7 @@ from typing import Annotated, Literal, NoReturn
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 
-SCHEMA_VERSION = "0.18"
-SHA256_PATTERN = r"^[0-9a-f]{64}$"
+SCHEMA_VERSION = "0.19"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
@@ -29,16 +27,6 @@ class AnswerType(StrEnum):
     STATE = "state"
     WORKSPACE_STATE = "workspace_state"
     NATIVE_ACTION = "native_action"
-
-
-class VerifierKind(StrEnum):
-    """Canonical names of private grader contracts."""
-
-    EXACT_ANSWER = "exact"
-    STRUCTURED_EXACT = "structured_exact"
-    PREDICTED_ACTION = "predicted_action"
-    NUMERIC_ANSWER = "numeric"
-    MCQ_ANSWER = "mcq"
 
 
 class Source(BaseModel):
@@ -76,19 +64,6 @@ class FunctionCall(BaseModel):
 
     name: str = Field(min_length=1)
     arguments: dict[str, JsonValue]
-
-
-@dataclass(frozen=True)
-class ToolCallComparatorConfig:
-    numeric_tolerance: float | None = None
-
-    def __post_init__(self) -> None:
-        if self.numeric_tolerance is not None and (
-            isinstance(self.numeric_tolerance, bool)
-            or not isfinite(self.numeric_tolerance)
-            or self.numeric_tolerance < 0
-        ):
-            raise ValueError("Numeric tolerance must be finite and nonnegative")
 
 
 class FunctionDefinition(BaseModel):
@@ -232,27 +207,12 @@ class ConversationTrace(BaseModel):
         return self
 
 
-class InlineText(BaseModel):
-    """Literal UTF-8 resource content."""
+class InlineFile(BaseModel):
+    """File bytes encoded as canonical base64, including UTF-8 text files."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    kind: Literal["inline_text"] = "inline_text"
-    content: str
-
-    @field_validator("content")
-    @classmethod
-    def validate_utf8(cls, value: str) -> str:
-        value.encode("utf-8")
-        return value
-
-
-class InlineBinary(BaseModel):
-    """Binary resource content encoded as canonical base64."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["inline_binary"] = "inline_binary"
+    kind: Literal["inline_file"] = "inline_file"
     content_base64: str
 
     @field_validator("content_base64")
@@ -278,7 +238,6 @@ class DatasetPath(BaseModel):
 
     kind: Literal["dataset_path"] = "dataset_path"
     path: str
-    sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
 
     @field_validator("path")
     @classmethod
@@ -287,30 +246,24 @@ class DatasetPath(BaseModel):
         return value
 
 
-ResourceSource = Annotated[InlineText | InlineBinary | DatasetPath, Field(discriminator="kind")]
-
-
-class ResourceFormat(StrEnum):
-    COPY = "copy"
-    TAR_GZ = "tar_gz"
+ResourceSource = Annotated[InlineFile | DatasetPath, Field(discriminator="kind")]
 
 
 class TaskResource(BaseModel):
-    """One copied source or archive extraction in a role's workspace."""
+    """One file or directory copied into a role's workspace."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: str
     source: ResourceSource
-    format: ResourceFormat = ResourceFormat.COPY
     mode: str | None = Field(default=None, pattern=r"^[0-7]{3,4}$")
+    mtime_ns: int | None = Field(default=None, strict=True)
 
-    @model_validator(mode="after")
-    def validate_resource(self) -> "TaskResource":
-        validate_relative_file_path(self.path)
-        if self.format == ResourceFormat.TAR_GZ and isinstance(self.source, InlineText):
-            raise ValueError("tar_gz resources require binary archive bytes or a dataset path")
-        return self
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        validate_relative_file_path(value)
+        return value
 
 
 class ResourceGroups(BaseModel):
@@ -346,12 +299,11 @@ class ProviderRequirement(BaseModel):
 
 
 def validate_workspace_path(path: str) -> PurePosixPath:
-    """Require a normalized absolute POSIX workspace path."""
-    if not path.startswith("/"):
+    """Require an absolute POSIX workspace path interpreted by the runtime."""
+    workspace = PurePosixPath(path)
+    if not workspace.is_absolute():
         raise ValueError(f"Workspace path must be absolute: {path!r}")
-    if path != "/":
-        validate_relative_file_path(path[1:])
-    return PurePosixPath(path)
+    return workspace
 
 
 class EnvironmentRequirements(BaseModel):
@@ -430,28 +382,3 @@ class TaskSpec(BaseModel):
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:
             raise ValueError("Native-action tasks require advertised functions")
         return self
-
-
-def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]:
-    """List semantic requirements the direct-chat runtime cannot preserve."""
-    requirements = specification.environment_requirements
-    features = [
-        name
-        for name, value in (
-            ("capabilities", requirements.capabilities),
-            ("docker_image", requirements.docker_image),
-            ("working_directory", requirements.working_directory),
-            ("setup_commands", requirements.setup_commands),
-            ("environment_variables", requirements.environment_variables),
-            ("tool_providers", requirements.tool_providers),
-        )
-        if value
-    ]
-    if specification.verifier.environment_requirements != EnvironmentRequirements():
-        features.append("verifier.environment_requirements")
-    resources = specification.resources
-    if resources.all or resources.worker or resources.oracle or resources.verifier:
-        features.append("resources")
-    if specification.answer_type in {AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE}:
-        features.append(specification.answer_type.value)
-    return tuple(features)

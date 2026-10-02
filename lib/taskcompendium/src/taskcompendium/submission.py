@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -17,7 +18,6 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     format_conversation,
-    unsupported_direct_chat_features,
 )
 
 ANSWER_CALL_NAME = "submit_answer"
@@ -50,7 +50,7 @@ class AnswerFormat(StrEnum):
     FINAL_ACTION = "final_action"
 
 
-class SubmissionConvention(BaseModel):
+class _SubmissionConvention(BaseModel):
     """How a result is requested, delivered, and extracted."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -59,7 +59,7 @@ class SubmissionConvention(BaseModel):
     answer_format: AnswerFormat
 
     @model_validator(mode="after")
-    def validate_convention(self) -> "SubmissionConvention":
+    def validate_convention(self) -> "_SubmissionConvention":
         if not self.id:
             raise ValueError("A submission convention id is required")
         return self
@@ -71,7 +71,13 @@ class SubmissionConvention(BaseModel):
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
 
-class FinalAction(SubmissionConvention):
+class SubmissionConvention(_SubmissionConvention):
+    """Deliver a text or numeric answer through a selected chat envelope."""
+
+    answer_format: Literal[AnswerFormat.PLAIN, AnswerFormat.JSON, AnswerFormat.ANSWER_CALL]
+
+
+class FinalAction(_SubmissionConvention):
     """Capture the final assistant turn with explicit function-call limits."""
 
     answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
@@ -94,7 +100,10 @@ class FinalAction(SubmissionConvention):
             raise ValueError(f"Final action permits at most {self.max_calls} function calls")
 
 
-def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> bool:
+type Submission = SubmissionConvention | FinalAction
+
+
+def submission_compatible(specification: TaskSpec, convention: Submission) -> bool:
     if not convention.supports(specification.answer_type):
         return False
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
@@ -104,7 +113,7 @@ def submission_compatible(specification: TaskSpec, convention: SubmissionConvent
     return True
 
 
-def submission_instruction(convention: SubmissionConvention) -> str:
+def submission_instruction(convention: Submission) -> str:
     """Return the instruction added after a conversation prefix."""
     if convention.answer_format == AnswerFormat.PLAIN:
         return "Give your answer as plain text."
@@ -117,7 +126,7 @@ def submission_instruction(convention: SubmissionConvention) -> str:
     raise ValueError(f"Unsupported answer format: {convention.answer_format}")
 
 
-def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
+def render_instruction(specification: TaskSpec, convention: Submission) -> str:
     """Return Harbor instruction text for the selected convention."""
     context = specification.context
     if not submission_compatible(specification, convention):
@@ -158,7 +167,7 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
     return messages
 
 
-def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
+def chat_request(specification: TaskSpec, convention: Submission) -> dict[str, Any]:
     """Prepare the conversation and tools for the selected submission convention."""
     unsupported = unsupported_direct_chat_features(specification)
     if unsupported:
@@ -188,7 +197,7 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     return request
 
 
-def extract_answer(response: ConversationEvent, convention: SubmissionConvention) -> str:
+def extract_answer(response: ConversationEvent, convention: Submission) -> str:
     """Extract semantic answer content from a typed assistant turn."""
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         if (
