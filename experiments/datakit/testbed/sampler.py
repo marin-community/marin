@@ -43,7 +43,7 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.transfer import copy_plan, execute_copy_plan
+from rigging.filesystem.transfer import copy_plan, execute_copy_plan
 
 from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 

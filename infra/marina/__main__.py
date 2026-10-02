@@ -59,7 +59,6 @@ HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
 APPLET_HOST = "applets.marina.oa.dev"
 PUBLIC_APPLET_HOST = "public.applets.marina.oa.dev"
-APPLET_HOSTS = {"zephyr.marina.oa.dev": "6c2b0dc9-9a31-4777-82d4-e759c0292aa3"}
 GRANTS_SCRIPT = Path(__file__).parent / "database_grants.py"
 APPS_DIR = Path(__file__).parent / "apps"
 DATABASE_SETUP_SCRIPT = Path(__file__).parent / "src" / "marina" / "database_setup.py"
@@ -259,7 +258,6 @@ def main() -> None:
                 "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
                 "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
-                "MARINA_APPLET_HOSTS": ",".join(f"{host}={applet_id}" for host, applet_id in APPLET_HOSTS.items()),
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
                 "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
                 **DATABASE_ENV,
@@ -289,7 +287,8 @@ def main() -> None:
         ingress="INGRESS_TRAFFIC_ALL",
         iap_enabled=False,
         deletion_protection=False,
-        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=0, max_instance_count=4),
+        # Public applet navigation otherwise waits for the whole Marina image to cold start.
+        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=1, max_instance_count=4),
         template=gcp.cloudrunv2.ServiceTemplateArgs(
             service_account=SERVICE_ACCOUNT,
             timeout="60s",
@@ -366,7 +365,6 @@ def main() -> None:
             APPLET_HOST: (SERVICE, service),
             PUBLIC_APPLET_HOST: (PUBLIC_APPLET_SERVICE, public_applet_service),
             **{host: (SERVICE, service) for host in HOST_APPS},
-            **{host: (SERVICE, service) for host in APPLET_HOSTS},
         }
         for host, (route_name, route_service) in hosts.items():
             slug = host.split(".")[0]

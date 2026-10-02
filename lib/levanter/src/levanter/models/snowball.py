@@ -755,7 +755,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return hax.named(hidden, out_axes)
 
     def get_lm_head(self) -> NamedArray:
-        return hax.named(self.transformer.output_proj, (self.Embed, self.Vocab))
+        return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "SnowballLMHeadModel":
         old = self._config.vocab_size

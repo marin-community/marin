@@ -125,7 +125,7 @@ def test_stitch_dashboard_resolves_shared_variables_into_independent_copies():
     run["query"]["infinityQuery"]["url_options"]["params"].clear()
     again, _ = stitch_dashboard(source, {})["templating"]["list"]
     (sql,) = [p["value"] for p in again["query"]["infinityQuery"]["url_options"]["params"] if p["key"] == "sql"]
-    assert "training_loop" in sql
+    assert "training_type" in sql
     with pytest.raises(KeyError, match="missing"):
         stitch_dashboard({"panels": [], "templating": {"list": [{"variableRef": "missing"}]}}, {})
 

@@ -6036,7 +6036,7 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2024" },
     { name = "scikit-learn", marker = "extra == 'datakit'" },
     { name = "scipy", marker = "extra == 'datakit'" },
-    { name = "shellsim", specifier = ">=0.1.10" },
+    { name = "shellsim", specifier = ">=0.1.20" },
     { name = "tokenizers" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "marin-core", extra = "gpu" } },
     { name = "torch", marker = "sys_platform != 'linux' and extra == 'gpu'", specifier = "==2.11.0" },
@@ -7036,6 +7036,7 @@ dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
+    { name = "msgspec" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
@@ -7087,6 +7088,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
     { name = "google-cloud-secret-manager", marker = "extra == 'secrets'", specifier = ">=2.16.0" },
+    { name = "msgspec", specifier = ">=0.20.0" },
     { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = ">=0.24" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -11290,15 +11292,15 @@ wheels = [
 
 [[package]]
 name = "shellsim"
-version = "0.1.10"
+version = "0.1.20"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b6/c4/7e4e705539c6e732ad547f5ecf30e852c349eadd59d7f59365cbb23cd095/shellsim-0.1.10.tar.gz", hash = "sha256:cea36bf9b3953961b6e1148a9060f9d73da89264c38e288e1577a1bc7f860e8d", size = 650934, upload-time = "2026-09-22T02:28:39.046Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/8d/e0c8cc07b07eb54d67e0bc5f3b8cf9e013bfffe86102344f520eaa25e09a/shellsim-0.1.20.tar.gz", hash = "sha256:a295b4035c6155d060c33436bc5a309634fb79faac896693f78d37f4cc0bd392", size = 838982, upload-time = "2026-09-26T19:29:57.668Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/b9/da4fa191c4f4344131fd225c2fab345fbdc5d8f622e2703074d19d834e6f/shellsim-0.1.10-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6da09736430532ecd84cab08ecf3c14391bb5f44822a8cace2f2d41a4a27af6e", size = 2204575, upload-time = "2026-09-22T02:28:31.241Z" },
-    { url = "https://files.pythonhosted.org/packages/26/37/b436342857d51024e630ce89388b2f9a873368e7b0158482826fdba708ab/shellsim-0.1.10-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:80a8957f598a6e68527ecb19913bc4a6610e6ec023270b5ec86fac8fd1ba79e8", size = 2121863, upload-time = "2026-09-22T02:28:32.857Z" },
-    { url = "https://files.pythonhosted.org/packages/24/aa/deb999dd016535bc3fd5ceb743d810d54d60ca96301c7cbe50c4914d2da8/shellsim-0.1.10-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:d3276192fd7f0f4db866437bbc254b6e93917f49fd68c164f94ba89bce912a8c", size = 2362445, upload-time = "2026-09-22T02:28:34.398Z" },
-    { url = "https://files.pythonhosted.org/packages/57/63/141d63deddfa433babd92941752dfd5590350698746a80e3a1ff3c6a2094/shellsim-0.1.10-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:a26537c7e297db9d82190ef777c8bfa67e2826d78d732f58d07aebc97e7f1c6b", size = 2387878, upload-time = "2026-09-22T02:28:35.78Z" },
-    { url = "https://files.pythonhosted.org/packages/57/7f/5cf18bd0243391c128a88eb3b1cc5eb4c725925ff48b27758c08f30f3057/shellsim-0.1.10-cp39-abi3-win_amd64.whl", hash = "sha256:218aa7f0117c0ae841df8dca22a7af78374e971522904e8cd722c65ef63316d6", size = 2292300, upload-time = "2026-09-22T02:28:37.377Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/aa/57eeec60c07d4c7dbe162630d22044fdeb0ebf459257c4868d05631703d8/shellsim-0.1.20-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6b2a4bc24f614465b02643e89450029dc6a06e459e03f4348e2c1507a58ccab6", size = 4639580, upload-time = "2026-09-26T19:29:49.063Z" },
+    { url = "https://files.pythonhosted.org/packages/57/5f/243de4ae362ba43936f9cde8fb5f0d03e8ae32336e22553a91ec5cdaed6e/shellsim-0.1.20-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:5995d21579559a2ab6e7ad94b0a26509045ce8ab287ff18c34a76588a22147ec", size = 4230670, upload-time = "2026-09-26T19:29:50.849Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/84/6ad3a8e550d1362131984d12a317e97e277a09a63a0b83f7446ee073da46/shellsim-0.1.20-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e1b6cccb606deb1359d66dd8aee1ea65fc92ca51f70a61594308441f0848f6c5", size = 4734492, upload-time = "2026-09-26T19:29:52.732Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/68/75443d675750f89b36099d085a5d05263fd18f70c240f0e59e0835de0482/shellsim-0.1.20-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:fe551c681d6b5fd8c8162cf952d87137cccf2eb82a108310971867c5729b6910", size = 5008257, upload-time = "2026-09-26T19:29:54.426Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/6e/37dc6eb45c02dd134d0243f673b8525e8f8c127474546582d99e62781bc1/shellsim-0.1.20-cp39-abi3-win_amd64.whl", hash = "sha256:fbb84b700f5922c133a21f35dd3c3571130cc1350f68f19a5dbd6151d9b5b344", size = 4882468, upload-time = "2026-09-26T19:29:56.249Z" },
 ]
 
 [[package]]

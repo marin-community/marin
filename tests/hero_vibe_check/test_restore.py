@@ -70,6 +70,8 @@ def spec():
     ("wrapped", "master", "include_manifest"),
     [
         pytest.param(False, True, True, id="master-weights-with-manifest"),
+        pytest.param(False, True, False, id="master-weights-without-manifest"),
+        pytest.param(True, True, False, id="wrapped-master-weights-without-manifest"),
         pytest.param(True, False, False, id="wrapped-weights-without-manifest"),
     ],
 )

@@ -243,7 +243,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
             "/v1/vllm/overview": (5, sections["vllm"]),
         },
         "rl_sync_train_step.json": {"/v1/rl/train-step": (5, sections["rl_sync_train_step"])},
-        "async_rl.json": {"/v1/async-rl/overview": (48, sections["async_rl"])},
+        "async_rl.json": {"/v1/async-rl/overview": (47, sections["async_rl"])},
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
         "home.json": {

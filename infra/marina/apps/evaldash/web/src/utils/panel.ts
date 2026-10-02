@@ -1,4 +1,12 @@
-import { INTERVAL_KIND, type IntervalKind, type PanelCell, type PanelRow } from '@/types/api'
+import { INTERVAL_KIND, type IntervalKind, type Meta, type PanelCell, type PanelRow } from '@/types/api'
+
+export function cohortWarning(cohort: string, meta: Meta): string | null {
+  if (cohort === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (!meta.verified_cohorts.includes(cohort)) {
+    return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
+  }
+  return null
+}
 
 // The fleet best on one benchmark and the model that holds it — the rail caret and the panel column
 // marker. Ranked by the score, as the panel sorts; Compare is where an ordering claim is made and it

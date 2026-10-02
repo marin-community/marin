@@ -137,7 +137,7 @@ _RL_CLUSTER_VARIABLE = {
 }
 _RL_SYNC_RUN_SQL = (
     "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step'"
-    " AND COALESCE(json_get(resource_attributes_json, 'training_loop'), '') <> 'async'"
+    " AND COALESCE(json_get(resource_attributes_json, 'training_type'), '') <> 'async'"
     " AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring})"
     " AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)"
     " AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
