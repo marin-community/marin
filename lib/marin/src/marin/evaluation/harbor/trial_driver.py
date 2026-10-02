@@ -33,7 +33,7 @@ from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
-from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
+from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.harbor.agent_context import (
     MAX_INPUT_TOKENS_KEY,
@@ -332,7 +332,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
-            "jobs_dir": UPath(overlay.jobs_dir),
+            "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
             "agents": [agent],
             "datasets": [dataset],
             "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),

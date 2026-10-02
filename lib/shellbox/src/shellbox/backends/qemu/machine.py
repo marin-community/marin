@@ -208,6 +208,8 @@ class QemuMachine:
             *accelerator_args,
             "-m",
             f"{self.spec.memory_mb or 512}M",
+            "-smp",
+            str(self.spec.cpus or 1),
             "-nodefaults",
             "-no-reboot",
             "-display",
@@ -281,6 +283,8 @@ class QemuMachine:
     async def run(self, command: Command) -> Result:
         if not command.argv:
             raise ValueError("Command argv is empty")
+        if command.user not in (None, "0", "root"):
+            raise UnsupportedMachineSpec("QEMU does not provide separate execution users")
         if command.stdin:
             raise ValueError("QEMU serial protocol does not support command stdin")
         process = self.process
@@ -427,6 +431,8 @@ class QemuMachineFactory:
         self.policy = policy
 
     async def create(self, spec: MachineSpec) -> QemuMachine:
+        if spec.storage_mb is not None or spec.gpus:
+            raise UnsupportedMachineSpec("QEMU does not provide storage resizing or GPU allocation")
         if spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("QEMU guest networking is unsupported")
         if spec.memory_mb is not None and spec.memory_mb <= 0:

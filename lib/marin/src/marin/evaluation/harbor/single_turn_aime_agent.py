@@ -20,7 +20,7 @@ from typing import Any
 from harbor.agents.base import BaseAgent  # pyrefly: ignore[missing-import]
 from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.models.agent.context import AgentContext  # pyrefly: ignore[missing-import]
-from upath import UPath  # pyrefly: ignore[missing-import]
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +42,7 @@ def _request_with_retry(call: Callable[[], object], *, max_attempts: int, retry_
     """Call ``call``, retrying transient endpoint failures with capped exponential backoff.
 
     The backoff doubles each attempt with no jitter and is clamped to ``_MAX_RETRY_DELAY`` so a
-    disappearing endpoint cannot stall the smoke past its bounded budget. Inlined rather than pulled
-    from ``rigging`` so the agent imports cleanly in the isolated Harbor driver environment, which
-    does not install ``marin-rigging``.
+    disappearing endpoint cannot stall the smoke past its bounded budget.
     """
     for attempt in range(max_attempts):
         try:
@@ -138,7 +136,7 @@ class SingleTurnAimeAgent(BaseAgent):
 
     def __init__(
         self,
-        logs_dir: Path | UPath,
+        logs_dir: Path | StoragePath,
         model_name: str,
         api_base: str,
         answer_path: str,
@@ -188,7 +186,7 @@ class SingleTurnAimeAgent(BaseAgent):
             max_attempts=self._request_max_attempts,
             retry_initial=self._request_retry_initial,
         )
-        (self.logs_dir / _RESPONSE_LOG).write_text(content)
+        (StoragePath(str(self.logs_dir)) / _RESPONSE_LOG).write_text(content)
         answer = _aime_answer(content)
         command = f"printf '%s\\n' {shlex.quote(answer)} > {shlex.quote(self._answer_path)}"
         result = await environment.exec(command=command)
