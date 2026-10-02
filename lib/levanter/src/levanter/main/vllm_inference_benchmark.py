@@ -6,9 +6,11 @@
 import argparse
 import asyncio
 import dataclasses
+import hashlib
 import importlib.metadata
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -41,6 +43,32 @@ def main():
         raise ValueError("Disable prefix caching so repeated warmup prompts do not bypass prefill")
     engine_args["enable_prefix_caching"] = False
     setup_start = time.perf_counter()
+    if provenance.get("flashinfer_jit_cache_wheel"):
+        # FlashInfer is optional outside this explicit precompiled-cache benchmark.
+        from flashinfer.jit.fused_moe import (  # noqa: PLC0415  # pyrefly: ignore[missing-import]
+            gen_cutlass_fused_moe_sm100_module,
+        )
+
+        if os.environ.get("FLASHINFER_DISABLE_JIT") != "1":
+            raise ValueError("Precompiled-cache validation requires FLASHINFER_DISABLE_JIT=1")
+        if torch.cuda.get_device_capability() != (10, 0):
+            raise ValueError("This precompiled-cache gate targets the GB200 SM100 MoE module")
+        spec = gen_cutlass_fused_moe_sm100_module()
+        if not spec.is_aot:
+            raise ValueError(f"Cache wheel is missing {spec.name}: {spec.aot_path}")
+        spec.load(spec.aot_path)
+        with spec.aot_path.open("rb") as library:
+            library_digest = hashlib.file_digest(library, "sha256").hexdigest()
+        provenance["flashinfer_precompiled_module"] = {
+            "name": spec.name,
+            "path": str(spec.aot_path),
+            "sha256": library_digest,
+            "load_succeeded": True,
+            "jit_disabled": True,
+            "flashinfer_version": importlib.metadata.version("flashinfer-python"),
+            "cache_version": importlib.metadata.version("flashinfer-jit-cache"),
+        }
+        logger.info("Precompiled FlashInfer module: %s", json.dumps(provenance["flashinfer_precompiled_module"]))
     engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**engine_args))
     setup_elapsed = time.perf_counter() - setup_start
     batch_index = 0
