@@ -39,7 +39,12 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     CapacityDrops,
 )
-from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available, unwritten_buffer
+from levanter.grug._moe.sonic import (
+    sonic_gather_sum,
+    sonic_gather_sum_available,
+    sonic_scatter_rows,
+    unwritten_buffer,
+)
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
     _clip_receiver_group_sizes,
@@ -201,15 +206,18 @@ def _gather_dispatch_rows(
     accepted: Float[Array, "Tlocal K"],
     topk: int,
 ) -> Float[Array, "TK H"]:
-    """Build the expert-sorted dispatch buffer with one gather.
+    """Build the expert-sorted dispatch buffer, ``jnp.repeat(x_local, topk, axis=0)[sorted_indices]``.
 
-    Equivalent to ``jnp.repeat(x_local, topk, axis=0)[sorted_indices]`` without
-    materializing the repeated buffer or running a data-sized permute. The backward pass
-    is the transpose: each token sums the cotangent rows of its accepted sorted slots.
-    ``accepted`` is 1 for an assignment that reaches its expert and 0 otherwise. The
-    transport never reads the other slots, so their cotangent rows are unspecified.
+    ``accepted`` is 1 for an assignment that reaches its expert and 0 otherwise. The transport
+    reads only the accepted slots, so on GPU a kernel reads each token's row once and writes it to
+    its accepted slots alone, leaving the others unspecified; elsewhere one gather fills every
+    slot. The backward pass is the transpose: each token sums the cotangent rows of its accepted
+    sorted slots, and the transport never writes the other slots' cotangent rows.
     """
-    del accepted
+    if sonic_gather_sum_available():
+        tokens_per_shard = sorted_indices.shape[0] // topk
+        positions = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
+        return sonic_scatter_rows(x_local, positions, accepted != 0, rows=sorted_indices.shape[0])
     return x_local[sorted_indices // topk]
 
 
@@ -495,12 +503,23 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
     assignments = routing.sorted_indices.shape[0]
     hidden_dim = out_cotangent.shape[1]
     weights_f32 = weights.astype(jnp.float32)
+    positions = jnp.argsort(routing.sorted_indices)
     with jax.named_scope("combine"):
         # The combine's transpose: every accepted row's cotangent is its token's output cotangent
         # times its routing weight, rounded once, as the fused gather-sum's backward rounds it.
-        sorted_weights = weights_f32.reshape(-1)[routing.sorted_indices]
-        token_cotangent = out_cotangent[routing.sorted_indices // layout.topk].astype(jnp.float32)
-        returned_cotangent = (token_cotangent * sorted_weights[:, None]).astype(out_cotangent.dtype)  # [TK, H]
+        # The transport reads only the accepted rows.
+        if sonic_gather_sum_available():
+            returned_cotangent = sonic_scatter_rows(  # [TK, H]
+                out_cotangent,
+                positions.reshape(weights.shape),
+                routing.accepted,
+                rows=assignments,
+                weights=weights_f32,
+            )
+        else:
+            sorted_weights = weights_f32.reshape(-1)[routing.sorted_indices]
+            token_cotangent = out_cotangent[routing.sorted_indices // layout.topk].astype(jnp.float32)
+            returned_cotangent = (token_cotangent * sorted_weights[:, None]).astype(out_cotangent.dtype)
 
     dispatch_cotangent = _transport_buffer(
         assignments,
@@ -547,7 +566,6 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
 
     with jax.named_scope("combine"):
         if expert_side:
-            positions = jnp.argsort(routing.sorted_indices)
             assignment_output_dot = output_dot[:, 0][positions].reshape(weights.shape)
             # d/dw of w * <dout, y> is <dout, y> = <dy, y> / w. Dropped and padding assignments
             # carry no weight and get a zero gradient without the division.
