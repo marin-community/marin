@@ -686,7 +686,6 @@ class _ObservedSnowball(eqx.Module):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-@jax.default_matmul_precision("highest")
 def test_snowball_rollout_capture_matches_sampled_forward_through_abort(dtype):
     cfg = _tiny_config(num_layers=2, inference_attention_implementation="reference")
     recorded = []

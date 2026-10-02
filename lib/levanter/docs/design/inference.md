@@ -291,8 +291,9 @@ JSON records batch output throughput and mean time from first token to batch
 completion per remaining output token. This amortized measure includes host
 scheduling, synchronization, and extraction; it is not a distribution of device
 kernel or per-token latencies. Incomplete generations fail instead of producing
-a throughput number. The OpenAI server currently renders streaming events from
-a finished response, so its HTTP first event cannot measure native prefill time.
+a throughput number. Non-echo HTTP streaming emits token deltas after prefill
+and at host decode boundaries. Its first-token time also includes HTTP transport;
+echo-mode completions are buffered until the response finishes.
 
 ### Checkpoint-backed comparison
 
@@ -342,8 +343,8 @@ python -m levanter.main.vllm_inference_benchmark \
   --output /tmp/vllm-result.json
 ```
 
-This uses the public [LLMEngine step interface](https://docs.vllm.ai/en/v0.10.2/api/vllm/engine/llm_engine.html)
-and cumulative output token IDs. First-token observations include admission and
+This uses `AsyncLLM.generate` with concurrent requests and cumulative output
+token IDs. First-token observations include admission and
 scheduling. If vLLM admits requests across multiple prefills, its first-token
 and decode overlap differs from Levanter's single-prefill measurement. Compare
 end-to-end throughput with that scheduling difference recorded. The adapter
@@ -606,3 +607,30 @@ Hero remains unsupported by this pinned TPU fixture. The vLLM fork at
 accepts only schema v1. A Hero TPU baseline needs a cache-preserving short-conv
 bridge and full-model parity before timing; disabling short convolutions would
 change the model.
+
+### Speculative target prerequisite
+
+`levanter.inference.speculative.verify_snowball_proposals` verifies packed blocks
+containing one pending token followed by deterministic draft proposals. It runs
+Snowball's paged target once, accepts a prefix, and returns a target recovery or
+bonus token. Stochastic verification uses a one-hot draft distribution; target
+sampling supports temperature with top-p equal to one. Reported logprobs describe
+the target distribution before rejection sampling, in the selected raw or
+temperature-only processed reporting mode.
+
+The returned sequence lengths commit only the visible prefix. Callers must use
+those lengths for continuation: rejected KV entries remain in allocated pages
+but are masked and overwritten. Stop tokens, remaining generation budgets, and
+cancelled rows truncate both emitted tokens and auxiliary states. The recovery
+or bonus token remains pending until the next target call.
+
+`SnowballLMHeadModel.decode_with_auxiliary_states` captures selected residual
+boundaries for EAGLE: boundary zero follows embedding normalization and gating,
+and boundary `i` follows block `i`, before final normalization. Unique boundaries
+are concatenated in ascending order. Ordinary `decode` retains its existing scan
+without allocating auxiliary buffers.
+
+This is an opt-in target primitive. It does not load an EAGLE draft checkpoint,
+manage a draft cache, allocate or reclaim pages, refresh draft weights, or enable
+speculation in the serving scheduler. Full EAGLE serving and throughput parity
+remain separate work.
