@@ -53,6 +53,9 @@ def install_final_state_capture(model) -> None:
                 "projection_fp64": (hidden_cpu.double() @ weight.double().T).tolist(),
                 "head_weight_sha256": hashlib.sha256(weight.contiguous().numpy().tobytes()).hexdigest(),
                 "logits_dtype": str(output.dtype),
+                "hidden_dtype": str(hidden.dtype),
+                "weight_dtype": str(head.weight.dtype),
+                "head_dtype_override": None if module.head_dtype is None else str(module.head_dtype),
             }
         )
 
