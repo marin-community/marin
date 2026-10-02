@@ -827,7 +827,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return SnowballLMHeadModel(new_tf, new_cfg)
 
     def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:
-        """Allocate one paged KV cache per transformer layer."""
+        """Allocate paged KV state on a serving mesh with context parallelism disabled."""
+        if _context_axis() is not None:
+            raise ValueError("Snowball paged inference requires context_axis_size=1")
         cfg = self.config
         kv_heads, head_size = Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim)
         caches = []
