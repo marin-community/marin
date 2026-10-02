@@ -250,33 +250,6 @@ async def test_launch_rejects_schema_only_verifier_before_starting_a_trial(tmp_p
     assert not (tmp_path / "trials").exists()
 
 
-async def test_private_group_verifier_round_trips_but_direct_chat_cannot_run_cohort_grading(tmp_path, specification):
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
-    task_dir = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
-    wire = specification.model_dump(mode="json")
-    wire["group_verifier"] = {"kind": "cohort_grader", "parameters_json": '{"rubric":"private cohort rule"}'}
-    path = task_dir / "specification.json"
-    path.write_text(json.dumps(wire))
-    task = read_specification(path)
-    assert task.model_dump(mode="json")["group_verifier"]["parameters_json"] == '{"rubric":"private cohort rule"}'
-    assert compatible_lowerings(task, (convention,), (HarborEnvironmentConfig(),)) == ()
-    with pytest.raises(NotImplementedError):
-        lower_to_harbor(task, convention, HarborEnvironmentConfig(), tmp_path / "export")
-    assert not (tmp_path / "export").exists()
-    with pytest.raises(NotImplementedError):
-        await run_trial(
-            task_dir,
-            HarborEnvironmentConfig(),
-            ChatLaunch(model="unused", api_base="https://example.invalid"),
-            tmp_path / "trials",
-            "cohort",
-        )
-    assert not (tmp_path / "trials").exists()
-    conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
-    result = grade_answer(task, convention, conversation, object())
-    assert result.reward == 1.0
-
-
 @pytest.mark.parametrize(
     "base_path,alias", [("foo", "foo."), ("foo", "foo "), ("inputs/answer", "inputs/answer:backup")]
 )
@@ -315,7 +288,6 @@ def test_parquet_preserves_private_schema_contracts_before_unsupported_export_is
         "parameters_json": '{"entrypoint":"checks/grade.py"}',
         "environment_requirements": {"environment_variables": {"CHECK_MODE": "strict"}},
     }
-    wire["group_verifier"] = {"kind": "cohort_grader", "parameters_json": '{"rubric":"private"}'}
     wire["resources"] = {
         "worker": [{"path": "project", "source": {"kind": "dataset_path", "path": "vendored/project"}}],
         "verifier": [{"path": "checks", "source": {"kind": "dataset_path", "path": "vendored/checks"}}],

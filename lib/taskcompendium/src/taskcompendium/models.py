@@ -414,7 +414,6 @@ class TaskSpec(BaseModel):
     final_tools: tuple[FunctionDefinition, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
-    group_verifier: VerifierSpec | None = Field(default=None, repr=False)
     source: Source
     schema_version: str = SCHEMA_VERSION
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
@@ -450,8 +449,6 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
     ]
     if specification.verifier.environment_requirements != EnvironmentRequirements():
         features.append("verifier.environment_requirements")
-    if specification.group_verifier is not None:
-        features.append("group_verifier")
     resources = specification.resources
     if resources.all or resources.worker or resources.oracle or resources.verifier:
         features.append("resources")

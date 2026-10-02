@@ -39,7 +39,6 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
-| `group_verifier` | Optional private verifier descriptor for grading a cohort of attempts. |
 | `schema_version` | Version of the serialized spec: `0.18`. Readers reject other versions. |
 | `resources` | Files, directories, and archives grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
@@ -170,7 +169,7 @@ Each spec selects a private verifier and stores its configuration in `VerifierSp
 
 `VerifierSpec.kind` is an open nonempty string. Its private typed `environment_requirements` defaults to empty and declares the capabilities, image, and workspace needed by the verifier. The harness owns these requirements. `parameters_json` is an opaque private JSON object owned by the shared scorer (`verifyit` / `tasktrove-verify`); the harness must not extract structural environment fields such as an image from it.
 
-`group_verifier` optionally declares private cohort grading through the same `VerifierSpec` descriptor. Cohort membership, grading phase, and scheduling belong to the rollout or trainer. The ordinary per-attempt grader uses only `verifier` and can score an already acquired answer regardless of worker workspace requirements. This package has no cohort runtime, so direct-chat export and launch reject tasks with a group verifier.
+`verifier` grades one acquired answer. Comparative scoring across several attempts, cohort membership, and grading phase belong to the trainer. The ordinary per-attempt grader can score an already acquired answer regardless of worker workspace requirements.
 
 Schema loading accepts descriptors without a grader implementation. Registry resolution, export, and launch validate executable configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, paths referencing `TaskSpec.resources`, or rubrics in `parameters_json`. These graders have no implementation in this package. Direct chat rejects nonempty verifier environment requirements before export or launch, including for its implemented pure graders.
 
