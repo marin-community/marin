@@ -49,6 +49,8 @@ from levanter.inference.engine import (
 )
 from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.inference.utils import INVALID
+from levanter.inference.weight_reload import WeightTransferConfig
+from levanter.inference.weight_reload_http import add_weight_reload_routes
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -89,6 +91,8 @@ class InferenceServerConfig:
     # Default generation parameters for API
     temperature: float = 0.7
     seed: int = 42
+
+    weight_transfer: WeightTransferConfig | None = None
 
     batch_timeout: float = 0.1  # seconds to wait for more requests before processing batch
 
@@ -249,6 +253,14 @@ class InferenceContext:
         """Allow new requests after a completed pause or weight replacement."""
         with self.lifecycle_lock, self.admission_lock:
             self.pause_event.clear()
+
+    def reset_prefix_cache(self) -> None:
+        """Abort active requests and clear cached state without changing model weights."""
+        with self.lifecycle_lock:
+            was_paused = self.pause_event.is_set()
+            self.pause_generation()
+            if not was_paused:
+                self.resume_generation()
 
     def reload(self, weight_callback: WeightSource, *, expected_version: int) -> int:
         """Stage same-architecture weights, then atomically install a new serving version.
@@ -1255,6 +1267,10 @@ class InferenceServer:
         """Create and configure the FastAPI application."""
         app = FastAPI(title="Levanter Inference Service", version="1.0.0")
         model_name = inference_context.config.model_name
+        if inference_context.config.weight_transfer is not None:
+            add_weight_reload_routes(
+                app, inference_context, inference_context.config.trainer, inference_context.config.weight_transfer
+            )
 
         # Register routes with thin wrappers that call helper functions
         @app.get("/health")
