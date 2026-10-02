@@ -350,15 +350,14 @@ def main() -> None:
         optimizer = optimizer_config.build(args.steps)
         optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
     else:
-        optimizer = optax.adamw(1e-4, b1=0.9, b2=0.95, mu_dtype=jnp.bfloat16, weight_decay=0.1)
-        optimizer_contract = {
-            "type": "adamw",
+        adamw_config = {
             "learning_rate": 1e-4,
             "b1": 0.9,
             "b2": 0.95,
-            "mu_dtype": "bfloat16",
             "weight_decay": 0.1,
         }
+        optimizer = optax.adamw(mu_dtype=jnp.bfloat16, **adamw_config)
+        optimizer_contract = {"type": "adamw", **adamw_config, "mu_dtype": "bfloat16"}
     checkpoint_contract = {
         "model": dataclasses.asdict(model_config),
         "mp_policy": mp_policy,

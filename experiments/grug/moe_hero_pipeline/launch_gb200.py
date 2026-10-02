@@ -14,6 +14,8 @@ from iris.jax.multigpu import MultiGpuHook
 from iris.rpc import job_pb2
 from rigging.timing import Duration
 
+from experiments.grug.moe_hero_pipeline.runtime.apply_overlay import JAXPP_COMMIT
+
 PJRT_WHEEL = "https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260915-708c3a4ec79c/jax_cuda13_pjrt-0.11.1%2Bmarin.708c3a4ec79c-py3-none-manylinux_2_27_aarch64.whl"
 _TASK_TIMEOUT = 7200
 
@@ -84,7 +86,7 @@ def main():
         '"torch==2.11.0+cu128"\n'
         f'uv pip install --python "$IRIS_VENV/bin/python" --no-deps "{PJRT_WHEEL}"\n'
         'uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall '
-        '"jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@328f75a80cecf22c7cc030a82d8941d3c1e220b6"\n'
+        f'"jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@{JAXPP_COMMIT}"\n'
         "uv run --no-sync python experiments/grug/moe_hero_pipeline/runtime/apply_overlay.py\n"
         "uv run --no-sync python -c 'import torch; assert torch.cuda.is_available(), "
         '"Current Hero Quack kernels require CUDA-enabled Torch"; '
