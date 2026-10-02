@@ -217,6 +217,65 @@ class Eagle3Draft(eqx.Module):
             raise ValueError(f"Unexpected EAGLE checkpoint tensors: {sorted(set(state) - expected)}")
         return result
 
+    def trainable_state_dict(self) -> dict[str, jax.Array]:
+        """Export the trainable-only tensor contract used by the online draft trainer."""
+        return {
+            "fc.weight": self.fc.T,
+            "input_norm.weight": self.input_norm.weight,
+            "layers.0.input_layernorm.weight": self.embed_norm.weight,
+            "layers.0.hidden_norm.weight": self.hidden_norm.weight,
+            "layers.0.post_attention_layernorm.weight": self.post_attention_norm.weight,
+            "norm.weight": self.final_norm.weight,
+            "layers.0.self_attn.q_proj.weight": self.q_proj.T,
+            "layers.0.self_attn.k_proj.weight": self.k_proj.T,
+            "layers.0.self_attn.v_proj.weight": self.v_proj.T,
+            "layers.0.self_attn.o_proj.weight": self.o_proj.T,
+            "layers.0.mlp.gate_proj.weight": self.mlp.w_gate.T,
+            "layers.0.mlp.up_proj.weight": self.mlp.w_up.T,
+            "layers.0.mlp.down_proj.weight": self.mlp.w_down.T,
+        }
+
+    def with_trainable_state_dict(self, state: Mapping[str, np.ndarray | jax.Array]) -> "Eagle3Draft":
+        """Stage a complete trainable overlay, preserving target-owned tensors and maps."""
+        current = self.trainable_state_dict()
+        if set(state) != set(current):
+            raise ValueError(
+                f"Draft update tensor mismatch: missing {sorted(set(current) - set(state))}, "
+                f"unexpected {sorted(set(state) - set(current))}"
+            )
+        weights = {}
+        finite = []
+        for name, old in current.items():
+            new = state[name]
+            if new.shape != old.shape or new.dtype != old.dtype:
+                raise ValueError(f"Draft update {name} must preserve shape and dtype")
+            weights[name] = jax.device_put(new, old.sharding)
+            finite.append(jnp.all(jnp.isfinite(weights[name])))
+        if not bool(jnp.all(jnp.stack(finite))):
+            raise ValueError("Draft update contains nonfinite weights")
+        weights["lm_head.weight"] = self.lm_head.T
+        weights["d2t"] = self.draft_to_target - jnp.arange(self.config.draft_vocab_size)
+        weights["t2d"] = jnp.zeros((self.config.vocab_size,), jnp.bool_).at[self.draft_to_target].set(True)
+        return type(self).from_state_dict(self.config, weights, target_embedding=self.embedding)
+
+    def with_trainable_checkpoint(self, directory: Path) -> "Eagle3Draft":
+        """Stage a local single-file checkpoint emitted by the online draft trainer."""
+        return self.with_trainable_state_dict(load_safetensors_state_dict(str(directory / "model.safetensors")))
+
+    def with_target_weights(self, embedding: jax.Array, output_projection: jax.Array) -> "Eagle3Draft":
+        """Refresh target embeddings and mapped target-head rows after policy publication."""
+        if embedding.shape != self.embedding.shape or output_projection.shape != (
+            self.config.hidden_dim,
+            self.config.vocab_size,
+        ):
+            raise ValueError("Published target weights do not match the draft architecture")
+        head = output_projection.at[:, self.draft_to_target].get(out_sharding=P(None, None))
+        return eqx.tree_at(
+            lambda model: (model.embedding, model.lm_head),
+            self,
+            (reshard(embedding, P(None, None)), head),
+        )
+
     def project_target_states(self, auxiliary: jax.Array) -> jax.Array:
         """Project concatenated target boundaries once; recurrent draft states bypass FC."""
         if auxiliary.shape[-1] != self.fc.shape[0]:

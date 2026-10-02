@@ -671,8 +671,20 @@ the context capacity. Verification uses independent per-request PRNG keys, so pe
 cancellation or batch compaction does not change a request's random draws. Defaults
 retain ordinary decoding without draft buffers.
 
-Cloned choices, rollout candidate capture, and online draft refresh remain
-unimplemented for this path. The pinned online trainer publishes only trainable
-draft tensors. Its target synchronization also refreshes the draft's mapped target
-head; a native refresh implementation must preserve this distinction when staging
-a complete candidate.
+Set `InferenceServerConfig.eagle3_checkpoint` to a local initial Speculators
+checkpoint when serving resident EAGLE. `InferenceServer.reload_draft(weights_path,
+expected_version=...)` stages the online trainer's complete trainable-only
+`model.safetensors` overlay. It preserves the installed draft head, target embedding,
+and vocabulary maps. Missing, extra, nonfinite, or mismatched tensors fail before
+pausing generation. A successful install clears target and draft caches while
+retaining the target model version.
+
+Target publication refreshes the draft's embedding and mapped output-head rows in
+the same paused install as the target weights. It retains the trainable draft
+overlay and advances the target model version. Both reload paths recheck the target
+version and draft identity after staging, so a concurrent publication cannot be
+overwritten by a candidate staged against older weights.
+
+Cloned choices, rollout candidate capture, and remote online draft-update transport
+remain unimplemented for this path. The local checkpoint refresh API does not wire
+the pinned SkyRL online trainer into the native remote client.

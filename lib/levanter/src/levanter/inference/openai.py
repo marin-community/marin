@@ -17,6 +17,7 @@ import queue
 import threading
 import time
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field, replace
 from typing import Any, List, Optional, Union, cast
 
@@ -63,6 +64,8 @@ from levanter.inference.openai_protocol import (
     TokensRequest,
     TokensResponse,
 )
+from levanter.models.eagle3 import Eagle3Draft
+from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
@@ -94,6 +97,9 @@ class InferenceServerConfig:
     # Default generation parameters for API
     temperature: float = 0.7
     seed: int = 42
+
+    eagle3_checkpoint: str | None = None
+    """Local initial Speculators checkpoint directory for opt-in resident EAGLE."""
 
     weight_transfer: WeightTransferConfig | None = None
 
@@ -205,6 +211,17 @@ def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinToken
     return stop_tokens
 
 
+def _validate_replacement_weights(current: eqx.Module, candidate: eqx.Module) -> None:
+    current_arrays = eqx.filter(current, eqx.is_array)
+    candidate_arrays = eqx.filter(candidate, eqx.is_array)
+    if jax.tree.structure(current_arrays) != jax.tree.structure(candidate_arrays):
+        raise ValueError("Replacement weights must preserve model architecture")
+    for old, new in zip(jax.tree.leaves(current_arrays), jax.tree.leaves(candidate_arrays), strict=True):
+        if (old.shape, old.dtype, old.sharding) != (new.shape, new.dtype, new.sharding):
+            raise ValueError("Replacement weights must preserve shape, dtype, and sharding")
+    jax.block_until_ready(candidate)
+
+
 class InferenceContext:
     """Background thread that manages the InferenceEngine and processes requests"""
 
@@ -283,24 +300,27 @@ class InferenceContext:
             if expected_version != self.model_version:
                 raise ValueError(f"Expected model version {expected_version}, serving {self.model_version}")
             current_model = self.model
+            current_draft = self.engine.draft
         with (
             self.config.trainer.use_device_mesh(),
             hax.axis_mapping(self.config.trainer.compute_axis_mapping),
         ):
             candidate = weight_callback(current_model)
-            current_arrays = eqx.filter(current_model, eqx.is_array)
-            candidate_arrays = eqx.filter(candidate, eqx.is_array)
-            if jax.tree.structure(current_arrays) != jax.tree.structure(candidate_arrays):
-                raise ValueError("Replacement weights must preserve model architecture")
-            for old, new in zip(jax.tree.leaves(current_arrays), jax.tree.leaves(candidate_arrays), strict=True):
-                if (old.shape, old.dtype, old.sharding) != (new.shape, new.dtype, new.sharding):
-                    raise ValueError("Replacement weights must preserve shape, dtype, and sharding")
-            jax.block_until_ready(candidate)
+            _validate_replacement_weights(current_model, candidate)
+            candidate_draft = current_draft
+            if current_draft is not None:
+                assert isinstance(candidate, SnowballLMHeadModel)
+                candidate_draft = current_draft.with_target_weights(
+                    candidate.transformer.token_embed, candidate.transformer.output_proj
+                )
+                _validate_replacement_weights(current_draft, candidate_draft)
 
         with self.lifecycle_lock:
             with self.admission_lock:
                 if expected_version != self.model_version:
                     raise ValueError(f"Expected model version {expected_version}, serving {self.model_version}")
+                if self.engine.draft is not current_draft:
+                    raise ValueError("Draft changed while target weights were staged")
             was_paused = self.pause_event.is_set()
             self.pause_generation()
             try:
@@ -308,12 +328,45 @@ class InferenceContext:
                     jax.block_until_ready(self.engine.gen_state)
                     self.model = candidate
                     self.engine.model = candidate
+                    self.engine.draft = candidate_draft
                     self.model_version += 1
                     installed_version = self.model_version
             finally:
                 if not was_paused:
                     self.resume_generation()
         return installed_version
+
+    def reload_draft(
+        self, weight_callback: collections.abc.Callable[[Eagle3Draft], Eagle3Draft], *, expected_version: int
+    ) -> None:
+        """Stage a whole draft and install it while generation is paused.
+
+        expected_version names the target model version. Draft-only updates retain
+        that version because target behavior scores still use the same policy.
+        Failed staging or a concurrent target/draft replacement leaves weights intact.
+        """
+        with self.admission_lock:
+            if expected_version != self.model_version:
+                raise ValueError(f"Expected model version {expected_version}, serving {self.model_version}")
+            current = self.engine.draft
+            if current is None:
+                raise ValueError("No resident EAGLE draft is configured")
+        with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
+            candidate = weight_callback(current)
+            _validate_replacement_weights(current, candidate)
+        with self.lifecycle_lock:
+            with self.admission_lock:
+                if expected_version != self.model_version or self.engine.draft is not current:
+                    raise ValueError("Target or draft changed while draft weights were staged")
+            was_paused = self.pause_event.is_set()
+            self.pause_generation()
+            try:
+                with self.model_lock, self.admission_lock:
+                    jax.block_until_ready(self.engine.gen_state)
+                    self.engine.draft = candidate
+            finally:
+                if not was_paused:
+                    self.resume_generation()
 
     def abort(self, request_ids: collections.abc.Sequence[str]) -> None:
         """Cancel only the named HTTP request groups at the next host decode boundary."""
@@ -1392,11 +1445,20 @@ class InferenceServer:
         This factory method loads the model, tokenizer, and creates all necessary
         components for the inference server.
         """
+        draft = None
+        if config.eagle3_checkpoint is not None:
+            if not isinstance(model, SnowballLMHeadModel):
+                raise ValueError("Resident EAGLE currently requires Snowball")
+            with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+                draft = Eagle3Draft.from_checkpoint(
+                    Path(config.eagle3_checkpoint), target_embedding=model.transformer.token_embed
+                )
         service = InferenceEngine.from_model_with_config(
             model=model,
             tokenizer=tokenizer,
             config=config.service,
             axis_resources=config.trainer.compute_axis_mapping,
+            draft=draft,
         )
 
         # Create and start inference thread
@@ -1492,6 +1554,12 @@ class InferenceServer:
     def reload(self, weight_callback: WeightSource, *, expected_version: int) -> int:
         """Install staged weights and return the new version after clearing serving state."""
         return self.inference_context.reload(weight_callback, expected_version=expected_version)
+
+    def reload_draft(self, weights_path: str, *, expected_version: int) -> None:
+        """Install a trainable-only online draft checkpoint against a target version."""
+        self.inference_context.reload_draft(
+            lambda current: current.with_trainable_checkpoint(Path(weights_path)), expected_version=expected_version
+        )
 
     def address(self):
         """Get the full address the server is running on."""
