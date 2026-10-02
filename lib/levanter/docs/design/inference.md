@@ -359,8 +359,10 @@ These passes are numerical diagnostics and do not produce throughput claims.
 The diagnostic also records the residual before final RMSNorm, the normalized
 and gated hidden states, and a host FP64 projection using the exact BF16 head
 weights. Native capture substitutes an identity output head in separate untimed
-passes; vLLM installs read-only model hooks after startup through worker RPC and
-removes them after the probe. The vLLM capture requires eager execution and TP1,
+passes; vLLM installs read-only model hooks after startup through a named worker
+extension and removes them after the probe. The RPC carries method names and
+plain results; it does not require callable serialization or unsafe-deserialization
+settings. The vLLM capture requires eager execution and TP1,
 and records token IDs and positions to align data-parallel rows. Both sides
 record a canonical head-weight digest. These tensors distinguish differences
 already present in the hidden state from final projection rounding; the FP64

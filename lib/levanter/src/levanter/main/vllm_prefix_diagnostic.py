@@ -8,10 +8,11 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
-
+from typing import cast
 
 from vllm import AsyncEngineArgs, SamplingParams
 from vllm.v1.engine.async_llm import AsyncLLM
+from vllm.v1.worker.worker_base import WorkerBase
 
 
 def install_final_state_capture(model) -> None:
@@ -73,6 +74,16 @@ def remove_final_state_capture(model) -> list[dict]:
     return records
 
 
+class PrefixDiagnosticWorkerExtension:
+    """Named RPC methods mixed into vLLM's worker for this untimed probe only."""
+
+    def install_prefix_diagnostic_capture(self) -> None:
+        install_final_state_capture(cast(WorkerBase, self).get_model())
+
+    def remove_prefix_diagnostic_capture(self) -> list[dict]:
+        return remove_final_state_capture(cast(WorkerBase, self).get_model())
+
+
 async def diagnose(engine: AsyncLLM, sequences: list[list[int]]) -> list[dict]:
     async def request(index: int, tokens: list[int]) -> dict:
         params = SamplingParams(temperature=0, max_tokens=1, ignore_eos=True, logprobs=20, detokenize=False)
@@ -105,12 +116,16 @@ def main():
         raise ValueError("Disable prefix caching for the shared-prefix diagnostic")
     if not engine_args.get("enforce_eager") or engine_args["tensor_parallel_size"] != 1:
         raise ValueError("Final-state capture requires eager execution and TP1")
+    extension = "levanter.main.vllm_prefix_diagnostic.PrefixDiagnosticWorkerExtension"
+    if engine_args.get("worker_extension_cls") not in (None, "", extension):
+        raise ValueError("The prefix diagnostic cannot replace another worker extension")
+    engine_args["worker_extension_cls"] = extension
     engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**engine_args))
     try:
         with asyncio.Runner() as runner:
-            runner.run(engine.collective_rpc("apply_model", args=(install_final_state_capture,)))
+            runner.run(engine.collective_rpc("install_prefix_diagnostic_capture"))
             results = runner.run(diagnose(engine, sequences))
-            final_states = runner.run(engine.collective_rpc("apply_model", args=(remove_final_state_capture,)))
+            final_states = runner.run(engine.collective_rpc("remove_prefix_diagnostic_capture"))
         result = {
             "boundary": "untimed_teacher_forced_single_prefill",
             "final_states": final_states,
