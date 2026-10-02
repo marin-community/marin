@@ -62,6 +62,7 @@ from experiments.grug.moe_hero_ep.train import (
 from experiments.marin_tokenizer import marin_tokenizer
 
 DEFAULT_HERO_STEPS = 25
+DEFAULT_EVAL_PREFIX = "eval"
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 # The hero has no tensor parallelism.
 HERO_MODEL_AXIS_SIZE = 1
@@ -117,7 +118,7 @@ def build_diagnostic_run(
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     eval_max_seq_len: int | None = None,
-    eval_prefix: str = "eval",
+    eval_prefix: str = DEFAULT_EVAL_PREFIX,
     gc_interval: int | None = None,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -512,7 +513,7 @@ def build_diagnostic_run(
 )
 @click.option(
     "--eval-prefix",
-    default="eval",
+    default=DEFAULT_EVAL_PREFIX,
     show_default=True,
     help="Metric prefix. Use a distinct prefix for evaluations at a different context length.",
 )
