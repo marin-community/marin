@@ -22,6 +22,8 @@ from levanter.grug.attention import ragged_paged_attention
 
 WARMUP_STEPS = 3
 MAX_ERROR_EXAMPLES = 8
+ERROR_ATOL = 1e-4
+ERROR_RTOL = 1e-4
 TPU_RPA_MODULE = "tpu_inference.kernels.ragged_paged_attention.v3.kernel"
 
 
@@ -53,7 +55,7 @@ def _error_metrics(actual, expected):
     actual = np.asarray(actual, dtype=np.float32)
     expected = np.asarray(expected, dtype=np.float32)
     difference = np.abs(actual - expected)
-    outside = difference > 1e-4 + 1e-4 * np.abs(expected)
+    outside = difference > ERROR_ATOL + ERROR_RTOL * np.abs(expected)
     return {
         "max_abs": float(difference.max()),
         "mean_abs": float(difference.mean()),
@@ -81,7 +83,7 @@ def _mismatch_oracle(inputs, args, comparisons, actual, reference):
         expected = probabilities @ np.asarray(values, np.float64) / probabilities.sum()
         rounded = float(np.asarray(expected, dtype=q.dtype))
         index = (batch, head, group, dim)
-        tolerance = 1e-4 + 1e-4 * abs(rounded)
+        tolerance = ERROR_ATOL + ERROR_RTOL * abs(rounded)
         rows.append(
             {
                 "index": list(index),
