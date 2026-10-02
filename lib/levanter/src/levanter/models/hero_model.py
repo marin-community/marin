@@ -5,6 +5,7 @@
 
 import dataclasses
 import math
+from typing import NamedTuple
 
 import equinox as eqx
 import haliax as hax
@@ -373,9 +374,6 @@ class DenseMLP(eqx.Module):
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
-        # Reshard after the reshape so the shared-expert output carries the same sharding as the
-        # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
-        # for why the unflattened tensor cannot keep the fused token tuple.
         return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
 
 
@@ -458,7 +456,6 @@ class HeroMoEMLP(eqx.Module):
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
@@ -635,6 +632,13 @@ class HeroTransformer(eqx.Module):
         return self.final_gated_norm(self.final_norm(hidden))
 
 
+class _HeroPageArrays(NamedTuple):
+    kv: jax.Array
+    k_history: jax.Array | None
+    attn_history: jax.Array | None
+    mlp_history: jax.Array | None
+
+
 class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig]):
     """Named-tensor boundary around the schema-v2 Hero inference snapshot."""
 
@@ -749,7 +753,9 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
             histories = [getattr(cache, site) for cache in kv_cache]
             return None if histories[0] is None else jnp.stack([cache.history.array for cache in histories])
 
-        arrays = (stacked_kv, stack_history("k_history"), stack_history("attn_history"), stack_history("mlp_history"))
+        arrays = _HeroPageArrays(
+            stacked_kv, stack_history("k_history"), stack_history("attn_history"), stack_history("mlp_history")
+        )
 
         def history_from_array(history, array):
             return (
@@ -761,10 +767,10 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
         def layer_step(x, layer_inputs):
             block, pages, use_long = layer_inputs
             cache = HeroLayerCache(
-                KvPageCache(hax.named(pages[0], template.kv.kv_pages.axes)),
-                history_from_array(template.k_history, pages[1]),
-                history_from_array(template.attn_history, pages[2]),
-                history_from_array(template.mlp_history, pages[3]),
+                KvPageCache(hax.named(pages.kv, template.kv.kv_pages.axes)),
+                history_from_array(template.k_history, pages.k_history),
+                history_from_array(template.attn_history, pages.attn_history),
+                history_from_array(template.mlp_history, pages.mlp_history),
             )
             attn_in = block.attn_gated_norm(block.rms_attn(x))
             attn_out, cache = jax.lax.cond(
@@ -785,7 +791,7 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
             mlp_out, mlp_history = _decode_convolution(
                 block.sconv_mlp, mlp_out, cache.mlp_history, batch_info, pos_ids
             )
-            return x + mlp_out, (
+            return x + mlp_out, _HeroPageArrays(
                 cache.kv.kv_pages.array,
                 None if cache.k_history is None else cache.k_history.history.array,
                 None if attn_history is None else attn_history.history.array,
@@ -803,10 +809,16 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
         for i in range(cfg.num_layers):
             caches.append(
                 HeroLayerCache(
-                    KvPageCache(hax.named(updated[0][i], template.kv.kv_pages.axes)),
-                    history_from_array(template.k_history, None if updated[1] is None else updated[1][i]),
-                    history_from_array(template.attn_history, None if updated[2] is None else updated[2][i]),
-                    history_from_array(template.mlp_history, None if updated[3] is None else updated[3][i]),
+                    KvPageCache(hax.named(updated.kv[i], template.kv.kv_pages.axes)),
+                    history_from_array(
+                        template.k_history, None if updated.k_history is None else updated.k_history[i]
+                    ),
+                    history_from_array(
+                        template.attn_history, None if updated.attn_history is None else updated.attn_history[i]
+                    ),
+                    history_from_array(
+                        template.mlp_history, None if updated.mlp_history is None else updated.mlp_history[i]
+                    ),
                 )
             )
         return hax.named(logits, (input_ids.axes[0], self.Vocab)), ListCache(tuple(caches))
