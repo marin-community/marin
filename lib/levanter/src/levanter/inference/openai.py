@@ -57,6 +57,7 @@ from levanter.inference.openai_protocol import (
     ChatTokenizeRequest,
     ChatTokenizeResponse,
     CompletionRequest,
+    PauseGenerationRequest,
     TokenList,
     TokensRequest,
     TokensResponse,
@@ -1115,6 +1116,7 @@ class _GenerationStreamingResponse(StreamingResponse):
 
 async def _http_generation[RequestT: (
     CompletionRequest,
+    PauseGenerationRequest,
     ChatCompletionRequest,
 ), ResponseT: (Completion, ChatCompletion)](
     ctx: InferenceContext,
@@ -1276,6 +1278,18 @@ class InferenceServer:
         @app.get("/health")
         async def health_check():
             return _health_check()
+
+        @app.post("/pause_generation")
+        async def pause_generation(request: PauseGenerationRequest):
+            if request.mode != "abort" or not request.clear_cache:
+                raise HTTPException(400, "Native serving requires mode=abort and clear_cache=true")
+            await asyncio.to_thread(inference_context.pause_generation)
+            return {"status": "ok"}
+
+        @app.post("/resume_generation")
+        async def resume_generation():
+            await asyncio.to_thread(inference_context.resume_generation)
+            return {"status": "ok"}
 
         @app.get("/v1/models")
         async def list_models() -> dict:
