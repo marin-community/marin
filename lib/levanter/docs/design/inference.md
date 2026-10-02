@@ -240,14 +240,6 @@ output hashes or token arrays and investigate differences before reporting a
 speed ratio. Production checkpoint loading and real serving latency remain separate
 validation steps.
 
-| Target | Native Snowball benchmark | Native Hero benchmark | vLLM comparison |
-| --- | --- | --- | --- |
-| H100 | Driver available; unmeasured | Driver available; unmeasured | Baseline adapter; unmeasured |
-| GB200 | Driver available; unmeasured | Driver available; unmeasured | Baseline adapter; unmeasured |
-| TPU v4 | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
-| TPU v5p | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
-| TPU v6e | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
-
 Hero's `experiments/grug/moe_hero_ep/heuristic.py:HERO_MODEL` uses 48 layers,
 width 6144, 384 experts with top-8 routing, two shared experts, latent dimension
 3072, short convolutions, and 12 local / 6 global KV heads. Snowball pins the
@@ -257,6 +249,29 @@ establish architectural equivalence. The native adapters preserve their distinct
 For a random-weight Hero smoke benchmark, use `config/inference/hero_tiny.json`
 with the same token workload and driver arguments as Snowball. Synthetic results
 measure the tiny configuration, not the production Hero model.
+
+### Validated tiny Hero on v5p
+
+On 2026-10-02, `hero-v5p-layout-lifecycle-20261002` completed twelve bridge/cache
+cases, then ran both runtimes on the same BF16 checkpoint
+`b81bf066dcfc54333753343606f1b1b5ca420714a5ee66263919e8a01845b830`.
+The fixture has two layers, width 256, 16 experts, latent width 128, and
+kernel-four convolutions at all three sites. Its global-attention interval is
+four, so this two-layer fixture does not exercise a global-attention layer.
+Two eight-token prompts each generate 16 tokens; both runtimes and every timed
+batch agree on all 32 output tokens, hash
+`cada82e418dc0e8e8ceae101483bad4dc0c9996f1225ebe6c593e7c5eadb240c`.
+
+The v5p-8 allocation exposes four JAX devices. Both runtimes use data parallelism
+four, tensor/model parallelism one, and expert parallelism one. Native JAX JIT
+measures 790.72 output tokens/second; vLLM with `enforce_eager=true` measures
+358.54, a 2.205× ratio for this tiny workload only. Source is Marin `d818b8d1d6`,
+vLLM `70ea9ae8f2601f06d820ee9d70e3afbdc52683b1`, and tpu-inference
+`35d05a3f1e408458ca3c164cc3a55382548888f3` with the bridge/cache fixes in
+[tpu-inference #30](https://github.com/marin-community/tpu-inference/pull/30) and
+[#31](https://github.com/marin-community/tpu-inference/pull/31). Native JAX is
+0.11.1; the isolated vLLM runtime uses JAX 0.11.0 and libtpu 0.0.44.
+This result does not measure production Hero throughput or compiled vLLM serving.
 
 ### Production Hero cache accounting
 
@@ -402,6 +417,25 @@ layout. Both runtime captures retain the norm, gate projections, and SiLU
 output; vLLM records a separate sigmoid recomputation from the captured input.
 Current June and Hero training gates apply both unary functions in the projection
 dtype. The promoted variants are diagnostic and do not change that contract.
+
+To examine the unary arithmetic independently of model projections and fusion,
+run the exhaustive finite-BF16 diagnostic in each runtime environment:
+
+```bash
+python -m experiments.benchmarks.diagnose_sigmoid_precision \
+  --runtime jax --platform gpu --output /tmp/jax-sigmoid.json
+# Run this command inside the same isolated Torch environment as the vLLM benchmark.
+python -m experiments.benchmarks.diagnose_sigmoid_precision \
+  --runtime torch --platform gpu --output /tmp/torch-sigmoid.json
+```
+
+Both invocations enumerate all 65,280 finite BF16 bit patterns and record the
+same input digest. The independent reference evaluates stable sigmoid in NumPy
+FP64, then rounds once to BF16. Reports separate normal, subnormal, and saturated
+reference outputs, plus the `abs(input) <= 0.04` range observed in the embedding
+gate captures. They record exact mismatch counts and errors without an acceptance
+tolerance. Compare runtime and device provenance as well as the input digest;
+standalone unary agreement does not establish fused model or generation parity.
 
 After both fixture runtimes finish, run full generation with the same loaded
 weights and saved native engine configuration:
