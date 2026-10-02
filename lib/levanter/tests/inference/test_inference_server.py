@@ -5,6 +5,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import equinox as eqx
@@ -680,9 +681,8 @@ class _TokenSensitiveCompletionModel(_DeterministicCompletionScoringModel):
         return hax.nn.one_hot((input_ids + 2) % 4, self.Vocab, dtype=jnp.float32), cache
 
 
-@pytest.fixture
-def exact_token_server():
-    config = InferenceServerConfig(
+def _exact_token_config():
+    return InferenceServerConfig(
         service=InferenceEngineConfig(
             max_seq_len=8,
             max_pages=4,
@@ -693,6 +693,11 @@ def exact_token_server():
             compute_dtype=jnp.float32,
         )
     )
+
+
+@pytest.fixture
+def exact_token_server():
+    config = _exact_token_config()
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, _TokenSensitiveCompletionModel(), _AliasingChatTokenizer())
     try:
@@ -823,17 +828,7 @@ def test_paused_server_returns_abort_then_resumes_exact_generation(exact_token_s
 
 @pytest.mark.asyncio
 async def test_pause_invalidates_requests_collected_before_the_barrier():
-    config = InferenceServerConfig(
-        service=InferenceEngineConfig(
-            max_seq_len=8,
-            max_pages=4,
-            max_seqs=2,
-            page_size=4,
-            max_queued_tokens=4,
-            max_seqs_in_prefill=2,
-            compute_dtype=jnp.float32,
-        )
-    )
+    config = _exact_token_config()
     model = _TokenSensitiveCompletionModel()
     tokenizer = _AliasingChatTokenizer()
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
@@ -855,3 +850,85 @@ async def test_pause_invalidates_requests_collected_before_the_barrier():
         resumed = await resumed_future
     assert resumed[0].finish_reason == FinishReason.LENGTH
     assert resumed[0].tokens == [3, 1]
+
+
+class _BlockingTokenModel(_TokenSensitiveCompletionModel):
+    entered: threading.Event = eqx.field(static=True)
+    release: threading.Event = eqx.field(static=True)
+
+    def __init__(self, entered, release):
+        super().__init__()
+        self.entered = entered
+        self.release = release
+
+    def _wait_for_release(self):
+        self.entered.set()
+        assert self.release.wait(30), "test did not release the in-flight model call"
+
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        jax.debug.callback(self._wait_for_release)
+        return super().decode(input_ids, cache, batch_info, pos_ids)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
+    entered, release = threading.Event(), threading.Event()
+    config = _exact_token_config()
+    model = _BlockingTokenModel(entered, release)
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, model, _AliasingChatTokenizer())
+    request = {
+        "model": "gpt2",
+        "messages": [{"role": "user", "content": "A"}],
+        "max_completion_tokens": 3,
+        "temperature": 0,
+        "logprobs": True,
+        "return_token_ids": True,
+        "stream": stream,
+    }
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+            pending = pool.submit(client.post, "/v1/chat/completions", json=request)
+            assert entered.wait(30), "generation did not reach the model"
+            pausing = pool.submit(server.pause_generation)
+            assert server.inference_context.pause_event.wait(5)
+            release.set()
+            pausing.result(timeout=30)
+            response = pending.result(timeout=30)
+            assert response.status_code == 200, response.text
+            if stream:
+                chunks = [
+                    json.loads(line[6:])
+                    for line in response.text.splitlines()
+                    if line.startswith("data: ") and line != "data: [DONE]"
+                ]
+                content = chunks[0]
+                finish_reason = chunks[-1]["choices"][0]["finish_reason"]
+            else:
+                content = response.json()
+                finish_reason = content["choices"][0]["finish_reason"]
+            choice = content["choices"][0]
+            assert finish_reason == "abort"
+            assert content["prompt_token_ids"] == [0, 1]
+            assert choice["token_ids"] == [3]
+            partial_logprobs = choice["logprobs"]["content"]
+            assert len(partial_logprobs) == 1
+            server.resume_generation()
+            full = client.post("/v1/chat/completions", json={**request, "stream": False}).json()
+            continuation = client.post(
+                "/v1/chat/completions",
+                json={
+                    **request,
+                    "stream": False,
+                    "max_completion_tokens": 2,
+                    "_skyrl_exact_prompt_token_ids": [0, 1, 3],
+                },
+            ).json()
+            assert choice["token_ids"] + continuation["choices"][0]["token_ids"] == full["choices"][0]["token_ids"]
+            assert (
+                partial_logprobs + continuation["choices"][0]["logprobs"]["content"]
+                == full["choices"][0]["logprobs"]["content"]
+            )
+    finally:
+        release.set()
+        server.inference_context.shutdown()
