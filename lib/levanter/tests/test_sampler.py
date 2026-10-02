@@ -69,7 +69,7 @@ def test_full_distribution_sampling_keeps_tail_probabilities(temperature):
 @pytest.mark.parametrize("top_p", [0.6, 1.0])
 def test_rollout_candidates_match_reporting_distribution_without_changing_sampling(mode, top_p):
     vocab = hax.Axis("vocab", 4)
-    logits = hax.named(jnp.log(jnp.array([0.4, 0.3, 0.2, 0.1])), vocab)
+    logits = hax.named(jnp.asarray(np.log([0.4, 0.3, 0.2, 0.1]), dtype=jnp.float32), vocab)
     sampler = Sampler(vocab, logprobs_mode=mode, max_logprobs=3)
     tokens, chosen, ids, scores = jax.jit(sampler.sample_with_candidates)(
         logits, 0.5, top_ps=top_p, key=jax.random.key(2)
