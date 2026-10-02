@@ -68,7 +68,7 @@ def main():
         command=command,
         main_base="89ac0d7705",
         source_model="moe_hero_ep.hero_recipe.HERO_MODEL_CONFIG",
-        runtime="JAX 0.11.1 + Marin ARM PJRT; JAXPP 46b8443 + host/startup and DiME overlays",
+        runtime="JAX 0.11.1 + Marin ARM PJRT; JAXPP 328f75a + pinned host/startup overlay",
         validation="experimental: JAXPP's declared JAX <=0.11.0 cap is overridden",
     )
     print(json.dumps(contract), flush=True)
@@ -83,8 +83,9 @@ def main():
         'uv pip install --python "$IRIS_VENV/bin/python" --index-url https://download.pytorch.org/whl/cu128 '
         '"torch==2.11.0+cu128"\n'
         f'uv pip install --python "$IRIS_VENV/bin/python" --no-deps "{PJRT_WHEEL}"\n'
-        "uv run --no-sync python experiments/grug/moe_hero_pipeline/runtime/patch_jaxpp_offload.py\n"
-        "uv run --no-sync python experiments/grug/moe_hero_pipeline/runtime/patch_dime2_lifetime.py\n"
+        'uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall '
+        '"jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@328f75a80cecf22c7cc030a82d8941d3c1e220b6"\n'
+        "uv run --no-sync python experiments/grug/moe_hero_pipeline/runtime/apply_overlay.py\n"
         "uv run --no-sync python -c 'import torch; assert torch.cuda.is_available(), "
         '"Current Hero Quack kernels require CUDA-enabled Torch"; '
         "print(torch.__version__, torch.cuda.get_device_capability())'\n"
