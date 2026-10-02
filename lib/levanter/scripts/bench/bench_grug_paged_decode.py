@@ -37,6 +37,13 @@ class _JaxMeasurements(NamedTuple):
     steady_state_time: float
 
 
+def _jax_runtime_versions():
+    packages = ("jax", "jaxlib", "numpy")
+    if jax.default_backend() == "tpu":
+        packages += ("libtpu",)
+    return {name: metadata.version(name) for name in packages}
+
+
 def _measure_jax(fn, inputs, repeats):
     start = time.perf_counter()
     compiled = jax.jit(fn).lower(*inputs).compile()
@@ -275,6 +282,7 @@ def main():
                 "error": error,
                 "device_profile": device_profile,
                 "git_sha": launch_provenance().base_commit,
+                "jax_runtime_versions": _jax_runtime_versions(),
                 "xla_flags": os.environ.get("XLA_FLAGS", ""),
                 "backend_env": {"LIBTPU_INIT_ARGS": os.environ.get("LIBTPU_INIT_ARGS", "")},
                 "logical_kv_bytes": kv_bytes,
@@ -416,6 +424,7 @@ def _tpu_vllm_baseline(inputs, expected, args):
         "steady_state_time": measurements.steady_state_time,
         "error": {"max_abs_vs_grug": float(difference.max()), "mean_abs_vs_grug": float(difference.mean())},
         "git_sha": launch_provenance().base_commit,
+        "jax_runtime_versions": _jax_runtime_versions(),
         "xla_flags": os.environ.get("XLA_FLAGS", ""),
         "backend_env": {"LIBTPU_INIT_ARGS": os.environ.get("LIBTPU_INIT_ARGS", "")},
         "cache_update": False,
