@@ -53,6 +53,10 @@ class FactProbeInput:
     span_start: np.ndarray  # [K]
     span_end: np.ndarray  # [K]
     attn_queries: np.ndarray  # [Q, 2] (row, position) whose MLA attention is recorded; Q may be 0
+    # The first ``attn_full_queries`` queries keep their full attention; every query also gets, per layer and head,
+    # its attention mass on the absolute key positions of its ``attn_key_sets`` row (-1 pads) and its entropy.
+    attn_full_queries: int
+    attn_key_sets: np.ndarray  # [Q, M]
     spot: np.ndarray  # [2] (row, position) whose whole forward is recorded (``model.forward_probe``), or [0]
     spot_token_ids: np.ndarray  # tokens whose lm_head columns are recorded at the spot
 
@@ -61,6 +65,10 @@ class FactProbeInput:
             raise ValueError("every fact span needs 1 <= start < end")
         if np.any(self.span_end > self.tokens.shape[1]) or np.any(self.span_row >= self.tokens.shape[0]):
             raise ValueError("fact span outside the probe rows")
+        if not 0 <= self.attn_full_queries <= len(self.attn_queries):
+            raise ValueError("attn_full_queries must be between 0 and the number of attention queries")
+        if len(self.attn_key_sets) != len(self.attn_queries):
+            raise ValueError("attn_key_sets needs one row per attention query")
 
     @classmethod
     def load(cls, path: str) -> FactProbeInput:
@@ -72,6 +80,14 @@ class FactProbeInput:
                 span_start=data["span_start"].astype(np.int64),
                 span_end=data["span_end"].astype(np.int64),
                 attn_queries=(data["attn_queries"] if "attn_queries" in data else np.zeros((0, 2))).astype(np.int64),
+                attn_full_queries=(
+                    int(data["attn_full_queries"]) if "attn_full_queries" in data else len(data.get("attn_queries", []))
+                ),
+                attn_key_sets=(
+                    data["attn_key_sets"]
+                    if "attn_key_sets" in data
+                    else np.full((len(data["attn_queries"]) if "attn_queries" in data else 0, 0), -1)
+                ).astype(np.int64),
                 spot=(data["spot"] if "spot" in data else np.zeros(0)).astype(np.int64),
                 spot_token_ids=(data["spot_token_ids"] if "spot_token_ids" in data else np.zeros(0)).astype(np.int64),
             )
@@ -100,6 +116,8 @@ def write_fact_probe_input(path: str, probe: FactProbeInput) -> None:
             span_start=probe.span_start,
             span_end=probe.span_end,
             attn_queries=probe.attn_queries,
+            attn_full_queries=probe.attn_full_queries,
+            attn_key_sets=probe.attn_key_sets,
             spot=probe.spot,
             spot_token_ids=probe.spot_token_ids,
         )
@@ -174,3 +192,18 @@ def count_text_patterns(tokens: np.ndarray, decode: Callable[[list[int]], str], 
 def write_text_counts(path: str, patterns: tuple[str, ...], steps: list[int], counts: list[np.ndarray]) -> None:
     with fsspec.open(path, "wb") as f:
         np.savez(f, patterns=np.asarray(patterns), steps=np.asarray(steps, np.int64), counts=np.stack(counts))
+
+
+def summarize_attention(
+    probs: np.ndarray, queries: np.ndarray, key_sets: np.ndarray, num_keys: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per query and head: the attention mass on that query's key set and the attention entropy. ``probs`` is
+    [Q, H, num_keys] over keys ``position - num_keys + 1 .. position`` (``model.ATTN_PROBE_KEYS``)."""
+    mass = np.zeros(probs.shape[:2], np.float32)
+    for q, ((_, position), keys) in enumerate(zip(queries, key_sets, strict=True)):
+        index = keys[keys >= 0] - (position - num_keys + 1)
+        if np.any(index < 0) or np.any(index >= num_keys):
+            raise ValueError(f"key set of query {q} falls outside its attention window")
+        mass[q] = probs[q][:, index].sum(-1)
+    entropy = -(probs * np.log(np.maximum(probs, 1e-30))).sum(-1)
+    return mass, entropy.astype(np.float32)

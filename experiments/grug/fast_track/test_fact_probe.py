@@ -11,7 +11,13 @@ from levanter.grug.attention import AttentionMask
 from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, dense_rel_bias
 
 import experiments.grug.fast_track.test_kda_local as t
-from experiments.grug.fast_track.fact_probe import RAW, FactProbeInput, FactProbeWriter, count_text_patterns
+from experiments.grug.fast_track.fact_probe import (
+    RAW,
+    FactProbeInput,
+    FactProbeWriter,
+    count_text_patterns,
+    summarize_attention,
+)
 from experiments.grug.fast_track.model import (
     ATTN_PROBE_KEYS,
     ATTN_PROBE_STAT,
@@ -32,6 +38,8 @@ def _probe(tokens: np.ndarray, spans: list[tuple[int, int, int]]) -> FactProbeIn
         span_start=start,
         span_end=end,
         attn_queries=np.zeros((0, 2)),
+        attn_full_queries=0,
+        attn_key_sets=np.zeros((0, 0)),
         spot=np.zeros(0),
         spot_token_ids=np.zeros(0),
     )
@@ -175,3 +183,16 @@ def test_spot_probe_runs_with_the_inkling_relative_position_bias():
         np.testing.assert_allclose(probs.sum(-1), 1.0, rtol=1e-5)
         # Position 60 is in document 1 (positions 40..): exactly its 21 keys get weight.
         assert np.all(probs[0, :, -21:] > 0) and np.all(probs[0, :, :-21] == 0)
+
+
+def test_attention_summary_is_mass_on_the_key_set_and_entropy():
+    probs = np.zeros((2, 1, 4), np.float32)
+    probs[0, 0] = [0.1, 0.2, 0.3, 0.4]  # query at position 10: keys 7..10
+    probs[1, 0] = [0.0, 0.0, 0.5, 0.5]  # query at position 5: keys 2..5
+    queries = np.array([[0, 10], [1, 5]])
+    key_sets = np.array([[8, 10], [4, -1]])
+    mass, entropy = summarize_attention(probs, queries, key_sets, num_keys=4)
+    np.testing.assert_allclose(mass[:, 0], [0.2 + 0.4, 0.5])
+    np.testing.assert_allclose(entropy[1, 0], np.log(2), rtol=1e-6)
+    with pytest.raises(ValueError):
+        summarize_attention(probs, queries, np.array([[1, -1], [4, -1]]), num_keys=4)
