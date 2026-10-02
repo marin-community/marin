@@ -66,6 +66,29 @@ def _error_metrics(actual, expected):
     }
 
 
+def _mismatch_oracle(inputs, args, comparisons):
+    q, cache, _, table, _, _ = inputs
+    indices = sorted({tuple(row["index"]) for comparison in comparisons for row in comparison["mismatch_examples"]})
+    rows = []
+    begin = 0 if args.window is None else max(0, args.context - args.window)
+    scale = np.float64(np.float32(args.head_dim**-0.5))
+    for batch, head, group, dim in indices:
+        query = np.asarray(q[batch, head, group], np.float64)
+        keys = cache[table[batch], :, 2 * head, :].reshape(-1, args.head_dim)[begin : args.context]
+        values = cache[table[batch], :, 2 * head + 1, dim].reshape(-1)[begin : args.context]
+        scores = np.asarray(keys, np.float64) @ query * scale
+        probabilities = np.exp(scores - scores.max())
+        expected = probabilities @ np.asarray(values, np.float64) / probabilities.sum()
+        rows.append(
+            {
+                "index": [batch, head, group, dim],
+                "float64_expected": float(expected),
+                "rounded_expected": float(np.asarray(expected, dtype=q.dtype)),
+            }
+        )
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -143,6 +166,7 @@ def main():
             )(*inputs)
             error["ieee_vs_reference"] = _error_metrics(ieee, reference)
             error["vs_ieee"] = _error_metrics(actual, ieee)
+        error["mismatch_float64_oracle"] = _mismatch_oracle(inputs, args, list(error.values()))
     device_profile = None
     if args.profile_device:
         profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
