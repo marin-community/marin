@@ -86,8 +86,8 @@ and releases the request ID. No separate remote cancellation endpoint is exposed
 Set `InferenceServerConfig.weight_transfer` to `WeightTransferConfig(backend="gloo",
 max_staging_bytes=...)` to enable SkyRL weight control routes. Install PyTorch in the
 serving environment (`torch_test` supplies it for local validation). Use `nccl` for
-a single GPU; CPU/Gloo has numerical integration coverage, while GPU/NCCL still
-requires hardware validation. Multi-device and multi-process serving are rejected.
+a single GPU. CPU/Gloo and a tiny single-receiver H100/NCCL gate pass in FP32 and
+BF16. Multi-device and multi-process serving are rejected.
 The receiver uses Torch broadcast and DLPack on the serving device. It does not
 materialize a complete checkpoint on the host.
 
@@ -133,7 +133,7 @@ PYTHONPATH=/path/to/MarinSkyRL/skyrl-train JAX_PLATFORMS=cpu \
   --marin-revision "$(git rev-parse HEAD)" --backend gloo --dtype bfloat16 --output /tmp/weight-transfer-gloo.json
 ```
 
-For the pending NCCL gate, use a node with two GPUs and a prepared JAX/Torch CUDA
+For the NCCL gate, use a node with two GPUs and a prepared JAX/Torch CUDA
 environment. The sender owns physical GPU 0 and the receiver owns physical GPU 1;
 each process sees its GPU as `cuda:0`. The script checks their UUIDs differ, that the
 receiver sees one JAX device, and that installed arrays stay on that device.
