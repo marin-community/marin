@@ -1383,14 +1383,19 @@ def test_gc_preserves_retry_resources_during_dispatch(provider, k8s, monkeypatch
     provider.sync(make_batch())
 
     retry = make_run_req(task_id, attempt_id=retry_attempt, num_tasks=1, attempt_uid="2222222222222222")
+    retry.priority = job_pb2.PRIORITY_BAND_PRODUCTION
     retry.entrypoint.workdir_files["config.json"] = b"retry"
     apply_json = k8s.apply_json
 
     def apply_with_gc(manifest):
         apply_json(manifest)
-        if manifest["kind"] == "ConfigMap":
-            # Reproduce GC between creating the retry's mount and creating its pod.
+        if manifest["kind"] in {"ConfigMap", "Pod"}:
+            # GC can run before the retry pod exists or immediately after it appears.
             provider.collect_garbage()
+        if manifest["kind"] == "Pod":
+            pdb = k8s.get_json(K8sResource.PDBS, f"{manifest['metadata']['name']}-pdb")
+            assert pdb is not None
+            assert pdb["spec"]["minAvailable"] == 1
 
     monkeypatch.setattr(k8s, "apply_json", apply_with_gc)
     provider.sync(make_batch(tasks_to_run=[retry]))

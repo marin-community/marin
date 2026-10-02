@@ -2708,25 +2708,26 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
-        self.kubectl.apply_json(manifest)
         task_id = run_req.task_id
+        if _is_coordinator_task(run_req):
+            # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
+            pdb = _build_pdb_manifest(
+                pod_name,
+                self.pods.namespace,
+                _task_hash(task_id),
+                run_req.priority,
+                managed_label=self.pods.managed_label,
+            )
+            self.kubectl.apply_json(pdb)
+            logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
+
+        self.kubectl.apply_json(manifest)
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
             task_id,
             run_req.attempt_id,
         )
-
-        if _is_coordinator_task(run_req):
-            pdb = _build_pdb_manifest(
-                pod_name,
-                self.pods.namespace,
-                _task_hash(run_req.task_id),
-                run_req.priority,
-                managed_label=self.pods.managed_label,
-            )
-            self.kubectl.apply_json(pdb)
-            logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
         """Delete pods that aren't in the desired ``(task_hash, attempt_id)`` set.
