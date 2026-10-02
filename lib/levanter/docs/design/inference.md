@@ -102,8 +102,7 @@ when different vocabulary IDs decode to the same text.
 The paired SkyRL remote client maps these completions to `student_topk_indices`
 and `behavior_topk_logprobs`; its retry coordinator concatenates partial evidence.
 This does not enable remote FTPO recipes or change their existing local-vLLM
-requirement. Chat candidate capture and student-selected teacher scoring remain
-unsupported.
+requirement. Chat candidate capture remains unsupported.
 
 ### Teacher scoring
 
@@ -116,8 +115,25 @@ Paused requests still return `abort` and are not scored.
 This supports SkyRL's external `OpenAICompatibleTeacherOracle` chosen-token and
 top-K distribution evidence. Set `return_tokens_as_token_ids=true` to retain exact
 candidate identities. The existing first-token sentinel is zero because that token
-has no preceding context. Arbitrary student-selected token scoring and rollout
-candidate capture are separate contracts and are not provided by this endpoint.
+has no preceding context.
+
+For the SkyRL `VLLMTeacherOracle` prompt-scoring contract, completion requests can
+instead set `prompt_logprobs=K`. Each choice then includes `prompt_logprobs` aligned
+with the input prompt: the first position is `null`, and later positions map exact
+token IDs to vLLM-style objects with a raw `logprob` field. The chosen prompt token is included alongside the
+teacher's top-K. This scoring is independent of generation temperature and nucleus
+filtering.
+
+The native extension `prompt_logprob_token_ids` has batch, prompt-position, and
+candidate dimensions. Every prompt position must supply exactly K IDs; duplicate
+placeholders are allowed. It scores those IDs directly instead of selecting the
+teacher's top-K, including IDs below that cutoff. The paired remote SkyRL client
+preserves `sampling_params_per_prompt` in this field and rejects responses missing
+requested IDs. Prompt scoring requires non-streaming responses and supports
+`max_tokens=0`; the existing local teacher adapter still requests one unused token.
+Set the remote client's `max_model_len` to the externally configured serving limit
+before constructing that adapter. No remote-teacher recipe or topology restrictions
+are relaxed by this transport support.
 
 ### Remote weight-sync pause
 

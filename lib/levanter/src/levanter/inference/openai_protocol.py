@@ -71,6 +71,9 @@ class CompletionRequest(BaseModel):
     frequency_penalty: float | None = None
     logit_bias: dict[str, int] | None = None
     logprobs: int | None = Field(default=None, ge=0)
+    prompt_logprobs: int | None = Field(default=None, ge=1)
+    # Batch, prompt position, candidate ID. Matches per-prompt teacher overrides.
+    prompt_logprob_token_ids: list[list[list[StrictInt]]] | None = None
     max_tokens: int = Field(default=1024, ge=0, description="Maximum number of tokens to generate")
     n: int | None = None
     presence_penalty: float | None = None
