@@ -12,7 +12,8 @@ parameter tensor and per layer of a stacked tensor:
   (``ddp < 0`` with ``|d|`` steady is a tensor stepping back and forth).
 - For MuonH tensors with Bi-Maxwell rails, ``G`` against the fast rail, the previous fast rail and the slow rail.
   The fresh gradient fed to the rails is ``g_t = fast_{t-1} + (fast_t - fast_{t-1}) / fast_rate``, and the
-  pre-Newton-Schulz direction is ``g + m (M - g)`` with ``M = (1 - w) fast + w slow``.
+  pre-Newton-Schulz direction is ``g + m (M - g)`` with ``M = (1 - w) fast + w slow``. Without Bi-Maxwell the
+  "fast" slot is the Nesterov buffer (``g_t = buf_t - m buf_{t-1}``) and the slow one is zero.
 
 Tensors matching ``exclude`` (the big row-sparse ``token_embed2`` by default) are left out to bound memory: the
 probe keeps a previous-step copy of the parameters, of the update and of the fast rails.
@@ -28,6 +29,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from experiments.grug.fast_track.grugmuon_stacked import ScaleByMuonState
 from experiments.grug.fast_track.optimizer import MuonMomentumState
 
 ATTRIBUTION_FILE = "weight_attribution_{index:04d}.npz"
@@ -48,19 +50,27 @@ def per_layer_sum(name: str, x: jax.Array) -> jax.Array:
 
 
 def rails_by_name(opt_state) -> tuple[dict[str, jax.Array], dict[str, jax.Array]]:
-    """The Bi-Maxwell fast and slow rails of every MuonH tensor, keyed by the tensor's parameter path."""
+    """The Bi-Maxwell fast and slow rails of every MuonH tensor, keyed by the tensor's parameter path. Without
+    Bi-Maxwell the first map holds the Nesterov momentum buffer (``buf = m buf + g``) and the second is empty."""
     fast: dict[str, jax.Array] = {}
     slow: dict[str, jax.Array] = {}
-    nodes = jax.tree.leaves(opt_state, is_leaf=lambda x: isinstance(x, MuonMomentumState))
+    nodes = jax.tree.leaves(opt_state, is_leaf=lambda x: isinstance(x, (MuonMomentumState, ScaleByMuonState)))
     for node in nodes:
-        if not isinstance(node, MuonMomentumState) or node.fast is None:
+        if isinstance(node, ScaleByMuonState):
+            # Muon's own Nesterov buffer (no external momentum); a zero momentum leaves it unused, all zeros.
+            for path, leaf in jax.tree_util.tree_leaves_with_path(node.momentum_buffer):
+                if isinstance(leaf, jax.Array):
+                    fast.setdefault(leaf_name(path), leaf)
             continue
-        for path, leaf in jax.tree_util.tree_leaves_with_path(node.fast):
+        if not isinstance(node, MuonMomentumState):
+            continue
+        for path, leaf in jax.tree_util.tree_leaves_with_path(node.buf if node.fast is None else node.fast):
             if isinstance(leaf, jax.Array):
-                fast[leaf_name(path)] = leaf
-        for path, leaf in jax.tree_util.tree_leaves_with_path(node.slow):
-            if isinstance(leaf, jax.Array):
-                slow[leaf_name(path)] = leaf
+                fast[leaf_name(path)] = leaf  # the external momentum overrides Muon's unused buffer
+        if node.slow is not None:
+            for path, leaf in jax.tree_util.tree_leaves_with_path(node.slow):
+                if isinstance(leaf, jax.Array):
+                    slow[leaf_name(path)] = leaf
     return fast, slow
 
 

@@ -1258,7 +1258,7 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
             if name in fast:
                 rec["Gf"] = per_layer_sum(name, g * fast[name].astype(jnp.float32))
                 rec["Gfp"] = per_layer_sum(name, g * fast_prev[name])
-                rec["Gs"] = per_layer_sum(name, g * slow[name].astype(jnp.float32))
+                rec["Gs"] = per_layer_sum(name, g * slow[name].astype(jnp.float32)) if name in slow else zero
                 new_fast_prev[name] = fast[name].astype(jnp.float32) + 0.0
             else:
                 rec["Gf"] = rec["Gfp"] = rec["Gs"] = zero

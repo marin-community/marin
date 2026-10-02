@@ -52,3 +52,18 @@ def test_writer_writes_chunks_with_logp(tmp_path):
     np.testing.assert_array_equal(out["steps"], [5, 6])
     np.testing.assert_allclose(out["logp"], [-0.5, -0.4])
     assert out["Gd/a"].shape == (2, 1)
+
+
+def test_without_bimaxwell_the_momentum_buffer_stands_in_for_the_fast_rail():
+    mesh, model = t._model(ngram_stat_rows=0)
+    params = eqx.filter(model, eqx.is_inexact_array)
+    opt = GrugMoeMuonHConfig().build(6)
+    with jax.set_mesh(mesh):
+        params = jax.tree.map(lambda p: reshard(p, P(*(None,) * p.ndim)), params)
+        state = opt.init(params)
+        leaves, treedef = jax.tree.flatten(params)
+        grads = jax.tree.unflatten(treedef, [jnp.full(p.shape, 0.01) for p in leaves])
+        _, state = eqx.filter_jit(opt.update)(grads, state, params)
+    buf, slow = rails_by_name(state)
+    assert buf and not slow
+    assert any(".attn.w_q" in n for n in buf)
