@@ -681,8 +681,8 @@ def test_resident_eagle_stochastic_request_keeps_draws_when_peer_is_cancelled():
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(tmp_path, dtype):
-    pytest.importorskip("fastapi")
-    pytest.importorskip("openai")
+    for dependency in ("fastapi", "openai", "uvicorn"):
+        pytest.importorskip(dependency)
     from levanter.inference.openai import (  # noqa: PLC0415  # optional serving deps
         InferenceContext,
         InferenceServerConfig,
