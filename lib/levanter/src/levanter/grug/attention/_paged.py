@@ -44,7 +44,8 @@ def ragged_paged_attention(
         implementation: TPU Pallas or portable reference; defaults to TPU on TPU.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
-    Padding queries produce zero. The TPU path uses JAX's existing ragged kernel;
+    Padding queries produce zero. The TPU path uses JAX's existing ragged kernel
+    for FP32 inputs; lower-precision inputs use the reference to preserve accuracy.
     GPU and CPU currently use a reference implementation, not an optimized kernel.
     Only the KV-head axis is partitioned; sequence metadata and pages are replicated.
     """
@@ -120,19 +121,15 @@ def _reference_attention(
         allowed &= key_position < kv_lens[seq, None]
         if sliding_window is not None:
             allowed &= key_position > position[:, None] - sliding_window
-        scores = jnp.einsum(
-            "thgd,tshd->thgs", q.astype(jnp.float32) * sm_scale, k, precision=jax.lax.Precision.HIGHEST
-        )
+        scores = jnp.einsum("thgd,tshd->thgs", q.astype(jnp.float32), k, precision=jax.lax.Precision.HIGHEST)
+        scores = scores * sm_scale
         if soft_cap is not None:
-            # TPU tanh uses an approximation that can flip BF16 output rounding.
-            scaled = scores / soft_cap
-            numerator = -jnp.expm1(-2 * jnp.abs(scaled))
-            scores = soft_cap * jnp.sign(scaled) * numerator / (2 - numerator)
+            scores = soft_cap * jax.lax.tanh(scores / soft_cap, accuracy=jax.lax.AccuracyMode.HIGHEST)
         scores = jnp.where(allowed[:, None, None, :], scores, -jnp.inf)
         next_maximum = jnp.maximum(maximum, jnp.max(scores, axis=-1))
         safe_maximum = jnp.where(jnp.isfinite(next_maximum), next_maximum, 0)
-        correction = jnp.exp(maximum - safe_maximum)
-        probabilities = jnp.exp(scores - safe_maximum[..., None])
+        correction = jax.lax.exp(maximum - safe_maximum, accuracy=jax.lax.AccuracyMode.HIGHEST)
+        probabilities = jax.lax.exp(scores - safe_maximum[..., None], accuracy=jax.lax.AccuracyMode.HIGHEST)
         # Unallocated slots can contain NaNs; masked values must not leak through 0 * NaN.
         v = jnp.where(allowed[:, :, None, None], v, 0)
         output = output * correction[..., None] + jnp.einsum(
@@ -146,6 +143,21 @@ def _reference_attention(
 
 
 def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+    # JAX's TPU kernel applies one precision to QK and AV. Default precision rounds
+    # the FP32 softmax weights to BF16; highest precision rejects BF16 operands.
+    # Stream reference pages instead of materializing an FP32 copy of the full cache.
+    if q.dtype != jnp.float32 or kv_pages.dtype != jnp.float32:
+        return _reference_attention(
+            q,
+            kv_pages,
+            kv_lens,
+            page_indices,
+            cu_q_lens,
+            num_seqs,
+            sm_scale=sm_scale,
+            sliding_window=sliding_window,
+            soft_cap=soft_cap,
+        )
     original_dim = q.shape[-1]
     padding = (-original_dim) % 128
     q_padded = jnp.pad(q, ((0, 0), (0, 0), (0, 0), (0, padding)))
@@ -154,13 +166,10 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
     if isinstance(sm_scale, (float, int)):
         kernel_scale = sm_scale
     else:
-        # Runtime scales cannot be static kernel arguments. Promote before scaling
-        # to avoid rounding BF16 queries before their dot product.
-        q_flat = q_flat.astype(jnp.float32) * sm_scale
+        # Runtime scales cannot be static kernel arguments.
+        q_flat = q_flat * sm_scale
         kernel_scale = 1.0
-    # FP32 inputs need full precision; Mosaic rejects FP32 precision on BF16 dots.
-    precision = "highest" if q_flat.dtype == jnp.float32 else "default"
-    with jax.default_matmul_precision(precision):
+    with jax.default_matmul_precision("highest"):
         output = tpu_ragged_paged_attention(
             q_flat,
             pages_padded,
