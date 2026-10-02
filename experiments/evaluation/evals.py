@@ -188,6 +188,7 @@ class HarborDefinition:
         config: ValidatedHarborConfig,
         model: ModelConfig,
         runtime_task_limit: int | None,
+        retry_unscored_trials: bool,
     ) -> EvalExecutor:
         secret_env = self.secret_env_for(config)
         return HarborExecutor(
@@ -195,6 +196,7 @@ class HarborDefinition:
             task_limit=runtime_task_limit,
             model_agent_kwargs=harbor_model_agent_kwargs(model),
             secret_env_keys=tuple(secret_env),
+            retry_unscored_trials=retry_unscored_trials,
         )
 
 
