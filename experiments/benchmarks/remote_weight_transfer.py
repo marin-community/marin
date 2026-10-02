@@ -42,6 +42,8 @@ from skyrl_train.inference_engines import remote_inference_engine
 
 logger = logging.getLogger(__name__)
 
+GATE_TIMEOUT = 30
+
 SKYRL_REVISION = "b3297eddfe67358004ee925a42c9ffca81ac8f6e"
 
 
@@ -89,7 +91,7 @@ async def run(args):
             max_seqs_in_prefill=1,
             compute_dtype=jnp.dtype(args.dtype),
         ),
-        weight_transfer=WeightTransferConfig(backend=args.backend, max_staging_bytes=1_000_000, timeout=30),
+        weight_transfer=WeightTransferConfig(backend=args.backend, max_staging_bytes=1_000_000, timeout=GATE_TIMEOUT),
     )
     receiver = {"jax_device": str(jax.devices()[0]), "torch": torch.__version__, "jax": jax.__version__}
     if args.backend == "nccl":
@@ -119,14 +121,14 @@ async def run(args):
             broadcast_source(
                 scratch / "sender.log",
                 backend=args.backend,
-                timeout=30,
+                timeout=GATE_TIMEOUT,
                 environment={"CUDA_VISIBLE_DEVICES": args.sender_device if args.backend == "nccl" else ""},
             ) as source,
         ):
             listener.bind(("127.0.0.1", 0))
             serving = asyncio.create_task(http_server.serve(sockets=[listener]))
             try:
-                await asyncio.wait_for(ready.wait(), 30)
+                await asyncio.wait_for(ready.wait(), GATE_TIMEOUT)
                 client = remote_inference_engine.RemoteInferenceEngine(
                     f"127.0.0.1:{listener.getsockname()[1]}", "gpt2", "vllm", tokenizer
                 )
@@ -218,7 +220,7 @@ async def run(args):
                 source.stop()
                 http_server.should_exit = True
                 try:
-                    await asyncio.wait_for(serving, 30)
+                    await asyncio.wait_for(serving, GATE_TIMEOUT)
                 except BaseException:
                     if primary_error is None:
                         raise
