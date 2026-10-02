@@ -24,7 +24,15 @@ be shared by every worker. A checkpoint written by the standard Hero FSDP
 trainer has a different state tree, including optional master and EMA weights;
 loading that format into this pipeline has not been implemented or validated.
 
-## Validated result
+At executable `a1e3ab278eeb05bb645db641dd3e7dabedf90dbb`, the combined runner
+completed ten synthetic and twenty fresh Harrier updates on 16 H100s with two
+full-width layers, FP32 parameters/BF16 compute and scaled MuonH. The explicit
+SM90 pooled-wave/FA4 adapter disables SYRK and establishes no ragged transport
+parity. All-48-layer main-recipe execution and combined GB200 validation remain
+pending. The H100
+reference records the measured losses, data budget and source boundary.
+
+## Historical full-model result
 
 The full 535,477,106,688-parameter, 48-layer model completed ten finite synthetic
 updates at sequence length 65,536 on 192 H100s in `cw-rno2a`. The recipe uses
@@ -42,7 +50,7 @@ initialization with synthetic data, not training-quality results. The complete
 scaling table, negative results, dependency findings, and W&B links are in
 [experiment #9277](https://github.com/marin-community/marin/issues/9277).
 
-## Runtime requirements
+## Historical runtime requirements
 
 The measured runs used JAXPP `46b8443eed01f54688dd24ae451203a504b1cff8` with
 local overlays. A stock installation of that pin is insufficient. Required

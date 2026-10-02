@@ -1,15 +1,31 @@
 # Hero pipeline on H100
 
-The Hero pipeline runner supports a hardware adapter for the current Hero model
-and optimizer configuration and a fresh Harrier data stream. The prepared
-H100 gates use two layers at width 6144 with 384 experts, sequence length 4096,
-PP2/EP8, FP32 parameters, BF16 compute, and scaled MuonH. The combined runner requires new bounded hardware gates. Results from the
-separate H100 and GB200 launch snapshots do not validate this integration checkout.
+The combined runner at `a1e3ab278eeb05bb645db641dd3e7dabedf90dbb`
+passed ten synthetic updates and twenty fresh Harrier updates on 16 H100s.
+Both gates used two layers at width 6144 with 384 experts, sequence length
+4096, PP2/EP8, FP32 parameters, BF16 compute, scaled MuonH and pinned-host
+optimizer state. Synthetic loss went from 11.804966926574707 to
+0.4793720245361328; fresh-data loss went from 11.8075590133667 to
+7.612007141113281 over 2,621,440 tokens. All native processes and Iris tasks
+completed successfully. These gates validate this two-layer H100 adapter;
+All-48-layer main-recipe execution remains unvalidated; the H100 adapter
+does not establish ragged transport parity.
 
-These worker commands require the integration branch `codex/hero-pipeline-consolidation`,
-based on main `89ac0d7705`, with the Hero pipeline and checkpoint changes.
-Record `git rev-parse HEAD` before installing; main alone does not contain this
-runner and runtime overlay.
+Publication targets the existing branch `codex/hero-gb200-pipeline` in
+[PR #9662](https://github.com/marin-community/marin/pull/9662), with executable
+pin `a1e3ab278eeb05bb645db641dd3e7dabedf90dbb`. That commit is currently local;
+publication awaits the combined GB200 gate. Once it is published, use:
+
+```bash
+git clone --branch codex/hero-gb200-pipeline https://github.com/marin-community/marin.git
+cd marin
+git checkout a1e3ab278eeb05bb645db641dd3e7dabedf90dbb
+git rev-parse HEAD
+```
+
+The model and kernel base is main `89ac0d7705`. Main alone does not contain this
+runner and runtime overlay. Record the executable pin separately from later
+documentation-only commits.
 
 `--main-hero-recipe` uses `HERO_MODEL_CONFIG` and `MoeHeuristic` from
 `experiments/grug/moe_hero_ep`. H100 selects `gpu_fa4_cute` attention and
@@ -20,7 +36,7 @@ decay 0.02 and z-loss 1e-4, and disables SYRK on H100.
 
 ## Runtime and startup
 
-The prepared adapter runtime uses JAX/JAXlib and stock x86 CUDA 13 PJRT/plugin
+The measured adapter runtime uses JAX/JAXlib and stock x86 CUDA 13 PJRT/plugin
 0.11.1, FA4 4.0.0b28, Cutlass DSL 4.6.2, Quack 0.6.4, and CUDA Torch
 2.11.0+cu128. JAXPP is pinned to
 `328f75a80cecf22c7cc030a82d8941d3c1e220b6` with the checked-in
@@ -65,7 +81,8 @@ export JAX_PLATFORMS=cuda,cpu
 uv run --no-sync python -c 'import jax; assert jax.default_backend() == "gpu", (jax.default_backend(), jax.devices()); assert jax.devices("cuda"); assert jax.devices("cpu"); print(jax.default_backend(), jax.devices("cuda"), jax.devices("cpu"))'
 uv run --no-sync python -c 'import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.cuda.get_device_capability())'
 JAX_PLATFORMS=cpu uv run --no-sync python -m experiments.grug.moe_hero_pipeline.pipeline_smoke --help
-JAX_PLATFORMS=cpu uv run --no-sync python -m pytest experiments/grug/moe_hero_pipeline/test_pipeline.py -q -n 0
+uv pip install pytest pytest-timeout pytest-xdist pytest-asyncio==1.4.0
+JAX_PLATFORMS=cpu uv run --no-sync python -m pytest experiments/grug/moe_hero_pipeline/test_pipeline.py experiments/grug/moe_hero_pipeline/test_data.py -q -n 0
 ```
 
 JAX reports CUDA's default backend platform as `gpu`. The explicit `cuda`
@@ -73,8 +90,19 @@ device query and `JAX_PLATFORMS=cuda,cpu` restrict that accelerator backend to C
 The explicit `--processes-per-task 8` matches the worker wrapper and disables
 per-process PGLE by default; concurrent CUPTI sessions on one node collide.
 
-Iris must allocate two eight-GPU H100 worker tasks in one job and expose its
-endpoint registry, task context, and a `jax` port. Each worker launches eight
+The commands below start workers inside a preconfigured Iris job. Match the
+measured allocation:
+
+| Job setting | Value |
+| --- | --- |
+| Worker tasks | 2, coscheduled in one job |
+| Per-task resources | 8 H100 GPUs, 112 CPUs, 1400 GiB RAM, 128 GiB disk |
+| Priority and timeout | `PRIORITY_BAND_BATCH`, 3600 seconds |
+| Retries | No failure or preemption retries |
+| Registered port | `jax` |
+
+Install the pinned runtime on both workers before invoking the command.
+Iris must expose its endpoint registry, task context, and the `jax` port. Each worker launches eight
 processes with one GPU per process. `iris.jax.multigpu_main` derives global rank
 as `8 * task_index + local_rank`, sets `IRIS_MULTIGPU_PROCESS_COUNT=16`,
 `IRIS_MULTIGPU_PROCESS_INDEX`, and `IRIS_MULTIGPU_LOCAL_DEVICE_IDS`. The runner's
@@ -130,8 +158,11 @@ horizon; the execution limit remains twenty steps. This preserves rare
 components that would become empty if their views shrank to the trial budget.
 The `real_data_view` event records every component's sequence count. The trial
 processes 2,621,440 global training tokens from fresh seed zero.
-Each process uses the existing 1 GB jagged-array read cache. The output
-root owns mixture metadata; this command does not request a checkpoint.
+The measured run reported all 200 components nonempty, with at least 826
+sequences in the smallest component. Main weights, component order and the
+390251-step mixture horizon were preserved. Each process uses the existing
+1 GB jagged-array read cache. The output root owns mixture metadata; this
+command does not request a checkpoint.
 
 The runner closes the disposable compilation-sample iterator before compiling,
 then opens the training iterator at the checkpoint step. It closes that
@@ -140,26 +171,42 @@ iterator on success and failure. A pipeline resume keeps `--seed` and
 `--steps` unchanged for the optimizer schedule. Real-data checkpoints record
 the mixture horizon and reject a resume with a different horizon.
 
+The retained tails directly record fifteen rank exits; both supervisors wait
+for every child and return the first failure, certifying all sixteen exits as
+zero. The checked source enforces iterator cleanup and per-step CUDA
+synchronization; the synchronization flag was enabled. Separate per-rank
+synchronization or
+iterator-close event traces were not retained. Detailed launch, controller and
+native evidence is retained with PR #9662's validation record.
+
 ## Checkpoint boundary and storage
 
-Before these adapter gates, complete a reduced BF16 pooled-transport
-save/resume/uninterrupted-control comparison with one source and runtime.
-The reduced model has width 256, four layers, 96 experts, sequence length 4096,
-PP2/EP8, batch 16, two microbatches, and the historical constant MuonH schedule.
-Use the runner's reduced default model with `--optimizer muonh --steps 2`.
-Save with `--checkpoint-root <shared-scratch-root> --checkpoint-every-steps 1
---stop-after-step 1`. Resume with the same root, steps, model, and seed, omitting
-both save-interval and stop flags. Run the two-step control with no checkpoint
-root. Use the original pinned JAXPP46b runtime with its historical overlays for
-all three jobs; its source and setup hashes must match.
-Require restoration of step 1, a finite step 2, a matched step-2 loss, and zero
-exit codes from every native process and Iris task. Keep one scratch checkpoint with a 30-day TTL; resume and
-control do not write another checkpoint.
-The scratch root must be under `s3://marin-us-east-02a/tmp/ttl=30d/`.
-Compare step-2 losses with the existing pipeline-test tolerances
-`rtol=1e-5, atol=1e-5`; record the actual absolute difference. A complete save
-emits `pipeline_checkpoint_saved` with `step=1`; resume must emit
-`pipeline_checkpoint_restored` with `step=1` before stepping.
+The reduced BF16 pooled-transport save/resume/uninterrupted-control comparison
+passed on historical source `77b4b15cae978b9acf2a721c47c3606773f6a177`.
+Its checkpoint stored 90,018,826 bytes in 17 objects, including optimizer state.
+Resumed and uninterrupted step-2 losses differed by 9.5367431640625e-7,
+within unchanged `rtol=1e-5, atol=1e-5`. This historical checkpoint result does
+not establish GPU checkpoint restoration for the combined `a1e3` executable.
+
+A fresh checkpoint gate for the combined executable remains unvalidated on
+GPUs. Match source, model, runtime, total `--steps`, seed and data schedule
+horizon across save, resume and uninterrupted control. For a reduced control,
+use the runner's default model without `--main-hero-recipe`, and keep
+`--optimizer muonh --steps 2` plus the same worker/runtime/offload settings on
+all three legs. Apply these exact additional flag sets:
+
+| Leg | Additional flags |
+| --- | --- |
+| Save | `--checkpoint-root <shared-scratch-root> --checkpoint-every-steps 1 --stop-after-step 1` |
+| Resume | `--checkpoint-root <shared-scratch-root>` |
+| Uninterrupted control | None |
+
+`--stop-after-step 1` bounds the save leg while preserving the two-step
+optimizer schedule. Omitting the save interval on resume prevents another
+write. Require restored step 1 before a finite step 2, matched step-2 loss at
+`rtol=1e-5, atol=1e-5`, and zero native/Iris exits. Record the actual loss
+difference and optimizer-inclusive stored bytes. Keep one checkpoint under
+`s3://marin-us-east-02a/tmp/ttl=30d/`.
 
 The pipeline state tree uses global layer paths. Standard Hero FSDP checkpoints
 use a different tree and have no validated conversion into this runner.
@@ -167,4 +214,4 @@ For the main FP32 recipe, CPU shape evaluation of the actual model and MuonH
 state estimates 196,925,211,676 bytes for two full-width layers and
 4,290,644,189,212 bytes for 48 layers. These estimates exclude metadata and
 storage overhead. Measure completed checkpoint bytes before widening a storage
-gate; the prepared synthetic and fresh-data gates write zero checkpoint bytes.
+gate. The measured combined synthetic and fresh-data gates wrote no checkpoints.
