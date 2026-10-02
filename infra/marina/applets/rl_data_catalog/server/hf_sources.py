@@ -28,12 +28,13 @@ class HuggingFaceSource:
     validation_url: str
 
 
+PDBTHINK_DATASET = "open-athena/pdbthink-coordinate-tasks"
 PDBTHINK_REVISION = "3734406cb97b1702844319f9a5d860cbbf8fe660"
-PDBTHINK_RELEASE = f"https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/{PDBTHINK_REVISION}"
+PDBTHINK_RELEASE = f"https://huggingface.co/datasets/{PDBTHINK_DATASET}/blob/{PDBTHINK_REVISION}"
 
 HF_SOURCES = (
     HuggingFaceSource(
-        dataset_id="open-athena/pdbthink-coordinate-tasks",
+        dataset_id=PDBTHINK_DATASET,
         revision=PDBTHINK_REVISION,
         revised_at="2026-10-02T18:39:51+00:00",
         version="1.3.0",
@@ -50,8 +51,7 @@ HF_SOURCES = (
         verification="Bundled pdbthink-coordinate verifier 1.1.0; exact correctness with per-task numeric tolerances",
         license="Apache-2.0; coordinate provenance identifies the public Protein Data Bank sources",
         notes=(
-            "100,000 tasks in 19 coordinate families, from 2,671 PDB entries in 1,867 source groups. "
-            "Grouped splits: 91,154 train, 4,411 validation, 4,435 test. "
+            "19 coordinate families, from 2,671 PDB entries in 1,867 source groups. "
             "The frozen benchmark's entries, exact protein sequences and RCSB 30% clusters were excluded. "
             "No sequence-to-structure prediction or retired MECH tasks. "
             "Use the release's CoordinateNoToolsAgent with tools disabled; a terminal agent changes the protocol. "

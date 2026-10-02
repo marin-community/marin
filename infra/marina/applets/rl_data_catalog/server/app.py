@@ -333,7 +333,7 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
     if not lock:
         return {"busy": True, "message": "Another visitor is refreshing the catalog. Your saved data remains available."}
     results = []
-    for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN, HF_ORIGIN):
+    for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN):
         previous = connection.execute(
             text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": origin}
         ).scalar_one_or_none()
@@ -348,7 +348,7 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                     ).scalars()
                 ]
                 snapshot = skyrl_snapshot(client, head, cached_rows, force=force)
-            elif origin == TASKTROVE_ORIGIN:
+            else:
                 info = get_json(client, f"https://huggingface.co/api/datasets/{TASKTROVE}")
                 revision = info["sha"]
                 manifest = (
@@ -357,10 +357,6 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                     else None
                 )
                 snapshot = tasktrove_snapshot(manifest, info) if manifest is not None else None
-            else:
-                # Refresh even an empty registration set so removing its last source retires it.
-                snapshot = hf_snapshot(HF_SOURCES)
-                revision = snapshot.revision
         except (
             httpx.HTTPError,
             HFCredentialError,
@@ -392,6 +388,11 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                 {"origin": origin},
             )
         results.append({"origin": origin, "revision": revision, "changed": snapshot is not None})
+    # Checked-in configuration errors must propagate, unlike recoverable upstream outages.
+    # Saving an empty registration set also retires the last removed source.
+    registered = hf_snapshot(HF_SOURCES)
+    save_snapshot(connection, registered)
+    results.append({"origin": HF_ORIGIN, "revision": registered.revision, "changed": True})
     return {"busy": False, "results": results}
 
 

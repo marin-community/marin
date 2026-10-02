@@ -149,14 +149,15 @@ def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(cata
     assert status["Task Trove"]["error"] is None
     assert result["results"][1]["changed"]
     registered = payloads["Hugging Face:open-athena/pdbthink-coordinate-tasks"]
-    assert registered["payload"]["task_count"] == 100000
     assert (registered["quality"], registered["difficulty"], registered["review_id"]) == (None, None, None)
 
 
 def test_registered_release_keeps_tool_free_contract_and_invalidates_old_review(
     catalog_connection: Connection,
 ) -> None:
-    source = HF_SOURCES[0]
+    source = replace(
+        HF_SOURCES[0], revision="first-release", splits=(("train", 7), ("test", 3)), type="RLVR", turns="Single-turn"
+    )
     snapshot = hf_snapshot((source,))
     save_snapshot(catalog_connection, snapshot)
     source_id = snapshot.rows[0]["id"]
@@ -178,7 +179,7 @@ def test_registered_release_keeps_tool_free_contract_and_invalidates_old_review(
     published = source_with_review(stored | {"verifier_issues": []})
     assert (published["environment"], published["type"], published["turns"]) == ("Harbor", "RLVR", "Single-turn")
     assert published["dataset_revision"] == published["verifier_revision"] == "new-pinned-release"
-    assert published["split_counts"] == {"train": 91154, "validation": 4411, "test": 4435}
+    assert published["task_count"] == 10
     assert published["review_id"] == "historical"
     assert published["review_stale"]
     assert published["quality"] is None and published["difficulty"] is None
