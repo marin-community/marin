@@ -993,7 +993,7 @@ def test_weight_publication_stages_before_install_and_preserves_failed_version()
         "logprobs": 0,
     }
 
-    def staging_failure(model):
+    def staging_failure(_model):
         raise ValueError("checkpoint staging failed")
 
     try:
@@ -1143,7 +1143,7 @@ async def test_http_disconnect_cancels_generation_without_poisoning_next_request
         server = InferenceServer.create(config, _BlockingTokenModel(entered, release), _AliasingChatTokenizer())
     messages = asyncio.Queue()
 
-    async def send(message):
+    async def send(_message):
         pass
 
     body = {
