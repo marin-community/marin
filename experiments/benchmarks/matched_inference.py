@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 
 import draccus
@@ -37,12 +38,18 @@ _WARMUP_BATCHES = 2
 _MEASURED_BATCHES = 3
 _INITIALIZATION_SEED = 17
 _AUXILIARY_SEED = 23
+_NORM_SEED = 29
 _FIXTURE_MAX_SEQ_LEN = 128
 _FIXTURE_MAX_BATCHED_TOKENS = 256
 _TINY_KV_CACHE_BYTES = 64 * 1024**2
 
 
-def export_fixture(root: Path, recipe: str) -> None:
+class NormWeights(StrEnum):
+    ONES = "ones"
+    NONUNIT = "nonunit"
+
+
+def export_fixture(root: Path, recipe: str, norm_weights: NormWeights = NormWeights.ONES) -> None:
     """Write deterministic BF16 weights, tokenizer, and identical token workload."""
     root.mkdir(parents=True, exist_ok=False)
     checkpoint = root / "checkpoint"
@@ -78,11 +85,17 @@ def export_fixture(root: Path, recipe: str) -> None:
         )
         model = jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16").cast_to_compute(model)
         state = model.to_state_dict()
+        norm_names = []
         for index, (name, value) in enumerate(state.items()):
             if "sconv" in name or name.endswith(("attn_gate.weight", "router.bias")):
                 state[name] = 0.1 * jax.random.normal(
                     jax.random.fold_in(jax.random.key(_AUXILIARY_SEED), index), value.shape, value.dtype
                 )
+            if norm_weights == NormWeights.NONUNIT and name.endswith("norm.weight"):
+                state[name] = 1 + 0.1 * jax.random.normal(
+                    jax.random.fold_in(jax.random.key(_NORM_SEED), index), value.shape, value.dtype
+                )
+                norm_names.append(name)
         model = hax.named_jit(lambda m, weights: m.from_state_dict(weights))(model, state)
         # The promoted GrugMoE loader consumes [expert, output, input] banks.
         tensors = {name: np.ascontiguousarray(np.asarray(value)) for name, value in model.to_state_dict().items()}
@@ -103,6 +116,7 @@ def export_fixture(root: Path, recipe: str) -> None:
                 "dtype": "bfloat16",
                 "synthetic_seed": _INITIALIZATION_SEED,
                 "auxiliary_seed": _AUXILIARY_SEED,
+                "norm_weights": {"mode": norm_weights, "seed": _NORM_SEED, "modified_tensors": norm_names},
                 "evidence_kind": "synthetic_checkpoint",
             },
             indent=2,
@@ -322,6 +336,7 @@ def main() -> None:
     export = commands.add_parser("export")
     export.add_argument("--recipe", choices=["snowball", "hero"], required=True)
     export.add_argument("--output", type=Path, required=True)
+    export.add_argument("--norm-weights", type=NormWeights, choices=list(NormWeights), default=NormWeights.ONES)
     for backend in ("native", "vllm"):
         run = commands.add_parser(backend)
         run.add_argument("--fixture", type=Path, required=True)
@@ -349,7 +364,7 @@ def main() -> None:
     compare.add_argument("--fixture", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "export":
-        export_fixture(args.output.resolve(), args.recipe)
+        export_fixture(args.output.resolve(), args.recipe, args.norm_weights)
     elif args.command == "compare":
         compare_fixture(args.fixture.resolve())
     elif args.command == "native":
