@@ -13,10 +13,10 @@ _BFLOAT16_OVERFLOW_MIDPOINT = float.fromhex("0x1.ffp127")
 def round_to_bfloat16(values: np.ndarray) -> np.ndarray:
     """Return nearest-even BF16 values in FP64, without intermediate FP32 rounding.
 
-    NumPy's BF16 cast can round through FP32, losing which side of a BF16
-    midpoint an FP64 oracle lies on. Quantizing the FP64 significand directly
-    also handles BF16 subnormals, signed zero and overflow ties.
+    Preserve signed zero, subnormals and NaNs. Values at or beyond the BF16
+    overflow midpoint round to signed infinity.
     """
+    # A NumPy BF16 cast can double-round through FP32 at BF16 midpoints.
     values = np.asarray(values, np.float64)
     finite = np.isfinite(values) & (np.abs(values) < _BFLOAT16_OVERFLOW_MIDPOINT)
     safe = np.where(finite, values, 0.0)
