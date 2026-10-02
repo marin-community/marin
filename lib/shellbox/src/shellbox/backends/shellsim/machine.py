@@ -138,6 +138,9 @@ class ShellSimMachine:
         async with self._lock:
             if source.is_dir():
                 await asyncio.to_thread(self.simulation.mount, source, target)
+                mode = source.stat().st_mode & 0o7777
+                result = await asyncio.to_thread(self.simulation.run, f"chmod {mode:o} {shlex.quote(target)}")
+                result.check_returncode()
                 return
             self.simulation.mkdir(str(PurePosixPath(target).parent), parents=True)
             self.simulation.write_file(target, source.read_bytes(), mode=source.stat().st_mode & 0o7777)

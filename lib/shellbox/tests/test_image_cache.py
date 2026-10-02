@@ -9,8 +9,27 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
-from shellbox.image import DockerfileSource, ImageCache
+from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
+
+
+@pytest.mark.parametrize("working_directory,expected", [("/task workspace", "/task workspace"), ("", "/")])
+def test_prepared_image_workdir_comes_from_its_digest_bound_config(tmp_path, working_directory, expected):
+    blobs = tmp_path / "blobs" / "sha256"
+    blobs.mkdir(parents=True)
+    config = json.dumps({"config": {"WorkingDir": working_directory}}).encode()
+    config_digest = hashlib.sha256(config).hexdigest()
+    config_path = blobs / config_digest
+    config_path.write_bytes(config)
+    manifest = json.dumps({"config": {"digest": f"sha256:{config_digest}"}}).encode()
+    manifest_digest = hashlib.sha256(manifest).hexdigest()
+    (blobs / manifest_digest).write_bytes(manifest)
+    image = PreparedImage(tmp_path, f"sha256:{manifest_digest}", RegistryImage("fixture"))
+    assert prepared_image_workdir(image) == expected
+    config_path.write_bytes(json.dumps({"config": {"WorkingDir": "/changed"}}).encode())
+    with pytest.raises(ValueError, match="config digest mismatch"):
+        prepared_image_workdir(image)
 
 
 def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, monkeypatch):
