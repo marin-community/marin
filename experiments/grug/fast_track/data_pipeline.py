@@ -18,7 +18,6 @@ from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.execution import run_steps_in_pool
 from experiments.datakit.reference_pipeline import (
-    DEFAULT_MAX_CONCURRENT,
     SMOKE_SCALE,
     TokenizerSpec,
     reference_datakit_steps,
@@ -43,6 +42,9 @@ class FastTrackDataStore(Artifact):
 
 DATA_POOL_WORKERS = 1
 DATA_POOL_RESOURCES = ResourceConfig(cpu=120, ram="1t", disk="1t")
+# Most shard tasks request two CPUs. Keep enough steps active to fill the worker
+# when each source has only one shard.
+DATA_PIPELINE_CONCURRENCY = 64
 FAST_TRACK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_2026_10_02"
 
 
@@ -78,7 +80,7 @@ def build_fast_track_data(
             max_workers=DATA_POOL_WORKERS,
             stage_runner_factory=SubprocessRunner,
         ) as pool:
-            run_steps_in_pool(datakit.all_steps, pool=pool, max_concurrent=DEFAULT_MAX_CONCURRENT)
+            run_steps_in_pool(datakit.all_steps, pool=pool, max_concurrent=DATA_PIPELINE_CONCURRENCY)
         store = read_artifact(datakit.output_buckets.output_path, ClusteredStoreData)
         log_store_summary(store)
         return FastTrackDataStore(store=store)
