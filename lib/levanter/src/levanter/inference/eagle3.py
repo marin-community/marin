@@ -29,6 +29,52 @@ class Eagle3State(eqx.Module):
         return Eagle3State(self.cache.reset(), jnp.zeros_like(self.target_auxiliary))
 
 
+def prefill_eagle3(
+    model: Eagle3Draft,
+    state: Eagle3State,
+    tokens: NamedArray,
+    target_auxiliary: jax.Array,
+    target_info: PageBatchInfo,
+) -> Eagle3State:
+    """Prefill shifted draft inputs and retain the final residual for each request."""
+    sequence_capacity = target_info.seq_lens.size
+    active = jnp.arange(sequence_capacity) < target_info.num_seqs
+    lengths = jnp.where(active, jnp.diff(target_info.cu_q_lens.array) - 1, 0)
+    offsets = jnp.concatenate([jnp.zeros(1, jnp.int32), jnp.cumsum(lengths)])
+    sequence_rows = jnp.repeat(jnp.arange(sequence_capacity), lengths, total_repeat_length=tokens.size)
+    positions = jnp.arange(tokens.size) - offsets[sequence_rows]
+    source_rows = target_info.cu_q_lens.array[sequence_rows] + positions
+    valid = jnp.arange(tokens.size) < offsets[-1]
+    source_rows = jnp.clip(source_rows, 0, tokens.size - 1)
+    shifted_tokens = tokens.array.at[jnp.minimum(source_rows + 1, tokens.size - 1)].get(out_sharding=P(None))
+    residuals = target_auxiliary.at[source_rows].get(out_sharding=P(None, None))
+    pages = target_info.page_indices.array.at[sequence_rows, positions // target_info.page_size].get(
+        out_sharding=P(None)
+    )
+    destinations = jnp.where(valid, pages * target_info.page_size + positions % target_info.page_size, -1)
+    info = PageBatchInfo(
+        slot_ids=target_info.slot_ids,
+        page_indices=target_info.page_indices,
+        seq_lens=hax.named(lengths, target_info.seq_lens.axes),
+        cu_q_lens=hax.named(offsets, target_info.cu_q_lens.axes),
+        num_seqs=target_info.num_seqs,
+        new_token_dests=hax.named(destinations, tokens.axes),
+        page_size=target_info.page_size,
+    )
+    output = model.decode(
+        hax.named(jnp.where(valid, shifted_tokens, 0), tokens.axes),
+        reshard(model.project_target_states(residuals), P(None, None)),
+        state.cache,
+        info,
+        hax.named(jnp.where(valid, positions, 0), tokens.axes),
+    )
+    last_rows = jnp.maximum(target_info.cu_q_lens.array[1:] - 1, 0)
+    seeds = target_auxiliary.at[last_rows].get(out_sharding=P(None, None))
+    slots = jnp.where(active, target_info.slot_ids.array, state.target_auxiliary.shape[0])
+    auxiliary = state.target_auxiliary.at[slots].set(seeds, mode="drop")
+    return Eagle3State(output.cache, auxiliary)
+
+
 class Eagle3Proposals(NamedTuple):
     token_ids: jax.Array
     tentative_cache: KvPageCache
@@ -38,8 +84,6 @@ class _DraftStep(NamedTuple):
     token_ids: NamedArray
     hidden_states: jax.Array
     cache: KvPageCache
-    batch_info: PageBatchInfo
-    positions: NamedArray
 
 
 def propose_eagle3(
@@ -51,66 +95,72 @@ def propose_eagle3(
     positions: NamedArray,
     *,
     num_draft_tokens: int,
+    draft_lengths: jax.Array,
 ) -> Eagle3Proposals:
-    """Generate K greedy proposals from target residuals and a pending target token.
+    """Generate bounded greedy proposals using each request's remaining budget.
 
-    The packed batch must have one query per active sequence, followed by padding.
-    Its pages must already cover all K draft steps. Draft positions refer to the
-    target residual positions: the input token is shifted one token ahead of that
-    residual. This API does not allocate pages or commit speculative cache entries.
-
-    Only the first written row uses a real target residual. After verification,
-    overwrite later rows with accepted target residuals before continuing; generated
-    draft states are not interchangeable with target residuals. Cancelled requests
-    discard all tentative rows. This function does not reconcile or commit that cache.
+    Inputs contain one pending token per active sequence followed by padding.
+    Positions describe target residuals, one token behind the input IDs. Pages
+    must cover each sequence's draft_lengths, which cannot exceed num_draft_tokens.
+    Finished proposal rows stop writing KV; their padding IDs are -1. The returned
+    cache is tentative and requires target-residual reconciliation before reuse.
     """
     if num_draft_tokens < 1:
         raise ValueError("EAGLE proposal count must be positive")
     capacity = pending_tokens.size
-    sequence_capacity = batch_info.seq_lens.size
-    if sequence_capacity > capacity:
-        raise ValueError("EAGLE token capacity must cover every sequence row")
-    token_rows = jnp.arange(capacity)
-    valid_tokens = token_rows < batch_info.num_seqs
-    valid_sequences = jnp.arange(sequence_capacity) < batch_info.num_seqs
+    sequences = batch_info.seq_lens.size
+    if sequences > capacity or draft_lengths.shape != (sequences,):
+        raise ValueError("EAGLE capacity and proposal lengths must cover each sequence")
 
-    def step(state: _DraftStep, _):
-        result = model.decode(state.token_ids, state.hidden_states, state.cache, state.batch_info, state.positions)
-        proposed = model.greedy_tokens(result.output)
-        next_positions = hax.named(jnp.where(valid_tokens, state.positions.array + 1, 0), positions.axes)
-        page_rows = jnp.minimum(token_rows, sequence_capacity - 1)
-        page_columns = next_positions.array // batch_info.page_size
-        pages = batch_info.page_indices.array.at[page_rows, page_columns].get(out_sharding=P(None))
-        destinations = jnp.where(
-            valid_tokens, pages * batch_info.page_size + next_positions.array % batch_info.page_size, -1
+    def step(state: _DraftStep, index):
+        active = (jnp.arange(sequences) < batch_info.num_seqs) & (index < draft_lengths)
+        count = jnp.sum(active).astype(jnp.int32)
+        selected = jnp.nonzero(active, size=capacity, fill_value=0)[0]
+        valid_tokens = jnp.arange(capacity) < count
+        valid_sequences = jnp.arange(sequences) < count
+        selected_sequences = selected[:sequences]
+        token_ids = state.token_ids.array.at[selected].get(out_sharding=P(None))
+        hidden = state.hidden_states.at[selected].get(out_sharding=P(None, None))
+        step_positions = positions.array.at[selected].get(out_sharding=P(None)) + index
+        step_positions = jnp.where(valid_tokens, step_positions, 0)
+        pages = batch_info.page_indices.array.at[selected, step_positions // batch_info.page_size].get(
+            out_sharding=P(None)
         )
-        next_info = PageBatchInfo(
-            slot_ids=batch_info.slot_ids,
-            page_indices=batch_info.page_indices,
-            seq_lens=hax.named(state.batch_info.seq_lens.array + valid_sequences, batch_info.seq_lens.axes),
-            cu_q_lens=batch_info.cu_q_lens,
-            num_seqs=batch_info.num_seqs,
-            new_token_dests=hax.named(destinations, batch_info.new_token_dests.axes),
+        destinations = jnp.where(
+            valid_tokens, pages * batch_info.page_size + step_positions % batch_info.page_size, -1
+        )
+        page_indices = batch_info.page_indices.array.at[selected_sequences].get(out_sharding=P(None, None))
+        seq_lens = batch_info.seq_lens.array.at[selected_sequences].get(out_sharding=P(None)) + index
+        info = PageBatchInfo(
+            slot_ids=hax.named(jnp.where(valid_sequences, batch_info.slot_ids.array[selected_sequences], -1), "seq"),
+            page_indices=hax.named(
+                jnp.where(valid_sequences[:, None], page_indices, -1), batch_info.page_indices.axes
+            ),
+            seq_lens=hax.named(jnp.where(valid_sequences, seq_lens, 0), "seq"),
+            cu_q_lens=hax.named(jnp.minimum(jnp.arange(sequences + 1), count), "seq"),
+            num_seqs=count,
+            new_token_dests=hax.named(destinations, pending_tokens.axes),
             page_size=batch_info.page_size,
         )
-        next_state = _DraftStep(
-            hax.named(proposed, pending_tokens.axes),
-            reshard(result.output.hidden_states, P(None, None)),
-            result.cache,
-            next_info,
-            next_positions,
+        result = model.decode(
+            hax.named(jnp.where(valid_tokens, token_ids, 0), pending_tokens.axes),
+            hidden,
+            state.cache,
+            info,
+            hax.named(step_positions, positions.axes),
         )
-        output = jnp.where(valid_sequences, proposed[:sequence_capacity], -1)
-        return next_state, output
+        proposed = model.greedy_tokens(result.output)
+        destinations = jnp.where(valid_tokens, selected, capacity)
+        next_tokens = state.token_ids.array.at[destinations].set(proposed, mode="drop")
+        next_hidden = state.hidden_states.at[destinations].set(
+            reshard(result.output.hidden_states, P(None, None)), mode="drop"
+        )
+        output_destinations = jnp.where(valid_tokens, selected, sequences)
+        output = jnp.full((sequences,), -1, jnp.int32).at[output_destinations].set(proposed, mode="drop")
+        return _DraftStep(hax.named(next_tokens, pending_tokens.axes), next_hidden, result.cache), output
 
-    initial = _DraftStep(
-        pending_tokens,
-        reshard(model.project_target_states(target_auxiliary), P(None, None)),
-        cache,
-        batch_info,
-        positions,
-    )
-    final, proposals = jax.lax.scan(step, initial, xs=None, length=num_draft_tokens)
+    initial = _DraftStep(pending_tokens, reshard(model.project_target_states(target_auxiliary), P(None, None)), cache)
+    final, proposals = jax.lax.scan(step, initial, jnp.arange(num_draft_tokens))
     return Eagle3Proposals(proposals.T, final.cache)
 
 

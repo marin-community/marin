@@ -235,6 +235,7 @@ def test_eagle3_learned_recurrent_proposals_match_full_torch_with_separate_cache
                 info,
                 positions,
                 num_draft_tokens=6,
+                draft_lengths=jnp.array([6]),
             )
         )(model, model.initial_cache(PageTableSpec(4, 2), dtype=jnp.float32))
         np.testing.assert_array_equal(proposals.token_ids, [expected_proposals])
@@ -309,6 +310,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
                 seed.batch_info,
                 seed.positions,
                 num_draft_tokens=3,
+                draft_lengths=jnp.array([3]),
             )
         )(draft, draft_prefilled.cache)
 
@@ -344,7 +346,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
                 jnp.array([proposal_case == "cancelled"]),
                 max_draft_tokens=3,
                 auxiliary_layers=config.auxiliary_layers,
-                key=jax.random.key(19),
+                keys=jax.random.split(jax.random.key(19), 1),
                 logprobs_mode="raw_logprobs",
             )
         )(target, prefilled.cache)
@@ -373,6 +375,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
                     seed.batch_info,
                     seed.positions,
                     num_draft_tokens=3,
+                    draft_lengths=jnp.array([3]),
                 )
             )(draft, reconciled.cache)
             np.testing.assert_array_equal(retried.token_ids, proposed.token_ids)
@@ -411,6 +414,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
                 next_seed.batch_info,
                 next_seed.positions,
                 num_draft_tokens=3,
+                draft_lengths=jnp.array([3]),
             )
         )(draft, reconciled.cache)
 
@@ -438,6 +442,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
                 next_seed.batch_info,
                 next_seed.positions,
                 num_draft_tokens=3,
+                draft_lengths=jnp.array([3]),
             )
         )(draft, fresh.cache)
         np.testing.assert_array_equal(next_proposals.token_ids, fresh_proposals.token_ids)
@@ -462,7 +467,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
                 jnp.zeros(1, dtype=bool),
                 max_draft_tokens=3,
                 auxiliary_layers=config.auxiliary_layers,
-                key=jax.random.key(20),
+                keys=jax.random.split(jax.random.key(20), 1),
                 logprobs_mode="raw_logprobs",
             )
         )(target, verified.cache)
@@ -559,3 +564,114 @@ def test_resident_eagle_generation_matches_ordinary_target_and_retry(termination
         if termination == "accept_stop":
             assert result.tokens == [[0, 0, 0]]
             assert result.finish_reasons == [FinishReason.STOP]
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_resident_eagle_mixed_requests_cancel_and_reuse_pages(dtype):
+    hf_config, weights, _ = _checkpoint()
+    draft_config = dataclasses.replace(
+        Eagle3Config.from_hf_config(hf_config), inference_attention_implementation="reference"
+    )
+    config = InferenceEngineConfig(
+        max_seq_len=16,
+        max_seqs=2,
+        max_seqs_in_prefill=2,
+        max_pages=20,
+        page_size=2,
+        max_prefill_size=16,
+        max_tokens_per_round=4,
+        max_queued_tokens=16,
+        max_rounds=1,
+        compute_dtype=dtype,
+    )
+    prompts = [[2, 7, 5], [4], [3, 8, 1, 9]]
+    requests = [
+        Request(prompt, i, dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(limit)), 1)
+        for i, (prompt, limit) in enumerate(zip(prompts, [10, 15, 11], strict=True))
+    ]
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        target = SnowballLMHeadModel.init(Axis("vocab", 32), _target_config(), key=jax.random.key(13))
+        target = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, target)
+        draft = Eagle3Draft.from_state_dict(draft_config, weights, target_embedding=target.transformer.token_embed)
+        ordinary = InferenceEngine.from_model_with_config(target, None, config)
+        expected = [ordinary.generate([request]) for request in requests]
+        engine = InferenceEngine.from_model_with_config(
+            target, None, dataclasses.replace(config, num_eagle3_tokens=3), draft=draft
+        )
+        observed = {}
+
+        def capture(request_id, results):
+            observed[request_id] = tuple(results[0].token_list)
+
+        result = engine.generate(
+            requests, output_callback=capture, should_abort=lambda rid: rid == 0 and len(observed.get(0, ())) >= 2
+        )
+        assert result.finish_reasons == [FinishReason.ABORT, FinishReason.LENGTH, FinishReason.LENGTH]
+        for i in range(3):
+            count = len(result.tokens[i])
+            assert result.tokens[i] == expected[i].tokens[0][:count]
+            np.testing.assert_allclose(result.logprobs[i], expected[i].logprobs[0][:count], atol=1e-4, rtol=1e-4)
+        assert 0 < len(result.tokens[0]) < len(expected[0].tokens[0])
+        assert result.tokens[1:] == [expected[1].tokens[0], expected[2].tokens[0]]
+        resumed = engine.generate([dataclasses.replace(requests[0], prompt_tokens=prompts[0] + result.tokens[0])])
+        assert result.tokens[0] + resumed.tokens[0] == expected[0].tokens[0]
+
+
+def test_resident_eagle_stochastic_request_keeps_draws_when_peer_is_cancelled():
+    hf_config, weights, _ = _checkpoint()
+    draft_config = dataclasses.replace(
+        Eagle3Config.from_hf_config(hf_config), inference_attention_implementation="reference"
+    )
+    config = InferenceEngineConfig(
+        max_seq_len=16,
+        max_seqs=2,
+        max_seqs_in_prefill=2,
+        max_pages=20,
+        page_size=2,
+        max_prefill_size=16,
+        max_tokens_per_round=4,
+        max_queued_tokens=16,
+        max_rounds=1,
+        compute_dtype=jnp.float32,
+        num_eagle3_tokens=3,
+    )
+    requests = [
+        Request(
+            prompt,
+            i,
+            dataclasses.replace(
+                SeqDecodingParams.default(),
+                temperature=jnp.array(0.8),
+                max_num_tokens=jnp.array(limit),
+                key=jax.random.PRNGKey(90 + i),
+            ),
+            1,
+        )
+        for i, (prompt, limit) in enumerate(zip([[2, 7, 5], [4]], [9, 15], strict=True))
+    ]
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        target = SnowballLMHeadModel.init(Axis("vocab", 32), _target_config(), key=jax.random.key(13))
+        # Uniform target scores and fixed draft proposals isolate per-request
+        # random draws from backend-dependent floating-point rounding.
+        target = eqx.tree_at(
+            lambda m: m.transformer.output_proj, target, jnp.zeros_like(target.transformer.output_proj)
+        )
+        weights["lm_head.weight"] = np.zeros_like(weights["lm_head.weight"])
+        draft = Eagle3Draft.from_state_dict(draft_config, weights, target_embedding=target.transformer.token_embed)
+        engine = InferenceEngine.from_model_with_config(target, None, config, draft=draft)
+        uninterrupted = engine.generate(requests)
+        first_count = 0
+
+        def capture(request_id, results):
+            nonlocal first_count
+            if request_id == 0:
+                first_count = len(results[0].token_list)
+
+        interrupted = engine.generate(
+            requests, output_callback=capture, should_abort=lambda rid: rid == 0 and first_count >= 2
+        )
+        assert interrupted.finish_reasons == [FinishReason.ABORT, FinishReason.LENGTH]
+        assert interrupted.tokens[1] == uninterrupted.tokens[1]
+        assert interrupted.logprobs[1] == uninterrupted.logprobs[1]
+        assert interrupted.tokens[0] == uninterrupted.tokens[0][: len(interrupted.tokens[0])]
+        assert 0 < len(interrupted.tokens[0]) < len(uninterrupted.tokens[0])

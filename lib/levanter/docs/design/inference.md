@@ -657,19 +657,22 @@ retain their original visible prefix and return no pending token. The caller
 still owns page allocation, reclamation, and removal of finished rows.
 
 `InferenceEngine.from_model_with_config(..., draft=draft)` with a positive
-`num_eagle3_tokens` enables resident learned proposals. This initial path requires
-one request and one choice, `max_seqs=max_seqs_in_prefill=1`, explicit page capacity,
-`top_p=1`, and `max_logprobs=0`. Unsupported combinations fail before generation.
-The engine owns separate draft KV and a target residual seed, resets both with the
-target cache, and reuses the scheduler's page ownership. It commits verified tokens
-through the ordinary stop-sequence and length checks, queues only the final pending
-token, and checks cancellation at each host extraction boundary. Each speculative
-round is one host update; `max_rounds` still controls ordinary decode. The final
-short generation budget uses ordinary decode to keep speculative writes inside the
-context capacity. Defaults retain ordinary decoding without draft buffers.
+`num_eagle3_tokens` enables resident learned proposals. This path supports mixed
+requests with one choice each, `top_p=1`, explicit page capacity, and
+`max_logprobs=0`. Decode token capacity must cover every sequence slot. Unsupported
+combinations fail before generation. The engine owns separate draft KV and target
+residual seeds, resets both with the target cache, and reuses the scheduler's page
+ownership. It commits verified tokens through ordinary stop-sequence and length
+checks, queues only the final pending token for each request, and checks cancellation
+at each host extraction boundary. Each speculative round is one host update;
+`max_rounds` still controls ordinary decode. Draft execution compacts unfinished
+proposal rows as their per-request budgets expire, keeping speculative writes inside
+the context capacity. Verification uses independent per-request PRNG keys, so peer
+cancellation or batch compaction does not change a request's random draws. Defaults
+retain ordinary decoding without draft buffers.
 
-Mixed batches, cloned choices, rollout candidate capture, and online draft refresh
-remain unimplemented for this path. The pinned online trainer publishes only
-trainable draft tensors. Its target synchronization also refreshes the draft's
-mapped target head; a native refresh implementation must preserve this distinction
-when staging a complete candidate.
+Cloned choices, rollout candidate capture, and online draft refresh remain
+unimplemented for this path. The pinned online trainer publishes only trainable
+draft tensors. Its target synchronization also refreshes the draft's mapped target
+head; a native refresh implementation must preserve this distinction when staging
+a complete candidate.
