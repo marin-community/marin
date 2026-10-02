@@ -774,6 +774,12 @@ class SnowballTransformer(eqx.Module):
 # --- LmHeadModel adapter -----------------------------------------------------------------------
 
 
+class _SnowballDecodeOutput(NamedTuple):
+    logits: NamedArray
+    cache: ListCache[KvPageCache]
+    auxiliary_states: NamedArray | None
+
+
 class SnowballAuxiliaryOutput(NamedTuple):
     logits: NamedArray
     cache: ListCache[KvPageCache]
@@ -893,7 +899,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         auxiliary_layers: tuple[int, ...],
-    ) -> tuple[NamedArray, ListCache[KvPageCache], NamedArray | None]:
+    ) -> _SnowballDecodeOutput:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
@@ -963,7 +969,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
         )
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
-        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches, auxiliary
+        return _SnowballDecodeOutput(hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches, auxiliary)
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:

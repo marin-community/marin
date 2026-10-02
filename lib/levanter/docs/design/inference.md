@@ -634,3 +634,29 @@ This is an opt-in target primitive. It does not load an EAGLE draft checkpoint,
 manage a draft cache, allocate or reclaim pages, refresh draft weights, or enable
 speculation in the serving scheduler. Full EAGLE serving and throughput parity
 remain separate work.
+
+### Pinned Snowball EAGLE3 draft
+
+`Eagle3Draft.from_checkpoint` loads a local single-file Speculators export using
+the shared streaming safetensors reader. The supported nested Llama schema has
+one draft layer, sliding-window attention, a reduced vocabulary, and normalization
+before the auxiliary projection, before the residual connection, and at the
+recurrent output. Other architectures are rejected. The loader validates every
+weight shape and the agreement of the `d2t` offset map with the `t2d` mask. The
+embedding-free checkpoint receives embeddings from the installed target; its
+supplied draft head loads unchanged.
+
+`propose_eagle3` projects target residuals once and generates greedy proposals
+with an independent paged draft cache. Draft input tokens are shifted one position
+ahead of their target residuals. The caller supplies allocated pages and space
+for all proposal steps. The returned draft cache is tentative: after target
+verification, rows generated from predicted draft states must be replaced by
+accepted target residuals before the next proposal round. A canceled request
+must discard its tentative rows.
+
+The learned proposal primitive can feed `verify_snowball_proposals`; it does not
+yet enable speculation in the serving scheduler. Online draft refresh and
+cross-round draft-cache reconciliation remain unimplemented. The pinned online
+trainer publishes only trainable draft tensors. Its target synchronization also
+refreshes the draft's mapped target head; a native refresh implementation must
+preserve this distinction when staging a complete candidate.
