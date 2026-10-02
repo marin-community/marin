@@ -21,20 +21,31 @@ class ModelHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert [tool["function"]["name"] for tool in request["tools"]] == ["Bash"]
-        completed = sum(message["role"] == "tool" for message in request["messages"])
-        if completed >= len(self.bash_commands):
+        tool_results = [message for message in request["messages"] if message["role"] == "tool"]
+        if tool_results:
+            assert tool_results[0]["tool_call_id"] == "unsupported_call"
+            assert json.loads(tool_results[0]["content"]) == {
+                "error": {"type": "unsupported_tool", "name": "WriteFile", "available_tools": ["Bash"]}
+            }
+        completed_bash = len(tool_results) - 1
+        if completed_bash >= len(self.bash_commands):
             message = {"role": "assistant", "content": "Done."}
         else:
+            name = "WriteFile" if not tool_results else "Bash"
             message = {
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
                     {
-                        "id": "call_1",
+                        "id": "unsupported_call" if not tool_results else f"bash_call_{completed_bash}",
                         "type": "function",
                         "function": {
-                            "name": "Bash",
-                            "arguments": json.dumps({"command": self.bash_commands[completed]}),
+                            "name": name,
+                            "arguments": json.dumps(
+                                {"path": "/workspace/answer.txt", "content": "wrong"}
+                                if not tool_results
+                                else {"command": self.bash_commands[completed_bash]}
+                            ),
                         },
                     }
                 ],
