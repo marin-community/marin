@@ -14,3 +14,5 @@ from levanter.grug.attention._core import (
 from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds as fa4_cute_segment_bounds
 from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention as gpu_fa4_cute_attention
 from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention as gpu_fa4_cute_sm100_attention
+from levanter.grug.attention._paged import PagedAttentionImplementation as PagedAttentionImplementation
+from levanter.grug.attention._paged import ragged_paged_attention as ragged_paged_attention

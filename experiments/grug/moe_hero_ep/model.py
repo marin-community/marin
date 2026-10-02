@@ -584,7 +584,7 @@ class CausalSelfAttention(eqx.Module):
                 projection = reshard(projection, kv_spec)
                 if num_kv_heads == stored_kv_heads:
                     return projection
-                return align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
+                return reshard(align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads), kv_spec)
 
             k, v = jax.lax.cond(
                 jnp.asarray(is_global, dtype=jnp.bool_),
@@ -1325,13 +1325,12 @@ class Transformer(eqx.Module):
         ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
             layer, layer_use_long_mask = scan_inputs
             use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
-            lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
-            layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
-            return eqx.filter_checkpoint(layer, policy=remat_policy)(
+            checkpointed_layer = eqx.filter_checkpoint(layer, policy=remat_policy)
+            return jax.lax.cond(
+                use_long,
+                lambda x: checkpointed_layer(x, long_mask.with_fa4_bounds(long_lower_bounds, valid), True, True),
+                lambda x: checkpointed_layer(x, short_mask.with_fa4_bounds(short_lower_bounds, valid), False, False),
                 carry_hidden,
-                layer_mask,
-                use_long,
-                use_long,
             )
 
         hidden, stacked_router_stats = jax.lax.scan(
