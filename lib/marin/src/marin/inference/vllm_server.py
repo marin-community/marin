@@ -259,7 +259,7 @@ class IsolatedCudaVllm:
         return self._command(install.executable, install.executable_args)
 
     def python_command(self, args: tuple[str, ...]) -> list[str]:
-        """Run Python with the same vLLM wheel, PyTorch, and CUDA toolchain as serving."""
+        """Build a Python command with the same vLLM wheel, PyTorch, and CUDA toolchain as serving."""
         return self._command("python", args)
 
     def _command(self, executable: str, executable_args: tuple[str, ...]) -> list[str]:
