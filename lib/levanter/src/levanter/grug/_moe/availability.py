@@ -25,7 +25,7 @@ def gpu_device_present() -> bool:
 
 @functools.cache
 def quack_grouped_gemm_available() -> bool:
-    """Whether QuACK's SM100 grouped GEMMs, used by the ragged expert MLP, can run here."""
+    """Whether QuACK's SM100 grouped GEMMs, used by the expert and shared-expert MLPs, can run here."""
     device = jax.devices()[0]
     if device.platform != "gpu" or float(device.compute_capability) < _SM100_COMPUTE_CAPABILITY:
         return False
@@ -36,8 +36,8 @@ def quack_grouped_gemm_available() -> bool:
     except ImportError as exc:
         logger.warning(
             "SM100 GPU present but the QuACK grouped-GEMM kernels did not import (%s). "
-            "The ragged expert MLP falls back to ragged_dot, which computes the same function "
-            "more slowly. Install levanter's `gpu` extra to use them.",
+            "The MoE MLPs fall back to XLA, which computes the same function more slowly. "
+            "Install levanter's `gpu` extra to use them.",
             exc,
         )
         return False

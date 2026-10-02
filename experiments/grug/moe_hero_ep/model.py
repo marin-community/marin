@@ -30,6 +30,7 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.shared_swiglu import SharedSwigluMlp, select_shared_swiglu_mlp
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
     AttentionMask,
@@ -783,24 +784,68 @@ class DenseMLP(eqx.Module):
         else:
             activation_fn = activation
 
-        gate, up = _dense_gate_up((self.w_gate, self.w_up), _flat_tokens(x))
-        return self.project_out(gate, up, x, activation_fn)
+        mlp = select_shared_swiglu_mlp(activation_fn, jnp.result_type(x, self.w_gate, self.w_up, self.w_down))
+        return self.project_out(mlp, self.gate_up(mlp, _flat_tokens(x)), x)
+
+    def gate_up(self, mlp: SharedSwigluMlp, x_flat: Float[Array, "T D"]) -> tuple[jax.Array, ...]:
+        """The gate/up half of the MLP on token-major activations; see `SharedSwigluMlp`."""
+        token_spec = _token_spec()
+        gate_spec, up_spec = _weight_spec(self.w_gate), _weight_spec(self.w_up)
+
+        def _local(x, w_gate, w_up):
+            return mlp.gate_up(x, _gather_weight(w_gate, gate_spec), _gather_weight(w_up, up_spec))
+
+        with jax.named_scope("DenseMLP"):
+            return shard_map(
+                _local,
+                mesh=get_abstract_mesh(),
+                in_specs=(token_spec, gate_spec, up_spec),
+                out_specs=token_spec,
+                check_rep=False,
+            )(x_flat, self.w_gate, self.w_up)
 
     def project_out(
-        self,
-        gate: Float[Array, "T M"],
-        up: Float[Array, "T M"],
-        like: Float[Array, "B S D"],
-        activation_fn: Any,
+        self, mlp: SharedSwigluMlp, gate_up: tuple[jax.Array, ...], like: Float[Array, "B S D"]
     ) -> Float[Array, "B S D"]:
-        """Apply the activation and the down projection to `_dense_gate_up`'s output."""
+        """The down half of the MLP on `gate_up`'s output, back in ``like``'s residual layout."""
+        token_spec = _token_spec()
+        down_spec = _weight_spec(self.w_down)
+
+        def _local(gate_up, w_down):
+            return mlp.down(gate_up, _gather_weight(w_down, down_spec))
+
         b, s, _ = like.shape
         with jax.named_scope("DenseMLP"):
-            out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
+            out_flat = shard_map(
+                _local,
+                mesh=get_abstract_mesh(),
+                in_specs=(token_spec, down_spec),
+                out_specs=token_spec,
+                check_rep=False,
+            )(gate_up, self.w_down)
             # Reshard after the reshape so the shared-expert output carries the same sharding as the
             # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
             # for why the unflattened tensor cannot keep the fused token tuple.
             return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(like))
+
+
+def _weight_spec(w: jax.Array) -> P:
+    """``w``'s partition spec, one entry per dimension."""
+    spec = _partition_spec_of(w) or P()
+    return P(*spec, *([None] * (w.ndim - len(spec))))
+
+
+def _gather_weight(w: jax.Array, spec: P) -> jax.Array:
+    """All-gather a shard map's local block of ``w`` over the mesh axes ``spec`` splits it on.
+
+    A weight that arrives FSDP-sharded is gathered inside the shard map, so its gradient's transpose
+    is a reduce-scatter; one already gathered ahead of the MoE section (`_prefetch_mlp_weights`)
+    passes through.
+    """
+    for dim, axes in enumerate(spec):
+        if axes is not None:
+            w = jax.lax.all_gather(w, axes, axis=dim, tiled=True)
+    return w
 
 
 def _flat_tokens(x: Float[Array, "B S D"]) -> Float[Array, "T D"]:
@@ -809,13 +854,14 @@ def _flat_tokens(x: Float[Array, "B S D"]) -> Float[Array, "T D"]:
     return reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
 
 
-def _dense_gate_up(
-    weights: tuple[jax.Array, jax.Array], x_flat: Float[Array, "T D"]
-) -> tuple[Float[Array, "T M"], Float[Array, "T M"]]:
-    """A shared expert's gate and up projections of token-major activations."""
-    w_gate, w_up = weights
-    with jax.named_scope("DenseMLP"):
-        return jnp.einsum("td,dm->tm", x_flat, w_gate), jnp.einsum("td,dm->tm", x_flat, w_up)
+def _staged_gate_up(mlp: SharedSwigluMlp):
+    """A `DispatchOverlap` callback: a shared expert's gate/up half on this shard's tokens."""
+
+    def gate_up(weights: tuple[jax.Array, jax.Array], x_local: Float[Array, "T D"]) -> tuple[jax.Array, ...]:
+        with jax.named_scope("DenseMLP"):
+            return mlp.gate_up(x_local, *weights)
+
+    return gate_up
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -1373,9 +1419,14 @@ def _mlp_section(
         # the backward's recompute alike; the first shared expert's gate/up projections run
         # beside it, and its output projection runs wherever the scheduler places it.
         first, shared = shared[0], shared[1:]
-        overlap = DispatchOverlap(fn=_dense_gate_up, params=(first.w_gate, first.w_up), x=_flat_tokens(mlp_in))
-        mlp_out, router_stats, (gate, up) = mlp.call_with_dispatch_overlap(mlp_in, token_valid, overlap)
-        mlp_out = mlp_out + first.project_out(gate, up, mlp_in, ActivationFunctionEnum.silu.to_jax_fn())
+        shared_mlp = select_shared_swiglu_mlp(
+            ActivationFunctionEnum.silu.to_jax_fn(), jnp.result_type(mlp_in, first.w_gate, first.w_up, first.w_down)
+        )
+        overlap = DispatchOverlap(
+            fn=_staged_gate_up(shared_mlp), params=(first.w_gate, first.w_up), x=_flat_tokens(mlp_in)
+        )
+        mlp_out, router_stats, staged = mlp.call_with_dispatch_overlap(mlp_in, token_valid, overlap)
+        mlp_out = mlp_out + first.project_out(shared_mlp, staged, mlp_in)
     else:
         mlp_out, router_stats = mlp(mlp_in, token_valid)
     for shared_expert in shared:
