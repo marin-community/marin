@@ -25,7 +25,7 @@ shapes, so this converter routes on that shape:
 import json
 import re
 
-from tasktrove_verify.spec import ExactSpec, ReasoningGymSpec, ScriptSpec
+from verifyit.spec import ExactSpec, ReasoningGymSpec, ScriptSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
@@ -45,7 +45,7 @@ _UNSCORABLE_REASONING_GYM_DATASETS = frozenset({"arc_agi", "rearc"})
 
 _OLD_REASONING_GYM_PIP_INSTALL = re.compile(r"^RUN pip install --no-cache-dir reasoning-gym")
 """The old grader imported ``reasoning_gym`` directly in the task's system Python; the new grader
-installs its own copy through ``tasktrove-verify[reasoning-gym]``, so this line is dead weight."""
+installs its own copy through ``verifyit[reasoning-gym]``, so this line is dead weight."""
 
 TRANSFORM_SCRIPT = "run_transform.py"
 CASES_FILE = "cases.json"
@@ -194,8 +194,8 @@ def _agent_code(workspace: Path) -> str | None:
 
 
 def main() -> float:
-    tests_dir = Path(os.environ["TASKTROVE_TESTS_DIR"])
-    workspace = Path(os.environ["TASKTROVE_WORKSPACE"])
+    tests_dir = Path(os.environ["VERIFYIT_TESTS_DIR"])
+    workspace = Path(os.environ["VERIFYIT_WORKSPACE"])
     cases = json.loads((tests_dir / "cases.json").read_text())
     code = _agent_code(workspace)
     if code is None:

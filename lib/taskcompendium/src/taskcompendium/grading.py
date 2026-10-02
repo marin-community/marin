@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
-from tasktrove_verify.grade import InvalidTask, numeric_tolerance
-from tasktrove_verify.modes.grade_exact import grade_exact_candidate
-from tasktrove_verify.modes.grade_math import grade_numeric_candidate
-from tasktrove_verify.spec import ExactSpec, NumericSpec
+from verifyit.grade import InvalidTask, numeric_tolerance
+from verifyit.modes.grade_exact import grade_exact_candidate
+from verifyit.modes.grade_math import grade_numeric_candidate
+from verifyit.spec import ExactSpec, NumericSpec
 
 from taskcompendium.models import ConversationEvent, VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention, extract_answer

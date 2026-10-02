@@ -115,7 +115,6 @@ NATIVE_MODULE_PREFIXES = (
     "skyrl_gym.",
     "skyrl_train.trajectory_runners.",
     "harbor.verifier.",
-    "tasktrove_verify.",
     "verifyit.",
 )
 

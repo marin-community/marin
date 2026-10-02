@@ -43,6 +43,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "verifyit",
     "deploy",
     "iac",
 )
@@ -91,6 +92,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "verifyit": "verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
 }
@@ -98,6 +100,7 @@ UV_PACKAGE: dict[str, str] = {
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
     "iac": ["deploy"],
+    "verifyit": ["all"],
 }
 
 PYTHON_VERSION = "3.12"
