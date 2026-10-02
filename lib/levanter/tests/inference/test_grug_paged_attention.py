@@ -12,7 +12,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention
 from levanter.grug.attention._paged_gpu import gpu_paged_attention
-from levanter.grug.attention._paged_tpu import _FloatPair, _exp_nonpositive, tpu_paged_decode
+from levanter.grug.attention._paged_tpu import _FloatPair, _exp_nonpositive, _fixed_high, tpu_paged_decode
 from levanter.testing.precision import round_to_bfloat16
 
 
@@ -294,3 +294,17 @@ def test_tpu_softmax_exp_matches_float64():
         rtol=1e-7,
     )
     np.testing.assert_array_equal(masked.high + masked.low, [0, 0, 1])
+
+
+def test_tpu_query_key_split_rounds_ties_across_bf16_exponents():
+    # Each row has maximum 128 quanta; halfway inputs exercise nearest-even
+    # quantization at both signs, including the smallest normal scale.
+    quanta = np.ldexp(np.ones(247, np.float64), np.arange(-126, 121))[:, None]
+    units = np.array([-128, -127.5, -2.5, -1.5, -0.5, 0, 0.5, 1.5, 2.5, 127.5, 128])
+    values = (quanta * units).astype(np.float32)
+    expected = (quanta * np.rint(units)).astype(np.float32)
+    with jax.default_device(jax.devices("cpu")[0]):
+        actual = jax.jit(_fixed_high)(jnp.asarray(values))
+        zeros = jax.jit(_fixed_high)(jnp.zeros_like(values))
+    np.testing.assert_array_equal(np.asarray(actual), expected)
+    np.testing.assert_array_equal(np.asarray(zeros), 0)

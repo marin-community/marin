@@ -115,7 +115,10 @@ def _fixed_high(value):
     bits = jax.lax.bitcast_convert_type(magnitude, jnp.int32)
     exponent = jnp.maximum(((bits >> _FLOAT32_MANTISSA_BITS) & 255) - _FLOAT32_EXPONENT_BIAS + 1 - 8, -126)
     quantum = jax.lax.bitcast_convert_type((exponent + _FLOAT32_EXPONENT_BIAS) << _FLOAT32_MANTISSA_BITS, jnp.float32)
-    return jnp.round(value / quantum) * quantum
+    # Both scales are normal powers of two throughout the finite BF16 range.
+    # Explicit multiplication avoids Mosaic's general FP32 division lowering.
+    inverse = jax.lax.bitcast_convert_type((_FLOAT32_EXPONENT_BIAS - exponent) << _FLOAT32_MANTISSA_BITS, jnp.float32)
+    return jnp.round(value * inverse) * quantum
 
 
 def _query_key_components(value):

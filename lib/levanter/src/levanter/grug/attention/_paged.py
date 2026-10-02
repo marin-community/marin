@@ -225,7 +225,7 @@ def _tpu_kernel_attention(
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap
 ):
     original_dim = q.shape[-1]
-    padding = (-original_dim) % 128
+    padding = (-original_dim) % TPU_HEAD_ALIGNMENT
     q_padded = jnp.pad(q, ((0, 0), (0, 0), (0, 0), (0, padding)))
     pages_padded = jnp.pad(kv_pages, ((0, 0), (0, 0), (0, 0), (0, padding)))
     q_flat = q_padded.astype(jnp.float32).reshape(q.shape[0], -1, q_padded.shape[-1])
