@@ -10,6 +10,7 @@ import os
 import statistics
 import time
 from functools import partial
+from importlib import metadata
 
 import jax
 import jax.numpy as jnp
@@ -187,6 +188,8 @@ def _tpu_vllm_baseline(inputs, expected, args):
     rpa = importlib.import_module("tpu_inference.kernels.ragged_paged_attention.v3.kernel")
     if jax.default_backend() != "tpu":
         raise ValueError("The vLLM RPA comparison requires TPU")
+    package = metadata.distribution("tpu-inference")
+    source = json.loads(package.read_text("direct_url.json") or "{}")
     accumulator_dtype = jnp.float32 if args.baseline == "tpu_vllm_rpa_fp32" else jnp.bfloat16
 
     def attend(q, cache, lengths, table, offsets, num_seqs):
@@ -226,6 +229,8 @@ def _tpu_vllm_baseline(inputs, expected, args):
     difference = jnp.abs(actual.astype(jnp.float32) - expected.astype(jnp.float32))
     return {
         "kernel": "tpu_vllm_rpa_v3",
+        "tpu_inference_version": package.version,
+        "tpu_inference_commit": source.get("vcs_info", {}).get("commit_id"),
         "implementation": args.baseline,
         "shape": vars(args),
         "dtype": args.dtype,
