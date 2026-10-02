@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 from typing import cast
 
@@ -80,8 +81,14 @@ class PrefixDiagnosticWorkerExtension:
     def install_prefix_diagnostic_capture(self) -> None:
         install_final_state_capture(cast(WorkerBase, self).get_model())
 
-    def remove_prefix_diagnostic_capture(self) -> list[dict]:
-        return remove_final_state_capture(cast(WorkerBase, self).get_model())
+    def save_prefix_diagnostic_capture(self, directory: str) -> None:
+        worker = cast(WorkerBase, self)
+        rank = worker.vllm_config.parallel_config.data_parallel_rank
+        records = remove_final_state_capture(worker.get_model())
+        # DPLBAsyncMPClient broadcasts utility RPCs but returns only rank zero's result.
+        # All diagnostic ranks share this host directory; retain every rank before returning.
+        output = {"data_parallel_rank": rank, "records": records}
+        (Path(directory) / f"rank-{rank}.json").write_text(json.dumps(output) + "\n")
 
 
 async def diagnose(engine: AsyncLLM, sequences: list[list[int]]) -> list[dict]:
@@ -116,16 +123,25 @@ def main():
         raise ValueError("Disable prefix caching for the shared-prefix diagnostic")
     if not engine_args.get("enforce_eager") or engine_args["tensor_parallel_size"] != 1:
         raise ValueError("Final-state capture requires eager execution and TP1")
+    if engine_args["data_parallel_size"] != engine_args["data_parallel_size_local"]:
+        raise ValueError("Final-state capture requires all DP ranks on the same host")
     extension = "levanter.main.vllm_prefix_diagnostic.PrefixDiagnosticWorkerExtension"
     if engine_args.get("worker_extension_cls") not in (None, "", extension):
         raise ValueError("The prefix diagnostic cannot replace another worker extension")
     engine_args["worker_extension_cls"] = extension
     engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**engine_args))
     try:
-        with asyncio.Runner() as runner:
+        with (
+            asyncio.Runner() as runner,
+            tempfile.TemporaryDirectory(prefix="vllm-prefix-capture-") as capture_directory,
+        ):
             runner.run(engine.collective_rpc("install_prefix_diagnostic_capture"))
             results = runner.run(diagnose(engine, sequences))
-            final_states = runner.run(engine.collective_rpc("remove_prefix_diagnostic_capture"))
+            runner.run(engine.collective_rpc("save_prefix_diagnostic_capture", args=(capture_directory,)))
+            final_states = [
+                json.loads((Path(capture_directory) / f"rank-{rank}.json").read_text())
+                for rank in range(engine_args["data_parallel_size"])
+            ]
         result = {
             "boundary": "untimed_teacher_forced_single_prefill",
             "final_states": final_states,
