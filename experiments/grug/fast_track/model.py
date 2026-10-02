@@ -4735,6 +4735,16 @@ def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | N
     return cfg.logit_soft_cap
 
 
+def _soft_capped(logits: jax.Array, cap: float | tuple[float, float, float] | None) -> jax.Array:
+    """The fused CE kernel's logit cap: ``c * tanh(z / c)``, or ``A * sigmoid((z + B) / C)`` for ``(A, B, C)``."""
+    if cap is None:
+        return logits
+    if isinstance(cap, tuple):
+        a, b, c = cap
+        return a * jax.nn.sigmoid((logits + b) / c)
+    return cap * jnp.tanh(logits / cap)
+
+
 def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:
     """``jax.lax.top_k`` over the last axis as ``k`` unrolled max/argmax passes (values stop-gradient).
 
@@ -6620,6 +6630,29 @@ class Transformer(eqx.Module):
         hidden, _ = self(token_ids, mask=mask)
         hidden, lm_head = self._lm_head_operands(hidden, token_ids)
         return jnp.einsum("bsh,hd->bsd", hidden, lm_head, out_sharding=batch_spec)
+
+    def position_predictions(
+        self,
+        token_ids: Int[Array, "B S"],
+        positions: Int[Array, "T 2"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        k: int,
+    ) -> tuple[Float[Array, " T"], Int[Array, "T k"], Float[Array, "T k"]]:
+        """At each ``(row, position)``: the loss of the actual next token and the top-``k`` next-token ids and
+        probabilities, through the training head (bigram prior, bias and soft-cap included)."""
+        hidden, _ = self(token_ids, mask=mask)
+        head_in, lm_head = self._lm_head_operands(hidden, token_ids)
+        head_in = reshard(head_in, P(None, None, None))
+        picked = head_in[positions[:, 0], positions[:, 1]].astype(jnp.float32)
+        logits = jnp.einsum(
+            "te,ev->tv", picked, reshard(lm_head, P(None, None)).astype(jnp.float32), out_sharding=P(None, None)
+        )
+        logp = jax.nn.log_softmax(_soft_capped(logits, _logit_cap(self.config)), axis=-1)
+        targets = reshard(token_ids, P(None, None))[positions[:, 0], positions[:, 1] + 1]
+        loss = -jnp.take_along_axis(logp, targets[:, None], axis=-1)[:, 0]
+        top_logp, top_ids = jax.lax.top_k(logp, k)
+        return loss, top_ids, jnp.exp(top_logp)
 
     def _output_bigram_features(self, token_ids: Int[Array, "B S"], dtype: jnp.dtype) -> Float[Array, "B S R"]:
         assert self.output_bigram_u is not None

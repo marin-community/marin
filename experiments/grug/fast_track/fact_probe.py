@@ -1,20 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fact probe: how a run learns, and keeps, the content of the batches it trained on.
+"""Fact probe: how a run learns, and keeps, short facts from the batches it trains on.
 
 Two passes over the same seed (the data order is a pure function of the seed):
 
 * ``train_batch_dump_steps`` writes the exact train batches of chosen steps (``write_train_batch``) and stops
-  before training, so a fact can be picked from them offline.
-* ``fact_probe_spans`` names token ranges inside those batches. After each of ``fact_probe_steps`` the run re-scores
-  the batches with the raw weights (and the EMA weights once they are live), and ``FactProbeRecord`` writes the
-  per-row mean loss and the per-token loss on every span to one npz.
+  before training, so facts can be picked from them offline.
+* ``fact_probe_input`` is an npz built offline (``write_fact_probe_input``): rows of tokens (e.g. a fact's
+  original training window, the fact alone after BOS, never-seen control text) and spans naming the fact tokens
+  inside them. Every ``fact_probe_every`` steps the run scores those rows with the raw weights (and, every
+  ``fact_probe_ema_every`` steps once it is live, the EMA weights) and ``FactProbeWriter`` records, for every span
+  token, its loss and the model's top-``TOP_K`` next-token predictions, plus every row's mean loss.
 
-A span ``(data_step, row, start, end)`` scores the prediction of ``tokens[row, start:end]`` in the batch of
-``data_step``, i.e. the losses at positions ``start - 1 .. end - 2``. That batch is consumed by the update that
-takes the step count from ``data_step`` to ``data_step + 1``, so the probe at count ``data_step`` is the last one
-before the model sees it.
+A span ``(row, start, end)`` scores the prediction of ``tokens[row, start:end]``, i.e. the model's outputs at
+positions ``start - 1 .. end - 2``. A batch dumped at ``data_step`` is consumed by the update that takes the step
+count from ``data_step`` to ``data_step + 1``.
 """
 
 from __future__ import annotations
@@ -23,33 +24,17 @@ import logging
 from dataclasses import dataclass
 
 import fsspec
+import jax
 import numpy as np
+from levanter.data.text.examples import GrugLmExample, causal_example_on_host
 
 logger = logging.getLogger(__name__)
 
 TRAIN_BATCH_DUMP_FILE = "train_batch_step{step}.npz"
+FACT_PROBE_CHUNK_FILE = "fact_probe_{kind}_{index:04d}.npz"
+TOP_K = 5
 RAW = "raw"
 EMA = "ema"
-
-
-@dataclass(frozen=True)
-class FactSpan:
-    data_step: int
-    row: int
-    start: int
-    end: int
-
-    def __post_init__(self):
-        if self.start < 1 or self.end <= self.start:
-            raise ValueError(f"fact span needs 1 <= start < end, got {self}")
-
-    @classmethod
-    def parse(cls, text: str) -> FactSpan:
-        """``"data_step:row:start:end"``."""
-        parts = text.split(":")
-        if len(parts) != 4:
-            raise ValueError(f"fact span must be data_step:row:start:end, got {text!r}")
-        return cls(*(int(part) for part in parts))
 
 
 def write_train_batch(path: str, step: int, tokens: np.ndarray, loss_weight: np.ndarray) -> None:
@@ -58,69 +43,102 @@ def write_train_batch(path: str, step: int, tokens: np.ndarray, loss_weight: np.
     logger.info("wrote train batch of step %d (%s) to %s", step, tokens.shape, path)
 
 
-class FactProbeRecord:
-    """Accumulates probe results and rewrites one npz after every probe step (so a crash keeps what it measured).
+@dataclass(frozen=True)
+class FactProbeInput:
+    tokens: np.ndarray  # [N, S] int32
+    span_row: np.ndarray  # [K]
+    span_start: np.ndarray  # [K]
+    span_end: np.ndarray  # [K]
 
-    Arrays: ``probe_steps`` [P]; ``data_steps`` [D]; ``{raw,ema}_row_loss`` [P, D, B] (mean loss per batch row);
-    ``{raw,ema}_span_loss`` [P, T] (every span's per-token losses, concatenated); ``span_id`` / ``span_token`` [T];
-    ``spans`` [K, 4]. EMA entries are NaN before the EMA is live.
-    """
+    def __post_init__(self):
+        if np.any(self.span_start < 1) or np.any(self.span_end <= self.span_start):
+            raise ValueError("every fact span needs 1 <= start < end")
+        if np.any(self.span_end > self.tokens.shape[1]) or np.any(self.span_row >= self.tokens.shape[0]):
+            raise ValueError("fact span outside the probe rows")
 
-    def __init__(self, spans: tuple[FactSpan, ...], path: str):
-        if not spans:
-            raise ValueError("fact probe needs at least one span")
-        self.spans = spans
-        self.path = path
-        self.data_steps = tuple(sorted({span.data_step for span in spans}))
-        self.probe_steps: list[int] = []
-        self.row_loss: dict[str, list[np.ndarray]] = {RAW: [], EMA: []}
-        self.span_loss: dict[str, list[np.ndarray]] = {RAW: [], EMA: []}
-        self.span_token: np.ndarray | None = None
+    @classmethod
+    def load(cls, path: str) -> FactProbeInput:
+        with fsspec.open(path, "rb") as f:
+            data = np.load(f)
+            return cls(
+                tokens=data["tokens"].astype(np.int32),
+                span_row=data["span_row"].astype(np.int64),
+                span_start=data["span_start"].astype(np.int64),
+                span_end=data["span_end"].astype(np.int64),
+            )
+
+    def positions(self) -> np.ndarray:
+        """``[T, 2]`` (row, position) of every span token's prediction, spans in order."""
+        return np.concatenate(
+            [
+                np.stack([np.full(end - start, row), np.arange(start - 1, end - 1)], axis=1)
+                for row, start, end in zip(self.span_row, self.span_start, self.span_end, strict=True)
+            ]
+        ).astype(np.int32)
+
+    def example(self, eos_id: int) -> GrugLmExample:
+        """The rows as one host batch, masked by document like the train loader (a segment starts after each EOS)."""
+        rows = [causal_example_on_host(row, eos_id=eos_id) for row in self.tokens]
+        return jax.tree.map(lambda *leaves: np.stack(leaves), *rows)
+
+
+def write_fact_probe_input(path: str, probe: FactProbeInput) -> None:
+    with fsspec.open(path, "wb") as f:
+        np.savez(
+            f,
+            tokens=probe.tokens,
+            span_row=probe.span_row,
+            span_start=probe.span_start,
+            span_end=probe.span_end,
+        )
+
+
+class FactProbeWriter:
+    """Buffers per-step probe results and writes them in chunks of ``chunk_size`` steps per weight kind:
+    ``<directory>/fact_probe_<kind>_<index>.npz`` with ``steps`` [C], ``loss`` [C, T], ``top_ids`` [C, T, TOP_K],
+    ``top_probs`` [C, T, TOP_K] (float16) and ``row_loss`` [C, N]."""
+
+    def __init__(self, directory: str, chunk_size: int):
+        self.directory = directory.rstrip("/")
+        self.chunk_size = chunk_size
+        self.buffers: dict[str, list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]] = {RAW: [], EMA: []}
+        self.chunks_written = {RAW: 0, EMA: 0}
 
     def add(
         self,
+        kind: str,
         step: int,
-        losses: dict[str, dict[int, np.ndarray]],
-        tokens: dict[int, np.ndarray],
-        weights: dict[int, np.ndarray],
-    ) -> dict[str, float]:
-        """Record ``losses[kind][data_step]`` (per-token [B, S]) at ``step``; returns scalars to log."""
-        if self.span_token is None:
-            self.span_token = np.concatenate([tokens[s.data_step][s.row, s.start : s.end] for s in self.spans])
-        self.probe_steps.append(step)
-        scalars = {}
-        for kind in (RAW, EMA):
-            by_step = losses.get(kind)
-            if by_step is None:
-                num_rows = next(iter(weights.values())).shape[0]
-                self.row_loss[kind].append(np.full((len(self.data_steps), num_rows), np.nan, np.float32))
-                self.span_loss[kind].append(np.full(len(self.span_token), np.nan, np.float32))
-                continue
-            rows = np.stack([_row_mean(by_step[d], weights[d]) for d in self.data_steps])
-            spans = [by_step[s.data_step][s.row, s.start - 1 : s.end - 1] for s in self.spans]
-            self.row_loss[kind].append(rows.astype(np.float32))
-            self.span_loss[kind].append(np.concatenate(spans).astype(np.float32))
-            for index, span_losses in enumerate(spans):
-                scalars[f"fact_probe/{kind}/span{index}"] = float(np.mean(span_losses))
-            for index, data_step in enumerate(self.data_steps):
-                scalars[f"fact_probe/{kind}/batch{data_step}"] = float(np.mean(rows[index]))
-        self._write()
-        return scalars
+        loss: np.ndarray,
+        top_ids: np.ndarray,
+        top_probs: np.ndarray,
+        row_loss: np.ndarray,
+    ) -> None:
+        self.buffers[kind].append((step, loss, top_ids, top_probs, row_loss))
+        if len(self.buffers[kind]) >= self.chunk_size:
+            self.flush(kind)
 
-    def _write(self) -> None:
-        span_id = np.concatenate([np.full(s.end - s.start, i, np.int32) for i, s in enumerate(self.spans)])
-        with fsspec.open(self.path, "wb") as f:
+    def flush(self, kind: str) -> None:
+        records = self.buffers[kind]
+        if not records:
+            return
+        steps, loss, top_ids, top_probs, row_loss = zip(*records, strict=True)
+        path = f"{self.directory}/{FACT_PROBE_CHUNK_FILE.format(kind=kind, index=self.chunks_written[kind])}"
+        with fsspec.open(path, "wb") as f:
             np.savez(
                 f,
-                probe_steps=np.asarray(self.probe_steps, np.int64),
-                data_steps=np.asarray(self.data_steps, np.int64),
-                spans=np.asarray([[s.data_step, s.row, s.start, s.end] for s in self.spans], np.int64),
-                span_id=span_id,
-                span_token=self.span_token,
-                **{f"{kind}_row_loss": np.stack(self.row_loss[kind]) for kind in (RAW, EMA)},
-                **{f"{kind}_span_loss": np.stack(self.span_loss[kind]) for kind in (RAW, EMA)},
+                steps=np.asarray(steps, np.int64),
+                loss=np.stack(loss).astype(np.float32),
+                top_ids=np.stack(top_ids).astype(np.int32),
+                top_probs=np.stack(top_probs).astype(np.float16),
+                row_loss=np.stack(row_loss).astype(np.float32),
             )
+        self.chunks_written[kind] += 1
+        self.buffers[kind] = []
+
+    def flush_all(self) -> None:
+        for kind in (RAW, EMA):
+            self.flush(kind)
 
 
-def _row_mean(loss: np.ndarray, weight: np.ndarray) -> np.ndarray:
+def row_mean_loss(loss: np.ndarray, weight: np.ndarray) -> np.ndarray:
     return (loss * weight).sum(axis=1) / weight.sum(axis=1)

@@ -69,9 +69,11 @@ from experiments.grug.fast_track.byte_targets import token_byte_table
 from experiments.grug.fast_track.fact_probe import (
     EMA,
     RAW,
+    TOP_K,
     TRAIN_BATCH_DUMP_FILE,
-    FactProbeRecord,
-    FactSpan,
+    FactProbeInput,
+    FactProbeWriter,
+    row_mean_loss,
     write_train_batch,
 )
 from experiments.grug.fast_track.grad_capture import CaptureWriter, add_to_captured, capture_matrices, capture_steps
@@ -303,11 +305,12 @@ class GrugTrainerConfig:
     # payoff and loss; writes ``<muon_probe_path>/snr_probe_step<N>.npz``.
     snr_probe_steps: tuple[int, ...] = ()
     # Fact probe (``fact_probe.py``). ``train_batch_dump_steps``: write those steps' train batches to
-    # ``<fact_probe_dir>/train_batch_step<N>.npz`` and stop before training. ``fact_probe_spans``: re-score the
-    # batches holding these spans after each of ``fact_probe_steps`` and write ``<fact_probe_dir>/fact_probe.npz``.
+    # ``<fact_probe_dir>/train_batch_step<N>.npz`` and stop before training. ``fact_probe_input``: score its rows
+    # every ``fact_probe_every`` steps (the EMA weights every ``fact_probe_ema_every``) into ``fact_probe_dir``.
     train_batch_dump_steps: tuple[int, ...] = ()
-    fact_probe_spans: tuple[FactSpan, ...] = ()
-    fact_probe_steps: tuple[int, ...] = ()
+    fact_probe_input: str | None = None
+    fact_probe_every: int = 1
+    fact_probe_ema_every: int = 50
     fact_probe_dir: str | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
@@ -1050,35 +1053,32 @@ def _make_probe_loss(mp: jmp.Policy):
 _captured_params = jax.jit(capture_matrices)
 
 
-def _make_fact_probe_loss(mp: jmp.Policy, model_transform: Callable[[Transformer], Transformer]):
-    """``loss(params, batch)``: the per-token next-token loss [B, S] of ``model_transform(params)`` on ``batch``."""
+def _make_fact_probe_scores(mp: jmp.Policy, model_transform: Callable[[Transformer], Transformer], positions):
+    """``scores(params, batch)``: per-token loss [B, S] and, at ``positions``, the next-token loss and top-k."""
 
     @jax.jit
-    def loss(params: Transformer, batch):
+    def scores(params: Transformer, batch):
         compute_params = _cast_to_compute(mp, model_transform(params))
-        return compute_params.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="none")
+        loss = compute_params.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="none")
+        predictions = compute_params.position_predictions(batch.tokens, positions, mask=batch.attn_mask, k=TOP_K)
+        return loss, predictions
 
-    return loss
+    return scores
 
 
 def _fact_probe_hook(
-    config: GrugRunConfig,
-    train_loader: DataLoader,
-    mesh: Mesh,
-    mp: jmp.Policy,
-    ema_start_step: int,
-    start_step: int,
+    config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy, ema_start_step: int, last_step: int
 ) -> Callable[..., None]:
-    """The ``fact_probe_spans`` hook: at each step count in ``fact_probe_steps``, score the spans' train batches with
-    the raw and the live EMA weights. EP runs score dropless on an expert-collapsed mesh, as the final eval does."""
+    """The ``fact_probe_input`` hook: every ``fact_probe_every`` steps score the probe rows with the raw weights, and
+    every ``fact_probe_ema_every`` with the live EMA weights. EP runs score dropless on an expert-collapsed mesh, as
+    the final eval does."""
     trainer_cfg = config.trainer
-    if trainer_cfg.fact_probe_dir is None or not trainer_cfg.fact_probe_steps:
-        raise ValueError("fact_probe_spans needs fact_probe_dir and fact_probe_steps")
-    record = FactProbeRecord(trainer_cfg.fact_probe_spans, f"{trainer_cfg.fact_probe_dir.rstrip('/')}/fact_probe.npz")
-    batches = {step: next(iter(train_loader.iter_from_step(step))) for step in record.data_steps}
-    host = {step: _host_batch(batch) for step, batch in batches.items()}
-    tokens = {step: pair[0] for step, pair in host.items()}
-    weights = {step: pair[1] for step, pair in host.items()}
+    if trainer_cfg.fact_probe_dir is None or trainer_cfg.fact_probe_input is None:
+        raise ValueError("fact_probe_input needs fact_probe_dir")
+    probe = FactProbeInput.load(trainer_cfg.fact_probe_input)
+    host_example = probe.example(config.data.the_tokenizer.eos_token_id)
+    weights = np.asarray(host_example.loss_weight)
+    writer = FactProbeWriter(trainer_cfg.fact_probe_dir, chunk_size=100)
     if mesh.shape["expert"] > 1:
         probe_mesh = compact_grug_mesh(
             expert_axis_size=1, replica_axis_size=mesh.shape["replica_dcn"], model_axis_size=mesh.shape["model"]
@@ -1090,32 +1090,32 @@ def _fact_probe_hook(
     else:
         probe_mesh, transform = mesh, lambda model: model
     with set_mesh(probe_mesh):
-        loss_fn = _make_fact_probe_loss(mp, transform)
-        probe_batches = {step: _reshard_tree_to_mesh(batch, probe_mesh) for step, batch in batches.items()}
-    pending = {step for step in trainer_cfg.fact_probe_steps if step >= start_step}
+        rows = NamedSharding(probe_mesh, P(_BATCH_AXES))
+        batch = jax.tree.map(
+            lambda leaf: jax.device_put(leaf, rows) if isinstance(leaf, np.ndarray) else leaf, host_example
+        )
+        positions = jax.device_put(probe.positions(), NamedSharding(probe_mesh, P(None, None)))
+        scores = _make_fact_probe_scores(mp, transform, positions)
 
-    def score(params: Transformer, count: int) -> dict[int, np.ndarray]:
+    def score(kind: str, params: Transformer, count: int) -> None:
         # A local: the expert-collapsed copy is larger than the train-mesh params and must die before the next step.
         model = _reshard_tree_to_mesh(_router_tie_view(params, count), probe_mesh)
         with _pgle_disabled():
-            return {
-                step: np.asarray(multihost_utils.process_allgather(loss_fn(model, batch), tiled=True))
-                for step, batch in probe_batches.items()
-            }
+            loss, (span_loss, top_ids, top_probs) = jax.device_get(scores(model, batch))
+        if jax.process_index() == 0:
+            writer.add(kind, count, span_loss, top_ids, top_probs, row_mean_loss(np.asarray(loss), weights))
 
     def hook(info, force: bool = False) -> None:
         count = info.next_step
-        if count not in pending or info.model is None:
+        if info.model is None or (count % trainer_cfg.fact_probe_every != 0 and count != last_step):
             return
-        pending.discard(count)
         with set_mesh(probe_mesh):
-            losses = {RAW: score(info.model, count)}
+            score(RAW, info.model, count)
             if count > ema_start_step and trainer_cfg.ema_beta is not None:
-                losses[EMA] = score(info.eval_model, count)
-        if jax.process_index() == 0:
-            # Tracker steps are 0-based (``info.step = count - 1``) like every other metric; wandb drops
-            # out-of-order steps.
-            levanter.tracker.log(record.add(count, losses, tokens, weights), step=info.step)
+                if count % trainer_cfg.fact_probe_ema_every == 0 or count == last_step:
+                    score(EMA, info.eval_model, count)
+        if count == last_step and jax.process_index() == 0:
+            writer.flush_all()
 
     return hook
 
@@ -2032,9 +2032,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
-        if config.trainer.fact_probe_spans:
+        if config.trainer.fact_probe_input is not None:
             state_callbacks.add_hook(
-                _fact_probe_hook(config, train_loader, mesh, trainer.mp, ema_start_step, int(state.step)), every=1
+                _fact_probe_hook(config, mesh, trainer.mp, ema_start_step, trainer.num_train_steps), every=1
             )
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval

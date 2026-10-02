@@ -47,7 +47,6 @@ from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.analyze_routing import token_strings_from_tokenizer
-from experiments.grug.fast_track.fact_probe import FactSpan
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import (
     AttnResLayerBackward,
@@ -417,8 +416,9 @@ def build_h100_ladder_run(
     muon_probe_steps: tuple[int, ...] = (),
     snr_probe_steps: tuple[int, ...] = (),
     train_batch_dump_steps: tuple[int, ...] = (),
-    fact_probe_spans: tuple[FactSpan, ...] = (),
-    fact_probe_steps: tuple[int, ...] = (),
+    fact_probe_input: str | None = None,
+    fact_probe_every: int = 1,
+    fact_probe_ema_every: int = 50,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -532,8 +532,9 @@ def build_h100_ladder_run(
         muon_probe_steps=muon_probe_steps,
         snr_probe_steps=snr_probe_steps,
         train_batch_dump_steps=train_batch_dump_steps,
-        fact_probe_spans=fact_probe_spans,
-        fact_probe_steps=fact_probe_steps,
+        fact_probe_input=fact_probe_input,
+        fact_probe_every=fact_probe_every,
+        fact_probe_ema_every=fact_probe_ema_every,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -625,7 +626,7 @@ def build_h100_ladder_run(
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
                 fact_probe_dir=(
-                    prefix_join(ctx.output_path, "fact_probe") if train_batch_dump_steps or fact_probe_spans else None
+                    prefix_join(ctx.output_path, "fact_probe") if train_batch_dump_steps or fact_probe_input else None
                 ),
                 grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
                 muon_probe_path=(
@@ -886,15 +887,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Comma-separated steps whose train batches go to <output>/fact_probe/; the run then stops before training.",
 )
 @click.option(
-    "--fact-span",
-    multiple=True,
-    help="Repeatable data_step:row:start:end token span to track (fact_probe.py); needs --fact-probe-steps.",
+    "--fact-probe-input",
+    default=None,
+    help="npz of probe rows and fact spans (fact_probe.write_fact_probe_input) to score through training.",
 )
-@click.option(
-    "--fact-probe-steps",
-    default="",
-    help="Comma-separated step counts at which to score the --fact-span batches; results in <output>/fact_probe/.",
-)
+@click.option("--fact-probe-every", default=1, show_default=True, help="Score the fact probe every N steps.")
+@click.option("--fact-probe-ema-every", default=50, show_default=True, help="Score the live EMA weights every N steps.")
 @click.option(
     "--snr-probe-steps",
     default="",
@@ -998,8 +996,9 @@ def main(
     muon_probe_steps: str,
     snr_probe_steps: str,
     dump_train_batches: str,
-    fact_span: tuple[str, ...],
-    fact_probe_steps: str,
+    fact_probe_input: str | None,
+    fact_probe_every: int,
+    fact_probe_ema_every: int,
     router_tie_class: tuple[str, ...],
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
@@ -1053,8 +1052,9 @@ def main(
         muon_probe_steps=tuple(int(step) for step in muon_probe_steps.split(",") if step),
         snr_probe_steps=tuple(int(step) for step in snr_probe_steps.split(",") if step),
         train_batch_dump_steps=tuple(int(step) for step in dump_train_batches.split(",") if step),
-        fact_probe_spans=tuple(FactSpan.parse(span) for span in fact_span),
-        fact_probe_steps=tuple(int(step) for step in fact_probe_steps.split(",") if step),
+        fact_probe_input=fact_probe_input,
+        fact_probe_every=fact_probe_every,
+        fact_probe_ema_every=fact_probe_ema_every,
         router_tie_specs=router_tie_specs,
     )
 
