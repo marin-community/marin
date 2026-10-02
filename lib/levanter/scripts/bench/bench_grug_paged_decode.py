@@ -31,8 +31,11 @@ def main():
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--kv-splits", type=int, choices=[8, 16], default=8)
-    parser.add_argument("--baseline", choices=["flashinfer_xqa"])
+    parser.add_argument("--baseline", choices=["flashinfer_xqa", "tpu_vllm_rpa", "tpu_vllm_rpa_fp32"])
     args = parser.parse_args()
+    if args.baseline in ("tpu_vllm_rpa", "tpu_vllm_rpa_fp32"):
+        # The optional fork sets its environment before initializing JAX devices.
+        importlib.import_module("tpu_inference.kernels.ragged_paged_attention.v3.kernel")
     dtype = jnp.dtype(args.dtype)
     pages_per_sequence = (args.context + args.page_size - 1) // args.page_size
     page_count = args.batch_size * pages_per_sequence
@@ -71,9 +74,6 @@ def main():
         compiled(*inputs).block_until_ready()
         times.append(time.perf_counter() - start)
     elapsed = statistics.median(times)
-    if args.baseline is not None:
-        baseline = _flashinfer_baseline(inputs, actual, args)
-        print(json.dumps(baseline), flush=True)
     visible = args.context if args.window is None else min(args.context, args.window)
     kv_bytes = 2 * args.batch_size * visible * args.kv_heads * args.head_dim * dtype.itemsize
     flops = 4 * args.batch_size * visible * args.kv_heads * args.groups * args.head_dim
@@ -105,8 +105,17 @@ def main():
                 "qk_av_flops": flops,
                 "qk_av_arithmetic_intensity": flops / kv_bytes,
             }
-        )
+        ),
+        flush=True,
     )
+
+    if args.baseline is not None:
+        baseline = (
+            _flashinfer_baseline(inputs, actual, args)
+            if args.baseline == "flashinfer_xqa"
+            else _tpu_vllm_baseline(inputs, actual, args)
+        )
+        print(json.dumps(baseline), flush=True)
 
 
 def _flashinfer_baseline(inputs, expected, args):
@@ -171,6 +180,69 @@ def _flashinfer_baseline(inputs, expected, args):
         "torch_version": torch.__version__,
         "git_sha": launch_provenance().base_commit,
         "cache_layout": "interleaved_strided_views_no_copy",
+    }
+
+
+def _tpu_vllm_baseline(inputs, expected, args):
+    rpa = importlib.import_module("tpu_inference.kernels.ragged_paged_attention.v3.kernel")
+    if jax.default_backend() != "tpu":
+        raise ValueError("The vLLM RPA comparison requires TPU")
+    accumulator_dtype = jnp.float32 if args.baseline == "tpu_vllm_rpa_fp32" else jnp.bfloat16
+
+    def attend(q, cache, lengths, table, offsets, num_seqs):
+        query = q.reshape(args.batch_size, args.kv_heads * args.groups, args.head_dim)
+        current_kv = jnp.zeros((args.batch_size, args.kv_heads, args.head_dim), cache.dtype)
+        shape = rpa.get_kv_cache_shape(cache.shape[0], args.page_size, args.kv_heads, args.head_dim, cache.dtype)
+        output, _ = rpa.ragged_paged_attention(
+            query,
+            current_kv,
+            current_kv,
+            cache.reshape(shape),
+            lengths,
+            table.reshape(-1),
+            offsets,
+            jnp.repeat(num_seqs[None], 3),
+            update_kv_cache=False,
+            sm_scale=args.head_dim**-0.5,
+            sliding_window=args.window,
+            out_dtype=accumulator_dtype,
+        )
+        return output.reshape(q.shape).astype(q.dtype)
+
+    # The outer wrapper owns no donated inputs; repeated timings reuse immutable cache/query arrays.
+    start = time.perf_counter()
+    compiled = jax.jit(attend).lower(*inputs).compile()
+    compile_time = time.perf_counter() - start
+    start = time.perf_counter()
+    actual = compiled(*inputs).block_until_ready()
+    first_run = time.perf_counter() - start
+    for _ in range(3):
+        compiled(*inputs).block_until_ready()
+    times = []
+    for _ in range(args.repeats):
+        start = time.perf_counter()
+        compiled(*inputs).block_until_ready()
+        times.append(time.perf_counter() - start)
+    difference = jnp.abs(actual.astype(jnp.float32) - expected.astype(jnp.float32))
+    return {
+        "kernel": "tpu_vllm_rpa_v3",
+        "implementation": args.baseline,
+        "shape": vars(args),
+        "dtype": args.dtype,
+        "accumulator_dtype": str(accumulator_dtype),
+        "backend": "tpu",
+        "device_type": jax.devices()[0].device_kind,
+        "device_count": 1,
+        "block_sizes": "fork_default",
+        "timing_boundary": "host_submit_and_synchronize",
+        "compile_time": compile_time,
+        "first_run_time": first_run,
+        "steady_state_time": statistics.median(times),
+        "error": {"max_abs_vs_grug": float(difference.max()), "mean_abs_vs_grug": float(difference.mean())},
+        "git_sha": launch_provenance().base_commit,
+        "xla_flags": os.environ.get("XLA_FLAGS", ""),
+        "backend_env": {"LIBTPU_INIT_ARGS": os.environ.get("LIBTPU_INIT_ARGS", "")},
+        "cache_update": False,
     }
 
 
