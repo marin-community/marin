@@ -12,6 +12,8 @@ from dataclasses import dataclass
 
 from rigging.provenance import Provenance
 
+BATCH_TIMING_BOUNDARY = "offline_batch_host_submission_to_host_tokens"
+
 
 @dataclass(frozen=True)
 class TokenWorkload:
@@ -107,7 +109,7 @@ def measure_batches(
     validation_summary = summarize_batch(workload, validation)
     return BenchmarkReport(
         schema_version=2,
-        timing_boundary="offline_batch_host_submission_to_host_tokens",
+        timing_boundary=BATCH_TIMING_BOUNDARY,
         workload=workload,
         workload_sha256=workload.sha256,
         compile_only=None,
