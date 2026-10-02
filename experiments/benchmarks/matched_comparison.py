@@ -15,11 +15,8 @@ _EXECUTION_CONFIG_FIELDS = {"inference_attention_implementation"}
 _HF_METADATA_FIELDS = {"_name_or_path", "transformers_version", "torch_dtype", "dtype"}
 
 
-def compare_fixture(root: Path) -> dict:
-    """Write a paired report, refusing incompatible inputs and withholding invalid ratios."""
-    manifest = json.loads((root / "manifest.json").read_text())
-    workload = TokenWorkload(**json.loads((root / "workload.json").read_text()))
-    reports = {name: json.loads((root / f"{name}-result.json").read_text()) for name in ("native", "vllm")}
+def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, dict]) -> dict:
+    """Validate paired runtime evidence and summarize agreement before speed ratios."""
     native, vllm = reports["native"]["provenance"], reports["vllm"]["provenance"]
     if native["backend"] != "levanter" or vllm["backend"] != "vllm":
         raise ValueError("Expected native and vLLM reports")
@@ -31,10 +28,14 @@ def compare_fixture(root: Path) -> dict:
         raise ValueError("Model dtypes differ")
     if vllm["effective_dtype"] != manifest["dtype"]:
         raise ValueError("Effective vLLM dtype differs")
-    native_hf = {k: v for k, v in native["checkpoint"]["hf_config"].items() if k not in _HF_METADATA_FIELDS}
-    vllm_hf = {k: v for k, v in vllm["hf_config"].items() if k not in _HF_METADATA_FIELDS}
-    if native_hf != vllm_hf:
-        raise ValueError("Loaded Hugging Face model configurations differ")
+    native_hf, vllm_hf = native["checkpoint"]["hf_config"], vllm["hf_config"]
+    hf_differences = {
+        field: {"native": native_hf.get(field), "vllm": vllm_hf.get(field)}
+        for field in native_hf.keys() | vllm_hf.keys()
+        if native_hf.get(field) != vllm_hf.get(field)
+    }
+    if hf_differences.keys() - _HF_METADATA_FIELDS:
+        raise ValueError(f"Loaded Hugging Face model configurations differ: {hf_differences}")
     if len(reports["native"]["warmup"]) != len(reports["vllm"]["warmup"]) or len(reports["native"]["samples"]) != len(
         reports["vllm"]["samples"]
     ):
@@ -108,6 +109,7 @@ def compare_fixture(root: Path) -> dict:
         "device_kinds": native["device_kind"],
         "parallelism": {"native_mesh": mesh, "vllm_dp": device_count, "vllm_tp": 1, "vllm_ep": device_count},
         "execution_config_differences": differences,
+        "hf_metadata_differences": hf_differences,
         "effective_execution": {name: report["provenance"]["effective_execution"] for name, report in reports.items()},
         "validation_output_hashes": {name: report["validation_output_sha256"] for name, report in reports.items()},
         "validation_tokens_agree": first_difference is None,
@@ -117,6 +119,15 @@ def compare_fixture(root: Path) -> dict:
         "native_over_vllm_throughput": throughput["native"] / throughput["vllm"] if comparable_outputs else None,
         "ratio_withheld_reason": None if comparable_outputs else "Outputs differ across backends or batches",
     }
+    return result
+
+
+def compare_fixture(root: Path) -> dict:
+    """Write a paired report, refusing incompatible inputs and withholding invalid ratios."""
+    manifest = json.loads((root / "manifest.json").read_text())
+    workload = TokenWorkload(**json.loads((root / "workload.json").read_text()))
+    reports = {name: json.loads((root / f"{name}-result.json").read_text()) for name in ("native", "vllm")}
+    result = compare_reports(manifest, workload, reports)
     (root / "comparison.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2), flush=True)
     return result
