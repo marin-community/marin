@@ -6,8 +6,9 @@ router updates. Standard 1F1B is the default. Each process initializes only its
 own stage. CPU tests compare sequential-stage hidden states, routing statistics,
 losses, and gradients against the unsplit model.
 
-The synthetic runner does not restore or save checkpoints. Its AdamW default is
-a bring-up configuration; the validated long-context recipe explicitly selects
+The synthetic runner can restore with `--checkpoint-root` and save with
+`--checkpoint-every-steps`. Its AdamW default is a bring-up configuration;
+the validated long-context recipe explicitly selects
 BF16 MuonH and both host offloads. Production continuation and long-run training
 stability remain unvalidated.
 

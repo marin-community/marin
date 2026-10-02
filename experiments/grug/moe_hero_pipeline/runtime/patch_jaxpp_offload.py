@@ -229,7 +229,7 @@ def _warm_pipeline_local_jaxpr(closed_jaxpr, mpmd_mesh):
     env.clear()
 
 
-_precompiled_pipeline_tasks: dict[tuple[jcore.Primitive, PjitKwargs], Any] = {}
+_precompiled_pipeline_tasks: dict[tuple[jcore.Primitive, PjitKwargs], jax.stages.Compiled] = {}
 _require_precompiled_pipeline_tasks = False
 
 

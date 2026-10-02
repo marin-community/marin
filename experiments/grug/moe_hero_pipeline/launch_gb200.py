@@ -15,6 +15,7 @@ from iris.rpc import job_pb2
 from rigging.timing import Duration
 
 PJRT_WHEEL = "https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260915-708c3a4ec79c/jax_cuda13_pjrt-0.11.1%2Bmarin.708c3a4ec79c-py3-none-manylinux_2_27_aarch64.whl"
+_TASK_TIMEOUT = 7200
 
 
 def main():
@@ -115,10 +116,10 @@ def main():
         max_retries_failure=0,
         max_retries_preemption=0,
         max_task_failures=1,
-        timeout=Duration.from_seconds(7200),
+        timeout=Duration.from_seconds(_TASK_TIMEOUT),
     )
     print("SUBMITTED", job.job_id, flush=True)
-    job.wait(timeout=7200, raise_on_failure=True)
+    job.wait(timeout=_TASK_TIMEOUT, raise_on_failure=True)
 
 
 if __name__ == "__main__":

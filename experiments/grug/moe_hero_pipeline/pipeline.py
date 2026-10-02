@@ -51,6 +51,7 @@ from experiments.grug.moe_hero_ep.model import (
     _unstacked_blocks,
 )
 from experiments.grug.moe_hero_ep.train import _tree_to_memory_kind
+from experiments.grug.moe_pipeline.pipeline import _partition_spec_tree
 
 try:
     import jaxpp.api as jaxpp
@@ -478,19 +479,6 @@ def _is_array(value: object) -> TypeGuard[_ArrayValue]:
     return jaxpp is not None and isinstance(value, jaxpp.MpmdArray)
 
 
-def _partition_spec_tree(tree):
-    def partition_spec(value):
-        if not _is_array(value):
-            return None
-        if isinstance(value.sharding, NamedSharding):
-            return value.sharding.spec
-        if jaxpp is not None and isinstance(value.sharding, jaxpp.MpmdSharding):
-            return value.sharding.spec
-        return P(*([None] * value.ndim))
-
-    return jax.tree.map(partition_spec, tree)
-
-
 def make_automatic_pipeline_step(
     optimizer: optax.GradientTransformation,
     mp_policy: jmp.Policy,
@@ -679,6 +667,7 @@ def restore_pipeline_state(parked: ParkedPipelineState) -> GrugMoeAutomaticPipel
 
 
 def precompile_automatic_mpmd_step(step) -> int:
+    """Compile local pipeline tasks and return their count."""
     _jaxpp_modules()
     return mpmd_primitives.precompile_pipeline_tasks(step.local_jaxpr, step.mpmd_mesh)
 
