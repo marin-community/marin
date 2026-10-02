@@ -37,13 +37,16 @@ def _mixed_case(dtype):
 
 
 def _dense_oracle(args, window, cap, scale):
+    scale = np.float64(np.float32(scale))
     q, pages, lengths, indices, offsets, num_seqs = (
-        np.asarray(x, dtype=np.float32 if i < 2 else None) for i, x in enumerate(args)
+        np.asarray(x, dtype=np.float64 if i < 2 else None) for i, x in enumerate(args)
     )
     output = np.zeros_like(q)
     for seq in range(int(num_seqs)):
         length = int(lengths[seq])
-        tokens = pages[indices[seq, : (length + pages.shape[1] - 1) // pages.shape[1]]].reshape(-1, 4, 32)
+        tokens = pages[indices[seq, : (length + pages.shape[1] - 1) // pages.shape[1]]].reshape(
+            -1, pages.shape[2], pages.shape[3]
+        )
         for token in range(int(offsets[seq]), int(offsets[seq + 1])):
             position = length - int(offsets[seq + 1]) + token
             begin = 0 if window is None else max(0, position - window + 1)
