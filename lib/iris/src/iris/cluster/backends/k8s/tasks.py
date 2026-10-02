@@ -96,6 +96,7 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
+from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
     OUTPUT_MOUNT,
@@ -2220,17 +2221,6 @@ def _proc_int(text: str, default: int = 0) -> int:
         return default
 
 
-def _stat_fields_after_comm(raw: str) -> list[str]:
-    """Fields of ``/proc/PID/stat`` starting at ``state`` (field 3).
-
-    The ``comm`` field (2) is parenthesized and may itself contain spaces or
-    parens, so index from the last ``)`` rather than splitting the whole line.
-    Returned index ``i`` is stat field ``i + 3``.
-    """
-    rclose = raw.rfind(")")
-    return raw[rclose + 2 :].split() if rclose != -1 else []
-
-
 def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
     """Parse ``_POD_PROC_STATUS_SCRIPT`` output into a ``ProcessInfo`` for PID 1.
 
@@ -2266,8 +2256,8 @@ def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
         # utime (field 14) + stime (field 15) => indices 11, 12 after comm.
         return _proc_int(fields[11]) + _proc_int(fields[12]) if len(fields) >= 13 else 0
 
-    stat1 = _stat_fields_after_comm(sections.get("stat1", ""))
-    stat2 = _stat_fields_after_comm(sections.get("stat2", ""))
+    stat1 = stat_fields_after_comm(sections.get("stat1", ""))
+    stat2 = stat_fields_after_comm(sections.get("stat2", ""))
     uptime1, uptime2 = _uptime("uptime1"), _uptime("uptime2")
 
     interval = uptime2 - uptime1
