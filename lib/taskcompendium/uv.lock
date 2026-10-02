@@ -731,6 +731,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "harbor-config"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "shortuuid" },
+    { name = "toml" },
+    { name = "typing-extensions" },
+    { name = "universal-pathlib" },
+]
+
+[[package]]
 name = "hf-xet"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2308,16 +2321,18 @@ name = "verifyit"
 version = "0.1.0"
 source = { editable = "../verifyit" }
 dependencies = [
+    { name = "harbor-config" },
     { name = "tomlkit" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "harbor-config", git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" },
     { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
-    { name = "math-verify", marker = "extra == 'answer'", specifier = ">=0.7" },
-    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.40" },
+    { name = "math-verify", marker = "extra == 'answer'", specifier = ">=0.9" },
+    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },
     { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
-    { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1" },
+    { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
     { name = "sympy", marker = "extra == 'answer'", specifier = ">=1.12" },
     { name = "tomlkit", specifier = ">=0.13" },
     { name = "verifyit", extras = ["answer", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../verifyit" },

@@ -85,8 +85,8 @@ def count_keyword(text: str, keyword: str) -> int:
     return len(re.findall(r"\b" + re.escape(keyword) + r"\b", text, flags=re.IGNORECASE))
 
 
-def contains_keyword(text: str, keyword: str) -> bool:
-    return count_keyword(text, keyword) > 0
+def contains_keyword(text: str, keyword: str, word_boundary: bool = True) -> bool:
+    return count_keyword(text, keyword) > 0 if word_boundary else keyword.lower() in text.lower()
 
 
 def compare(actual: int, relation: str, expected: int) -> tuple[bool, str] | None:
@@ -161,9 +161,11 @@ def nth_paragraph_first_word(text: str, params: dict) -> tuple[bool, str]:
 @constraint("keywords:forbidden_words")
 def forbidden_words(text: str, params: dict) -> tuple[bool, str]:
     forbidden = params.get("forbidden_words", [])
-    if not isinstance(forbidden, list):
-        return False, "forbidden_words must be list"
-    hits = [w for w in forbidden if isinstance(w, str) and contains_keyword(text, w)]
+    if not isinstance(forbidden, list) or not all(isinstance(word, str) for word in forbidden):
+        return False, "forbidden_words must be a list of strings"
+    if type(params.get("word_boundary", True)) is not bool:
+        raise ValueError("word_boundary must be boolean")
+    hits = [w for w in forbidden if contains_keyword(text, w, params.get("word_boundary", True))]
     return not hits, f"hits={hits}"
 
 
@@ -189,9 +191,11 @@ def letter_frequency(text: str, params: dict) -> tuple[bool, str]:
 @constraint("keywords:existence")
 def keyword_existence(text: str, params: dict) -> tuple[bool, str]:
     keywords = params.get("keywords", [])
-    if not isinstance(keywords, list):
-        return False, "keywords must be list"
-    missing = [w for w in keywords if isinstance(w, str) and not contains_keyword(text, w)]
+    if not isinstance(keywords, list) or not all(isinstance(word, str) for word in keywords):
+        return False, "keywords must be a list of strings"
+    if type(params.get("word_boundary", True)) is not bool:
+        raise ValueError("word_boundary must be boolean")
+    missing = [w for w in keywords if not contains_keyword(text, w, params.get("word_boundary", True))]
     return not missing, f"missing={missing}"
 
 
@@ -619,5 +623,9 @@ def repeat_phrase(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("combination:two_responses")
 def two_responses(text: str, params: dict) -> tuple[bool, str]:
-    parts = [p for p in text.split(TWO_RESPONSE_SEPARATOR) if p.strip()]
-    return len(parts) >= 2, f"sections_by_******={len(parts)}"
+    sections = text.split(TWO_RESPONSE_SEPARATOR)
+    if any(not section.strip() for section in sections[1:-1]):
+        return False, "empty section between responses"
+    parts = [section.strip() for section in sections if section.strip()]
+    passed = len(parts) == 2 and parts[0] != parts[1]
+    return passed, f"sections_by_******={len(parts)}"

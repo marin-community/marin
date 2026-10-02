@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from verifyit.grade import Status, grade
+from verifyit.grade import InvalidTask, Status, grade
 from verifyit.modes import grade_stdio
 from verifyit.spec import Compare, StdioSpec
 
@@ -145,3 +145,73 @@ def test_stdio_crashing_special_judge_rejects_instead_of_falling_back(tmp_path):
     (tests_dir / "cases" / "output_0.txt").write_text("3 1 2\n")
     spec = StdioSpec(command=f"{sys.executable} solution.py", special_judge="judge.py", min_cases=1)
     assert grade_stdio.grade(spec, tests_dir, workspace).reward == 0.0
+
+
+def test_stdio_binary_stdin_program_scores_correct_output(tmp_path):
+    program = "import sys\nfor line in sys.stdin.buffer:\n    print(int(line.strip()) * 2)\n"
+    tests_dir, workspace = _task(tmp_path, program)
+    verdict = grade(_spec(), tests_dir, workspace)
+    assert (verdict.reward, verdict.status) == (1.0, Status.SCORED)
+
+
+@pytest.mark.parametrize("special_judge", [None, "judge.py"])
+def test_stdio_correct_output_before_candidate_crash_scores_zero(tmp_path, special_judge):
+    tests_dir, workspace = _task(tmp_path, DOUBLE + "raise SystemExit(7)\n")
+    if special_judge:
+        (tests_dir / special_judge).write_text("print('1')\n")
+    verdict = grade(_spec(special_judge=special_judge), tests_dir, workspace)
+    assert (verdict.reward, verdict.status) == (0.0, Status.SCORED)
+    assert verdict.detail["passed"] == 0
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected", "score"),
+    [
+        (" 1.00  2e0\n  answer \n", "1 2\nanswer", 1.0),
+        ("1 2", "1\n2", 0.0),
+        ("1\n\n2", "1\n2", 0.0),
+        ("value  1", "value 1", 0.0),
+        ("1.00000000000000000001", "1", 0.0),
+        ("1e4000", "10e3999", 1.0),
+        ("-1e-4000", "1e-4000", 0.0),
+        ("", "  ", 1.0),
+        ("NaN", "1", 0.0),
+        ("Infinity", "1", 0.0),
+    ],
+)
+def test_decimal_lines_direct_and_executed_outputs_agree(tmp_path, candidate, expected, score):
+    tests_dir, workspace = _task(tmp_path, f"print({candidate!r})", cases=1)
+    (tests_dir / "cases" / "output_0.txt").write_text(expected)
+    spec = _spec(compare=Compare.DECIMAL_LINES)
+    direct = grade_stdio.grade_stdio_candidate(spec, candidate, expected)
+    executed = grade(spec, tests_dir, workspace)
+    assert (direct.reward, direct.status) == (score, Status.SCORED)
+    assert (executed.reward, executed.status) == (score, Status.SCORED)
+
+
+def test_nonfinite_decimal_reference_is_invalid_before_execution(tmp_path):
+    tests_dir, workspace = _task(tmp_path, SLEEPER, cases=1)
+    (tests_dir / "cases" / "output_0.txt").write_text("NaN")
+    spec = _spec(compare=Compare.DECIMAL_LINES)
+    with pytest.raises(InvalidTask, match="nonfinite"):
+        grade_stdio.grade_stdio_candidate(spec, "NaN", "NaN")
+    verdict = grade(spec, tests_dir, workspace)
+    assert (verdict.reward, verdict.status) == (0.0, Status.INVALID_TASK)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"compare": "typo"},
+        {"compare": Compare.FLOAT, "float_tolerance": float("nan")},
+        {"compare": Compare.FLOAT, "float_tolerance": float("inf")},
+        {"compare": Compare.FLOAT, "float_tolerance": -1.0},
+    ],
+)
+def test_invalid_comparison_policy_cannot_award_stdout_credit(tmp_path, options):
+    tests_dir, workspace = _task(tmp_path, "print(0)", cases=1)
+    spec = _spec(**options)
+    with pytest.raises(InvalidTask):
+        grade_stdio.grade_stdio_candidate(spec, "0", "0")
+    verdict = grade(spec, tests_dir, workspace)
+    assert (verdict.reward, verdict.status) == (0.0, Status.INVALID_TASK)
