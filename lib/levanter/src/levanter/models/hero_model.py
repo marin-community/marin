@@ -856,7 +856,7 @@ def _decode_convolution(
         return x * unshard(conv.weight)[0], history
     assert history is not None
     # The first implementation gathers packed token rows for a causal scan. Channel-sharded
-    # fused convolution can replace this without changing the page-history contract.
+    # fused convolution can replace this without changing the request-history contract.
     named_x = hax.named(reshard(x[:, 0], P(None, None)), (positions.axes[0], Axis("channel", x.shape[-1])))
     output, history = paged_short_conv(unshard(conv.weight), named_x, history, info, positions)
     return reshard(output.array[:, None], _activation_spec(x)), history

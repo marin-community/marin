@@ -135,7 +135,7 @@ class ShardedLogitModel(DummyModel):
         return hax.NamedArray(jax.sharding.reshard(logits.array, P("data", "model")), logits.axes), cache
 
 
-def test_generate_samples_explicit_token_and_vocabulary_shards():
+def test_generate_samples_explicit_vocabulary_shards():
     mesh = Mesh(
         np.asarray(jax.devices()).reshape(1, -1),
         ("data", "model"),
