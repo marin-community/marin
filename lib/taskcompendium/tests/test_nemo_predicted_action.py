@@ -51,7 +51,13 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     request = specification.context
     assert specification.source.dataset == provenance["dataset"]
     assert specification.source.revision == provenance["dataset_revision"]
-    assert [message.role for message in request.events] == ["system", "user", "assistant", "user"]
+    assert len(request.events) == 4
+    assert [message.role for message in request.events if message.type == "message"] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
     assert request.events[0].content == row["responses_create_params"]["input"][0]["content"]
     assert request.events[-1].content == row["responses_create_params"]["input"][-1]["content"]
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
@@ -218,6 +224,7 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
         assert result.verifier_result is None
     else:
         assert result.exception_info is None, result.exception_info
+        assert result.verifier_result is not None
         assert result.verifier_result.rewards == {"reward": reward}
     assert (tmp_path / "trials/run/agent/submission.json").exists()
 
@@ -255,6 +262,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     )
 
     assert result.exception_info is None, result.exception_info
+    assert result.verifier_result is not None
     assert result.verifier_result.rewards == {"reward": 1.0}
     request, authorization = requests[0]
     native_request = specification.final_tools

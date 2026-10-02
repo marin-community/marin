@@ -62,6 +62,7 @@ from taskcompendium.pipeline.zephyr import (
 from taskcompendium.verifiers.atlas_answers import MathAnswerVerifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
+from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 
 @dataclass(frozen=True)
@@ -810,3 +811,55 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
     assert {
         name: TaskSpec.model_validate_json(row["task_json"]).resources for name, row in audited.items()
     } == original_resources
+
+
+def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_exact_copies(tmp_path):
+    rows = []
+    contracts: dict[str, dict[str, JsonValue]] = {
+        "a": {"uuid": "first"},
+        "b": {"uuid": "second"},
+        "c": {"uuid": "first"},
+    }
+    for name, contract in contracts.items():
+        source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
+        verifier = SourceContractVerifier(
+            evaluator="unbound-source-agent",
+            source_revision="b" * 40,
+            contract=contract,
+            runtime_requirements=("source evaluator",),
+        )
+        task = TaskSpec(
+            id=name,
+            source=source,
+            environment_requirements=EnvironmentRequirements(),
+            answer_type=AnswerType.TEXT,
+            context=ConversationInput(events=(TextMessage(role="user", content="Shared public question"),)),
+            verifier=VerifierSpec(kind=VerifierKind.SOURCE_CONTRACT, parameters_json=verifier.model_dump_json()),
+        )
+        audit = TaskAudit(
+            task_id=name,
+            source=source,
+            raw={"contract": contract},
+            normalized=task,
+            normalization_rejection=None,
+            checks=[],
+            review=None,
+            intended_use=IntendedUse.TRAIN,
+            decision=Decision(task_id=name, disposition=Disposition.KEEP, reasons=[]),
+        )
+        rows.append(audit_columns(audit))
+    merged = tmp_path / "merged"
+    (merged / "data").mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), merged / "data/part-0.parquet")
+    (merged / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
+    output = tmp_path / "canonical"
+    canonicalize_sources(str(merged), str(output))
+    audited = {
+        row["task_id"]: row for file in (output / "audit").glob("*.parquet") for row in pq.read_table(file).to_pylist()
+    }
+    assert {name for name, row in audited.items() if row["filter_status"] == "keep"} == {"a", "b"}
+    assert audited["c"]["duplicate_of"] == "a"
+    assert {
+        name: json.loads(json.loads(row["task_json"])["verifier"]["parameters_json"])["contract"]
+        for name, row in audited.items()
+    } == contracts

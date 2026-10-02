@@ -20,9 +20,7 @@ COMPONENT = "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent
 UPSTREAM = "https://huggingface.co/datasets/nebius/SWE-rebench-V2"
 RUBRIC = ReviewRubric(
     id=(
-
-            "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_nebius_swe_rebench_v2-quality"
-
+        "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_nebius_swe_rebench_v2-quality"
     ),
     version="1",
     criteria=FAMILY_CRITERIA[FAMILY]

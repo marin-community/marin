@@ -50,6 +50,7 @@ from experiments.post_training.task_curation_source_bindings import SOURCE_NAMES
 
 PIPELINE_VERSION = "2026.10.01.1"
 PIPELINE_PREFIX = "task-curation"
+WORKER_PACKAGE = "./lib/taskcompendium[pipeline]"
 
 
 class ParquetView(StrEnum):
@@ -121,7 +122,7 @@ def acquire_source(binding: SourceBinding, resources: ResourceConfig) -> Artifac
     worker = (
         acquire_source_rows
         if isinstance(binding.acquisition.source, SnapshotSource)
-        else remote(acquire_source_rows, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"])
+        else remote(acquire_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE])
     )
     return apply(
         content_name(f"{PIPELINE_PREFIX}/{binding.name}/acquired", binding.acquisition),
@@ -158,7 +159,7 @@ def audit_source(
         remote(
             audit_source_rows,
             resources=config["resources"],
-            pip_packages=["./lib/taskcompendium[pipeline]"],
+            pip_packages=[WORKER_PACKAGE],
         )(
             source_path=config["source_path"],
             output_path=config["output_path"],
@@ -195,7 +196,7 @@ def filter_source(
         content_name(
             f"{PIPELINE_PREFIX}/{binding.name}/filtered", {"audited": (audited.name, audited.version), "policy": policy}
         ),
-        remote(filter_source_rows, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"]),
+        remote(filter_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
         version=binding.version,
         audit_path=audited,
         output_path=OUT,
@@ -213,7 +214,7 @@ def concat_sources(
             f"{PIPELINE_PREFIX}/merged/{view.value}",
             {"sources": [(step.name, step.version) for step in inputs], "view": view},
         ),
-        remote(concatenate_source_rows, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"]),
+        remote(concatenate_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
         version=PIPELINE_VERSION,
         input_paths=inputs,
         output_path=OUT,
@@ -240,7 +241,7 @@ def build_workflow(
     merged = concat_sources(sources, ParquetView.AUDIT, resources)
     canonical = apply(
         content_name(f"{PIPELINE_PREFIX}/canonical", {"merged": (merged.name, merged.version), "policy": "exact-v1"}),
-        remote(canonicalize_source_rows, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"]),
+        remote(canonicalize_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
         version=PIPELINE_VERSION,
         merged_path=merged,
         output_path=OUT,
@@ -248,7 +249,7 @@ def build_workflow(
     views = [
         apply(
             content_name(f"{PIPELINE_PREFIX}/merged/{view.value}", {"canonical": (canonical.name, canonical.version)}),
-            remote(concatenate_source_rows, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"]),
+            remote(concatenate_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
             version=PIPELINE_VERSION,
             input_paths=(canonical,),
             output_path=OUT,

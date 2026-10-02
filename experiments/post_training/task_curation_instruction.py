@@ -42,6 +42,40 @@ def save_rows(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
 
 
+def solve_witnesses(client: OpenAIBatchClient, candidates: list[TaskSpec], path: Path) -> dict[str, str]:
+    """Request candidate answers and retain complete text replies as grading witnesses."""
+    if not candidates:
+        return {}
+    witnesses = {}
+    requests = [
+        {
+            "custom_id": task.id,
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": GLM_MODEL,
+                "messages": [{"role": "user", "content": task.context.events[0].content}],
+                "chat_template_kwargs": {"reasoning_effort": "low"},
+                "max_tokens": 8192,
+            },
+        }
+        for task in candidates
+    ]
+    output = batch_output(client, requests, path / "solver", filename="rewrite-witnesses.jsonl", poll_seconds=5.0)
+    for row in [json.loads(line) for line in output.split("\n") if line.strip()]:
+        response = row.get("response")
+        if response is None or response.get("status_code") != 200:
+            continue
+        choices = response["body"]["choices"]
+        if (
+            len(choices) == 1
+            and choices[0]["finish_reason"] == "stop"
+            and isinstance(choices[0]["message"].get("content"), str)
+        ):
+            witnesses[row["custom_id"]] = choices[0]["message"]["content"]
+    return witnesses
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--if-snapshot", type=Path, required=True)
@@ -144,36 +178,7 @@ def main() -> None:
                 candidates.append(candidate)
                 candidate_parents[candidate.id] = parents[record.task_id]
         after = reviewer.review(candidates, review_rubric, path / "review", originals=candidate_parents)
-        witnesses = {}
-        if name == "structured" and candidates:
-            requests = [
-                {
-                    "custom_id": task.id,
-                    "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": {
-                        "model": GLM_MODEL,
-                        "messages": [{"role": "user", "content": task.context.events[0].content}],
-                        "chat_template_kwargs": {"reasoning_effort": "low"},
-                        "max_tokens": 8192,
-                    },
-                }
-                for task in candidates
-            ]
-            output = batch_output(
-                client, requests, path / "solver", filename="rewrite-witnesses.jsonl", poll_seconds=5.0
-            )
-            for row in [json.loads(line) for line in output.split("\n") if line.strip()]:
-                response = row.get("response")
-                if response is None or response.get("status_code") != 200:
-                    continue
-                choices = response["body"]["choices"]
-                if (
-                    len(choices) == 1
-                    and choices[0]["finish_reason"] == "stop"
-                    and isinstance(choices[0]["message"].get("content"), str)
-                ):
-                    witnesses[row["custom_id"]] = choices[0]["message"]["content"]
+        witnesses = solve_witnesses(client, candidates, path) if name == "structured" else {}
         decisions, controls = [], []
         reviews_by_id = {review.task_id: review for review in after}
         for candidate in candidates:

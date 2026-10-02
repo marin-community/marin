@@ -68,6 +68,10 @@ the first source row and mark later rows with `duplicate_of`; differing private
 references for the same public task reject every member. Preference records are
 keyed by prompt and candidate evidence: different labeled responses to one prompt
 are valid separate records, not conflicting answer keys.
+Opaque source evaluator contracts likewise use their full semantics as the key:
+different private inputs do not prove contradictory answers. Exact copies still
+deduplicate, and GLM checks their reference agreement. Typed answer verifiers
+retain public-task conflict detection.
 
 Canonical merging groups matching task contracts across sources. It chooses an
 accepted representative deterministically, preferring evaluation records and then
@@ -816,6 +820,8 @@ private inputs and runtime requirements. The common verification pass records it
 as unbound. `PreferenceEvidenceVerifier` preserves pairwise candidates or binary
 labels privately; these labels do not define an exact answer for a new response.
 Neither contract manufactures a reward. GLM still makes a final quality decision.
+The NeMo adapter pins the atlas's MarinSkyRL wrapper; its upstream NeMo Gym runtime
+binding remains unverified.
 
 NeMo blend recipes share request/tool-history parsing, with separate leaf selectors
 and family criteria. Sampling positions are excluded from semantic task payloads.
@@ -823,6 +829,12 @@ Original records and normalization edits remain in the audit. Placeholder questi
 must be resolved with the pinned upstream filler and indexed source rows; an empty
 placeholder is not an ordinary solvable task. SWE subcorpus selection uses a pinned
 instance-membership inventory and the published mixture composition.
+
+Review requests preserve the complete public conversation and tool schemas.
+Duplicate private transcripts point to their public copy; historical reasoning and
+large private test fixtures have bounded previews with counts and hashes. The
+default character guard is 512,000 and can be changed with `--prompt-budget` for
+the selected model. A guard failure remains an explicit rejected review failure.
 
 GLM already receives bounded previews of declared task resources, including their
 visibility and truncation. A source can additionally set

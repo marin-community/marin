@@ -55,5 +55,10 @@ def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
 
 
 def deduplication_key(task: TaskSpec) -> str:
-    """Preference candidates define distinct records even when the prompt repeats."""
-    return semantic_digest(task, include_reference=task.verifier.kind == VerifierKind.PREFERENCE_EVIDENCE)
+    """Opaque evaluator inputs and preference candidates define distinct task records."""
+    # Different opaque contracts do not establish conflicting answer keys. Their
+    # quality review checks reference agreement; exact copies still deduplicate.
+    return semantic_digest(
+        task,
+        include_reference=task.verifier.kind in {VerifierKind.PREFERENCE_EVIDENCE, VerifierKind.SOURCE_CONTRACT},
+    )

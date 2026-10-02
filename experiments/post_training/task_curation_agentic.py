@@ -56,7 +56,7 @@ class PilotSource:
 
 
 def nl2bash_snapshot(path: Path) -> DatasetRecipe:
-    """Adapt the existing cleanup output without importing experiments from the library."""
+    """Write the nl2bash fixture snapshot and return its bound recipe."""
     binary = FIXTURE.read_bytes()
     converted = convert_nl2bash(read_task_binary(binary))
     if not isinstance(converted, ConvertedTask):

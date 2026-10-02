@@ -40,7 +40,7 @@ from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 DATASET = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
-VERIFIER_REVISION = "cdc6600b4b5ef78e322c95f61a5401448d55c15e"
+VERIFIER_REVISION = "d8b6e8c163def3660e9d3072c1c174226a1709fa"
 
 
 def message_text(content: Any) -> str:
@@ -155,7 +155,10 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
         tools = functions(request.get("tools", []))
     except (ValueError, KeyError, TypeError, ValidationError) as error:
         return ImportRejection(reason="unsupported_request", detail=str(error))
-    requirements = ("nemotron-agent:" + row.data["agent_ref"]["name"],)
+    requirements = (
+        "nemotron-agent:" + row.data["agent_ref"]["name"],
+        "upstream-NeMo-Gym-binding:unverified",
+    )
     contract = {
         key: value
         for key, value in data.items()
@@ -166,7 +169,7 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
     if reasoning:
         contract["provider_reasoning"] = reasoning
     verifier = SourceContractVerifier(
-        evaluator="NeMo Gym " + row.data["agent_ref"]["name"],
+        evaluator="MarinSkyRL NemotronUltraEnv " + row.data["agent_ref"]["name"],
         source_revision=VERIFIER_REVISION,
         contract=contract,
         runtime_requirements=requirements,

@@ -231,9 +231,7 @@ def sample_sources(names: list[str], output: Path, count: int, seed: int, nemo_s
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {name: executor.submit(sample_source, name, output, count, seed, nemo_shard) for name in independent}
         manifests.update({name: future.result() for name, future in futures.items()})
-    grouped = sorted(
-        (name for name in names if name in NEMOTRON_SOURCES), key=lambda name: NEMOTRON_SOURCES[name]["blend"]
-    )
+    grouped = sorted((name for name in names if name in NEMOTRON_SOURCES), key=lambda name: NEMOTRON_SOURCES[name].blend)
     for name in grouped:
         manifests[name] = sample_source(name, output, count, seed, nemo_shard)
     return [manifests[name] for name in names]

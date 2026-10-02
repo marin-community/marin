@@ -8,10 +8,12 @@ import importlib
 import json
 import random
 from collections.abc import Iterator
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import requests
+from taskcompendium.pipeline.datasets.nemotron_ultra import DATASET, REVISION
 from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_MODULES
 
 from experiments.post_training.task_curation_nemotron_placeholders import placeholder_sources
@@ -21,22 +23,29 @@ from experiments.post_training.task_curation_prefix_sampling import (
     TransferBudget,
 )
 
-DATASET = "nvidia/Nemotron-RL-Ultra-Training-Blends"
-REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
+
+@dataclass(frozen=True)
+class BlendComponent:
+    atlas_id: str
+    blend: str
+    selector: str
+    family: str
+    component: str
+    upstream: str
 
 
-def component_catalog() -> dict:
+def component_catalog() -> dict[str, BlendComponent]:
     result = {}
     for name in NEMOTRON_MODULES:
         leaf = importlib.import_module("taskcompendium.pipeline.datasets." + name)
-        result[name] = {
-            "atlas_id": leaf.ATLAS_ID,
-            "blend": leaf.BLEND,
-            "selector": leaf.SELECTOR,
-            "family": leaf.FAMILY,
-            "component": leaf.COMPONENT,
-            "upstream": leaf.UPSTREAM,
-        }
+        result[name] = BlendComponent(
+            atlas_id=leaf.ATLAS_ID,
+            blend=leaf.BLEND,
+            selector=leaf.SELECTOR,
+            family=leaf.FAMILY,
+            component=leaf.COMPONENT,
+            upstream=leaf.UPSTREAM,
+        )
     return result
 
 
@@ -47,14 +56,14 @@ def row_selector(row: dict) -> str:
     return row.get("dataset") or "agent:" + row["agent_ref"]["name"]
 
 
-def matches_component(row: dict, component: dict, swe_gym_ids: frozenset[str]) -> bool:
-    if row_selector(row) != component["selector"]:
+def matches_component(row: dict, component: BlendComponent, swe_gym_ids: frozenset[str]) -> bool:
+    if row_selector(row) != component.selector:
         return False
-    if component["family"] != "swe-repo":
+    if component.family != "swe-repo":
         return True
     instance = row["metadata"]["instance_id"]
     belongs_to_gym = instance in swe_gym_ids
-    return belongs_to_gym == component["component"].endswith("/SWE-Gym/SWE-Gym")
+    return belongs_to_gym == component.component.endswith("/SWE-Gym/SWE-Gym")
 
 
 def response_chunks(response: requests.Response, maximum: int) -> Iterator[bytes]:
@@ -100,7 +109,7 @@ def sample_blend(
     is a smoke sample, not a population-uniform sample. Incomplete components
     and unresolved SWE subcorpus membership are explicit in their manifests.
     """
-    selected = {name: item for name, item in COMPONENTS.items() if item["blend"] == blend}
+    selected = {name: item for name, item in COMPONENTS.items() if item.blend == blend}
     inventory = frozenset(swe_gym_inventory.read_text().splitlines()) if swe_gym_inventory else frozenset()
     retained = {name: [] for name in selected}
     seen_offsets = {name: set() for name in selected}
@@ -109,7 +118,7 @@ def sample_blend(
         for name, component in selected.items():
             if len(retained[name]) >= count:
                 continue
-            if component["family"] == "swe-repo" and swe_gym_inventory is None:
+            if component.family == "swe-repo" and swe_gym_inventory is None:
                 continue
             if not matches_component(row, component, inventory):
                 continue
@@ -178,13 +187,13 @@ def sample_blend(
         serialized = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
         snapshot = directory / "sample.jsonl"
         snapshot.write_text(serialized)
-        unresolved = component["family"] == "swe-repo" and swe_gym_inventory is None
+        unresolved = component.family == "swe-repo" and swe_gym_inventory is None
         manifest = {
-            **component,
+            **asdict(component),
             "name": name,
             "dataset": DATASET,
             "revision": REVISION,
-            "config": f"{blend}/{component['component']}",
+            "config": f"{blend}/{component.component}",
             "hf_config": blend,
             "split": "train",
             "seed": seed,
@@ -200,11 +209,11 @@ def sample_blend(
             "range_bytes": size_probe_bytes + sum(w["bytes"] for w in windows),
             "range_size_probe_bytes": size_probe_bytes,
             "selector_attribution": "requires SWE-Gym membership" if unresolved else "verified source selection",
-            "swe_gym_inventory": str(swe_gym_inventory) if component["family"] == "swe-repo" else None,
+            "swe_gym_inventory": str(swe_gym_inventory) if component.family == "swe-repo" else None,
             "swe_attribution_basis": (
                 "Exact SWE-Gym membership; complement attributed to SWE-rebench only under "
                 "the pinned Ultra dataset card exhaustive two-source composition"
-                if component["family"] == "swe-repo"
+                if component.family == "swe-repo"
                 else None
             ),
             "complete_probe": len(rows) == count and not unresolved,
@@ -266,7 +275,7 @@ def sample_source(name: str, output: Path, count: int, seed: int) -> dict:
             and manifest["complete_probe"]
         ):
             return manifest
-    manifest = sample_blend(COMPONENTS[name]["blend"], output, count, seed, swe_gym_inventory=swe_gym_inventory(output))[
+    manifest = sample_blend(COMPONENTS[name].blend, output, count, seed, swe_gym_inventory=swe_gym_inventory(output))[
         name
     ]
     if not manifest["complete_probe"]:

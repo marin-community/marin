@@ -61,7 +61,12 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         )
     choices = re.findall(r"(?m)^([A-Z]):", prompt)
     expected = extract_boxed(reference)
-    if not isinstance(expected, str) or not choices or choices != [chr(65 + i) for i in range(len(choices))] or expected not in choices:
+    if (
+        not isinstance(expected, str)
+        or not choices
+        or choices != [chr(65 + i) for i in range(len(choices))]
+        or expected not in choices
+    ):
         return ImportRejection(
             reason="unsupported_choice_contract",
             detail="Contiguous labeled choices and a boxed option conclusion are required",

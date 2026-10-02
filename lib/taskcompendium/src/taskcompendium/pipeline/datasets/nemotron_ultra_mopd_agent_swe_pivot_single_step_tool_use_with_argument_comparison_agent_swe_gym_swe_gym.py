@@ -19,9 +19,7 @@ COMPONENT = "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent
 UPSTREAM = "https://huggingface.co/datasets/SWE-Gym/SWE-Gym"
 RUBRIC = ReviewRubric(
     id=(
-
-            "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_swe_gym_swe_gym-quality"
-
+        "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_swe_gym_swe_gym-quality"
     ),
     version="1",
     criteria=FAMILY_CRITERIA[FAMILY]

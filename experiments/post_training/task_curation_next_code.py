@@ -16,7 +16,7 @@ from experiments.post_training.tasktrove.taskbinary import TaskFiles
 
 
 def convert_codenet(task: TaskFiles) -> ConvertedTask | Rejected:
-    """Reuse directory case extraction while preserving CodeNet's Python grader."""
+    """Extract CodeNet cases and bind whitespace-token output comparison."""
     converted = convert_codeforces(task)
     if isinstance(converted, Rejected):
         return converted

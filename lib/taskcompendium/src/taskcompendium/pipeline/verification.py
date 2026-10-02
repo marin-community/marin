@@ -70,14 +70,13 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
     else:
         return [CheckResult(check="grader_controls", status=CheckStatus.UNSUPPORTED, detail=task.verifier.kind.value)]
 
-    return _answer_checks(
+    return answer_checks(
         task, verifier, (("empty", "", 0.0), ("reference", positive, 1.0), ("perturbed", negative, 0.0))
     )
 
 
-def _answer_checks(
-    task: TaskSpec, verifier: Verifier, controls: tuple[tuple[str, str, float], ...]
-) -> list[CheckResult]:
+def answer_checks(task: TaskSpec, verifier: Verifier, controls: tuple[tuple[str, str, float], ...]) -> list[CheckResult]:
+    """Grade plain-response controls while retaining unavailable graders as unsupported."""
     results = []
     for name, answer, expected in controls:
         attempt = GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
@@ -90,7 +89,7 @@ def _answer_checks(
         )
         status = CheckStatus.PASS if passed else CheckStatus.FAIL
         if result.status == Outcome.INFRA_ERROR:
-            status = CheckStatus.INFRA_ERROR
+            status = CheckStatus.UNSUPPORTED
         results.append(CheckResult(check=name, status=status, detail=f"{result.status}: reward={result.reward}"))
     return results
 
@@ -102,7 +101,7 @@ def verify_witness(task: TaskSpec, witness: str, negative: str) -> list[CheckRes
     It stays outside the model-visible task and never becomes its reference key.
     """
     verifier = resolve_verifier(task.verifier)
-    return _answer_checks(task, verifier, (("empty", "", 0.0), ("witness", witness, 1.0), ("negative", negative, 0.0)))
+    return answer_checks(task, verifier, (("empty", "", 0.0), ("witness", witness, 1.0), ("negative", negative, 0.0)))
 
 
 def _action_checks(task: TaskSpec, verifier: PredictedActionVerifier) -> list[CheckResult]:

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from taskcompendium.grading import GradingAttempt, Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -30,7 +29,7 @@ from taskcompendium.pipeline.models import (
     SnapshotSource,
     VerificationReport,
 )
-from taskcompendium.pipeline.verification import PLAIN
+from taskcompendium.pipeline.verification import answer_checks
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
 
 KNOWLEDGE_CONFIG = "laion__nemotron-gym-knowledge-openqa-v4"
@@ -102,26 +101,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
 def verification_report(task: TaskSpec) -> VerificationReport:
     """Exercise the exact gate and preserve semantic fallback as unresolved."""
     verifier = ReferenceAnswersVerifier.model_validate_json(task.verifier.parameters_json)
-    checks = []
-    for name, candidate, expected in (
-        ("empty", "", 0.0),
-        ("reference", verifier.references[0], 1.0),
-    ):
-        result = verifier.grade(
-            GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=candidate)), None)
-        )
-        passed = (
-            result.reward == expected
-            if result.status == Outcome.GRADED
-            else expected == 0.0 and result.status == Outcome.EXTRACTION_ERROR
-        )
-        checks.append(
-            CheckResult(
-                check=name,
-                status=CheckStatus.PASS if passed else CheckStatus.FAIL,
-                detail=f"{result.status}: reward={result.reward}",
-            )
-        )
+    checks = answer_checks(task, verifier, (("empty", "", 0.0), ("reference", verifier.references[0], 1.0)))
     checks.append(
         CheckResult(
             check="semantic_reference_judge",
