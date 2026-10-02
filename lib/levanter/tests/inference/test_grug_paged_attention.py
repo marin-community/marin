@@ -179,8 +179,23 @@ def test_grug_gpu_split_reduction_matches_dense(kv_splits):
         np.testing.assert_allclose(actual, _dense_oracle(args, 263, None, 0.17), atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.skipif(jax.default_backend() != "gpu", reason="GPU Pallas kernel")
-def test_grug_gpu_full_shape_bf16_decode_matches_float64():
+@pytest.mark.parametrize(
+    "implementation,dma_buffers",
+    [
+        pytest.param(
+            "gpu_pallas_bf16_3x",
+            1,
+            marks=pytest.mark.skipif(jax.default_backend() != "gpu", reason="GPU Pallas kernel"),
+        ),
+        pytest.param(
+            "tpu_fp32_tiles", 1, marks=pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
+        ),
+        pytest.param(
+            "tpu_fp32_tiles", 2, marks=pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
+        ),
+    ],
+)
+def test_grug_full_shape_bf16_decode_matches_float64(implementation, dma_buffers):
     # This measured Hero shape crosses BF16 rounding boundaries where the
     # FP32 page-streaming reference and IEEE split-K kernel can disagree.
     batch, context, heads, groups, dim, page_size = 8, 4096, 12, 4, 128, 128
@@ -197,7 +212,13 @@ def test_grug_gpu_full_shape_bf16_decode_matches_float64():
         jnp.array(batch, jnp.int32),
     )
     actual = jax.jit(
-        partial(ragged_paged_attention, sm_scale=dim**-0.5, sliding_window=2048, implementation="gpu_pallas_bf16_3x")
+        partial(
+            ragged_paged_attention,
+            sm_scale=dim**-0.5,
+            sliding_window=2048,
+            implementation=implementation,
+            tpu_dma_buffers=dma_buffers,
+        )
     )(*args)
     expected = _dense_oracle(args, 2048, None, dim**-0.5).astype(np.asarray(q).dtype)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
@@ -273,34 +294,3 @@ def test_tpu_softmax_exp_matches_float64():
         rtol=1e-7,
     )
     np.testing.assert_array_equal(masked.high + masked.low, [0, 0, 1])
-
-
-@pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
-@pytest.mark.parametrize("dma_buffers", [1, 2])
-def test_grug_tpu_full_shape_bf16_decode_matches_float64(dma_buffers):
-    # This measured Hero shape crosses BF16 rounding boundaries where the
-    # FP32 page-streaming reference and the accurate kernel can disagree.
-    batch, context, heads, groups, dim, page_size = 8, 4096, 12, 4, 128, 128
-    q_key, cache_key = jax.random.split(jax.random.key(42))
-    q = jax.random.normal(q_key, (batch, heads, groups, dim), jnp.bfloat16)
-    page_count = batch * context // page_size
-    pages = jax.random.normal(cache_key, (page_count, page_size, 2 * heads, dim), jnp.bfloat16)
-    args = _PagedCase(
-        q,
-        pages,
-        jnp.full((batch,), context, jnp.int32),
-        jnp.arange(page_count, dtype=jnp.int32).reshape(batch, -1),
-        jnp.arange(batch + 1, dtype=jnp.int32),
-        jnp.array(batch, jnp.int32),
-    )
-    actual = jax.jit(
-        partial(
-            ragged_paged_attention,
-            sm_scale=dim**-0.5,
-            sliding_window=2048,
-            implementation="tpu_fp32_tiles",
-            tpu_dma_buffers=dma_buffers,
-        )
-    )(*args)
-    expected = _dense_oracle(args, 2048, None, dim**-0.5).astype(np.asarray(q).dtype)
-    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
