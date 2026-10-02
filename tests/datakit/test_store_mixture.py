@@ -11,7 +11,7 @@ from experiments.datakit.store.mixture import MixtureWeighting, store_mixture
 from experiments.grug.fast_track.data_pipeline import (
     FastTrackDataConfig,
     FastTrackDataStore,
-    RepeatedDocumentDataSource,
+    RegistryDataSource,
     build_fast_track_data,
     store_mixture_for_step,
 )
@@ -108,13 +108,12 @@ def test_fast_track_data_fingerprint_tracks_tokenizer_content():
     def data_step(tokenizer_identity: str) -> ArtifactStep[FastTrackDataStore]:
         config = FastTrackDataConfig(
             run_id="tokenizer-content-test",
-            source=RepeatedDocumentDataSource(count=2),
+            source=RegistryDataSource(source_names=("source",)),
             quality_model="quality-model",
             quality_model_version="test",
             pool_workers=1,
             tokenizer=TokenizerSpec("hero-bpe-v16384", tokenizer_identity),
             tokenizer_vocab=16_384,
-            sequence_length=4_096,
         )
         return build_fast_track_data(config, version="test-dev")
 

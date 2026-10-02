@@ -129,7 +129,7 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
 | `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |
 | `--target-cluster` | Select a specific Iris cluster for submission. Omit to let Iris select an H100 cluster. |
-| `--source-mode` | use the existing cache, a normalized sample, a registry source, or repeated documents |
+| `--source-mode` | use the existing cache, a normalized sample, or a registry source |
 | `--weighting` | use token-proportional or uniform DataKit bucket weights |
 
 Results land in W&B `marin-community/marin_moe`; eval bpb keys are `eval/paloma/macro_bpb`,
@@ -154,14 +154,6 @@ Change only the mixture. The second command uses the same DataKit store:
 uv run fast-track --submit --run-id data-uniform --size d512 --dense --source-mode sample \
     --sources cp/arxiv_abstracts,cp/wikiteam,starcoder2/ir_python \
     --num-steps 20 --batch-size 8 --weighting uniform --version 2026.09.23
-```
-
-Test exact duplicate removal with one raw document repeated 1,000 times, then train and evaluate on
-the one surviving document:
-
-```bash
-uv run fast-track --submit --run-id repeated-document --size d512 \
-    --source-mode repeated_document --num-steps 20 --batch-size 8 --dense --version 2026.09.23
 ```
 
 Use `--source-mode registry --sources <name>` to start from a registered raw source. Sample mode
