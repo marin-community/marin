@@ -7,6 +7,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
+from levanter.utils.jax_utils import logsumexp_last_axis
+
 
 def _tpu_exp(x: jax.Array) -> jax.Array:
     return jax.lax.exp(x, accuracy=jax.lax.AccuracyMode.HIGHEST)
@@ -14,22 +16,6 @@ def _tpu_exp(x: jax.Array) -> jax.Array:
 
 def _cross_entropy_exp(x: jax.Array) -> jax.Array:
     return jax.lax.platform_dependent(x, tpu=_tpu_exp, default=jnp.exp)
-
-
-def _tpu_logsumexp(logits: jax.Array) -> jax.Array:
-    # Default TPU logarithms can introduce ~1e-4 errors in FP32 cross-entropy.
-    maximum = jnp.max(logits, axis=-1)
-    maximum = jax.lax.stop_gradient(jnp.where(jnp.isfinite(maximum), maximum, 0))
-    total = jnp.sum(_tpu_exp(logits - maximum[..., None]), axis=-1)
-    return maximum + jax.lax.log(total, accuracy=jax.lax.AccuracyMode.HIGHEST)
-
-
-def _default_logsumexp(logits: jax.Array) -> jax.Array:
-    return jax.nn.logsumexp(logits, axis=-1)
-
-
-def _cross_entropy_logsumexp(logits: jax.Array) -> jax.Array:
-    return jax.lax.platform_dependent(logits, tpu=_tpu_logsumexp, default=_default_logsumexp)
 
 
 @jax.custom_jvp
@@ -101,7 +87,7 @@ def linear_softmax_cross_entropy_loss_reference(
         logits = logits.astype(dtype)
 
     logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-    lse = _cross_entropy_logsumexp(logits)
+    lse = logsumexp_last_axis(logits)
     label_logits = logits[jnp.arange(logits.shape[0]), labels]
     loss = lse - label_logits
     if return_argmax:
@@ -163,7 +149,7 @@ def linear_softmax_cross_entropy_loss_streaming(
         valid = (start + jnp.arange(block_size)) < v_dim
         logits = jnp.where(valid, logits, -jnp.inf)
 
-        block_lse = _cross_entropy_logsumexp(logits)
+        block_lse = logsumexp_last_axis(logits)
         logsumexp = _cross_entropy_logaddexp(logsumexp, block_lse)
 
         in_block = (labels >= start) & (labels < start + block_size)

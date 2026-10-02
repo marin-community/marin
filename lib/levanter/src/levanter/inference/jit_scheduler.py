@@ -1166,6 +1166,8 @@ class _DecodeOutputs(eqx.Module):
     tokens: ht.i32[NamedArray, "position"]
     slot_ids: ht.i32[NamedArray, "position"]
     logprobs: ht.Float[NamedArray, "position"] | None
+    top_token_ids: NamedArray | None
+    top_logprobs: NamedArray | None
     num_tokens: jax.Array
     finish_reasons: ht.i32[NamedArray, "seq"]
 
@@ -1182,11 +1184,21 @@ class _DecodeOutputs(eqx.Module):
         return self.tokens.axis_size("position") - self.num_tokens
 
     @staticmethod
-    def init(max_tokens: int, max_seqs: int, with_logprobs: bool = True) -> "_DecodeOutputs":
+    def init(max_tokens: int, max_seqs: int, with_logprobs: bool = True, max_logprobs: int = 0) -> "_DecodeOutputs":
         return _DecodeOutputs(
             tokens=hax.full({"position": max_tokens}, INVALID, dtype=jnp.int32),
             slot_ids=hax.full({"position": max_tokens}, INVALID, dtype=jnp.int32),
             logprobs=(hax.full({"position": max_tokens}, jnp.nan, dtype=jnp.float32) if with_logprobs else None),
+            top_token_ids=(
+                hax.full({"position": max_tokens, "candidate": max_logprobs}, INVALID, dtype=jnp.int32)
+                if max_logprobs
+                else None
+            ),
+            top_logprobs=(
+                hax.full({"position": max_tokens, "candidate": max_logprobs}, jnp.nan, dtype=jnp.float32)
+                if max_logprobs
+                else None
+            ),
             num_tokens=jnp.array(0, dtype=jnp.int32),
             finish_reasons=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
         )
@@ -1198,6 +1210,8 @@ class _DecodeOutputs(eqx.Module):
         new_logprobs: ht.Float[NamedArray, " position"],  # type: ignore[name-defined]
         num_new_tokens: int,
         finish_reasons_snapshot: ht.i32[NamedArray, "seq"],  # type: ignore[name-defined]
+        top_token_ids: NamedArray | None = None,
+        top_logprobs: NamedArray | None = None,
     ) -> "_DecodeOutputs":
         """Append outputs and retain each sequence's first terminal reason."""
 
@@ -1214,6 +1228,16 @@ class _DecodeOutputs(eqx.Module):
             tokens=new_tok_buf,
             slot_ids=new_sid_buf,
             logprobs=new_lp_buf,
+            top_token_ids=(
+                masked_set(self.top_token_ids, "position", self.num_tokens, top_token_ids, num_new_tokens)
+                if self.top_token_ids is not None
+                else None
+            ),
+            top_logprobs=(
+                masked_set(self.top_logprobs, "position", self.num_tokens, top_logprobs, num_new_tokens)
+                if self.top_logprobs is not None
+                else None
+            ),
             num_tokens=self.num_tokens + num_new_tokens,
             finish_reasons=new_reasons,
         )

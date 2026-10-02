@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Literal, NamedTuple
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -8,8 +10,16 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 from haliax import AxisSelector, NamedArray
+from levanter.utils.jax_utils import logsumexp_last_axis
 
-__all__ = ["Sampler"]
+LogprobsMode = Literal["raw_logprobs", "processed_logprobs"]
+
+
+class SampledTokens(NamedTuple):
+    token_ids: NamedArray
+    logprobs: NamedArray
+    top_token_ids: NamedArray | None
+    top_logprobs: NamedArray | None
 
 
 class Sampler(eqx.Module):
@@ -29,8 +39,19 @@ class Sampler(eqx.Module):
 
     Vocab: AxisSelector = eqx.field(static=True)
 
-    def __init__(self, Vocab: hax.AxisSelector = "vocab"):
+    logprobs_mode: LogprobsMode = eqx.field(static=True)
+    max_logprobs: int = eqx.field(static=True)
+
+    def __init__(
+        self,
+        Vocab: hax.AxisSelector = "vocab",
+        *,
+        logprobs_mode: LogprobsMode = "processed_logprobs",
+        max_logprobs: int = 0,
+    ):
         self.Vocab = Vocab
+        self.logprobs_mode = logprobs_mode
+        self.max_logprobs = max_logprobs
 
     def __call__(
         self,
@@ -61,6 +82,23 @@ class Sampler(eqx.Module):
                 Log-probabilities for each sampled token (same shape as *tokens*).
         """
 
+        sampled = self.sample_with_candidates(logits, temperatures, top_ps=top_ps, key=key)
+        return sampled.token_ids, sampled.logprobs
+
+    def sample_with_candidates(
+        self,
+        logits: NamedArray,
+        temperatures: NamedArray | float | jnp.ndarray,
+        *,
+        top_ps: NamedArray | float | jnp.ndarray | None = None,
+        key: PRNGKeyArray,
+    ) -> SampledTokens:
+        """Sample and report chosen/top-K scores from the same forward pass.
+
+        Raw scores precede temperature and nucleus filtering. Processed scores
+        include both, with temperature zero scored at temperature one. Candidate
+        buffers and top-K work are absent when ``max_logprobs`` is zero.
+        """
         # Ensure float32 for numerical stability
         logits_f32 = logits.astype(jnp.float32)
 
@@ -78,18 +116,28 @@ class Sampler(eqx.Module):
         # Where temperature == 0, fall back to greedy choice
         tokens = hax.where(temperatures == 0, greedy, samples)
 
-        vocab_axis = sampling_logits.resolve_axis(self.Vocab)
-        vocab_axis_index = sampling_logits.axes.index(vocab_axis)
-        sampling_logits_array = jnp.moveaxis(sampling_logits.array, vocab_axis_index, -1)
+        reporting_logits = logits_f32 if self.logprobs_mode == "raw_logprobs" else sampling_logits
+        vocab_axis = reporting_logits.resolve_axis(self.Vocab)
+        vocab_axis_index = reporting_logits.axes.index(vocab_axis)
+        reporting_logits_array = jnp.moveaxis(reporting_logits.array, vocab_axis_index, -1)
         selected_logits = jnp.take_along_axis(
-            sampling_logits_array,
+            reporting_logits_array,
             jnp.expand_dims(tokens.array.astype(jnp.int32), axis=-1),
             axis=-1,
         ).squeeze(-1)
-        log_z = jax.nn.logsumexp(sampling_logits_array, axis=-1)
+        log_z = logsumexp_last_axis(reporting_logits_array)
         log_prob_tokens = hax.named(selected_logits - log_z, tokens.axes)
 
-        return tokens, log_prob_tokens
+        if self.max_logprobs == 0:
+            return SampledTokens(tokens, log_prob_tokens, None, None)
+        top_logits, top_ids = jax.lax.top_k(reporting_logits_array, self.max_logprobs)
+        candidate_axes = (*tokens.axes, hax.Axis("candidate", self.max_logprobs))
+        return SampledTokens(
+            tokens,
+            log_prob_tokens,
+            hax.named(top_ids, candidate_axes),
+            hax.named(top_logits - log_z[..., None], candidate_axes),
+        )
 
     def _apply_top_p(
         self,
