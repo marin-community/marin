@@ -42,6 +42,21 @@ class PreparedImage:
     source: RegistryImage | DockerfileSource
 
 
+def prepared_image_workdir(image: PreparedImage) -> str:
+    """Read the selected image's initial working directory from its verified OCI config."""
+    algorithm, digest = image.manifest_digest.split(":", 1)
+    manifest_bytes = (image.layout / "blobs" / algorithm / digest).read_bytes()
+    if algorithm != "sha256" or hashlib.sha256(manifest_bytes).hexdigest() != digest:
+        raise ValueError("Prepared image manifest digest mismatch")
+    manifest = json.loads(manifest_bytes)
+    algorithm, digest = manifest["config"]["digest"].split(":", 1)
+    config_bytes = (image.layout / "blobs" / algorithm / digest).read_bytes()
+    if algorithm != "sha256" or hashlib.sha256(config_bytes).hexdigest() != digest:
+        raise ValueError("Prepared image config digest mismatch")
+    config = json.loads(config_bytes)
+    return config.get("config", {}).get("WorkingDir") or "/"
+
+
 def image_source_key(source: RegistryImage | DockerfileSource) -> str:
     """Identify a registry reference or the current contents of a build context."""
     if isinstance(source, RegistryImage):

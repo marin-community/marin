@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from shellbox.backends.qemu.bundle import guest_code_id, stage_bundle
-from shellbox.image import OCI_TAG, DockerfileSource, PreparedImage, RegistryImage
+from shellbox.image import OCI_TAG, DockerfileSource, PreparedImage, RegistryImage, prepared_image_workdir
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ class QemuAssets:
 
 def stage_qemu_image(image: PreparedImage, assets: QemuAssets, cache: Path) -> Path:
     """Stage a prepared image as a reusable QEMU bundle."""
+    working_directory = prepared_image_workdir(image)
     source_id = (
         image.source.reference
         if isinstance(image.source, RegistryImage)
@@ -46,6 +47,8 @@ def stage_qemu_image(image: PreparedImage, assets: QemuAssets, cache: Path) -> P
             metadata = json.loads((bundle / "image.json").read_text())
             if metadata["manifest_digest"] != image.manifest_digest:
                 raise ValueError("Cached QEMU bundle image digest differs from prepared image")
+            if metadata["cwd"] != working_directory:
+                raise ValueError("Cached QEMU bundle working directory differs from prepared image")
             return bundle
         with tempfile.TemporaryDirectory(prefix="bundle-", dir=cache) as temporary:
             staged = Path(temporary) / "bundle"
@@ -66,5 +69,7 @@ def stage_qemu_image(image: PreparedImage, assets: QemuAssets, cache: Path) -> P
             metadata = json.loads((staged / "image.json").read_text())
             if metadata["manifest_digest"] != image.manifest_digest:
                 raise ValueError("QEMU bundle image digest differs from prepared image")
+            metadata["cwd"] = working_directory
+            (staged / "image.json").write_text(json.dumps(metadata, indent=2) + "\n")
             staged.rename(bundle)
     return bundle

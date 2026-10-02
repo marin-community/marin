@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import tarfile
 import tempfile
 from dataclasses import replace
@@ -362,7 +363,8 @@ class QemuMachine:
             encoded = base64.b64encode(source.read_bytes()).decode()
             script = (
                 f"/harbor/busybox mkdir -p {shlex.quote(str(Path(target).parent))} && "
-                f"printf '%s' '{encoded}' | /harbor/busybox base64 -d > {shlex.quote(target)}"
+                f"printf '%s' '{encoded}' | /harbor/busybox base64 -d > {shlex.quote(target)} && "
+                f"/harbor/busybox chmod {stat.S_IMODE(source.stat().st_mode):o} {shlex.quote(target)}"
             )
         result = await self.run(Command(("/bin/sh", "-c", script), output_limit_bytes=TRANSFER_LIMIT_BYTES))
         if result.exit_code:

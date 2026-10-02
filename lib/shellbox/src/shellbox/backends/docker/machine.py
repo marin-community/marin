@@ -4,6 +4,7 @@
 """Docker reference implementation of the machine contract."""
 
 import asyncio
+import stat
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -95,6 +96,11 @@ class DockerMachine:
         result = await docker("cp", copy_source, f"{self.name}:{target}")
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
+        if source.is_dir():
+            mode = stat.S_IMODE(source.stat().st_mode)
+            result = await docker("exec", "--user", "0", self.name, "chmod", f"{mode:o}", target)
+            if result.exit_code:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)

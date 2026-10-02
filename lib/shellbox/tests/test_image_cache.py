@@ -9,8 +9,27 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
-from shellbox.image import DockerfileSource, ImageCache
+from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
+
+
+@pytest.mark.parametrize("working_directory,expected", [("/task workspace", "/task workspace"), ("", "/")])
+def test_image_working_directory(tmp_path, working_directory, expected):
+    blobs = tmp_path / "blobs" / "sha256"
+    blobs.mkdir(parents=True)
+    config = json.dumps({"config": {"WorkingDir": working_directory}}).encode()
+    config_digest = hashlib.sha256(config).hexdigest()
+    config_path = blobs / config_digest
+    config_path.write_bytes(config)
+    manifest = json.dumps({"config": {"digest": f"sha256:{config_digest}"}}).encode()
+    manifest_digest = hashlib.sha256(manifest).hexdigest()
+    (blobs / manifest_digest).write_bytes(manifest)
+    image = PreparedImage(tmp_path, f"sha256:{manifest_digest}", RegistryImage("fixture"))
+    assert prepared_image_workdir(image) == expected
+    config_path.write_bytes(json.dumps({"config": {"WorkingDir": "/changed"}}).encode())
+    with pytest.raises(ValueError):
+        prepared_image_workdir(image)
 
 
 def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, monkeypatch):
@@ -28,7 +47,14 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
             layout = Path(args[-1].removeprefix("oci:").removesuffix(":image"))
             blobs = layout / "blobs/sha256"
             blobs.mkdir(parents=True)
-            config = json.dumps({"os": "linux", "architecture": "amd64", "payload": builds[-1].decode()}).encode()
+            config = json.dumps(
+                {
+                    "os": "linux",
+                    "architecture": "amd64",
+                    "config": {"WorkingDir": "/task workspace"},
+                    "payload": builds[-1].decode(),
+                }
+            ).encode()
             config_digest = hashlib.sha256(config).hexdigest()
             (blobs / config_digest).write_bytes(config)
             manifest = json.dumps({"config": {"digest": f"sha256:{config_digest}"}, "layers": []}).encode()
@@ -87,6 +113,14 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
     bundle = stage_qemu_image(second, assets, tmp_path / "bundles")
     metadata = json.loads((bundle / "image.json").read_text())
     assert metadata["manifest_digest"] == second.manifest_digest
+    assert metadata["cwd"] == "/task workspace"
+    manifest = json.loads((second.layout / "blobs/sha256" / second.manifest_digest.split(":")[1]).read_bytes())
+    config_path = second.layout / "blobs/sha256" / manifest["config"]["digest"].split(":")[1]
+    original_config = config_path.read_bytes()
+    config_path.write_bytes(b"{}")
+    with pytest.raises(ValueError):
+        stage_qemu_image(second, assets, tmp_path / "bundles")
+    config_path.write_bytes(original_config)
     assert metadata["dockerfile_sha256"] == hashlib.sha256((contexts[1] / "Dockerfile").read_bytes()).hexdigest()
     (contexts[1] / "payload").write_bytes(b"changed")
     changed = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"))
