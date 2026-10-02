@@ -16,7 +16,7 @@ from taskcompendium.grading import (
     StructuredExactVerifier,
     Verifier,
 )
-from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.models import EnvironmentRequirements, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import (
     GradingAttempt,
     SubmissionConvention,
@@ -37,6 +37,8 @@ VERIFIERS: Mapping[str, type[Verifier]] = MappingProxyType(
 
 
 def resolve_verifier(specification: VerifierSpec) -> Verifier:
+    if specification.environment_requirements != EnvironmentRequirements():
+        raise NotImplementedError("Private verifier environments require an execution runtime")
     verifier_type = VERIFIERS.get(specification.kind)
     if verifier_type is None:
         raise NotImplementedError(f"Unsupported verifier kind: {specification.kind!r}")

@@ -13,8 +13,7 @@ from pathlib import PurePosixPath
 from typing import Annotated, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
-
-from taskcompendium.path_validation import validate_relative_file_path, validate_relative_file_paths
+from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 
 SCHEMA_VERSION = "0.18"
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -68,27 +67,6 @@ def _finite_json_float(value: str) -> float:
     if not isfinite(result):
         raise ValueError("Verifier configuration numbers must be finite")
     return result
-
-
-class VerifierSpec(BaseModel):
-    """A private verifier selection and its pinned configuration.
-
-    ``kind`` selects a verifier class. ``parameters_json`` is its private
-    JSON-encoded configuration.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: str = Field(min_length=1)
-    parameters_json: str = Field(repr=False)
-
-    @field_validator("parameters_json")
-    @classmethod
-    def validate_parameters(cls, value: str) -> str:
-        parameters = json.loads(value, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
-        if not isinstance(parameters, dict):
-            raise ValueError("Verifier configuration must be a JSON object")
-        return value
 
 
 class FunctionCall(BaseModel):
@@ -290,7 +268,11 @@ class InlineBinary(BaseModel):
 
 
 class DatasetPath(BaseModel):
-    """A file or directory path in the task's pinned Source snapshot."""
+    """A vendored path below the containing TaskCompendium dataset reader root.
+
+    The reader supplies its root and snapshot explicitly to a materializer;
+    upstream Source provenance, process cwd, and export layout do not locate it.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -321,13 +303,11 @@ class TaskResource(BaseModel):
     path: str
     source: ResourceSource
     format: ResourceFormat = ResourceFormat.COPY
-    executable: bool = False
+    mode: str | None = Field(default=None, pattern=r"^[0-7]{3,4}$")
 
     @model_validator(mode="after")
     def validate_resource(self) -> "TaskResource":
         validate_relative_file_path(self.path)
-        if self.format == ResourceFormat.TAR_GZ and self.executable:
-            raise ValueError("Archive directories cannot have a file executable flag")
         return self
 
 
@@ -349,12 +329,18 @@ class ResourceGroups(BaseModel):
 
 
 class ProviderRequirement(BaseModel):
-    """One versioned action interface and immutable initial-state digest."""
+    """One versioned action interface and literal JSON initial state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_interface: str = Field(min_length=1)
-    seed_sha256: str = Field(pattern=SHA256_PATTERN)
+    initial_state: JsonValue = Field(repr=False)
+
+    @field_validator("initial_state")
+    @classmethod
+    def validate_initial_state(cls, value: JsonValue) -> JsonValue:
+        json.dumps(value, allow_nan=False)
+        return value
 
 
 def validate_workspace_path(path: str) -> PurePosixPath:
@@ -375,7 +361,6 @@ class EnvironmentRequirements(BaseModel):
     docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
     working_directory: str | None = None
     setup_commands: tuple[str, ...] = ()
-    additional_workspace_roots: tuple[str, ...] = ()
     tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -388,13 +373,31 @@ class EnvironmentRequirements(BaseModel):
             raise ValueError("Provider requirement names must be nonempty")
         if any(not command.strip() for command in self.setup_commands):
             raise ValueError("Setup commands must be nonempty")
-        roots = [validate_workspace_path(path) for path in self.additional_workspace_roots]
         if self.working_directory is not None:
-            roots.append(validate_workspace_path(self.working_directory))
-        for index, root in enumerate(roots):
-            if any(root.is_relative_to(other) or other.is_relative_to(root) for other in roots[:index]):
-                raise ValueError("Workspace roots and working directory must not overlap")
+            validate_workspace_path(self.working_directory)
         return self
+
+
+class VerifierSpec(BaseModel):
+    """A private verifier selection and its pinned configuration.
+
+    ``parameters_json`` belongs to the scorer. Typed environment requirements
+    declare private harness capabilities independently of scoring configuration.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: str = Field(min_length=1)
+    parameters_json: str = Field(repr=False)
+    environment_requirements: EnvironmentRequirements = Field(default_factory=EnvironmentRequirements)
+
+    @field_validator("parameters_json")
+    @classmethod
+    def validate_parameters(cls, value: str) -> str:
+        parameters = json.loads(value, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
+        if not isinstance(parameters, dict):
+            raise ValueError("Verifier configuration must be a JSON object")
+        return value
 
 
 class TaskSpec(BaseModel):
@@ -436,11 +439,12 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
             ("docker_image", requirements.docker_image),
             ("working_directory", requirements.working_directory),
             ("setup_commands", requirements.setup_commands),
-            ("additional_workspace_roots", requirements.additional_workspace_roots),
             ("tool_providers", requirements.tool_providers),
         )
         if value
     ]
+    if specification.verifier.environment_requirements != EnvironmentRequirements():
+        features.append("verifier.environment_requirements")
     resources = specification.resources
     if resources.all or resources.worker or resources.oracle or resources.verifier:
         features.append("resources")

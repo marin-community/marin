@@ -111,7 +111,6 @@ async def test_schema_canonical_verifier_kinds_serialize_load_and_grade(
 ):
     serialized = json.loads(_task(verifier, answer_type).model_dump_json())
     assert serialized["verifier"]["kind"] == wire_kind
-    assert serialized["schema_version"] == "0.18"
     loaded = TaskSpec.model_validate_json(json.dumps(serialized))
     convention = PlainText(id="plain")
     correct_result = await grade_answer(loaded, convention, _attempt(loaded, correct))

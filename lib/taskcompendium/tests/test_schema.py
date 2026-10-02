@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Complete semantic records round-trip independently of runtime support."""
+"""Public schema loading and runtime boundaries preserve private contracts."""
 
 import json
 
@@ -13,14 +13,15 @@ from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowering
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    ConversationTrace,
     EnvironmentRequirements,
     Source,
     TaskSpec,
     TextMessage,
     VerifierSpec,
 )
-from taskcompendium.submission import PlainText, chat_request
-from taskcompendium.verifier_registry import resolve_verifier
+from taskcompendium.submission import GradingAttempt, PlainText, chat_request
+from taskcompendium.verifier_registry import grade_answer
 
 
 @pytest.fixture
@@ -35,90 +36,6 @@ def specification():
     )
 
 
-def test_complete_private_schema_round_trips_without_execution(tmp_path, specification):
-    wire = json.loads(specification.model_dump_json())
-    wire.update(
-        answer_type="workspace_state",
-        tags=["", "difficulty:7", "custom label", "custom label"],
-        environment_requirements={
-            "capabilities": ["shell", "filesystem", "process", "browser", "network"],
-            "docker_image": "org/project@sha256:" + "a" * 64,
-            "working_directory": "/app",
-            "setup_commands": ["git checkout pinned-commit"],
-            "additional_workspace_roots": ["/data"],
-            "tool_providers": {"company": {"action_interface": "workplace:v1", "seed_sha256": "b" * 64}},
-        },
-        verifier={"kind": "script", "parameters_json": '{"entrypoint":"private/check.py","image":"private/image"}'},
-        resources={
-            "all": [{"path": "readme.txt", "source": {"kind": "inline_text", "content": "Shared inputs."}}],
-            "worker": [
-                {"path": "input.txt", "source": {"kind": "inline_text", "content": "café\n"}},
-                {
-                    "path": "project",
-                    "source": {"kind": "dataset_path", "path": "archives/project.tar.gz", "sha256": "c" * 64},
-                    "format": "tar_gz",
-                },
-                {
-                    "path": "fixtures",
-                    "source": {"kind": "dataset_path", "path": "projects/example/fixtures"},
-                },
-                {
-                    "path": "run.py",
-                    "source": {"kind": "dataset_path", "path": "projects/example/run.py", "sha256": "d" * 64},
-                    "executable": True,
-                },
-            ],
-            "oracle": [{"path": "input.txt", "source": {"kind": "inline_binary", "content_base64": "AP8="}}],
-            "verifier": [
-                {
-                    "path": "private/check.py",
-                    "source": {"kind": "inline_text", "content": "raise SystemExit(0)\n"},
-                    "executable": True,
-                },
-                {"path": "input.txt", "source": {"kind": "inline_text", "content": "private evaluator fixture"}},
-            ],
-        },
-    )
-    path = tmp_path / "specification.json"
-    path.write_text(json.dumps(wire))
-    loaded = read_specification(path)
-    persisted = json.loads(loaded.model_dump_json())
-    assert set(persisted) == {
-        "id",
-        "context",
-        "environment_requirements",
-        "final_tools",
-        "answer_type",
-        "source",
-        "verifier",
-        "schema_version",
-        "resources",
-        "tags",
-    }
-    assert persisted["tags"] == ["", "difficulty:7", "custom label", "custom label"]
-    assert persisted["environment_requirements"] == wire["environment_requirements"]
-    assert persisted["verifier"] == wire["verifier"]
-    assert persisted["resources"]["oracle"][0]["source"] == {"kind": "inline_binary", "content_base64": "AP8="}
-    assert persisted["resources"]["worker"][1]["format"] == "tar_gz"
-    assert persisted["resources"]["worker"][2] == {
-        "path": "fixtures",
-        "source": {"kind": "dataset_path", "path": "projects/example/fixtures", "sha256": None},
-        "format": "copy",
-        "executable": False,
-    }
-    assert persisted["resources"]["worker"][3] == {
-        "path": "run.py",
-        "source": {"kind": "dataset_path", "path": "projects/example/run.py", "sha256": "d" * 64},
-        "format": "copy",
-        "executable": True,
-    }
-    assert set(persisted["resources"]) == {"all", "worker", "oracle", "verifier"}
-    path.write_text(loaded.model_dump_json())
-    assert read_specification(path).model_dump(mode="json") == persisted
-    with pytest.raises(NotImplementedError):
-        resolve_verifier(loaded.verifier)
-
-
 @pytest.mark.parametrize(
     "update",
     [
@@ -126,11 +43,15 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
         {"environment_requirements": EnvironmentRequirements(docker_image="org/image@sha256:" + "a" * 64)},
         {"environment_requirements": EnvironmentRequirements(working_directory="/app")},
         {"environment_requirements": EnvironmentRequirements(setup_commands=("initialize",))},
-        {"environment_requirements": EnvironmentRequirements(additional_workspace_roots=("/data",))},
         {
             "environment_requirements": EnvironmentRequirements.model_validate(
                 {
-                    "tool_providers": {"company": {"action_interface": "workplace:v1", "seed_sha256": "b" * 64}},
+                    "tool_providers": {
+                        "company": {
+                            "action_interface": "workplace:v1",
+                            "initial_state": {"inbox": [], "company": "example"},
+                        }
+                    },
                 }
             )
         },
@@ -145,7 +66,8 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
                 "worker": [
                     {
                         "path": "project",
-                        "source": {"kind": "dataset_path", "path": "tasks/example/project"},
+                        "source": {"kind": "dataset_path", "path": "vendored/project"},
+                        "mode": "0755",
                     }
                 ]
             }
@@ -154,10 +76,32 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
         {"answer_type": AnswerType.STATE},
         {"answer_type": AnswerType.WORKSPACE_STATE},
         {"verifier": VerifierSpec(kind="llm_judge", parameters_json='{"rubric":"private"}')},
+        {
+            "verifier": VerifierSpec(
+                kind="exact",
+                parameters_json='{"expected":"done"}',
+                environment_requirements=EnvironmentRequirements(capabilities=("process",)),
+            ),
+        },
+        {
+            "resources": {
+                "verifier": [
+                    {
+                        "path": "checks",
+                        "source": {"kind": "dataset_path", "path": "vendored/checks.tar.gz"},
+                        "format": "tar_gz",
+                        "mode": "0755",
+                    }
+                ]
+            }
+        },
     ],
 )
 def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path, specification, update):
-    task = TaskSpec.model_validate({**specification.model_dump(), **update})
+    record = TaskSpec.model_validate({**specification.model_dump(), **update})
+    path = tmp_path / "specification.json"
+    path.write_text(record.model_dump_json())
+    task = read_specification(path)
     convention = PlainText(id="plain")
     assert compatible_lowerings(task, (convention,), (HarborEnvironmentConfig(),)) == ()
     with pytest.raises(NotImplementedError):
@@ -170,7 +114,7 @@ def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path
 
 @pytest.mark.parametrize("path", ["../private.txt", "/private.txt", "https://example.com/private.txt", "a/../b"])
 @pytest.mark.parametrize("digest", [None, "a" * 64])
-def test_dataset_resource_references_cannot_escape_the_pinned_dataset(specification, path, digest):
+def test_vendored_resource_references_cannot_escape_the_dataset_reader_root(specification, path, digest):
     wire = specification.model_dump()
     source = {"kind": "dataset_path", "path": path, "sha256": digest}
     wire["resources"] = {
@@ -212,6 +156,31 @@ def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(tmp_pat
     assert resources["verifier"][0]["source"]["content"] == "hidden test"
 
 
+@pytest.mark.parametrize("initial_state", [None, "company-snapshot", {"inbox": [], "counter": 3}])
+def test_reader_keeps_literal_provider_state_but_direct_chat_cannot_export_it(tmp_path, specification, initial_state):
+    wire = specification.model_dump(mode="json")
+    wire["environment_requirements"]["tool_providers"] = {
+        "company": {"action_interface": "workplace:v1", "initial_state": initial_state}
+    }
+    path = tmp_path / "specification.json"
+    path.write_text(json.dumps(wire))
+    task = read_specification(path)
+    with pytest.raises(NotImplementedError):
+        lower_to_harbor(task, PlainText(id="plain"), HarborEnvironmentConfig(), tmp_path / "export")
+    assert not (tmp_path / "export").exists()
+
+
+def test_reader_rejects_nested_nonfinite_provider_state(tmp_path, specification):
+    wire = specification.model_dump(mode="json")
+    wire["environment_requirements"]["tool_providers"] = {
+        "company": {"action_interface": "workplace:v1", "initial_state": {"counters": [float("nan")]}}
+    }
+    path = tmp_path / "specification.json"
+    path.write_text(json.dumps(wire))
+    with pytest.raises(ValidationError):
+        read_specification(path)
+
+
 @pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e309"])
 def test_private_verifier_config_rejects_nested_nonfinite_json_numbers(tmp_path, specification, number):
     # JsonValue previously allowed nonfinite values despite allow_inf_nan=False.
@@ -225,3 +194,18 @@ def test_private_verifier_config_rejects_nested_nonfinite_json_numbers(tmp_path,
     path.write_text(json.dumps(wire))
     with pytest.raises(ValidationError):
         read_specification(path)
+
+
+async def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, specification):
+    wire = specification.model_dump(mode="json")
+    wire["verifier"]["environment_requirements"] = {"docker_image": "private/grader@sha256:" + "a" * 64}
+    path = tmp_path / "specification.json"
+    path.write_text(json.dumps(wire))
+    task = read_specification(path)
+    attempt = GradingAttempt(
+        conversation=ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done"))),
+        workspace=object(),
+    )
+    # This correct answer must not earn credit without the required private runtime.
+    with pytest.raises(NotImplementedError):
+        await grade_answer(task, PlainText(id="plain"), attempt)

@@ -37,13 +37,13 @@ flowchart LR
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
 | `final_tools` | An ordered list of functions advertised at the decision point. These definitions do not bind functions to an implementation. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, `workspace_state`, or `native_action`. |
-| `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
+| `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
 | `schema_version` | Version of the serialized spec: `0.18`. Readers reject other versions. |
 | `resources` | Files, directories, and archives grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
-A task has one final result. Ordered steps and reward aggregation are deferred. Descriptive difficulty can be a tag such as `difficulty:7`; there is no numeric difficulty field.
+A task has one final result. Ordered steps and reward aggregation are deferred.
 
 `context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; the adapter sends them as OpenAI-compatible chat messages without executing them again. `answer_type` does not prescribe a wrapper such as JSON.
 
@@ -83,12 +83,11 @@ Public expectations belong in `context`: for example, the columns a CSV must con
 | `docker_image` | Optional immutable image reference, such as `registry/project@sha256:<64 lowercase hex digits>`. Tags alone are rejected. |
 | `working_directory` | Optional normalized absolute POSIX path for the main workspace. Omission declares no required working directory. |
 | `setup_commands` | Ordered commands required to establish the initial workspace. |
-| `additional_workspace_roots` | Other normalized absolute workspace roots, disjoint from each other and from the main working directory. |
-| `tool_providers` | Mapping from a task-local provider instance name to a required action interface and seed digest. |
+| `tool_providers` | Mapping from a task-local provider instance name to a required action interface and initial state. |
 
-Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and `seed_sha256`, the lowercase SHA256 digest of immutable initial provider state. Two named instances can require the same interface with different seeds. The selected runtime owns provider implementation, transport, seed acquisition, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
+Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and required `initial_state`, a JSON value such as a string, null, or an object. Two named instances can require the same interface with different initial states. No digest is required. The selected runtime owns provider implementation, transport, state initialization, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
 
-The task's `docker_image` describes worker initial state. A private executable verifier can declare its own image and execution configuration in its private `parameters_json`; it must not expose that runtime or private resources to the worker.
+The task's `docker_image` and worker file mounts describe worker initial state. A verifier declares its own capabilities, image, and workspace requirements in private `VerifierSpec.environment_requirements`. A future runtime must keep those requirements and private resources separate from the worker environment.
 
 ## Resource mounts
 
@@ -105,7 +104,7 @@ Private gold and hidden tests belong in `oracle` or `verifier`. An `all` resourc
 
 Oracle resources are reserved for trusted reference-solution generation. Verifier resources are used when evaluating a candidate result. These groups declare access; they do not require an oracle or evaluator process to run.
 
-The worker mount root is `environment_requirements.working_directory` when declared; otherwise the selected runtime supplies it. For example, a resource at `project` with a working directory of `/app` appears at `/app/project`. Worker mounts are established before setup commands run in that working directory. `additional_workspace_roots` declares other accessible roots and does not change the resource destination base. Oracle and verifier mounts use separate private roots supplied by their runtimes.
+The worker mount root is `environment_requirements.working_directory` when declared; otherwise the selected runtime supplies it. For example, a resource at `project` with a working directory of `/app` appears at `/app/project`. Worker mounts are established before setup commands run in that working directory. Oracle and verifier mounts use separate private roots supplied by their runtimes.
 
 Each `TaskResource` declares one mount with these fields:
 
@@ -114,21 +113,21 @@ Each `TaskResource` declares one mount with these fields:
 | `path` | Normalized relative destination under each receiving role's runtime-owned workspace root. |
 | `source` | One discriminated content source from the table below. |
 | `format` | `copy` (default) installs literal bytes or copies a referenced file or directory at `path`; `tar_gz` explicitly extracts a gzip-compressed tar archive into the directory at `path`. |
-| `executable` | Controls an ordinary file's installed mode: `644` when false, `755` when true, regardless of its source mode. True requires a regular file; it must be false for archive extraction. Directory copies preserve member executable bits. |
+| `mode` | Optional Unix permission mode as a three- or four-digit octal string, such as `0644` or `0755`. An explicit mode applies to the mounted file or root directory. Omission preserves dataset permissions; inline files default to `0644`, and archive target directories default to `0755`. |
 
 | Source `kind` | Fields |
 | --- | --- |
 | `inline_text` | `content`: literal UTF-8 text. |
 | `inline_binary` | `content_base64`: canonical base64 for binary bytes. |
-| `dataset_path` | `path`: normalized relative file or directory path in `source.dataset` at `source.revision`; `sha256`: optional lowercase SHA256 digest of regular-file bytes. |
+| `dataset_path` | `path`: normalized relative file or directory path vendored in the containing TaskCompendium dataset; `sha256`: optional lowercase SHA256 digest of regular-file bytes. |
 
-Dataset references inherit provenance from the task's `Source`. They cannot name an arbitrary URI or request a network fetch. A trusted dataset resolver must acquire exactly the immutable snapshot identified by `Source.dataset` and `Source.revision`, then inspect the referenced path to determine whether it is a regular file or directory. Schema decoding performs no filesystem inspection or I/O. The path's identity is that dataset, immutable revision, and relative path. An optional `sha256` adds a regular-file byte integrity check; when supplied, a materializer must require a regular file and verify its digest. There is no directory hash.
+Dataset paths are relative to the containing TaskCompendium dataset from which the spec is read. `TaskSpec.source` records upstream audit provenance and does not resolve resource paths. A future trusted reader or materializer must receive an explicit containing-dataset root and pinned snapshot; it must not fetch the original upstream source or infer this root from the process working directory or an exported Harbor package's parent. Paths cannot name an arbitrary URI or request a network fetch. Schema decoding performs no filesystem inspection or I/O. An optional `sha256` adds a regular-file byte integrity check; when supplied, a materializer must require a regular file and verify its digest. There is no directory hash.
 
 `tar_gz` requires regular archive-file bytes and explicit extraction; it never accepts a directory or extracts an archive merely because its filename has an archive extension. The resolved source type determines `copy` behavior.
 
-Copying a directory includes the complete recursive subtree, preserving empty directories and source executable bits. A task need not enumerate every source file or declare the path's type. Before writing any resource, a materializer must reject moving or unresolved revisions, unsupported or unsafe entry types, and digest mismatches.
+Copying a directory includes the complete recursive subtree and preserves empty directories and member permissions. Archive extraction also preserves member permissions. A mount's explicit `mode` changes only its mounted file or root directory. When a member is represented by its own mount instead of mounting the containing directory, it can declare its own mode. A task need not enumerate every source file or declare the path's type. Before writing any resource, a materializer must reject moving or unresolved snapshots, unsupported or unsafe entry types, and digest mismatches.
 
-For a task whose Source names a pinned dataset snapshot, grouped resources can contain:
+For a spec read from a pinned TaskCompendium dataset snapshot, grouped resources can contain:
 
 ```json
 {
@@ -149,7 +148,7 @@ For a task whose Source names a pinned dataset snapshot, grouped resources can c
 }
 ```
 
-Archive and directory runtimes must reject traversal, absolute paths, links, special files, and collisions, enforce byte limits, and normalize member file modes to `644` or `755` according to the source executable bits. The schema represents mounts and archive extraction, but no dataset resolver, archive extractor, or resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
+Archive and directory runtimes must reject traversal, absolute paths, links, special files, and collisions, and enforce byte limits. The schema represents mounts and archive extraction, but no dataset resolver, archive extractor, or resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
 
 ## What can we import?
 
@@ -167,7 +166,9 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The submission convention extracts a candidate answer, then the verifier grades it. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
-`VerifierSpec.kind` is an open nonempty string and `parameters_json` is a private JSON object. Schema loading does not require a grader implementation. Registry resolution, export, and launch validate executable configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, image pins, paths referencing `TaskSpec.resources`, or rubrics in that object without adding a new top-level task field. These graders have no implementation in this package.
+`VerifierSpec.kind` is an open nonempty string. Its private typed `environment_requirements` defaults to empty and declares the capabilities, image, and workspace needed by the verifier. The harness owns these requirements. `parameters_json` is an opaque private JSON object owned by the shared scorer (`verifyit` / `tasktrove-verify`); the harness must not extract structural environment fields such as an image from it.
+
+Schema loading accepts descriptors without a grader implementation. Registry resolution, export, and launch validate executable configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, paths referencing `TaskSpec.resources`, or rubrics in `parameters_json`. These graders have no implementation in this package. Direct chat rejects nonempty verifier environment requirements before export or launch, including for its implemented pure graders.
 
 The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, `structured_exact` for JSON values with strict type and array-order comparison, and `predicted_action` for final function calls. The expected answer and grading settings stay out of the model-visible instruction.
 
@@ -175,7 +176,7 @@ The implemented canonical kinds are `exact` for normalized text, `numeric` for n
 
 A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with a Harbor environment configuration, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the environment configuration says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
 
-`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no required environment capabilities, images, workspace initialization, tool providers, or resources; a task requiring `shell` has no candidate in this slice. File, workspace-state, arbitrary-state, and unimplemented-verifier tasks also have no direct-chat candidate. Export and chat request construction raise `NotImplementedError` for these requirements before producing artifacts or requesting a model response. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
+`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no worker or verifier environment capabilities, images, workspace initialization, tool providers, or resources; a task requiring `shell` has no candidate in this slice. File, workspace-state, arbitrary-state, and unimplemented-verifier tasks also have no direct-chat candidate. Export and chat request construction raise `NotImplementedError` for these requirements before producing artifacts or requesting a model response. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
 Submission conventions preserve the task’s advertised functions. Plain-text and JSON submissions keep those functions; `AnswerCall` adds `submit_answer` and requires one call with an answer string. An existing function named `submit_answer` conflicts with that convention and is rejected. `FinalAction(require_call=True)` requests a call, and `FinalAction(max_calls=1)` disables parallel calls. A launch may set `parallel_tool_calls` only when it agrees with the convention. Direct chat captures the final assistant turn without executing advertised functions.
 
@@ -242,6 +243,8 @@ The direct-chat environment exposes no filesystem or shell tools. The custom ver
 A valid but wrong answer receives reward `0.0`. A well-formed message that violates its submission convention receives `submission_failure` with reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
 
 The package tests replay fixed assistant messages at the HTTP boundary through the production launcher and agent. Replay is absent from the installed package.
+
+TaskCompendium requires Python 3.12 or 3.13 and uses `marin-rigging` for shared portable path and mount-collision validation. The validator leaf module performs no storage access.
 
 Run the package tests from the repository root:
 
