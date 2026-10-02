@@ -364,8 +364,7 @@ def test_snowball_hf_config_loading_allows_distributed_initialization(tmp_path):
         import jax
         # Deliberately do NOT import levanter.models.snowball.
         from transformers import AutoConfig
-        from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.models.lm_model import LmConfig
+        from levanter.models.lm_model import LmConfig
         assert "levanter.models.snowball" not in sys.modules
         # from_hf triggers discovery before resolving the HF config; replicate that ordering.
         LmConfig.get_known_choices()
