@@ -10,6 +10,7 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention
+from levanter.grug.attention._paged_gpu import gpu_paged_attention
 
 
 def _mixed_case(dtype):
@@ -86,3 +87,51 @@ def test_grug_tpu_paged_attention_matches_dense(window, runtime_scale):
         jax.jit(fn)(*args, sm_scale=jnp.array(0.17)) if runtime_scale else jax.jit(partial(fn, sm_scale=0.17))(*args)
     )
     np.testing.assert_allclose(actual, _dense_oracle(args, window, None, 0.17), atol=1e-4, rtol=1e-4)
+
+
+def _decode_case(dtype):
+    rng = np.random.default_rng(41)
+    q = jnp.asarray(rng.normal(size=(4, 2, 3, 32)), dtype)
+    pages = jnp.asarray(rng.normal(size=(7, 16, 4, 32)), dtype).at[0].set(jnp.nan)
+    return (
+        q,
+        pages,
+        jnp.array([37, 18, -1], jnp.int32),
+        jnp.array([[4, 2, 6], [1, 3, -1], [-1, -1, -1]], jnp.int32),
+        jnp.array([0, 1, 2, -1], jnp.int32),
+        jnp.array(2, jnp.int32),
+    )
+
+
+@pytest.mark.parametrize("window,cap", [(None, None), (1, None), (29, 1.5)])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_grug_gpu_paged_attention_interpreter_matches_dense(window, cap, dtype):
+    args = _decode_case(dtype)
+    q, pages, _, indices, _, _ = args
+    upper = jnp.array([37, 18, 0, 0], jnp.int32)
+    lower = jnp.zeros_like(upper) if window is None else jnp.maximum(0, upper - window)
+    bounds = jnp.stack((lower, upper), axis=-1)
+    table = jnp.maximum(indices[jnp.array([0, 1, 0, 0])], 0)
+    actual = jax.jit(partial(gpu_paged_attention, soft_cap=cap, interpret=True))(q, pages, table, bounds, 0.17)
+    expected = jnp.asarray(_dense_oracle(args, window, cap, 0.17), dtype).astype(jnp.float32)
+    np.testing.assert_allclose(actual.astype(jnp.float32), expected, atol=1e-5, rtol=1e-5)
+    assert np.max(np.abs(np.asarray(actual, np.float32) - np.asarray(expected))) < 1e-5
+
+
+@pytest.mark.skipif(jax.default_backend() != "gpu", reason="GPU Pallas kernel")
+@pytest.mark.parametrize("window", [None, 29])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_grug_gpu_paged_attention_decode_matches_dense(window, dtype):
+    args = _decode_case(dtype)
+    compiled = jax.jit(
+        partial(ragged_paged_attention, sm_scale=0.17, sliding_window=window, implementation="gpu_pallas")
+    )
+    actual = compiled(*args)
+    expected = jnp.asarray(_dense_oracle(args, window, None, 0.17), dtype).astype(jnp.float32)
+    np.testing.assert_allclose(actual.astype(jnp.float32), expected, atol=1e-4, rtol=1e-4)
+    empty = compiled(*args[:-1], jnp.array(0, jnp.int32))
+    np.testing.assert_array_equal(empty, jnp.zeros_like(args[0]))
+    prefill_args = (*args[:4], jnp.array([0, 2, 4, -1], jnp.int32), args[-1])
+    prefill = compiled(*prefill_args)
+    expected_prefill = jnp.asarray(_dense_oracle(prefill_args, window, None, 0.17), dtype).astype(jnp.float32)
+    np.testing.assert_allclose(prefill.astype(jnp.float32), expected_prefill, atol=1e-4, rtol=1e-4)

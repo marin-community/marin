@@ -11,9 +11,10 @@ import jax.numpy as jnp
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention import ragged_paged_attention as tpu_ragged_paged_attention
 from jax.sharding import PartitionSpec as P
 
+from levanter.grug.attention._paged_gpu import gpu_paged_attention
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
-PagedAttentionImplementation = Literal["reference", "tpu"]
+PagedAttentionImplementation = Literal["reference", "tpu", "gpu_pallas"]
 
 
 def ragged_paged_attention(
@@ -41,16 +42,18 @@ def ragged_paged_attention(
         sm_scale: Query/key logit multiplier.
         sliding_window: Number of visible tokens, including the query itself.
         soft_cap: Optional tanh logit cap, applied before masking.
-        implementation: TPU Pallas or portable reference; defaults to TPU on TPU.
+        implementation: TPU Pallas, opt-in GPU Pallas decode, or portable reference.
+            Defaults to TPU on TPU and reference elsewhere.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. The TPU path uses JAX's existing ragged kernel;
-    GPU and CPU currently use a reference implementation, not an optimized kernel.
+    GPU and CPU default to the reference implementation. The opt-in ``gpu_pallas``
+    backend accelerates decode-only batches and uses the reference for prefill.
     Only the KV-head axis is partitioned; sequence metadata and pages are replicated.
     """
     if implementation is None:
         implementation = "tpu" if jax.default_backend() == "tpu" else "reference"
-    if implementation not in ("tpu", "reference"):
+    if implementation not in ("tpu", "reference", "gpu_pallas"):
         raise ValueError(f"Unknown paged attention implementation: {implementation}")
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError("sliding_window must be positive")
@@ -59,8 +62,9 @@ def ragged_paged_attention(
     if q.ndim != 4 or kv_pages.ndim != 4 or kv_pages.shape[2:] != (2 * q.shape[1], q.shape[3]):
         raise ValueError("Expected grouped queries and interleaved KV pages with matching heads and head_dim")
 
+    backend = {"tpu": _tpu_attention, "reference": _reference_attention, "gpu_pallas": _gpu_attention}[implementation]
     fn = partial(
-        _tpu_attention if implementation == "tpu" else _reference_attention,
+        backend,
         sm_scale=sm_scale,
         sliding_window=sliding_window,
         soft_cap=soft_cap,
@@ -171,3 +175,28 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
     output = output.reshape(q_padded.shape)[..., :original_dim].astype(q.dtype)
     valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs).valid
     return jnp.where(valid[:, None, None, None], output, 0)
+
+
+def _gpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+    metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+    upper = jnp.where(metadata.valid, metadata.position + 1, 0)
+    lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
+    bounds = jnp.stack((lower, upper), axis=-1)
+    token_pages = jnp.maximum(page_indices[metadata.sequence], 0)
+    active = jnp.arange(kv_lens.shape[0]) < num_seqs.reshape(())
+    decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
+    return jax.lax.cond(
+        decode_only,
+        lambda: gpu_paged_attention(q, kv_pages, token_pages, bounds, sm_scale, soft_cap=soft_cap),
+        lambda: _reference_attention(
+            q,
+            kv_pages,
+            kv_lens,
+            page_indices,
+            cu_q_lens,
+            num_seqs,
+            sm_scale=sm_scale,
+            sliding_window=sliding_window,
+            soft_cap=soft_cap,
+        ),
+    )
