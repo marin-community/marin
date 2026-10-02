@@ -38,7 +38,13 @@ from levanter.layers.kv_cache import PageCache, KvPageCache, ListCache
 from levanter.layers.paged_short_conv import ShortConvPageCache, paged_short_conv
 from levanter.models.hero import HeroConfig
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.snowball import RMSNorm, GatedNorm, rms_norm, _init_weight
+from levanter.models.snowball import (
+    RMSNorm,
+    GatedNorm,
+    rms_norm,
+    _init_weight,
+    _reshard_sequence as _reshard_sequence_axis,
+)
 from levanter.sharding import partition_spec_of
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -112,14 +118,6 @@ def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> F
 def _sequence_axis_of(x: jax.Array) -> str | None:
     spec = partition_spec_of(x)
     return spec[1] if spec is not None and len(spec) > 1 else None
-
-
-def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
-    """Move ``x``'s sequence axis onto ``axis`` (None replicates it), keeping its other axes."""
-    spec = partition_spec_of(x)
-    if spec is None:
-        return x
-    return reshard(x, P(spec[0], axis, *spec[2:]))
 
 
 def _apply_rotary_embedding_fused(
