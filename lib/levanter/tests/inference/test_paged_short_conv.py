@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import NamedTuple
+
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -13,7 +15,13 @@ from levanter.kernels.pallas.short_conv import short_conv_reference
 from levanter.layers.paged_short_conv import ShortConvPageCache, paged_short_conv
 
 
-def _packed_batch(chunks, page_rows, starts, page_size):
+class PackedBatch(NamedTuple):
+    inputs: hax.NamedArray
+    info: PageBatchInfo
+    positions: hax.NamedArray
+
+
+def _packed_batch(chunks, page_rows, starts, page_size) -> PackedBatch:
     lengths = [len(chunk) for chunk in chunks]
     positions = np.concatenate(
         [np.arange(start, start + length) for start, length in zip(starts, lengths, strict=True)]
@@ -36,7 +44,7 @@ def _packed_batch(chunks, page_rows, starts, page_size):
         new_token_dests=hax.named(jnp.asarray([*destinations, INVALID, INVALID], dtype=jnp.int32), "position"),
         page_size=page_size,
     )
-    return (
+    return PackedBatch(
         hax.named(values, ("position", "channel")),
         info,
         hax.named(jnp.asarray([*positions, 0, 0], dtype=jnp.int32), "position"),
