@@ -787,13 +787,20 @@ def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(
 
         def stage_across_target_publication(current):
             staged = current.with_trainable_checkpoint(tmp_path / "model.safetensors")
-            context.reload(lambda model: model, expected_version=1)
+            context.reload(lambda _: target, expected_version=1)
             return staged
 
         with pytest.raises(ValueError, match="changed while draft weights were staged"):
             context.reload_draft(stage_across_target_publication, expected_version=1)
         assert context.model_version == 2
-        np.testing.assert_array_equal(engine.draft.lm_head, refreshed.lm_head)
+        np.testing.assert_array_equal(engine.draft.embedding, target.transformer.token_embed)
+        np.testing.assert_array_equal(
+            engine.draft.lm_head, np.asarray(target.transformer.output_proj)[:, np.asarray(draft.draft_to_target)]
+        )
         after_race = engine.generate([request])
-        assert after_race.tokens == new.tokens
-        np.testing.assert_array_equal(after_race.logprobs, new.logprobs)
+        race_oracle = InferenceEngine.from_model_with_config(target, None, config, draft=engine.draft).generate(
+            [request]
+        )
+        assert after_race.tokens == old.tokens
+        assert after_race.tokens == race_oracle.tokens
+        np.testing.assert_array_equal(after_race.logprobs, race_oracle.logprobs)
