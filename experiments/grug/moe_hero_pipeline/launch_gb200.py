@@ -61,6 +61,8 @@ def main():
             "-m",
             "experiments.grug.moe_hero_pipeline.pipeline_smoke",
             "--main-hero-recipe",
+            "--processes-per-task",
+            str(_GPUS_PER_NODE),
             "--optimizer",
             "muonh",
             "--schedule",

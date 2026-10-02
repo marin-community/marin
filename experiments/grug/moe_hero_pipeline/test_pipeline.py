@@ -245,7 +245,8 @@ def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_
             )
         canonical = checkpoint_state(state)
         root = str(tmp_path)
-        path = save_checkpoint(root, state, step=1, contract={"model": "tiny-hero", "optimizer": optimizer_name})
+        contract = {"model": "tiny-hero", "optimizer": optimizer_name, "data_schedule_steps": 100}
+        path = save_checkpoint(root, state, step=1, contract=contract)
         loaded = load_checkpoint(jax.tree.map(jnp.zeros_like, canonical), path)
         assert jax.tree.structure(loaded) == jax.tree.structure(canonical)
         for actual, expected in zip(jax.tree.leaves(loaded), jax.tree.leaves(canonical), strict=True):
@@ -254,9 +255,10 @@ def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_
         destination = pipeline_state((1, 1, 1, 1, 1))
         destination = jax.tree.map(jnp.zeros_like, destination)
         shardings = jax.tree.map(lambda value: value.sharding, destination)
-        restored, completed = restore_checkpoint(
-            root, destination, shardings, contract={"model": "tiny-hero", "optimizer": optimizer_name}
-        )
+        # A changed mixture horizon changes random-access data order after resume.
+        with pytest.raises(ValueError, match="training configuration does not match"):
+            restore_checkpoint(root, destination, shardings, contract={**contract, "data_schedule_steps": 99})
+        restored, completed = restore_checkpoint(root, destination, shardings, contract=contract)
         assert completed == 1
         restored_canonical = checkpoint_state(restored)
         assert jax.tree.structure(restored_canonical) == jax.tree.structure(canonical)

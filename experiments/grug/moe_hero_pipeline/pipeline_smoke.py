@@ -189,6 +189,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-processes", type=int)
     parser.add_argument("--process-id", type=int)
     parser.add_argument("--local-device-id", type=int)
+    parser.add_argument("--processes-per-task", type=int, help="Local process count for the main recipe runtime")
     parser.add_argument("--real-data", action="store_true", help="Read the current immutable Hero Harrier mixture")
     parser.add_argument("--data-output-root", help="Caller-owned root for resolving the real-data context")
     parser.add_argument(
@@ -240,6 +241,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", help="Optional rank-zero W&B console capture in marin-community/marin_moe")
     parser.add_argument("--compilation-cache", default="/tmp/hero-pipeline-jax-cache")
     args = parser.parse_args()
+    if args.main_hero_recipe and (args.processes_per_task is None or args.processes_per_task < 1):
+        parser.error("main-hero-recipe requires a positive processes-per-task count")
     if args.diagnostic_layers is not None and (
         not (args.full_hero or args.main_hero_recipe) or args.diagnostic_layers < 1
     ):
@@ -405,6 +408,7 @@ def main() -> None:
             inline_watch_enabled=False,
             moe_implementation=model_config.moe_implementation,
             remat_mode=model_config.remat_mode,
+            processes_per_task=args.processes_per_task,
         )
         if model_config.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
             verify_ragged_pjrt()
@@ -456,6 +460,8 @@ def main() -> None:
         "data": HARRIER_MIX_2026_08_18_STORE.adopt_source if args.real_data else "synthetic",
         "data_seed": args.seed,
     }
+    if args.real_data:
+        checkpoint_contract["data_schedule_steps"] = args.data_schedule_steps
     _log(
         "pipeline_init",
         model=dataclasses.asdict(model_config),

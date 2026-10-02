@@ -70,6 +70,8 @@ JAX_PLATFORMS=cpu uv run --no-sync python -m pytest experiments/grug/moe_hero_pi
 
 JAX reports CUDA's default backend platform as `gpu`. The explicit `cuda`
 device query and `JAX_PLATFORMS=cuda,cpu` restrict that accelerator backend to CUDA.
+The explicit `--processes-per-task 8` matches the worker wrapper and disables
+per-process PGLE by default; concurrent CUPTI sessions on one node collide.
 
 Iris must allocate two eight-GPU H100 worker tasks in one job and expose its
 endpoint registry, task context, and a `jax` port. Each worker launches eight
@@ -95,7 +97,7 @@ XLA_FLAGS=--xla_gpu_enable_command_buffer= CUDA_MODULE_LOADING=EAGER \
 JAXPP_DISABLE_SCHEDULE_TASK_FUSION=1 \
 uv run --no-sync python -m iris.jax.multigpu_main --nproc 8 --devices-per-proc 1 -- \
   python -u -m experiments.grug.moe_hero_pipeline.pipeline_smoke \
-    --main-hero-recipe --diagnostic-layers 2 \
+    --main-hero-recipe --processes-per-task 8 --diagnostic-layers 2 \
     --attention-implementation gpu_fa4_cute \
     --moe-implementation fixed_pooled_wave_all_to_all --expert-waves 6 \
     --schedule standard_1f1b --stages 2 --expert-axis-size 8 \
@@ -135,7 +137,8 @@ The runner closes the disposable compilation-sample iterator before compiling,
 then opens the training iterator at the checkpoint step. It closes that
 iterator on success and failure. A pipeline resume keeps `--seed` and
 `--data-schedule-steps` unchanged for random-access sample order, and keeps
-`--steps` unchanged for the optimizer schedule.
+`--steps` unchanged for the optimizer schedule. Real-data checkpoints record
+the mixture horizon and reject a resume with a different horizon.
 
 ## Checkpoint boundary and storage
 
