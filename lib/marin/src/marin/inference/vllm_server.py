@@ -256,6 +256,14 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         install = self._install()
+        return self._command(install.executable, install.executable_args)
+
+    def python_command(self, args: tuple[str, ...]) -> list[str]:
+        """Run Python with the same vLLM wheel, PyTorch, and CUDA toolchain as serving."""
+        return self._command("python", args)
+
+    def _command(self, executable: str, executable_args: tuple[str, ...]) -> list[str]:
+        install = self._install()
         command = [
             "uvx",
             "--from",
@@ -276,8 +284,8 @@ class IsolatedCudaVllm:
                 "python",
                 "-c",
                 _CUDA_NVCC_BOOTSTRAP,
-                install.executable,
-                *install.executable_args,
+                executable,
+                *executable_args,
             )
         )
         return command
