@@ -218,6 +218,8 @@ def _unaligned_head_case(heads, groups):
     rng = np.random.default_rng(38)
     q = jnp.asarray(rng.normal(size=(2, heads, groups, 128)), jnp.bfloat16)
     pages = jnp.asarray(rng.normal(size=(7, 16, 2 * heads, 128)), jnp.bfloat16)
+    # Poison slots outside the two windows, including both partial edge pages.
+    pages = pages.at[2, :4].set(jnp.nan).at[6, 5:].set(jnp.nan).at[3, 0].set(jnp.nan).at[1, 2:].set(jnp.nan)
     return _PagedCase(
         q,
         pages,
