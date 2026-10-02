@@ -11,9 +11,10 @@ evaluation scores the held-out set.
 
 Plan or run::
 
-    python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset gate --routing native
+    python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset gate --routing native \\
+        --cluster cw-us-east-02a
     python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset full \\
-        --routing replay --run
+        --routing replay --cluster cw-rno2a --run
 """
 
 from __future__ import annotations
@@ -69,6 +70,9 @@ ANSWERS_PER_PROMPT = 8
 EVAL_BATCH_PROMPTS = 1024
 # The E9 held-out protocol's sampling.
 EVAL_SAMPLING = MappingProxyType({"temperature": 0.6, "top_p": 0.95})
+# H100 clusters of the same node type. Both read the export and data from the us-east-02a bucket; cw-rno2a reads it
+# through its local object-store cache.
+H100_CLUSTERS = ("cw-us-east-02a", "cw-rno2a")
 
 NUMERICS_AB_RECIPE = replace(
     SNOWBALL_RECIPE,
@@ -121,9 +125,9 @@ def numerics_ab_config(preset: AsyncPreset, routing: Routing, settings: tuple[st
 
 
 def build_run(
-    preset: AsyncPreset, routing: Routing, version: str | None, settings: tuple[str, ...] = ()
+    preset: AsyncPreset, routing: Routing, cluster: str, version: str | None, settings: tuple[str, ...] = ()
 ) -> ArtifactStep[SkyRLRun]:
-    """Assemble the RL step for one preset and routing mode under this branch's MarinSkyRL commit."""
+    """Assemble the RL step for one preset and routing mode on ``cluster`` under this branch's MarinSkyRL commit."""
     recipe = NUMERICS_AB_RECIPE
     policy = SNOWBALL_POLICY
     config = numerics_ab_config(preset, routing, settings)
@@ -161,15 +165,15 @@ def build_run(
             seed=config["trainer"]["seed"],
         ),
         IrisSkyRLExecution(
-            cluster=policy.cluster,
-            cluster_config=f"lib/iris/config/{policy.cluster}.yaml",
+            cluster=cluster,
+            cluster_config=f"lib/iris/config/{cluster}.yaml",
             cpu=16,
             memory=recipe.host_memory,
             disk="2TB",
             priority="interactive",
             # One automatic retry, then fail; a healthy run resumes from its latest checkpoint on resubmission.
             max_retries=1,
-            target_cluster=policy.cluster,
+            target_cluster=cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=72,
             # The W&B key decides the entity.
@@ -183,6 +187,7 @@ def build_run(
 @click.command(help=__doc__)
 @click.option("--preset", type=click.Choice(sorted(PRESETS)), required=True)
 @click.option("--routing", type=click.Choice([mode.value for mode in Routing]), required=True)
+@click.option("--cluster", type=click.Choice(H100_CLUSTERS), required=True, help="H100 cluster that runs the job.")
 @click.option(
     "--set",
     "settings",
@@ -191,9 +196,9 @@ def build_run(
     help="Change one setting of the rendered RL config (dotted key; prefix + to add a new key).",
 )
 @rl_build_options
-def main(preset: str, routing: str, settings: tuple[str, ...]) -> dict[str, ArtifactStep]:
+def main(preset: str, routing: str, cluster: str, settings: tuple[str, ...]) -> dict[str, ArtifactStep]:
     mode = Routing(routing)
-    return {f"skyrl-{MARIN_SKYRL.commit[:9]}-{mode}-{preset}": build_run(PRESETS[preset], mode, None, settings)}
+    return {f"skyrl-{MARIN_SKYRL.commit[:9]}-{mode}-{preset}": build_run(PRESETS[preset], mode, cluster, None, settings)}
 
 
 if __name__ == "__main__":
