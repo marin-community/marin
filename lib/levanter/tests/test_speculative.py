@@ -126,7 +126,7 @@ def test_paged_target_verification_matches_sequential_decode_and_discards_reject
                 jnp.zeros(3, dtype=bool),
                 max_draft_tokens=3,
                 auxiliary_layers=(0, 1, 2),
-                key=jax.random.key(9),
+                keys=jax.random.split(jax.random.key(9), 3),
                 logprobs_mode="raw_logprobs",
             )
         )
@@ -157,7 +157,7 @@ def test_paged_target_verification_matches_sequential_decode_and_discards_reject
                 jnp.array([False, True, False]),
                 max_draft_tokens=3,
                 auxiliary_layers=(0, 1, 2),
-                key=jax.random.key(9),
+                keys=jax.random.split(jax.random.key(9), 3),
                 logprobs_mode="raw_logprobs",
             )
         )(model, cache, args)

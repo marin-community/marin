@@ -122,7 +122,7 @@ def verify_snowball_proposals(
     *,
     max_draft_tokens: int,
     auxiliary_layers: tuple[int, ...],
-    key: jax.Array,
+    keys: jax.Array,
     logprobs_mode: LogprobsMode,
     stop_token_ids: tuple[int, ...] = (),
 ) -> SpeculativeTargetOutput:
@@ -131,7 +131,8 @@ def verify_snowball_proposals(
     Each active sequence contributes its pending token followed by at most K
     proposals. PageBatchInfo describes tentative lengths after writing that block.
     The returned committed lengths exclude rejected proposals and cancelled rows;
-    the next decode must use these lengths. Rejected KV slots remain physically
+    the next decode must use these lengths. Each sequence has its own PRNG key,
+    so reordering or cancelling peers does not change its draws. Rejected KV slots remain physically
     present but are outside the visible prefix and overwritten on continuation.
     The recovered/bonus output is pending: its KV is written by the next call.
 
@@ -157,16 +158,29 @@ def verify_snowball_proposals(
     # The sampler owns replicated vocabulary rows, matching the ordinary engine.
     rows = logits.array.at[indices].get(out_sharding=P(None, None, None))
     proposals = input_ids.array.at[indices[:, 1:]].get(out_sharding=P(None, None))
-    tokens = verify_deterministic_proposals(
+
+    def verify_row(logits, proposals, length, temp, remaining, cancelled, key):
+        result = verify_deterministic_proposals(
+            logits[None],
+            proposals[None],
+            length[None],
+            temp[None],
+            remaining[None],
+            cancelled[None],
+            key=key,
+            logprobs_mode=logprobs_mode,
+            stop_token_ids=stop_token_ids,
+        )
+        return jax.tree.map(lambda x: x[0], result)
+
+    tokens = jax.vmap(verify_row)(
         rows,
         proposals,
         jnp.maximum(query_lengths - 1, 0),
         temperature,
         remaining_tokens,
         cancelled | ~active,
-        key=key,
-        logprobs_mode=logprobs_mode,
-        stop_token_ids=stop_token_ids,
+        keys,
     )
     committed = batch_info.seq_lens.array - query_lengths + tokens.lengths
     features = auxiliary.array.at[indices].get(out_sharding=P(None, None, None))
