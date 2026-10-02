@@ -132,7 +132,10 @@ def _reference_attention(
             "thgd,tshd->thgs", q.astype(jnp.float32) * sm_scale, k, precision=jax.lax.Precision.HIGHEST
         )
         if soft_cap is not None:
-            scores = soft_cap * jnp.tanh(scores / soft_cap)
+            # TPU tanh uses an approximation that can flip BF16 output rounding.
+            scaled = scores / soft_cap
+            numerator = -jnp.expm1(-2 * jnp.abs(scaled))
+            scores = soft_cap * jnp.sign(scaled) * numerator / (2 - numerator)
         scores = jnp.where(allowed[:, None, None, :], scores, -jnp.inf)
         next_maximum = jnp.maximum(maximum, jnp.max(scores, axis=-1))
         safe_maximum = jnp.where(jnp.isfinite(next_maximum), next_maximum, 0)
