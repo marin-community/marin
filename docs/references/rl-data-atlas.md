@@ -293,6 +293,27 @@ incomplete with their raw calls retained; cached reviews and publication receive
 same content check.
 Imported Task Trove dashboard notes and task audits remain separate historical collections; this publisher creates new collections from actual task attempts.
 
+Harbor reviews use the configured MarinSkyRL checkout for the existing result
+adapter, even when the source has no training registration. Preserve the task's
+resource limits and network restrictions when preparing its runtime.
+
+For Skill2Env, set `runtime.harbor_reward_mode: skill2env_components`. This
+preserves the named native rewards, reports their arithmetic mean, and counts a
+full pass only when every component is one within numerical tolerance.
+The native `tests/test.sh` supplies these scores; `tests/rubric.md` does not
+automatically add an LLM rubric reward.
+
+For Debian-based task images needing offline Terminus-2 tools, set
+`runtime.harbor_agent.name` to `offline_terminus:OfflineTerminus2`. Under
+`runtime.harbor_agent.kwargs`, provide `debian_package_manifest` as an absolute
+path and `debian_package_manifest_sha256` as its hash. The manifest is a JSON
+array of `filename` and `sha256` records; place the referenced `.deb` files
+beside it and include all missing dependencies. Verify package checksums against
+the distribution's package index before execution. Setup installs the checked
+bundle without downloads and records `agent/offline-tooling.json`. Set
+`record_terminal_session: false` when the bundle omits asciinema; conversation
+and trajectory artifacts remain available.
+
 Opening the [authenticated page](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/) checks the MarinSkyRL registry repository and Task Trove release
 repository heads and always refreshes MarinSkyRL upstream dataset metadata, including
 when the MarinSkyRL head is unchanged. The public page reads the latest saved
@@ -339,123 +360,24 @@ never stored in the applet tables or sent to the frontend. Normal page loads reu
 
 ## Register a native Harbor release
 
-Add external Harbor datasets to
-`infra/marina/applets/rl_data_catalog/server/harbor_sources.py`. This is the
-Atlas intake for sources that are independent of MarinSkyRL and Task Trove.
-It requires no training registry entry. The applet bundles this metadata and
-shows it under **Harbor Hub** after a source refresh. Refresh reads the bundled
-pins; it does not follow upstream `latest` tags or download task archives.
+Add a `HarborSource` entry to
+`infra/marina/applets/rl_data_catalog/server/harbor_sources.py`. Record the
+immutable release digest, complete task count and its evidence, source links,
+license scope, and other metadata defined by the dataclass. Verify the count
+against the full release membership, including API pagination.
 
-Each registration records the package name, immutable SHA-256 digest,
-publication date, exact release task count and its evidence, metadata check
-date, source/paper links, license information, and classification. Verify the
-count against the pinned release's complete task membership, including API
-pagination. Keep the project's code license distinct from third-party task
-asset terms. Additions and pin updates go through a Marin PR. Changing the pin
-invalidates reviews of both the old data and its bundled native verifiers;
-previous review artifacts remain available.
+Submit registrations and pin updates through a Marin PR. The applet bundles
+these entries under **Harbor Hub** without requiring a training registration.
+After deploying the update, refresh sources to load the bundled pins. Refresh
+does not follow upstream tags or download task archives. Changing a pin
+invalidates the current assessment while retaining earlier review artifacts.
 
-Skill2Env is registered as `Harbor Hub:skill2env/skill2env`. Its official 1.0.1
-release (Harbor revision 2) has 7,496 tasks at
-`sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c`.
-The task count was checked against Harbor's release membership on October 1,
-2026. The paper's private S2EBench is a separate evaluation set. Registration
-starts with no quality rating or difficulty measurement.
+For validation, download selected tasks at their recorded digests and use the
+review workflow above with `source.format: harbor_directory` and
+`source.source_id: Harbor Hub:<org>/<dataset>`. Preserve the release population,
+selection method, and task digests with the evidence: the runner samples only
+the local task directories. Publish evidence after the source entry is deployed;
+registration alone establishes no quality rating or difficulty measurement.
 
-Prepare a review sample in a Harbor environment that supports Hub package
-references and schema 1.3 network policies. Official Harbor revision
-`bf991e490394ef9c3250a6db2bc5cbda903cb4c3` supports both. Verify that the runtime
-preserves `no-network` for the environment, agent, and verifier before executing
-the sample. The sampled images lack `tmux`, which Terminus-2 needs. To provision
-agent tools offline, set `runtime.harbor_agent.name` to
-`offline_terminus:OfflineTerminus2` and its `kwargs.debian_package_manifest` to
-an absolute manifest path, with its SHA-256 in `kwargs.debian_package_manifest_sha256`.
-The manifest is a JSON array of `filename` and
-`sha256` records for local Debian packages, including all dependencies missing
-from the task image. Download packages before execution and verify their
-checksums against the distribution's package index. The agent installs only
-those packages and records them in `agent/offline-tooling.json` before normal
-Terminus-2 setup. Task files, resource limits, and network policies remain
-unchanged. Set `kwargs.record_terminal_session` to false when the bundle omits
-asciinema; the saved conversation and agent trajectory remain available.
-
-The [Skill2Env paper](https://www.alphaxiv.org/abs/2609.reinforcing-agents-collective-skills.pdf)
-uses Pi for training rollouts and evaluation. This intake uses Atlas's
-Terminus-2 setup with the released tasks and native verifiers. Its model scores
-are Atlas measurements and do not reproduce the paper's Pi results.
-
-From the Marin repository root, this example fetches only metadata
-and writes a reproducible three-task selection:
-
-```python
-import asyncio
-import json
-import random
-from pathlib import Path
-
-from harbor.registry.client.package import PackageDatasetClient
-
-from infra.marina.applets.rl_data_catalog.server.harbor_sources import HARBOR_SOURCES
-
-
-async def main():
-    source = next(row for row in HARBOR_SOURCES if row.package == "skill2env/skill2env")
-    reference = f"{source.package}@{source.digest}"
-    metadata = await PackageDatasetClient().get_dataset_metadata(reference)
-    assert metadata.version == source.digest
-    references = sorted(f"{task.org}/{task.name}@{task.ref}" for task in metadata.task_ids)
-    assert len(references) == len(set(references)) == source.task_count
-    sample = {
-        "package_ref": reference,
-        "population_count": len(references),
-        "seed": 42,
-        "selection": "Python random.sample over sorted immutable task references",
-        "tasks": random.Random(42).sample(references, 3),
-    }
-    Path("/tmp/skill2env-review-sample.json").write_text(json.dumps(sample, indent=2) + "\n")
-
-
-asyncio.run(main())
-```
-
-Download each selected task by its recorded digest with
-`harbor download '<org/task>@sha256:<digest>' --export --output-dir /absolute/path/skill2env-review-tasks`.
-This creates one task directory per selected reference. Download sequentially
-and inspect task resource requirements before building or running environments.
-Keep the sample manifest with the review evidence. Downloading the entire
-dataset is unnecessary for a sampled review.
-
-Copy `experiments/rl_data_reviews/review-config.example.json`, configure the
-model endpoint and native runtime paths, and replace its `source` with:
-
-```json
-{
-  "repository": "skill2env/skill2env",
-  "revision": "sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c",
-  "source_id": "Harbor Hub:skill2env/skill2env",
-  "format": "harbor_directory",
-  "tasks_path": "/absolute/path/skill2env-review-tasks"
-}
-```
-
-Run `make_review.py` with that config, `--n 3`, and a fixed seed, using the
-commands above. The review runtime uses a MarinSkyRL checkout for its existing
-Harbor result adapter; this does not require registering a training source.
-Set `runtime.harbor_reward_mode` to `skill2env_components` for Skill2Env. Its
-native verifiers return several named rewards rather than one `reward` field.
-The review retains every component, reports their arithmetic mean, and marks a
-full pass only when every component equals one, following
-[Skill2Env's validation rules](https://github.com/NVlabs/Skill2Env/blob/3fe416cecfeb1ac1d62bd1b5e799f8f248c5ba91/skill2env/validation.py#L228).
-Partial credit is a verified outcome, but does not count as a solved task.
-The review's local population is the staged sample, so retain the full-release
-population and selection method from the sample manifest. A three-task review
-does not establish corpus-wide quality. Native `tests/test.sh` supplies the
-outcome score; the presence of `tests/rubric.md` does not automatically add a
-behavioral reward to that score.
-
-Publish completed evidence with `publish_review.py --run-dir <review-directory>
---atlas-id 'Harbor Hub:skill2env/skill2env'` after the source entry is deployed.
-Only sources rated Good qualify for a current difficulty comparison. Use the
-same recorded task sample across Small, Large, and Hosted, retaining their
-individual attempts, verifier results, and infrastructure failures. The model
-settings and quality gate above also apply to native Harbor releases.
+Skill2Env provides an example registration. Its evaluation setup, results, and
+limitations are recorded in [issue #9630](https://github.com/marin-community/marin/issues/9630).
