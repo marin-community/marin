@@ -1362,49 +1362,50 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     )
     cm = {
         "kind": "ConfigMap",
-        "metadata": {"name": "deferred-cm", "labels": labels},
+        "metadata": {"name": "deferred-pod-wf", "labels": labels},
     }
-    k8s.seed_resource(K8sResource.CONFIGMAPS, "deferred-cm", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "deferred-pod-wf", cm)
 
     provider.sync(make_batch())
     assert k8s.get_json(K8sResource.PODS, "deferred-pod") is None
 
     provider.collect_garbage()
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "deferred-cm") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "deferred-pod-wf") is None
 
 
-def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
-    """Deferred cleanup waits while a retry with the same task hash is active."""
-    task_id = "/kill-me/0"
-    task_hash = _task_hash(task_id)
-    labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
-
-    # Seed the pod and its configmap.
-    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash, _LABEL_ATTEMPT_ID: "0"})
-    cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
-    k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf", cm)
-
+@pytest.mark.parametrize("retry_attempt", [0, 1])
+def test_gc_preserves_retry_resources_during_dispatch(provider, k8s, monkeypatch, retry_attempt):
+    task_id = "/retry-job/0"
+    old = make_run_req(task_id, num_tasks=1, attempt_uid="1111111111111111")
+    old.entrypoint.workdir_files["config.json"] = b"old"
+    provider.sync(make_batch(tasks_to_run=[old]))
+    old_pod = k8s.list_json(K8sResource.PODS)[0]["metadata"]["name"]
     provider.sync(make_batch())
-    assert k8s.get_json(K8sResource.PODS, "iris-kill-me-0-0") is None
 
-    retry = make_run_req(task_id, attempt_id=1)
+    retry = make_run_req(task_id, attempt_id=retry_attempt, num_tasks=1, attempt_uid="2222222222222222")
+    retry.entrypoint.workdir_files["config.json"] = b"retry"
+    apply_json = k8s.apply_json
+
+    def apply_with_gc(manifest):
+        apply_json(manifest)
+        if manifest["kind"] == "ConfigMap":
+            # Reproduce GC between creating the retry's mount and creating its pod.
+            provider.collect_garbage()
+
+    monkeypatch.setattr(k8s, "apply_json", apply_with_gc)
     provider.sync(make_batch(tasks_to_run=[retry]))
     provider.collect_garbage()
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf") is not None
 
-    provider.sync(make_batch())
-    provider.collect_garbage()
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf") is None
+    retry_pod = k8s.list_json(K8sResource.PODS)[0]
+    retry_name = retry_pod["metadata"]["name"]
+    configmap = next(v["configMap"]["name"] for v in retry_pod["spec"]["volumes"] if "configMap" in v)
+    assert k8s.get_json(K8sResource.CONFIGMAPS, configmap) is not None
+    assert k8s.get_json(K8sResource.PDBS, f"{retry_name}-pdb") is not None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, f"{old_pod}-wf") is None
+    assert k8s.get_json(K8sResource.PDBS, f"{old_pod}-pdb") is None
 
 
-def test_gc_skips_hashes_with_active_pods(provider, k8s):
-    """GC must not delete configmaps/PDBs for task hashes that have active retry pods.
-
-    task_hash is shared across all attempts of the same task_id. If attempt 0 is
-    terminal (old) and attempt 1 is still Running, deleting by task_hash would
-    remove the active attempt's configmap and PDB protection.
-    """
-
+def test_gc_cleans_old_attempt_resources_while_retry_is_active(provider, k8s):
     now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1412,6 +1413,7 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 
     # Old terminal pod for attempt 0.
     _seed_terminal_pod(k8s, "old-attempt-0", "Succeeded", shared_hash, old_ts)
+    _seed_configmap(k8s, "old-attempt-0-wf", shared_hash, old_ts)
 
     # Configmap and PDB for the active retry (attempt 1).
     active_labels = {
@@ -1419,52 +1421,52 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
         _LABEL_TASK_HASH: shared_hash,
     }
-    cm = {"kind": "ConfigMap", "metadata": {"name": "active-retry-cm", "labels": active_labels}}
-    k8s.seed_resource(K8sResource.CONFIGMAPS, "active-retry-cm", cm)
+    cm = {"kind": "ConfigMap", "metadata": {"name": "active-attempt-1-wf", "labels": active_labels}}
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "active-attempt-1-wf", cm)
     pdb = {
         "kind": "PodDisruptionBudget",
-        "metadata": {"name": "active-retry-pdb", "labels": active_labels},
+        "metadata": {"name": "active-attempt-1-pdb", "labels": active_labels},
         "spec": {"minAvailable": 1},
     }
-    k8s.seed_resource(K8sResource.PDBS, "active-retry-pdb", pdb)
+    k8s.seed_resource(K8sResource.PDBS, "active-attempt-1-pdb", pdb)
 
     # The active retry's pod, seeded so the passes below read it as active.
     populate_pod(k8s, "active-attempt-1", "Running", labels={_LABEL_TASK_HASH: shared_hash})
 
-    # Two passes: the first sweeps the terminal pod and enqueues its hash, the second
-    # is the one that would delete the CM/PDB if the active attempt did not hold them.
+    # Sweep the old pod, then its resources, while the retry stays active.
     provider.collect_garbage()
     provider.collect_garbage()
 
     # Terminal pod is deleted (by name, not by hash).
     assert k8s.get_json(K8sResource.PODS, "old-attempt-0") is None
-    # But configmap and PDB are preserved because the hash is still active.
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "active-retry-cm") is not None
-    assert k8s.get_json(K8sResource.PDBS, "active-retry-pdb") is not None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "old-attempt-0-wf") is None
+    # The retry keeps its mount and disruption protection.
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "active-attempt-1-wf") is not None
+    assert k8s.get_json(K8sResource.PDBS, "active-attempt-1-pdb") is not None
 
 
-def test_gc_defers_configmap_cleanup_for_age_swept_pods(provider, k8s):
-    """An age-swept task's CM/PDB cleanup is enqueued, never done in the same pass.
+def test_gc_retries_resource_cleanup_after_delete_failure(provider, k8s, monkeypatch):
+    req = make_run_req("/cleanup-job/0", num_tasks=1, attempt_uid="1111111111111111")
+    req.entrypoint.workdir_files["config.json"] = b"config"
+    provider.sync(make_batch(tasks_to_run=[req]))
+    pod_name = k8s.list_json(K8sResource.PODS)[0]["metadata"]["name"]
+    provider.sync(make_batch())
 
-    The hashes come from the pods the pass just deleted, so they exist nowhere else:
-    cleaning up inline means anything that raises in between orphans those configmaps
-    and PDBs permanently, with no later pass able to rediscover them. Enqueuing puts
-    them in state that survives the pass and is retried.
-    """
-    now = datetime.now(UTC)
-    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    task_hash = "sweptaabbccdd1122"
+    delete = k8s.delete
 
-    _seed_terminal_pod(k8s, "swept-pod", "Succeeded", task_hash, old_ts)
-    _seed_configmap(k8s, "swept-pod-wf", task_hash, old_ts)
+    def fail_pdb_delete(resource, name, **kwargs):
+        if resource == K8sResource.PDBS:
+            raise KubectlError("API unavailable")
+        delete(resource, name, **kwargs)
 
+    with monkeypatch.context() as patch:
+        patch.setattr(k8s, "delete", fail_pdb_delete)
+        provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.CONFIGMAPS, f"{pod_name}-wf") is None
+    assert k8s.get_json(K8sResource.PDBS, f"{pod_name}-pdb") is not None
     provider.collect_garbage()
-
-    assert k8s.get_json(K8sResource.PODS, "swept-pod") is None
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is not None, "cleanup must be deferred, not inline"
-
-    provider.collect_garbage()
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is None
+    assert k8s.get_json(K8sResource.PDBS, f"{pod_name}-pdb") is None
 
 
 # ---------------------------------------------------------------------------
