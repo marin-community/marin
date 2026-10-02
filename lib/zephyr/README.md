@@ -70,7 +70,8 @@ account for concurrent disk use.
 The scope does not own the pool. Scope exit and nested context exit leave the
 pool available. Copy the context into new threads with `copy_context().run`.
 For a remote driver, serialize the pool and enter `execution_scope()` in that
-process. Pool exit stops the workers after all pipeline calls finish.
+process. Wait for all pipeline executions to finish before pool exit. Pool exit
+stops the workers and fails any active executions.
 
 ### Read-only memory stores
 
