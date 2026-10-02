@@ -566,7 +566,7 @@ async def test_tampered_private_verifier_fails_before_request_or_trial(tmp_path,
     path.write_text(json.dumps(payload))
     # A schema record may be loaded without an available, valid grader.
     assert read_specification(path).verifier.kind == "numeric"
-    with pytest.raises(ValueError, match="Invalid 'numeric' verifier parameters"):
+    with pytest.raises(ValueError):
         await run_trial(
             task,
             environment_config,

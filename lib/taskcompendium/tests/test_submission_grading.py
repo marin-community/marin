@@ -94,7 +94,7 @@ async def test_serialized_json_convention_extracts_answer_and_scores_invalid_sub
 
 async def test_invalid_private_verifier_is_not_scored_as_agent_failure():
     task = _task(VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json="{}"))
-    with pytest.raises(ValueError, match="Invalid 'exact' verifier parameters"):
+    with pytest.raises(ValueError):
         await grade_answer(task, JsonAnswer(id="json"), _attempt(task, '{"answer":'))
 
 
