@@ -30,6 +30,8 @@ ctx.execute(pipeline)
 **Loading Files**
 - `.load_{file,parquet,jsonl,vortex}` - load rows from a file
 
+Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_path_column` to use another name). Selecting only that column returns the source path for each matching row. Parquet path-only reads skip source data columns unless a filter needs them.
+
 **Transformations:**
 - `.map(fn)` - transform each item
 - `.flat_map(fn)` - expand items (e.g., `load_jsonl`)

@@ -49,6 +49,7 @@ marina = "marina.cli:cli"
 packages = ["src/marina"]
 
 [tool.pytest.ini_options]
+pythonpath = ["../.."]
 testpaths = ["tests", "apps"]
 timeout = 30
 timeout_method = "thread"

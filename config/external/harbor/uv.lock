@@ -1073,6 +1073,7 @@ dependencies = [
     { name = "daytona" },
     { name = "gcsfs" },
     { name = "harbor", extra = ["archive", "tau3"] },
+    { name = "marin-rigging" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
 ]
@@ -1082,6 +1083,7 @@ requires-dist = [
     { name = "daytona", specifier = "==0.200.2" },
     { name = "gcsfs" },
     { name = "harbor", extras = ["archive", "tau3"], git = "https://github.com/marin-community/harbor.git?rev=0985d012bcf4cc9d1acb1a831a86350cd31ac72a" },
+    { name = "marin-rigging", specifier = ">=0.2.0" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
 ]

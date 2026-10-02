@@ -63,11 +63,15 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--seed` overrides the Evalchemy seed for every selected task in that launch and is stored in its record;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
 `--seed` overrides the Evalchemy seed for every selected task and records it;
-`--retry-unscored-harbor-trials` retries only durable Harbor trials without verifier results;
-`--resume-results-path` resumes one Harbor evaluation from an object-store result path;
+`--retry-unscored-harbor-trials` requires a results path and retries known unscored Harbor trials,
+while preserving scored agent failures and unknown errors;
+`--resume-results-path` resumes one Harbor evaluation from an object-store result path whose saved
+identity matches the full model and hosted judge configurations, policy, runtime, dataset, and task limit.
+A results root without this model-bound identity is rejected;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
 band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
 launcher always submits through the `marin` Iris controller.
@@ -237,7 +241,7 @@ verified policy version use the current shared pins in `config/external/`.
 and `max_tokens`. `runtime_extras` names optional Evalchemy dependency groups required by custom task
 packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog when omitted; an
 explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
-launcher `--limit` overrides the file limit. `record.json` stores the resulting task
+launcher `--limit` overrides the file limit while `--seed` overrides the file seed. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
 record provenance stores the exact Evalchemy requirement, including runtime extras. FinanceBench
 also requires a `judge` block with a dedicated endpoint, model, and secret reference. Marin forwards

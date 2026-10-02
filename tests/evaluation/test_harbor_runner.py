@@ -3,7 +3,7 @@
 
 import json
 import os
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -26,9 +26,9 @@ from marin.evaluation.harbor.runner import (
     HarborExecutor,
     _read_trial,
     _read_trials,
-    validate_harbor_resume_root,
 )
-from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, ModelConfigRef, RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
@@ -594,6 +594,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         ),
         task_limit=7,
         model_agent_kwargs={"extra_body": "{}"},
+        model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
         secret_env_keys=("DAYTONA_API_KEY",),
     )
     env_vars = {"DAYTONA_API_KEY": "daytona-key"}
@@ -624,64 +625,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
-    assert json.loads((tmp_path / "harbor_resume_identity.json").read_text()) == {
-        "schema_version": 1,
-        "dataset": executor.config.record_dataset,
-    }
-
-
-def test_validate_harbor_resume_root_rejects_different_dataset(tmp_path):
-    output_dir = tmp_path / "results"
-    output_dir.mkdir()
-    (output_dir / "harbor_resume_identity.json").write_text(
-        json.dumps({"schema_version": 1, "dataset": "other-dataset"})
-    )
-
-    with pytest.raises(ValueError, match="requires dataset 'aime'"):
-        validate_harbor_resume_root(str(output_dir), _validated_config(dataset_selector="aime"))
-
-
-def test_validate_harbor_resume_root_rejects_job_name_prefix_collision(tmp_path):
-    output_dir = tmp_path / "results"
-    job_dir = output_dir / "harbor_jobs" / "harbor_aime_extended_0123456789ab"
-    job_dir.mkdir(parents=True)
-    (job_dir / "config.json").write_text("{}")
-
-    with pytest.raises(ValueError, match="requires dataset 'aime'"):
-        validate_harbor_resume_root(str(output_dir), _validated_config(dataset_selector="aime"))
-
-
-def test_validate_harbor_resume_root_accepts_confirmed_long_dataset(tmp_path):
-    config = _validated_config(dataset_selector="terminal-bench/terminal-bench-2-1")
-    output_dir = tmp_path / "results"
-    output_dir.mkdir()
-    (output_dir / "harbor_result.json").write_text(json.dumps({"dataset": config.record_dataset}))
-    job_dir = Path(str(runner._jobs_dir(str(output_dir)))) / runner._job_name(config.record_dataset, ("legacy",))
-    job_dir.mkdir(parents=True)
-    (job_dir / "config.json").write_text("{}")
-
-    validate_harbor_resume_root(str(output_dir), config)
-
-
-def test_validate_harbor_resume_root_accepts_long_dataset_from_job_archive(tmp_path):
-    config = _validated_config(dataset_selector="terminal-bench/terminal-bench-2-1")
-    output_dir = tmp_path / "results"
-    job_dir = Path(str(runner._jobs_dir(str(output_dir)))) / runner._job_name(config.record_dataset, ("legacy",))
-    job_dir.mkdir(parents=True)
-    (job_dir / "config.json").write_text(json.dumps({"archive": {"dataset": config.record_dataset}}))
-
-    validate_harbor_resume_root(str(output_dir), config)
-
-
-def test_validate_harbor_resume_root_rejects_mismatched_job_archive(tmp_path):
-    config = _validated_config(dataset_selector="terminal-bench/terminal-bench-2-1")
-    output_dir = tmp_path / "results"
-    job_dir = Path(str(runner._jobs_dir(str(output_dir)))) / runner._job_name(config.record_dataset, ("legacy",))
-    job_dir.mkdir(parents=True)
-    (job_dir / "config.json").write_text(json.dumps({"archive": {"dataset": "other-dataset"}}))
-
-    with pytest.raises(ValueError, match="requires dataset 'terminal-bench/terminal-bench-2-1'"):
-        validate_harbor_resume_root(str(output_dir), config)
+    assert json.loads((tmp_path / "harbor_resume_identity.json").read_text())["model"]["location"] == "org/checkpoint"
 
 
 def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path, monkeypatch):
@@ -694,9 +638,7 @@ def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path,
         executor.config.record_dataset,
         (executor.config.digest, session.model.endpoint.model, executor.task_limit),
     )
-    (tmp_path / "harbor_resume_identity.json").write_text(
-        json.dumps({"schema_version": 1, "dataset": executor.config.record_dataset})
-    )
+    (tmp_path / "harbor_resume_identity.json").write_text(executor.resume_identity.model_dump_json())
     job_dir = Path(str(runner._jobs_dir(str(tmp_path)))) / job_name
     _write_job_record(job_dir, 2, executor.config)
     scored_result = job_dir / "scored-zero" / "result.json"
@@ -751,6 +693,7 @@ def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int
         _validated_config(dataset_selector=dataset, n_benchmark=n_benchmark, trials_per_task=trials_per_task),
         task_limit=None,
         model_agent_kwargs={},
+        model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
     )
 
 
@@ -1027,3 +970,37 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["unscored_trials"] == 0
+
+
+@pytest.mark.parametrize("changed_input", ["checkpoint", "judge", "policy"])
+def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_path, monkeypatch, changed_input):
+    executor = _harbor_executor("aime")
+    stored_results = []
+
+    def driver(config, overlay, _env, _state):
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        trial = job_dir / "scored" / "result.json"
+        if trial.exists():
+            assert trial.read_bytes() == stored_results[0]
+            return
+        _write_job_record(job_dir, 1, config)
+        trial.parent.mkdir()
+        trial.write_text('{"task_name":"scored","verifier_result":{"rewards":{"reward":1}}}')
+        stored_results.append(trial.read_bytes())
+
+    monkeypatch.setattr(runner, "run_harbor_driver", driver)
+    session = _inference_session()
+    assert executor(session, str(tmp_path), {}).canonical_metrics["aime"]["reward"] == 1
+    assert executor(session, str(tmp_path), {}).canonical_metrics["aime"]["reward"] == 1
+    if changed_input == "checkpoint":
+        changed = replace(
+            executor, model_config=executor.model_config.model_copy(update={"location": "org/new-checkpoint"})
+        )
+    elif changed_input == "judge":
+        changed = replace(executor, judge_config=executor.model_config)
+    else:
+        changed = replace(executor, config=replace(executor.config, digest=f"sha256:{'2' * 64}"))
+    before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    with pytest.raises(EvaluationError, match="different dataset, model, policy"):
+        changed(session, str(tmp_path), {})
+    assert {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before

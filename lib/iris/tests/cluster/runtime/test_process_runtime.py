@@ -1,15 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavioral tests for ProcessRuntime mount resolution and TMPFS cleanup."""
+"""Behavioral tests for ProcessRuntime process sampling and filesystem setup."""
 
 import sys
+from io import StringIO
 from pathlib import Path
 
-from iris.cluster.runtime.process import ProcessRuntime
+from iris.cluster.runtime.process import ProcessRuntime, _read_proc_cpu_millicores
 from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, MountKind, MountSpec
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
+
+
+def test_process_cpu_stat_with_parentheses_in_name_reports_cpu_usage(monkeypatch):
+    stat = "42 (python) worker) S 0 1 1 0 -1 4194560 12345 0 0 0 80 20 0 0 20 0 8 0 6000 0 0 0"
+
+    def open_proc(path):
+        if path == "/proc/42/stat":
+            return StringIO(stat)
+        if path == "/proc/stat":
+            return StringIO("cpu  2000 0 0 0 0 0 0 0 0 0\n")
+        raise AssertionError(f"Unexpected proc path: {path}")
+
+    monkeypatch.setattr("builtins.open", open_proc)
+    monkeypatch.setattr("os.cpu_count", lambda: 8)
+
+    millicores, total, process_ticks = _read_proc_cpu_millicores(42, 1000, 90)
+
+    assert (millicores, total, process_ticks) == (80, 2000, 100)
 
 
 def _make_config(

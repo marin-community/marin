@@ -24,7 +24,9 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
@@ -33,9 +35,10 @@ from marin.evaluation.harbor.driver_config import (
     HarborErrorTaxonomy,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
+    harbor_runtime_descriptor,
     run_harbor_driver,
 )
-from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
+from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, ModelConfigRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
@@ -53,7 +56,6 @@ _JOB_DIGEST_LENGTH = 12
 _HOSTED_JUDGE_API_KEY = "EMPTY"
 _HARBOR_RESULT_FILE = "harbor_result.json"
 _RESUME_IDENTITY_FILE = "harbor_resume_identity.json"
-_RESUME_IDENTITY_SCHEMA_VERSION = 1
 _JOB_PREFIX = "harbor_"
 
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
@@ -158,28 +160,12 @@ def canonical_served_name(name: str) -> str:
     return candidate
 
 
-def _safe_job_dataset(dataset: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_-]", "_", dataset)
-
-
-def _job_dataset_prefix(dataset: str) -> str:
-    return f"{_JOB_PREFIX}{_safe_job_dataset(dataset)[:_JOB_DATASET_LENGTH]}_"
-
-
-def _dataset_from_job_name(job_name: str) -> str | None:
-    if not job_name.startswith(_JOB_PREFIX):
-        return None
-    dataset, separator, digest = job_name.removeprefix(_JOB_PREFIX).rpartition("_")
-    if separator and len(digest) == _JOB_DIGEST_LENGTH and all(character in "0123456789abcdef" for character in digest):
-        return dataset
-    return None
-
-
 def _job_name(dataset: str, identity: tuple[object, ...]) -> str:
     """A deterministic Harbor job name so a re-run resumes the previous job's completed trials."""
     key = "|".join(str(value) for value in identity)
     digest = hashlib.sha256(key.encode()).hexdigest()[:_JOB_DIGEST_LENGTH]
-    return f"{_job_dataset_prefix(dataset)}{digest}"
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", dataset)[:_JOB_DATASET_LENGTH]
+    return f"{_JOB_PREFIX}{safe}_{digest}"
 
 
 def _jobs_dir(output_dir: str) -> StoragePath:
@@ -192,94 +178,39 @@ def _job_dir(output_dir: str, job_name: str) -> StoragePath:
     return _jobs_dir(output_dir) / job_name
 
 
-def _resume_identity(config: ValidatedHarborConfig) -> dict[str, object]:
-    return {
-        "schema_version": _RESUME_IDENTITY_SCHEMA_VERSION,
-        "dataset": config.record_dataset,
-    }
+class HarborResumeIdentity(BaseModel):
+    """Immutable scoring inputs required to reuse a Harbor results root."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal[2] = 2
+    dataset: str
+    policy_digest: str
+    runtime: str
+    task_limit: int | None
+    model: ModelConfigRef
+    judge: ModelConfigRef | None
 
 
-def _read_resume_json(path: StoragePath, output_dir: str) -> object:
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Harbor results root {output_dir!r} has an unreadable {path.name}") from exc
-
-
-def _archive_dataset_from_job_config(path: StoragePath, output_dir: str) -> str | None:
-    config = _read_resume_json(path, output_dir)
-    if not isinstance(config, Mapping):
-        return None
-    archive = config.get("archive")
-    if not isinstance(archive, Mapping):
-        return None
-    dataset = archive.get("dataset")
-    return dataset if isinstance(dataset, str) else None
-
-
-def _raise_resume_identity_mismatch(output_dir: str, config: ValidatedHarborConfig, existing: str) -> None:
-    raise ValueError(
-        f"Harbor results root {output_dir!r} {existing}; this launch requires dataset "
-        f"{config.record_dataset!r}. Use the Harbor config that created this root, or omit "
-        "--resume-results-path to start a clean run."
-    )
-
-
-def validate_harbor_resume_root(output_dir: str, config: ValidatedHarborConfig) -> None:
-    """Verify that an existing results root belongs to the planned Harbor dataset."""
-    root = StoragePath.parse(output_dir)
-    identity_path = root / _RESUME_IDENTITY_FILE
-    if identity_path.exists():
-        identity = _read_resume_json(identity_path, output_dir)
-        if identity != _resume_identity(config):
-            _raise_resume_identity_mismatch(output_dir, config, f"declares {identity!r}")
-        return
-
-    result_path = root / _HARBOR_RESULT_FILE
-    completed_dataset: object | None = None
-    if result_path.exists():
-        result = _read_resume_json(result_path, output_dir)
-        completed_dataset = result.get("dataset") if isinstance(result, Mapping) else None
-        if completed_dataset != config.record_dataset:
-            _raise_resume_identity_mismatch(output_dir, config, f"contains completed dataset {completed_dataset!r}")
-
-    job_configs = tuple((_jobs_dir(output_dir) / "*/config.json").glob())
-    archived_datasets = {
-        dataset for path in job_configs if (dataset := _archive_dataset_from_job_config(path, output_dir)) is not None
-    }
-    if archived_datasets and archived_datasets != {config.record_dataset}:
-        _raise_resume_identity_mismatch(
-            output_dir,
-            config,
-            f"contains archived datasets {tuple(sorted(archived_datasets))!r}",
-        )
-    safe_dataset = _safe_job_dataset(config.record_dataset)
-    if len(safe_dataset) > _JOB_DATASET_LENGTH and completed_dataset is None and not archived_datasets:
+def validate_harbor_resume_root(output_dir: str, identity: HarborResumeIdentity) -> None:
+    """Reject an existing results root unless its recorded scoring inputs match."""
+    path = StoragePath.parse(output_dir) / _RESUME_IDENTITY_FILE
+    if not path.exists():
+        raise ValueError(f"Harbor results root {output_dir!r} has no model-bound resume identity")
+    existing = HarborResumeIdentity.model_validate_json(path.read_text())
+    if existing != identity:
         raise ValueError(
-            f"Harbor results root {output_dir!r} predates exact dataset identity metadata, and dataset "
-            f"{config.record_dataset!r} is too long to verify from its job names. Omit "
-            "--resume-results-path to start a clean run."
+            f"Harbor results root {output_dir!r} has different dataset, model, policy, runtime, task limit, or judge"
         )
-    job_names = tuple(path.parent.name for path in job_configs)
-    if not job_names and completed_dataset is None:
-        raise ValueError(
-            f"Harbor results root {output_dir!r} has no dataset identity or resumable jobs. "
-            "Choose the original results root, or omit --resume-results-path to start a clean run."
-        )
-    expected_job_dataset = safe_dataset[:_JOB_DATASET_LENGTH]
-    incompatible = tuple(name for name in job_names if _dataset_from_job_name(name) != expected_job_dataset)
-    if incompatible:
-        _raise_resume_identity_mismatch(output_dir, config, f"contains incompatible jobs {incompatible!r}")
 
 
-def _bind_harbor_results_root(output_dir: str, config: ValidatedHarborConfig) -> None:
-    """Persist dataset identity, upgrading a compatible existing root on first use."""
+def _bind_harbor_results_root(output_dir: str, identity: HarborResumeIdentity) -> None:
+    """Persist scoring identity before the first trial, or validate it before reuse."""
     root = StoragePath.parse(output_dir)
-    identity_path = root / _RESUME_IDENTITY_FILE
     if tuple((root / "*").glob()):
-        validate_harbor_resume_root(output_dir, config)
-    if not identity_path.exists():
-        identity_path.write_text(json.dumps(_resume_identity(config), indent=2))
+        validate_harbor_resume_root(output_dir, identity)
+        return
+    (root / _RESUME_IDENTITY_FILE).write_text(identity.model_dump_json(indent=2))
 
 
 def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> HarborTrial:
@@ -564,11 +495,24 @@ class HarborExecutor:
     config: ValidatedHarborConfig
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
+    model_config: ModelConfigRef
+    judge_config: ModelConfigRef | None = None
     secret_env_keys: tuple[str, ...] = ()
     min_completion_rate: float = DEFAULT_MIN_COMPLETION_RATE
     """Minimum scoreable fraction of attempted trials for accepting the run."""
     retry_unscored_trials: bool = False
-    """Re-run only durable trials for which the verifier never produced a result."""
+    """Retry known unscored trials while preserving scored and unknown-error outcomes."""
+
+    @property
+    def resume_identity(self) -> HarborResumeIdentity:
+        return HarborResumeIdentity(
+            dataset=self.config.record_dataset,
+            policy_digest=self.config.digest,
+            runtime=harbor_runtime_descriptor(self.config.error_taxonomy.commit, self.config.runtime_project),
+            task_limit=self.task_limit,
+            model=self.model_config,
+            judge=self.judge_config,
+        )
 
     def _run(
         self,
@@ -579,7 +523,7 @@ class HarborExecutor:
         verifier_env: Mapping[str, str],
         judge_model: RunningModel | None,
     ) -> HarborRunResult:
-        _bind_harbor_results_root(output_dir, self.config)
+        _bind_harbor_results_root(output_dir, self.resume_identity)
         dataset = self.config.record_dataset
         identity: tuple[object, ...] = (self.config.digest, model.endpoint.model, self.task_limit)
         if judge_model is not None:

@@ -45,7 +45,13 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, base_metric, declared_metric, primary_filter
+from marin.evaluation.metric_selection import (
+    REPEAT_MEAN_SUFFIX,
+    base_metric,
+    declared_metric,
+    declared_sample_metric,
+    primary_filter,
+)
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
 
 
@@ -220,7 +226,7 @@ def _lm_eval_grading(
     Per-sample rows name the extraction filter in ``filter``. Aggregate metric keys use a
     ``,<filter>`` suffix. This accepts both encodings.
     """
-    picked = declared_metric(metrics, primary_metric_name)
+    picked = declared_sample_metric(metrics, primary_metric_name)
     if picked is None and primary_metric_name is not None and primary_metric_name.endswith(REPEAT_MEAN_SUFFIX):
         picked = declared_metric(metrics, primary_metric_name.removesuffix(REPEAT_MEAN_SUFFIX))
     if picked is None:
@@ -919,15 +925,17 @@ def _add_lm_eval_rows(
             continue
         raw = json.loads(line)
         normalized = samples_from_lm_eval(task, raw, primary_metric_name)
-        sample_repeat = raw.get("sample_repeat")
-        trial_id = "" if sample_repeat is None else str(sample_repeat)
         variants = raw.get("filter_variants")
         filters = (
             [variant.get("filter") for variant in variants]
             if isinstance(variants, list) and variants
             else [raw.get("filter")]
         )
+        repeat = raw.get("sample_repeat")
+        trial_id = str(repeat) if repeat is not None else ""
         for sample, extraction_filter in zip(normalized, filters, strict=True):
+            # An explicit filter only carries information a grading does not already name; a
+            # filtered response without a per-sample grade would otherwise lose its filter.
             store.add_sample(
                 sample,
                 trial_id=trial_id,

@@ -2191,9 +2191,25 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     policy = _write_harbor_config(tmp_path / "aime-policy.yaml")
     output_dir = "memory://existing-harbor-results"
-    (StoragePath(output_dir) / "harbor_jobs" / "harbor_aime_0123456789ab" / "config.json").write_text("{}")
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(HarborDefinition(name="aime-policy", config_path=policy),),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=None,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
 
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "tester")
+    (StoragePath(output_dir) / "harbor_resume_identity.json").write_text(
+        batch.evaluations[0].executor.resume_identity.model_dump_json()
+    )
     result = CliRunner().invoke(
         cli,
         [

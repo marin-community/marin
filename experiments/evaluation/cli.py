@@ -177,7 +177,7 @@ def cli() -> None:
 @click.option(
     "--retry-unscored-harbor-trials",
     is_flag=True,
-    help="Before Harbor resumes, remove only trials that have no verifier result.",
+    help="Retry known unscored Harbor trials in --resume-results-path; preserve scored and unknown-error outcomes.",
 )
 @click.option(
     "--platform",

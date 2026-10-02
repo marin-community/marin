@@ -6,6 +6,7 @@ dependencies = [
     "daytona==0.200.2",
     "gcsfs",
     "harbor[archive,tau3]",
+    "marin-rigging>=0.2.0",
     # LiteLLM imports this at module initialization but does not declare it.
     "pydantic-settings",
     "s3fs",

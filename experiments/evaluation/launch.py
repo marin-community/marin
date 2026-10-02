@@ -26,7 +26,7 @@ from marin.evaluation.harbor.driver_config import (
     harbor_runtime_descriptor,
     preflight_harbor_configs,
 )
-from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name
+from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -163,6 +163,7 @@ def _resolve_definitions(
     seed: int | None,
     retry_unscored_harbor_trials: bool,
     version: str | None,
+    judge_model: ModelConfig | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
@@ -213,6 +214,7 @@ def _resolve_definitions(
                         model,
                         runtime_task_limit,
                         retry_unscored_harbor_trials,
+                        judge_model,
                     ),
                     secret_env=dict(definition.secret_env_for(config)),
                 ),
@@ -276,12 +278,16 @@ def build_evaluation_batch(
         spec.seed,
         spec.retry_unscored_harbor_trials,
         spec.version,
+        judge.model if judge is not None else None,
     )
+    if spec.retry_unscored_harbor_trials and spec.resume_results_path is None:
+        raise ValueError("--retry-unscored-harbor-trials requires --resume-results-path")
     if spec.resume_results_path is not None:
         if len(definitions) != 1 or not isinstance(definitions[0][1].executor, HarborExecutor):
             raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
         if "://" not in spec.resume_results_path:
             raise ValueError("--resume-results-path must be an object-store path")
+        validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.resume_identity)
     model_ref = ModelRef(
         name=model.name,
         location=model.location,

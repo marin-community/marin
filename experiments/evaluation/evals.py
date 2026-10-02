@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
@@ -24,7 +24,7 @@ from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_i
 from marin.evaluation.harbor.driver_config import ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef, ModelConfigRef
 from marin.evaluation.runner import EvalExecutor
 from marin.external_dependencies import ExternalDependency
 from rigging.secrets import SecretSpec
@@ -194,12 +194,15 @@ class HarborDefinition:
         model: ModelConfig,
         runtime_task_limit: int | None,
         retry_unscored_trials: bool,
+        judge_model: ModelConfig | None,
     ) -> EvalExecutor:
         secret_env = self.secret_env_for(config)
         return HarborExecutor(
             config=config,
             task_limit=runtime_task_limit,
             model_agent_kwargs=harbor_model_agent_kwargs(model),
+            model_config=ModelConfigRef.model_validate(asdict(model)),
+            judge_config=ModelConfigRef.model_validate(asdict(judge_model)) if judge_model is not None else None,
             secret_env_keys=tuple(secret_env),
             retry_unscored_trials=retry_unscored_trials,
         )
