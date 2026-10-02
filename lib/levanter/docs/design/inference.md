@@ -366,6 +366,29 @@ output; vLLM records a separate sigmoid recomputation from the captured input.
 Current June and Hero training gates apply both unary functions in the projection
 dtype. The promoted variants are diagnostic and do not change that contract.
 
+After both fixture runtimes finish, run full generation with the same loaded
+weights and saved native engine configuration:
+
+```bash
+uv run python -m experiments.benchmarks.diagnose_embedding_generation \
+  --fixture /tmp/snowball-comparison --output /tmp/embedding-generation.json
+```
+
+This pass uses the ordinary inference engine without activation tracing. It
+requires the unchanged baseline to reproduce the saved native validation tokens,
+then compares an embedding-only FP32 SiLU-plus-sigmoid intervention against the
+saved vLLM tokens. It retains exact tokens, first divergence, weight digests,
+and execution provenance. The changed arithmetic is diagnostic; it produces no
+throughput comparison and does not alter serving or training defaults.
+
+The default fixture has all-one normalization weights. To exercise learned norm
+scaling and its rounding boundaries, export a separate fixture with
+`export --recipe snowball --norm-weights nonunit --output /tmp/snowball-nonunit`.
+This deterministically changes only norm scales, records the seed and affected
+tensors, and verifies the complete native checkpoint roundtrip. Run both
+backends against that same export; its checkpoint identity differs from the
+all-one fixture.
+
 The native trace returns embedding, attention, routed and shared expert outputs,
 residuals, router choices and combine weights, final normalization, and actual
 logits together from the same paged layer scan. It retains the serving decoder's

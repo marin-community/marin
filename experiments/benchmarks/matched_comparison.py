@@ -179,16 +179,8 @@ def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, 
         if not math.isfinite(rate) or rate <= 0 or rate != report["median_output_tokens_per_second"]:
             raise ValueError(f"{backend} throughput summary is invalid")
         throughput[backend] = rate
-    first_difference = next(
-        (
-            {"request_index": request, "output_token_index": position, "native_token": a, "vllm_token": b}
-            for request, (left, right) in enumerate(
-                zip(reports["native"]["validation_tokens"], reports["vllm"]["validation_tokens"], strict=True)
-            )
-            for position, (a, b) in enumerate(zip(left, right, strict=True))
-            if a != b
-        ),
-        None,
+    first_difference = first_token_difference(
+        reports["native"]["validation_tokens"], reports["vllm"]["validation_tokens"]
     )
     comparable_outputs = first_difference is None and all(deterministic.values())
     result = {
@@ -210,6 +202,19 @@ def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, 
         "ratio_withheld_reason": None if comparable_outputs else "Outputs differ across backends or batches",
     }
     return result
+
+
+def first_token_difference(native: list[list[int]], vllm: list[list[int]]) -> dict | None:
+    """Locate the first unequal token in two complete batches of equal shape."""
+    return next(
+        (
+            {"request_index": request, "output_token_index": position, "native_token": a, "vllm_token": b}
+            for request, (left, right) in enumerate(zip(native, vllm, strict=True))
+            for position, (a, b) in enumerate(zip(left, right, strict=True))
+            if a != b
+        ),
+        None,
+    )
 
 
 def compare_fixture(root: Path) -> dict:
