@@ -196,6 +196,7 @@ def test_http_broadcast_installs_only_complete_weights_and_preserves_failed_vers
             installed = client.post("/finish_weight_reload", json=ready)
             assert installed.status_code == 200, installed.text
             assert installed.json()["model_version"] == 2
+            assert all(not np.any(np.asarray(value)) for value in cache_arrays())
             new = generate()
             assert new["token_ids"] == [0, 0]
             assert new["token_ids"] != old["token_ids"]
