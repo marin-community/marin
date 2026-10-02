@@ -142,7 +142,7 @@ class Eagle3Draft(eqx.Module):
 
     @classmethod
     def from_checkpoint(cls, directory: Path, *, target_embedding: jax.Array) -> "Eagle3Draft":
-        """Load a local, single-file HF export with the shared streaming tensor reader."""
+        """Load config.json and model.safetensors from an embedding-free local export."""
         config = Eagle3Config.from_hf_config(json.loads((directory / "config.json").read_text()))
         state = load_safetensors_state_dict(str(directory / "model.safetensors"))
         return cls.from_state_dict(config, state, target_embedding=target_embedding)

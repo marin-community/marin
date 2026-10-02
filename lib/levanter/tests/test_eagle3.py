@@ -3,7 +3,7 @@
 
 import dataclasses
 import json
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import equinox as eqx
 import haliax as hax
@@ -21,6 +21,12 @@ from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from haliax import Axis
 from levanter.models.eagle3 import Eagle3Config, Eagle3Draft
 from levanter.testing.helpers import skip_if_no_torch
+
+
+class _Checkpoint(NamedTuple):
+    config: dict[str, Any]
+    state: dict[str, np.ndarray]
+    target_embedding: np.ndarray
 
 
 def _checkpoint():
@@ -78,7 +84,7 @@ def _checkpoint():
     for name, shape in shapes.items():
         state[name] = (rng.normal(size=shape) * 0.2 + (1 if len(shape) == 1 else 0)).astype(np.float32)
     embedding = rng.normal(size=(32, 16)).astype(np.float32)
-    return config, state, embedding
+    return _Checkpoint(config, state, embedding)
 
 
 def _torch_forward(state, embedding, token_ids, hidden, *, project):
