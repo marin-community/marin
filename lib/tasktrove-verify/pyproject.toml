@@ -8,20 +8,20 @@ version = "0.1.0"
 description = "One grader for TaskTrove Clean tasks: reads tests/verifier.toml, writes /logs/verifier/reward.json."
 readme = "README.md"
 requires-python = ">=3.11"
-# The core depends only on a TOML reader so it installs quickly into every task image. Each mode
-# that needs more declares an extra below.
+# Grading dependencies remain optional; shared error metadata uses Harbor's config-only package.
 dependencies = [
     "tomlkit>=0.13",
+    "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
 ]
 
 [project.scripts]
 tasktrove-verify = "tasktrove_verify.grade:main"
 
 [project.optional-dependencies]
-answer = ["math-verify>=0.7", "sympy>=1.12"]
+answer = ["math-verify>=0.9", "sympy>=1.12"]
 schema = ["jsonschema>=4.20", "pyyaml>=6.0"]
-judge = ["openai>=1.40"]
-reasoning-gym = ["reasoning-gym>=0.1"]
+judge = ["openai>=1.59.9"]
+reasoning-gym = ["reasoning-gym>=0.1.25"]
 all = ["tasktrove-verify[answer,schema,judge,reasoning-gym]"]
 
 [dependency-groups]
@@ -31,6 +31,9 @@ test = [
     "pytest-json-report>=1.5",
 ]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/tasktrove_verify"]
 
@@ -38,7 +41,7 @@ packages = ["src/tasktrove_verify"]
 only-include = ["src/tasktrove_verify"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src", "tests"]
+pythonpath = ["src", "tests", "."]
 timeout = 120
 filterwarnings = ["ignore::DeprecationWarning"]
 addopts = "--import-mode=importlib"

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import sys
 from pathlib import Path
 
 from tasktrove_verify import grade as grade_module
@@ -59,5 +60,27 @@ def test_unscored_rerun_removes_prior_harbor_reward_files(tmp_path, monkeypatch)
     main([str(spec), "--logs-dir", str(logs)])
 
     assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
+
+
+def test_pytest_setup_failure_opt_in_clears_previous_reward(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "test_candidate.py").write_text("def test_ok():\n    assert True\n")
+    spec = tmp_path / "verifier.toml"
+    spec.write_text(
+        'mode = "pytest"\npaths = ["test_candidate.py"]\n'
+        f'python = "{sys.executable}"\n'
+        "setup_failure_is_infra = true\n"
+    )
+    logs = tmp_path / "logs"
+    assert main([str(spec), "--logs-dir", str(logs), "--workspace", str(workspace)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert (logs / "reward.txt").read_text() == "1.0\n"
+
+    spec.write_text(spec.read_text() + 'setup = "exit 3"\n')
+    assert main([str(spec), "--logs-dir", str(logs), "--workspace", str(workspace)]) == 0
+    assert _verdict(logs)["status"] == Status.INFRA_ERROR
     assert not (logs / "reward.json").exists()
     assert not (logs / "reward.txt").exists()

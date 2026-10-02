@@ -16,6 +16,7 @@ from typing import Any
 
 import tomlkit
 
+DEFAULT_REWARD_KEY = "reward"
 DEFAULT_OUTPUT = "/app/answer.txt"
 DEFAULT_WORKSPACE = "/app"
 
@@ -47,6 +48,12 @@ class MathType(StrEnum):
     EQUATION = "equation"
 
 
+class MathProfile(StrEnum):
+    ANCHORED = "anchored"
+    BOXED = "boxed"
+    RAW = "raw"
+
+
 class SchemaFormat(StrEnum):
     JSON = "json"
     YAML = "yaml"
@@ -57,6 +64,19 @@ class Compare(StrEnum):
     EXACT = "exact"
     TOKENS = "tokens"
     FLOAT = "float"
+    DECIMAL_LINES = "decimal_lines"
+
+
+class TestIdMatching(StrEnum):
+    EXACT = "exact"
+    UNIQUE_PREFIX = "unique_prefix"
+
+
+class EmptyOutputPolicy(StrEnum):
+    """Whether a present empty answer is scored zero or passed to its grader."""
+
+    ZERO = "zero"
+    GRADE = "grade"
 
 
 @dataclass(frozen=True)
@@ -64,6 +84,7 @@ class McqSpec:
     expected: str
     options: int = 4
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -71,6 +92,9 @@ class MathSpec:
     expected: str
     math_type: MathType = MathType.SCALAR
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    profile: MathProfile = MathProfile.ANCHORED
+    allow_additive_constant: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,6 +103,7 @@ class NumericSpec:
     tolerance_abs: float = 1e-6
     tolerance_rel: float = 1e-6
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -88,6 +113,9 @@ class ExactSpec:
     ignore_whitespace: bool = True
     ordered: bool = True
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    strip_outer_whitespace: bool = True
+    substring: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,6 +123,7 @@ class JsonSchemaSpec:
     schema: str = "schema.json"
     format: SchemaFormat = SchemaFormat.JSON
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -108,6 +137,7 @@ class XmlElementsSpec:
     required: tuple[str, ...] = ()
     any_of: tuple[str, ...] = ()
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -117,6 +147,7 @@ class CsvColumnsSpec:
     required: tuple[str, ...] = ()
     any_of: tuple[str, ...] = ()
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -129,6 +160,7 @@ class Constraint:
 class IfevalSpec:
     constraints: tuple[Constraint, ...]
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -136,6 +168,8 @@ class ReasoningGymSpec:
     dataset: str
     entry: str = "entry.json"
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    params: str | None = None
 
 
 @dataclass(frozen=True)
@@ -165,6 +199,9 @@ class PytestSpec:
     python: str = "python3"
     timeout: float = 600.0
     workspace: str = DEFAULT_WORKSPACE
+    setup_failure_is_infra: bool = False
+    batch_size: int = 0
+    id_matching: TestIdMatching = TestIdMatching.EXACT
 
 
 @dataclass(frozen=True)
@@ -197,7 +234,8 @@ class GotestSpec:
 
 RUBRIC_REFERENCE = "reference"
 RUBRIC_CHECKLIST = "checklist"
-RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST})
+RUBRIC_LABELS = "labels"
+RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS})
 
 
 @dataclass(frozen=True)
@@ -221,6 +259,25 @@ class JudgeSpec:
     exact_gate: bool = True
     request_timeout: float = 120.0
     output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    system_prompt: str = ""
+    prompt_template: str = ""
+    label_scores: dict[str, float] = field(default_factory=dict)
+    exact_gate_answers: tuple[str, ...] = ()
+    exact_gate_label: str = ""
+    strip_reasoning_blocks: bool = False
+    max_completion_tokens: int = 8192
+    incomplete_retry_tokens: int = 0
+    reasoning_effort: str = ""
+    label_scan: str = "literal"
+    label_case: str = "sensitive"
+    api: str = "chat_completions"
+
+
+class JudgeRuntimeSource(StrEnum):
+    """Select the environment-configured judge endpoint for remote grading."""
+
+    ENVIRONMENT = "environment"
 
 
 @dataclass(frozen=True)
@@ -229,6 +286,8 @@ class ScriptSpec:
     args: tuple[str, ...] = ()
     timeout: float = 600.0
     workspace: str = DEFAULT_WORKSPACE
+    reward_key: str = DEFAULT_REWARD_KEY
+    verdict_file: str | None = None
 
 
 Spec = (
@@ -282,8 +341,11 @@ def _coerce(name: str, annotation: Any, value: Any) -> Any:
         return tuple(Constraint(name=c["name"], params=dict(c.get("params", {}))) for c in value)
     if isinstance(annotation, type) and issubclass(annotation, StrEnum):
         return annotation(value)
-    if annotation is float and isinstance(value, int):
-        return float(value)
+    if annotation is float and type(value) is int:
+        try:
+            return float(value)
+        except OverflowError as error:
+            raise ValueError(f"field {name!r} is outside the float range") from error
     if annotation == (str | None):
         return value
     if isinstance(annotation, type) and not isinstance(value, annotation):

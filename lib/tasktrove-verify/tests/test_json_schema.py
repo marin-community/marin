@@ -48,6 +48,52 @@ def test_document_matching_the_schema_scores_one(tests_dir, workspace):
     assert (reward.reward, reward.status) == (1.0, Status.SCORED)
 
 
+def test_decoded_candidate_uses_same_schema_contract_as_file_grade(tests_dir, workspace):
+    for candidate, expected_reward in ((ORDER, 1.0), ({**ORDER, "quantity": "three"}, 0.0)):
+        answer(workspace, json.dumps(candidate))
+        direct = grade_json_schema.grade_json_schema_candidate(SCHEMA, candidate)
+        from_file = grade_json_schema.grade(JsonSchemaSpec(), tests_dir, workspace)
+        assert direct.reward == expected_reward
+        assert (direct.reward, direct.status, direct.detail) == (
+            from_file.reward,
+            from_file.status,
+            from_file.detail,
+        )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_nonfinite_json_number_cannot_bypass_numeric_bounds(tests_dir, workspace, value):
+    schema = {"type": "object", "properties": {"quantity": {"type": "number", "minimum": 0, "maximum": 10}}}
+    (tests_dir / "schema.json").write_text(json.dumps(schema))
+    candidate = {"quantity": value}
+    answer(workspace, json.dumps(candidate))
+    direct = grade_json_schema.grade_json_schema_candidate(schema, candidate)
+    from_file = grade_json_schema.grade(JsonSchemaSpec(), tests_dir, workspace)
+    assert (direct.reward, direct.status, direct.detail) == (0.0, Status.SCORED, {"reason": "nonfinite_number"})
+    assert (direct.reward, direct.status, direct.detail) == (
+        from_file.reward,
+        from_file.status,
+        from_file.detail,
+    )
+
+
+def test_nonfinite_nested_candidate_scores_zero(tests_dir, workspace):
+    schema = {"type": "object", "properties": {"values": {"type": "array", "items": {"type": "number"}}}}
+    (tests_dir / "schema.json").write_text(json.dumps(schema))
+    answer(workspace, '{"values": [1, NaN]}')
+    assert grade_json_schema.grade(JsonSchemaSpec(), tests_dir, workspace).detail == {"reason": "nonfinite_number"}
+
+
+def test_nonfinite_schema_bound_is_invalid_task(tests_dir, workspace):
+    schema = {"type": "number", "minimum": float("nan")}
+    (tests_dir / "schema.json").write_text(json.dumps(schema))
+    answer(workspace, "1")
+    with pytest.raises(InvalidTask, match="nonfinite"):
+        grade_json_schema.grade(JsonSchemaSpec(), tests_dir, workspace)
+    with pytest.raises(InvalidTask, match="nonfinite"):
+        grade_json_schema.grade_json_schema_candidate(schema, 1)
+
+
 def test_document_inside_a_code_fence_is_unwrapped(tests_dir, workspace):
     answer(workspace, f"Here is the order:\n\n```json\n{json.dumps(ORDER)}\n```\n")
     assert grade_json_schema.grade(JsonSchemaSpec(), tests_dir, workspace).reward == 1.0
@@ -173,3 +219,57 @@ def test_unparsable_toml_scores_zero_without_raising(tests_dir, workspace):
     reward = grade_json_schema.grade(JsonSchemaSpec(format=SchemaFormat.TOML), tests_dir, workspace)
     assert (reward.reward, reward.status) == (0.0, Status.SCORED)
     assert reward.detail["reason"] == "parse_error"
+
+
+def test_grid_schema_rejects_boolean_cells_even_when_python_equality_matches(tests_dir, workspace):
+    # ARC's original row comparison accepts False == 0 and True == 1.
+    # A typed JSON schema keeps the expected integer-grid contract.
+    schema = {
+        "type": "array",
+        "items": {"type": "array", "items": {"type": "integer"}},
+        "const": [[0, 1]],
+    }
+    (tests_dir / "schema.json").write_text(json.dumps(schema))
+    answer(workspace, "[[0, 1]]")
+    assert grade_json_schema.grade(JsonSchemaSpec(), tests_dir, workspace).reward == 1.0
+    answer(workspace, "[[false, true]]")
+    reward = grade_json_schema.grade(JsonSchemaSpec(), tests_dir, workspace)
+    assert (reward.reward, reward.status) == (0.0, Status.SCORED)
+
+
+@pytest.mark.parametrize("instance", [None, [], {}, 0, False, ""])
+def test_present_json_falsy_values_are_data_not_missing_output(tmp_path, instance):
+    (tmp_path / "schema.json").write_text("{}")
+    (tmp_path / "answer.txt").write_text(json.dumps(instance))
+    spec = JsonSchemaSpec()
+    assert grade_json_schema.grade(spec, tmp_path, tmp_path).reward == 1
+    assert grade_json_schema.grade_json_schema_candidate({}, instance).reward == 1
+    (tmp_path / "answer.txt").unlink()
+    assert grade_json_schema.grade(spec, tmp_path, tmp_path).reward == 0
+
+
+def test_deep_candidate_scores_zero_through_direct_and_file_apis(tmp_path):
+    candidate = 0
+    for _ in range(1200):
+        candidate = [candidate]
+    verdict = grade_json_schema.grade_json_schema_candidate({}, candidate)
+    assert (verdict.reward, verdict.status) == (0.0, Status.SCORED)
+    (tmp_path / "schema.json").write_text("{}")
+    for candidate_format, text in (
+        (SchemaFormat.JSON, "[" * 1200 + "0" + "]" * 1200),
+        (SchemaFormat.YAML, "&loop [*loop]"),
+    ):
+        (tmp_path / "answer.txt").write_text(text)
+        verdict = grade_json_schema.grade(JsonSchemaSpec(format=candidate_format), tmp_path, tmp_path)
+        assert (verdict.reward, verdict.status) == (0.0, Status.SCORED)
+
+
+def test_deep_trusted_schema_is_invalid_before_candidate_scoring(tmp_path):
+    schema = {}
+    for _ in range(1200):
+        schema = {"allOf": [schema]}
+    with pytest.raises(InvalidTask):
+        grade_json_schema.grade_json_schema_candidate(schema, None)
+    (tmp_path / "schema.json").write_text('{"allOf":[' * 1200 + "{}" + "]}" * 1200)
+    with pytest.raises(InvalidTask):
+        grade_json_schema.grade(JsonSchemaSpec(), tmp_path, tmp_path)

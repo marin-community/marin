@@ -8,10 +8,15 @@ import pytest
 
 pytest.importorskip("math_verify", reason="math mode needs the `answer` extra")
 
-from tasktrove_verify.grade import Status
+import math_verify
+import sympy
+from math_verify.errors import TimeoutException
+from tasktrove_verify.execution.worker import call_bounded
+from tasktrove_verify.grade import InvalidTask, Status, run, write_reward
 from tasktrove_verify.grade import grade as dispatch
 from tasktrove_verify.modes import grade_math
-from tasktrove_verify.spec import MathSpec, MathType
+from tasktrove_verify.modes.grade_exact import grade_exact_candidate
+from tasktrove_verify.spec import ExactSpec, MathProfile, MathSpec, MathType, render_spec
 
 
 def _answer(workspace: Path, text: str) -> None:
@@ -109,3 +114,212 @@ def test_math_grades_from_a_worker_thread(tmp_path):
     worker.start()
     worker.join()
     assert results[0].status == Status.SCORED and results[0].reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "expected,candidate,reward", [("0.5", r"\frac{1}{2}", 1), ("2", "3", 0), ("red", "red", 1), ("2", "???", 0)]
+)
+def test_boxed_profile_preserves_source_expression_and_text_parsing(expected, candidate, reward):
+    result = grade_math.grade_math_candidate(MathSpec(expected, profile=MathProfile.BOXED), candidate)
+    assert result.reward == reward
+
+
+def test_boxed_profile_distinguishes_missing_parse_from_parsed_mismatch():
+    spec = MathSpec("2", profile=MathProfile.BOXED)
+    assert grade_math.grade_math_candidate(spec, "3").detail.get("reason") != "missing_parse"
+    assert grade_math.grade_math_candidate(spec, "").detail["reason"] == "missing_parse"
+
+
+def test_unknown_direct_math_profile_cannot_award_correct_answer():
+    with pytest.raises(InvalidTask, match="unknown"):
+        grade_math.grade_math_candidate(MathSpec("2", profile="unknown"), "2")
+
+
+@pytest.mark.parametrize("profile", ["anchored", "boxed"])
+def test_parser_failure_cannot_trigger_fallback_or_positive_reward(monkeypatch, tmp_path, profile):
+
+    def parser_failure(*args, **kwargs):
+        raise TimeoutError("parser budget exhausted")
+
+    monkeypatch.setattr(math_verify, "parse", parser_failure)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(f'mode="math"\nexpected="2"\nprofile="{profile}"\n')
+    _answer(tmp_path, "2")
+    result = run(spec_path, tmp_path)
+    assert (result.status, result.reward) == (Status.INFRA_ERROR, 0.0)
+
+
+@pytest.mark.parametrize("operation", ["parse", "verify"])
+def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, operation):
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text('mode="math"\nexpected="2"\n')
+    _answer(tmp_path, "2")
+    logs = tmp_path / "logs"
+    positive = run(spec_path, tmp_path)
+    assert (positive.status, positive.reward) == (Status.SCORED, 1.0)
+    write_reward(logs, positive)
+
+    def expired(*args, **kwargs):
+        raise TimeoutException("backend deadline exhausted")
+
+    monkeypatch.setattr(math_verify, operation, expired)
+    result = run(spec_path, tmp_path)
+    assert (result.status, result.reward) == (Status.INFRA_ERROR, 0.0)
+    write_reward(logs, result)
+    assert not (logs / "reward.txt").exists()
+    assert not (logs / "reward.json").exists()
+    assert '"status": "infra_error"' in (logs / "verdict.json").read_text()
+
+
+@pytest.mark.parametrize(
+    "expected,candidate,reward",
+    [
+        ("x^2", "x^2+3", 1.0),
+        ("x", "2x", 0.0),
+        (r"\sin(x)^2+\cos(x)^2", "4", 1.0),
+        (r"\{1,2\}", r"\{3,4\}", 0.0),
+        ("[1,2)", "[3,4)", 0.0),
+        ("y=x+1", "y=x+2", 0.0),
+        (r"\infty", r"-\infty", 0.0),
+        (r"\begin{pmatrix}1&2\\3&4\end{pmatrix}", r"\begin{pmatrix}2&3\\4&5\end{pmatrix}", 0.0),
+    ],
+)
+def test_additive_constant_only_matches_finite_scalar_expressions(tmp_path, expected, candidate, reward):
+    _answer(tmp_path, candidate)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(MathSpec(expected=expected, allow_additive_constant=True)))
+    result = run(spec_path, tmp_path)
+    assert result.status is Status.SCORED
+    assert result.reward == reward
+
+
+def test_additive_constant_policy_preserves_default_exact_comparison(tmp_path):
+    _answer(tmp_path, "x^2+3")
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(MathSpec(expected="x^2")))
+    assert run(spec_path, tmp_path).reward == 0.0
+
+
+@pytest.mark.parametrize("nonfinite", ["nan", "zoo", "oo", "-oo"])
+def test_nonfinite_difference_cannot_be_an_additive_constant(monkeypatch, tmp_path, nonfinite):
+    _answer(tmp_path, "x+1")
+    monkeypatch.setattr(sympy, "simplify", lambda expression: sympy.sympify(nonfinite))
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(MathSpec(expected="x", allow_additive_constant=True)))
+    result = run(spec_path, tmp_path)
+    assert result.status is Status.SCORED
+    assert result.reward == 0.0
+
+
+def test_additive_backend_deadline_is_infrastructure_failure(tmp_path, monkeypatch):
+    def deadline(expression):
+        raise TimeoutException("additive simplification deadline")
+
+    monkeypatch.setattr(sympy, "simplify", deadline)
+    _answer(tmp_path, "x+1")
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(MathSpec(expected="x", allow_additive_constant=True)))
+    result = run(spec_path, tmp_path)
+    assert result.status is Status.INFRA_ERROR
+    assert result.reward == 0.0
+
+
+def test_additive_option_preserves_exact_collection_comparison(tmp_path):
+    _answer(tmp_path, r"\{2,1\}")
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(
+        render_spec(MathSpec(expected=r"\{1,2\}", math_type=MathType.SET, allow_additive_constant=True))
+    )
+    result = run(spec_path, tmp_path)
+    assert result.status is Status.SCORED
+    assert result.reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "expected,candidate,reward",
+    [
+        ("x^2", "x^2", 0.0),
+        ("x*y", "x y", 0.0),
+        ("x", "x", 0.0),
+        ("2", "2", 1.0),
+        ("x^2", r"\boxed{x^2}", 1.0),
+        ("x^2", r"\boxed{x^2+3}", 0.0),
+    ],
+)
+def test_raw_math_profile_preserves_unwrapped_prediction_extraction(tmp_path, expected, candidate, reward):
+    _answer(tmp_path, candidate)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(MathSpec(expected=expected, profile=MathProfile.RAW)))
+    result = run(spec_path, tmp_path)
+    assert result.status is Status.SCORED
+    assert result.reward == reward
+
+
+@pytest.mark.parametrize("candidate,reward", [("x^2+3", 0.0), (r"\boxed{x^2+3}", 1.0), (r"\boxed{2x^2}", 0.0)])
+def test_raw_additive_fallback_requires_latex_extraction(tmp_path, candidate, reward):
+    _answer(tmp_path, candidate)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(MathSpec(expected="x^2", profile=MathProfile.RAW, allow_additive_constant=True)))
+    result = run(spec_path, tmp_path)
+    assert result.status is Status.SCORED
+    assert result.reward == reward
+
+
+def test_raw_math_unparsed_reference_is_invalid_task(tmp_path):
+    _answer(tmp_path, r"\boxed{not a math reference???}")
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(MathSpec(expected="not a math reference???", profile=MathProfile.RAW)))
+    result = run(spec_path, tmp_path)
+    assert (result.status, result.reward) == (Status.INVALID_TASK, 0.0)
+
+
+@pytest.mark.parametrize("candidate", [r"\boxed{2} then \boxed{", r"\boxed{2} then \boxed{}"])
+def test_raw_math_does_not_recover_an_earlier_answer_after_malformed_final_box(tmp_path, candidate):
+    _answer(tmp_path, candidate)
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(MathSpec(expected="2", profile=MathProfile.RAW)))
+    result = run(spec_path, tmp_path)
+    assert (result.status, result.reward) == (Status.SCORED, 0.0)
+
+
+@pytest.mark.parametrize(
+    "gold,candidate,expected",
+    [
+        ("1,1,2", "2,1,1", 1),
+        ("1,1,2", "1,2,2", 0),
+        ("1,1,2", "1,2", 0),
+        ("1,2", "1,2,3", 0),
+        (r"\frac{1}{2}", "0.5", 1),
+        ("0", "0.00000000005", 0),
+        ("0", "0.0000000001", 0),
+        ("1000000000000000000000000000001", "1000000000000000000000000000002", 0),
+        ("1000000000000000000000000000000.1", "1000000000000000000000000000000.2", 0),
+    ],
+)
+def test_canonical_members_preserve_exact_multiset_and_numeric_distinctions(gold, candidate, expected):
+    reference = call_bounded(grade_math.canonical_math_members, gold, timeout=10)
+    proposed = call_bounded(grade_math.canonical_math_members, candidate, timeout=10)
+    verdict = grade_exact_candidate(ExactSpec(expected=reference, ordered=False), ",".join(proposed))
+    assert verdict.reward == expected
+
+
+@pytest.mark.parametrize("value", ["", "[]", "1,,2", "x", r"\infty", "0.1+0.2", "1 +", "1 trailing text", r"\frac{1}"])
+def test_canonical_members_reject_empty_nonfinite_and_approximate_expressions(value):
+    with pytest.raises(ValueError):
+        call_bounded(grade_math.canonical_math_members, value, timeout=10)
+
+
+@pytest.mark.parametrize("expected", ["", "   ", r"\displaystyle"])
+@pytest.mark.parametrize("candidate", ["2", "1/0"])
+def test_boxed_empty_reference_parse_is_invalid_before_candidate(expected, candidate):
+    with pytest.raises(InvalidTask, match="boxed reference"):
+        grade_math.grade_math_candidate(MathSpec(expected, profile=MathProfile.BOXED), candidate)
+
+
+def test_boxed_preserves_physics_reference_raw_fallback():
+    expected = r"n=\frac{e}{\hbar} \sqrt{\frac{m_{\mathrm{e}} \lambda}{4 \pi \varepsilon_{0}}}"
+    spec = MathSpec(expected, profile=MathProfile.BOXED)
+    assert grade_math.grade_math_candidate(spec, expected).reward == 1
+    missing = grade_math.grade_math_candidate(spec, "")
+    assert missing.status == Status.SCORED
+    assert missing.reward == 0

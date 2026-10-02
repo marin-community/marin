@@ -49,7 +49,29 @@ must also be nonnegative. The effective tolerance,
 [`spec.py`](src/tasktrove_verify/spec.py) owns the frozen mode dataclasses plus `parse_spec` and
 `render_spec`. Spec paths are relative to the directory containing `verifier.toml`. `grade.py`
 owns dispatch, output handling, verdict writing, and the CLI. Executable graders live in
-`modes/grade_*.py`; shared parsers and process runners remain separate.
+`modes/grade_*.py`; `file_ops/` owns bounded reads and restoration, and `execution/` owns
+command execution and worker deadlines.
+
+Answer specs expose `empty_output = "zero"` by default. Explicit `"grade"` passes present empty
+text to the mode's contract; missing files still score zero. Rewards must be finite numbers
+in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
+become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
+
+The mode modules expose direct candidate graders for callers holding extracted values.
+`aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;
+invalid tasks and infrastructure errors discard partial credit. The judge and Reasoning Gym modes
+also expose direct candidate APIs for decoded context and trusted entries. Judge connections carry
+runtime credentials separately from serializable specs. Reasoning Gym's optional `params` file
+configures its scorer; callers own isolation when invoking its direct API.
+
+`adapters/` prepares framework observations for the shared modes. Frameworks retain task
+execution, dispatch, and dependency pins; installing this package does not enable an adapter.
+`preparation/` retains raw inputs and named normalization policies. Preparation failures carry
+Harbor's error categories from the pinned config-only `harbor-config` dependency.
+
+`json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
+float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
+repeated records and rejecting unexpected errors.
 
 ## Install and use
 

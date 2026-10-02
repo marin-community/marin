@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import textwrap
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.grade import InvalidTask, Status
+from tasktrove_verify.grade import InvalidTask, Status, main, run, scored, write_reward
 from tasktrove_verify.modes import grade_script
-from tasktrove_verify.spec import ScriptSpec
+from tasktrove_verify.spec import ScriptSpec, parse_spec, render_spec
 
 # The grading script is handed the workspace as its cwd and the three TASKTROVE_* variables.
 BASH_REWARD_JSON = """\
@@ -97,11 +98,11 @@ def test_reward_outside_the_unit_interval_scores_zero(tmp_path):
     assert reward.detail["reported"] == 7.0
 
 
-def test_failing_script_that_still_reported_a_reward_is_scored(tmp_path):
+def test_failing_script_cannot_report_a_positive_reward(tmp_path):
     body = '#!/bin/bash\nprintf \'{"reward": 0.5}\' > "$TASKTROVE_LOGS_DIR/reward.json"\necho boom >&2\nexit 3\n'
     tests = _tests_dir(tmp_path, body, "test.sh")
     reward = grade_script.grade(ScriptSpec(path="test.sh"), tests, _workspace(tmp_path))
-    assert (reward.reward, reward.status) == (0.5, Status.SCORED)
+    assert (reward.reward, reward.status) == (0.0, Status.INFRA_ERROR)
     assert reward.detail["exit_code"] == 3
     assert "boom" in reward.detail["stderr"]
 
@@ -109,8 +110,9 @@ def test_failing_script_that_still_reported_a_reward_is_scored(tmp_path):
 def test_failing_script_without_a_reward_is_an_infra_error(tmp_path):
     body = "#!/bin/bash\necho 'no toolchain' >&2\nexit 2\n"
     tests = _tests_dir(tmp_path, body, "test.sh")
-    with pytest.raises(RuntimeError, match="no toolchain"):
-        grade_script.grade(ScriptSpec(path="test.sh"), tests, _workspace(tmp_path))
+    reward = grade_script.grade(ScriptSpec(path="test.sh"), tests, _workspace(tmp_path))
+    assert reward.status == Status.INFRA_ERROR
+    assert "no toolchain" in reward.detail["stderr"]
 
 
 def test_missing_script_is_an_invalid_task(tmp_path):
@@ -142,3 +144,180 @@ def test_explicit_spec_workspace_overrides_the_workspace_argument(tmp_path):
     reward = grade_script.grade(ScriptSpec(path="test.sh", workspace=str(elsewhere)), tests, _workspace(tmp_path))
     assert reward.reward == 1.0
     assert (elsewhere / "ran-here").is_file()
+
+
+@pytest.mark.parametrize("channel,payload", [("reward.json", '{"reward": "broken"}'), ("reward.txt", "broken")])
+def test_invalid_authoritative_reward_cannot_be_replaced_by_stdout(tmp_path, channel, payload):
+    body = (
+        "import os\nfrom pathlib import Path\n"
+        f'(Path(os.environ["TASKTROVE_LOGS_DIR"]) / {channel!r}).write_text({payload!r})\n'
+        "print(1.0)\n"
+    )
+    tests = _tests_dir(tmp_path, body, "grade.py")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "reward.json").write_text('{"reward": 1.0}')
+    (logs / "reward.txt").write_text("1.0")
+    reward = run(tests / "verifier.toml", _workspace(tmp_path))
+    write_reward(logs, reward)
+    assert reward.status == Status.INFRA_ERROR
+    assert json.loads((logs / "verdict.json").read_text())["status"] == "infra_error"
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
+
+
+def test_named_reward_survives_spec_roundtrip_and_preserves_metrics(tmp_path):
+    spec = parse_spec(render_spec(ScriptSpec(path="grade.py", reward_key="accuracy")))
+    body = (
+        "import os\nfrom pathlib import Path\n"
+        '(Path(os.environ["TASKTROVE_LOGS_DIR"]) / "reward.json").write_text('
+        '\'{"accuracy": 0.75, "loss": 4.0, "reward": 0.0}\')\n'
+    )
+    tests = _tests_dir(tmp_path, body, "grade.py")
+    reward = grade_script.grade(spec, tests, _workspace(tmp_path))
+    assert (reward.reward, reward.status) == (0.75, Status.SCORED)
+    assert reward.detail["metrics"] == {"accuracy": 0.75, "loss": 4.0, "reward": 0.0}
+
+
+def test_named_reward_cannot_be_replaced_by_scalar_channel(tmp_path):
+    tests = _tests_dir(tmp_path, '#!/bin/bash\nprintf 1 > "$TASKTROVE_LOGS_DIR/reward.txt"\necho 1\n', "test.sh")
+    (tests / "verifier.toml").write_text(render_spec(ScriptSpec(path="test.sh", reward_key="accuracy")))
+    reward = run(tests / "verifier.toml", _workspace(tmp_path))
+    assert reward.status == Status.INFRA_ERROR
+
+
+@pytest.mark.parametrize(
+    "status,reward_value", [("scored", 0.0), ("scored", 1.0), ("infra_error", 0.0), ("invalid_task", 0.0)]
+)
+def test_declared_script_verdict_preserves_status_and_native_metadata(tmp_path, status, reward_value):
+    payload = {
+        "status": status,
+        "reward": reward_value,
+        "detail": {"native": {"reward_basis": ["state", "nl"], "info": {"runtime": False}}},
+    }
+    body = (
+        "import os\nfrom pathlib import Path\n"
+        + f"(Path(os.environ['TASKTROVE_LOGS_DIR'])/'result.json').write_text({json.dumps(payload)!r})\nprint(1)\n"
+    )
+    tests = _tests_dir(tmp_path, body, "grade.py")
+    (tests / "verifier.toml").write_text('mode="script"\npath="grade.py"\nverdict_file="result.json"\n')
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "reward.json").write_text('{"reward":1}')
+    (logs / "reward.txt").write_text("1")
+    reward = run(tests / "verifier.toml", _workspace(tmp_path))
+    write_reward(logs, reward)
+    assert reward.status.value == status
+    assert reward.reward == reward_value
+    assert reward.detail["native"] == payload["detail"]["native"]
+    if status == "scored":
+        assert json.loads((logs / "reward.json").read_text())["reward"] == reward_value
+    else:
+        assert not (logs / "reward.json").exists()
+        assert not (logs / "reward.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "payload,ending",
+    [(None, "print(1)"), ("{broken", "print(1)"), ('{"status":"scored","reward":1,"detail":{}}', "raise SystemExit(3)")],
+)
+def test_declared_script_failure_cannot_be_replaced_by_success(tmp_path, payload, ending):
+    body = "import os\nfrom pathlib import Path\n"
+    if payload is not None:
+        body += f"(Path(os.environ['TASKTROVE_LOGS_DIR'])/'result.json').write_text({payload!r})\n"
+    body += ending + "\n"
+    tests = _tests_dir(tmp_path, body, "grade.py")
+    (tests / "verifier.toml").write_text('mode="script"\npath="grade.py"\nverdict_file="result.json"\n')
+    reward = run(tests / "verifier.toml", _workspace(tmp_path))
+    assert reward.status == Status.INFRA_ERROR
+
+
+@pytest.mark.parametrize("filename", ["../result.json", "/tmp/result.json", "", "."])
+def test_declared_verdict_path_cannot_escape_private_logs(tmp_path, filename):
+    tests = _tests_dir(tmp_path, "print(1)\n", "grade.py")
+    (tests / "verifier.toml").write_text(render_spec(ScriptSpec(path="grade.py", verdict_file=filename)))
+    assert run(tests / "verifier.toml", _workspace(tmp_path)).status == Status.INVALID_TASK
+
+
+def test_declared_producer_timeout_does_not_accept_written_success(tmp_path):
+    tests = _tests_dir(
+        tmp_path,
+        (
+            "import os,time\n"
+            "from pathlib import Path\n"
+            '(Path(os.environ["TASKTROVE_LOGS_DIR"])/"result.json").write_text(\'{"status"'
+            ':"scored","reward":1,"detail":{}}\')\n'
+            "time.sleep(120)\n"
+        ),
+        "grade.py",
+    )
+    (tests / "verifier.toml").write_text(
+        render_spec(ScriptSpec(path="grade.py", timeout=0.2, verdict_file="result.json"))
+    )
+    reward = run(tests / "verifier.toml", _workspace(tmp_path))
+    assert reward.status == Status.INFRA_ERROR
+    assert reward.detail["script"]["exit_code"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"status":"scored","reward":0,"reward":1,"detail":{}}',
+        '{"status":"scored","reward":2,"detail":{}}',
+        '{"status":"scored","reward":true,"detail":{}}',
+        '{"status":"unknown","reward":0,"detail":{}}',
+        '{"status":"infra_error","reward":1,"detail":{}}',
+    ],
+)
+def test_declared_verdict_malformed_contract_is_infrastructure_failure(tmp_path, payload):
+    tests = _tests_dir(
+        tmp_path,
+        "import os\nfrom pathlib import Path\n"
+        + f'(Path(os.environ["TASKTROVE_LOGS_DIR"])/"result.json").write_text({payload!r})\nprint(1)\n',
+        "grade.py",
+    )
+    (tests / "verifier.toml").write_text(render_spec(ScriptSpec(path="grade.py", verdict_file="result.json")))
+    assert run(tests / "verifier.toml", _workspace(tmp_path)).status == Status.INFRA_ERROR
+
+
+@pytest.mark.parametrize("channel", ["reward.json", "reward.txt", "result.json"])
+@pytest.mark.parametrize("producer", ["symlink", "dangling", "oversize"])
+def test_invalid_reward_artifact_cannot_fall_back_or_leave_stale_credit(tmp_path, channel, producer):
+    payload = {
+        "reward.json": '{"reward":1}',
+        "reward.txt": "1",
+        "result.json": '{"status":"scored","reward":1,"detail":{}}',
+    }[channel]
+    operation = {
+        "symlink": "target.write_text(payload); artifact.symlink_to(target)",
+        "dangling": "artifact.symlink_to(target)",
+        "oversize": "artifact.write_text(payload + ' ' * 1_000_001)",
+    }[producer]
+    body = (
+        "import os\nfrom pathlib import Path\n"
+        "logs = Path(os.environ['TASKTROVE_LOGS_DIR'])\n"
+        f"artifact = logs / {channel!r}\npayload = {payload!r}\n"
+        "target = logs / 'target'\n"
+        f"{operation}\nprint(1)\n"
+    )
+    tests = _tests_dir(tmp_path, body, "grade.py")
+    if channel == "result.json":
+        (tests / "verifier.toml").write_text(render_spec(ScriptSpec(path="grade.py", verdict_file=channel)))
+    logs = tmp_path / "logs"
+    write_reward(logs, scored(1))
+    assert main([str(tests / "verifier.toml"), "--workspace", str(_workspace(tmp_path)), "--logs-dir", str(logs)]) == 0
+    verdict = json.loads((logs / "verdict.json").read_text())
+    assert (verdict["status"], verdict["reward"]) == ("infra_error", 0)
+    assert not (logs / "reward.txt").exists()
+    assert not (logs / "reward.json").exists()
+
+
+@pytest.mark.parametrize("payload", ['{"reward":0,"reward":1}', '{"reward":1,"metadata":{"value":1e999}}'])
+def test_ambiguous_or_nonfinite_json_metadata_cannot_award_credit(tmp_path, payload):
+    body = (
+        "import os\nfrom pathlib import Path\n"
+        f"(Path(os.environ['TASKTROVE_LOGS_DIR']) / 'reward.json').write_text({payload!r})\nprint(1)\n"
+    )
+    tests = _tests_dir(tmp_path, body, "grade.py")
+    reward = run(tests / "verifier.toml", _workspace(tmp_path))
+    assert (reward.status, reward.reward) == (Status.INFRA_ERROR, 0)

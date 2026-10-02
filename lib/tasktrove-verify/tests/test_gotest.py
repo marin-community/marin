@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
+from tasktrove_verify.grade import Status, main, run
 from tasktrove_verify.modes import grade_gotest
 from tasktrove_verify.spec import GotestSpec
 
@@ -111,3 +114,76 @@ def test_gotest_real_go_module_passes(tmp_path):
     (workspace / "calc_test.go").write_text(CALC_TEST_GO)
     reward = grade_gotest.grade(GotestSpec(must_pass=("example.com/m.TestAdd",)), tmp_path, workspace)
     assert reward.reward == 1.0
+
+
+@pytest.mark.parametrize("actions", [("fail", "pass"), ("pass", "fail"), ("fail", "skip", "pass")])
+def test_gotest_repeated_test_failure_is_not_erased(tmp_path, monkeypatch, actions):
+    stream = (
+        "\n".join(f'{{"Action": "{action}", "Package": "one", "Test": "TestRepeated"}}' for action in actions)
+        + '\n{"Action": "pass", "Package": "two", "Test": "TestRepeated"}\n'
+    )
+    stream += '{"Action":"fail","Package":"one"}\n{"Action":"pass","Package":"two"}\n'
+    workspace = _use_fake_go(monkeypatch, tmp_path, stream)
+    reward = grade_gotest.grade(GotestSpec(must_not_break=("one.TestRepeated",)), tmp_path, workspace)
+    assert (reward.reward, reward.detail["first_failure"]) == (0.0, "one.TestRepeated")
+    assert grade_gotest.grade(GotestSpec(must_pass=("two.TestRepeated",)), tmp_path, workspace).reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "suffix,exit_code",
+    [
+        ('{"Action":"fail","Package":"p"}\n', 1),
+        ("", 0),
+        ('{"Action":"pass","Package":"p"}\n', 2),
+        ('{"Action":"run","Package":"p","Test":"TestPending"}\n{"Action":"fail","Package":"p"}\n', 1),
+    ],
+)
+def test_gotest_failclosed_incomplete_or_crashed_runner_cannot_report_success(tmp_path, monkeypatch, suffix, exit_code):
+    stream = '{"Action":"pass","Package":"p","Test":"TestRequired"}\n' + suffix
+    workspace = _use_fake_go(monkeypatch, tmp_path, stream, exit_code=exit_code)
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "verifier.toml").write_text('mode="gotest"\nmust_pass=["p.TestRequired"]\n')
+    reward = run(tests / "verifier.toml", workspace)
+    assert reward.status == Status.INFRA_ERROR
+    assert reward.reward == 0
+
+
+def test_gotest_failclosed_one_package_error_is_not_hidden_by_another_packages_test_failure(tmp_path, monkeypatch):
+    stream = (
+        '{"Action":"pass","Package":"required","Test":"TestRequired"}\n'
+        '{"Action":"fail","Package":"required"}\n'
+        '{"Action":"fail","Package":"other","Test":"TestOther"}\n'
+        '{"Action":"fail","Package":"other"}\n'
+    )
+    workspace = _use_fake_go(monkeypatch, tmp_path, stream)
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "verifier.toml").write_text('mode="gotest"\nmust_pass=["required.TestRequired"]\n')
+    reward = run(tests / "verifier.toml", workspace)
+    assert reward.status == Status.INFRA_ERROR
+    assert reward.reward == 0
+
+
+@pytest.mark.skipif(shutil.which("go") is None, reason="the go toolchain is not installed")
+def test_gotest_undiscovered_test_function_cannot_leave_positive_reward(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "go.mod").write_text("module example.com/m\n\ngo 1.18\n")
+    (workspace / "calc.go").write_text(CALC_GO)
+    # Go compiles this Test function but does not execute it without _test.go.
+    (workspace / "checks.go").write_text(CALC_TEST_GO)
+    native = subprocess.run(["go", "test", "-json", "./..."], cwd=workspace, capture_output=True, text=True)
+    assert native.returncode == 0
+    assert "[no test files]" in native.stdout
+    spec = tmp_path / "verifier.toml"
+    spec.write_text('mode = "gotest"\n')
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "reward.txt").write_text("1.0")
+    assert main([str(spec), "--workspace", str(workspace), "--logs-dir", str(logs)]) == 0
+    verdict = json.loads((logs / "verdict.json").read_text())
+    assert verdict["status"] == "scored"
+    assert verdict["reward"] == 0.0
+    assert verdict["detail"]["reason"] == "no_tests"
+    assert float((logs / "reward.txt").read_text()) == 0.0
