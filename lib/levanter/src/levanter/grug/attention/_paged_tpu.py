@@ -22,6 +22,8 @@ _QUERY_GROUP_ALIGNMENT = 8
 _INVERSE_LOG_2 = 1 / log(2)
 _MIN_NORMAL_LOG = -126 * log(2)
 _EXP_DEGREE = 12
+_FLOAT32_EXPONENT_BIAS = 127
+_FLOAT32_MANTISSA_BITS = 23
 _DEKKER_LOW_SIGNIFICAND_BITS = 12
 _DEKKER_HIGH_MASK = -(1 << _DEKKER_LOW_SIGNIFICAND_BITS)
 
@@ -95,7 +97,9 @@ def _exp_nonpositive(x):
     polynomial = _constant(1 / factorial(_EXP_DEGREE), safe.high)
     for degree in range(_EXP_DEGREE - 1, -1, -1):
         polynomial = _add(_multiply(polynomial, remainder), _constant(1 / factorial(degree), safe.high))
-    power = jax.lax.bitcast_convert_type((exponent.astype(jnp.int32) + 127) << 23, jnp.float32)
+    power = jax.lax.bitcast_convert_type(
+        (exponent.astype(jnp.int32) + _FLOAT32_EXPONENT_BIAS) << _FLOAT32_MANTISSA_BITS, jnp.float32
+    )
     supported = finite & (safe.high >= _MIN_NORMAL_LOG)
     return _FloatPair(
         jnp.where(supported, polynomial.high * power, 0.0),
@@ -109,8 +113,8 @@ def _fixed_high(value):
     # exactly representable in an FP32 accumulator.
     magnitude = jnp.max(jnp.abs(value), axis=1, keepdims=True)
     bits = jax.lax.bitcast_convert_type(magnitude, jnp.int32)
-    exponent = jnp.maximum(((bits >> 23) & 255) - 127 + 1 - 8, -126)
-    quantum = jax.lax.bitcast_convert_type((exponent + 127) << 23, jnp.float32)
+    exponent = jnp.maximum(((bits >> _FLOAT32_MANTISSA_BITS) & 255) - _FLOAT32_EXPONENT_BIAS + 1 - 8, -126)
+    quantum = jax.lax.bitcast_convert_type((exponent + _FLOAT32_EXPONENT_BIAS) << _FLOAT32_MANTISSA_BITS, jnp.float32)
     return jnp.round(value / quantum) * quantum
 
 
