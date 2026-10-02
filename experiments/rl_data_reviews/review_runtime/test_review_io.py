@@ -6,11 +6,26 @@
 import importlib
 import json
 import sys
+from collections.abc import Iterator
 from types import SimpleNamespace
+
+import pytest
 
 from experiments.rl_data_reviews.review_runtime.review_io import capture_native_sources, native_calls
 
 
+@pytest.fixture
+def isolated_verifyit_imports(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    for name in list(sys.modules):
+        if name == "verifyit" or name.startswith("verifyit."):
+            monkeypatch.delitem(sys.modules, name)
+    yield
+    for name in list(sys.modules):
+        if name == "verifyit" or name.startswith("verifyit."):
+            sys.modules.pop(name)
+
+
+@pytest.mark.usefixtures("isolated_verifyit_imports")
 def test_verifyit_call_captures_source_and_installed_revision(tmp_path, monkeypatch):
     package = tmp_path / "verifyit"
     package.mkdir()
@@ -41,6 +56,3 @@ def test_verifyit_call_captures_source_and_installed_revision(tmp_path, monkeypa
         "source_url": "https://github.com/marin-community/verifyit",
         "source_commit": "d3edc5d240d53edbd0c0e4a53c0e112629550f7e",
     }
-    for name in list(sys.modules):
-        if name == "verifyit" or name.startswith("verifyit."):
-            monkeypatch.delitem(sys.modules, name)
