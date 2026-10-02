@@ -148,9 +148,16 @@ def run_native(root: Path, hardware_label: str, expert_axis_size: int) -> None:
 
 
 def run_vllm(
-    root: Path, hardware_label: str, execution_mode: str, expert_axis_size: int, kv_cache_memory_bytes: int
+    root: Path,
+    hardware_label: str,
+    execution_mode: str,
+    expert_axis_size: int,
+    kv_cache_memory_bytes: int,
+    compile_workers: int,
 ) -> None:
     """Measure the exported checkpoint using the promoted Marin CUDA fork."""
+    if compile_workers < 1:
+        raise ValueError("compile_workers must be positive")
     manifest = json.loads((root / _MANIFEST_FILENAME).read_text())
     manifest["hardware_label"] = hardware_label
     provenance = root / "vllm-provenance.json"
@@ -196,6 +203,9 @@ def run_vllm(
     repo = Path(__file__).resolve().parents[2]
     paths = [str(repo / "lib/levanter/src"), str(repo / "lib/rigging/src")]
     environment = {**os.environ, **launcher.env()}
+    environment["MAX_JOBS"] = str(compile_workers)
+    environment["FLASHINFER_NVCC_THREADS"] = "1"
+    manifest["compiler_parallelism"] = {"ninja_workers": compile_workers, "nvcc_threads": 1}
     environment["PYTHONPATH"] = os.pathsep.join([*paths, environment.get("PYTHONPATH", "")])
     # Isolate Triton from cache overrides inherited from the parent JAX process.
     with tempfile.TemporaryDirectory(prefix="matched-vllm-triton-") as cache:
@@ -224,6 +234,7 @@ def main() -> None:
         if backend == "vllm":
             run.add_argument("--execution-mode", choices=["eager", "compiled"], default="eager")
             run.add_argument("--kv-cache-memory-bytes", type=int, default=_TINY_KV_CACHE_BYTES)
+            run.add_argument("--compile-workers", type=int, default=2)
     args = parser.parse_args()
     if args.command == "export":
         export_fixture(args.output.resolve(), args.recipe)
@@ -236,6 +247,7 @@ def main() -> None:
             args.execution_mode,
             args.expert_axis_size,
             args.kv_cache_memory_bytes,
+            args.compile_workers,
         )
 
 
