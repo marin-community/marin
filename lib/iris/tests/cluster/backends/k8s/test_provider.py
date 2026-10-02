@@ -1379,7 +1379,7 @@ def test_gc_preserves_retry_resources_during_dispatch(provider, k8s, monkeypatch
     old = make_run_req(task_id, num_tasks=1, attempt_uid="1111111111111111")
     old.entrypoint.workdir_files["config.json"] = b"old"
     provider.sync(make_batch(tasks_to_run=[old]))
-    old_pod = k8s.list_json(K8sResource.PODS)[0]["metadata"]["name"]
+    old_pod_name = k8s.list_json(K8sResource.PODS)[0]["metadata"]["name"]
     provider.sync(make_batch())
 
     retry = make_run_req(task_id, attempt_id=retry_attempt, num_tasks=1, attempt_uid="2222222222222222")
@@ -1401,8 +1401,8 @@ def test_gc_preserves_retry_resources_during_dispatch(provider, k8s, monkeypatch
     configmap = next(v["configMap"]["name"] for v in retry_pod["spec"]["volumes"] if "configMap" in v)
     assert k8s.get_json(K8sResource.CONFIGMAPS, configmap) is not None
     assert k8s.get_json(K8sResource.PDBS, f"{retry_name}-pdb") is not None
-    assert k8s.get_json(K8sResource.CONFIGMAPS, f"{old_pod}-wf") is None
-    assert k8s.get_json(K8sResource.PDBS, f"{old_pod}-pdb") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, f"{old_pod_name}-wf") is None
+    assert k8s.get_json(K8sResource.PDBS, f"{old_pod_name}-pdb") is None
 
 
 def test_gc_cleans_old_attempt_resources_while_retry_is_active(provider, k8s):

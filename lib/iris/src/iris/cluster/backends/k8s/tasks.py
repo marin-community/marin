@@ -2438,8 +2438,7 @@ class K8sTaskProvider:
         cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node
         refresh) run at most once per ``cluster_scan_interval``, and continue to
         run on an idle cluster (the controller never gates a cluster backend's
-        reconcile on having work) so orphaned pods are reaped. Terminal-resource
-        GC runs on its own thread.
+        reconcile on having work) so orphaned pods are reaped.
         """
         apply_failures: list[TaskUpdate] = []
         for run_req in request.tasks_to_run:
