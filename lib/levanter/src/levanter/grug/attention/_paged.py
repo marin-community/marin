@@ -48,7 +48,8 @@ def ragged_paged_attention(
             Defaults to TPU on TPU and reference elsewhere.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
-    Padding queries produce zero. The TPU path uses JAX's existing ragged kernel;
+    Padding queries produce zero. The TPU path uses JAX's existing ragged kernel
+    for FP32 inputs; lower-precision inputs use the reference to preserve accuracy.
     GPU and CPU default to the reference implementation. The opt-in ``gpu_pallas``
     backend accelerates decode-only batches and uses the reference for prefill.
     Only the KV-head axis is partitioned; sequence metadata and pages are replicated.
@@ -154,6 +155,21 @@ def _reference_attention(
 
 
 def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+    # JAX's TPU kernel applies one precision to QK and AV. Default precision rounds
+    # the FP32 softmax weights to BF16; highest precision rejects BF16 operands.
+    # Stream reference pages instead of materializing an FP32 copy of the full cache.
+    if q.dtype != jnp.float32 or kv_pages.dtype != jnp.float32:
+        return _reference_attention(
+            q,
+            kv_pages,
+            kv_lens,
+            page_indices,
+            cu_q_lens,
+            num_seqs,
+            sm_scale=sm_scale,
+            sliding_window=sliding_window,
+            soft_cap=soft_cap,
+        )
     original_dim = q.shape[-1]
     padding = (-original_dim) % 128
     q_padded = jnp.pad(q, ((0, 0), (0, 0), (0, 0), (0, padding)))
@@ -166,9 +182,7 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
         # to avoid rounding BF16 queries before their dot product.
         q_flat = q_flat.astype(jnp.float32) * sm_scale
         kernel_scale = 1.0
-    # FP32 inputs need full precision; Mosaic rejects FP32 precision on BF16 dots.
-    precision = "highest" if q_flat.dtype == jnp.float32 else "default"
-    with jax.default_matmul_precision(precision):
+    with jax.default_matmul_precision("highest"):
         output = tpu_ragged_paged_attention(
             q_flat,
             pages_padded,
