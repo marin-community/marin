@@ -92,14 +92,18 @@ cd "$WORKTREE"
 export WANDB_API_KEY="$(python3 -c 'import netrc; print(netrc.netrc().authenticators("api.wandb.ai")[2])')"
 export HF_TOKEN="$(cat ~/.cache/huggingface/token)"
 RUN_ID="canary-bisect-tpu-${COMMIT:0:10}-$(date -u +%m%d%H%M)"
+# The scheduled canary's settings at the tested commit.
+WORKFLOW=.github/workflows/marin-canary-ferry.yaml
+BATCH_SIZE=$(grep -m1 'CANARY_BATCH_SIZE: "' "$WORKFLOW" | sed 's/.*"\(.*\)".*/\1/')
+TARGET_TOKENS=$(grep -m1 'CANARY_TARGET_TOKENS: "' "$WORKFLOW" | sed 's/.*"\(.*\)".*/\1/')
 
 uv run --project "$CURRENT" iris --config=lib/iris/config/marin.yaml job run --no-wait \
   --timeout 21600 --memory=2G --disk=4G --cpu=1 --extra=cpu \
   --priority batch --preemptible --reserve v6e-4 \
   -e RUN_ID "$RUN_ID" \
   -e CANARY_ACCELERATOR tpu \
-  -e CANARY_BATCH_SIZE 128 \
-  -e CANARY_TARGET_TOKENS 250000000 \
+  -e CANARY_BATCH_SIZE "$BATCH_SIZE" \
+  -e CANARY_TARGET_TOKENS "$TARGET_TOKENS" \
   -e WANDB_ENTITY marin-community -e WANDB_PROJECT marin \
   -- python -m experiments.ferries.canary_ferry
 echo "https://wandb.ai/marin-community/marin/runs/$RUN_ID"
