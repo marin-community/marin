@@ -232,21 +232,27 @@ def _tpu_kernel_attention(
         sliding_window=sliding_window,
         soft_cap=soft_cap,
     )
-    if groups > 1:
-        q_flat = q_flat.reshape(q.shape[0], groups, heads_per_group * q.shape[2], q_flat.shape[-1])
-        pages_padded = pages_padded.reshape(
-            *pages_padded.shape[:2], groups, 2 * heads_per_group, pages_padded.shape[-1]
-        )
-        kernel = jax.vmap(kernel, in_axes=(1, 2, None, None, None, None), out_axes=1)
+    metadata = (
+        jnp.maximum(kv_lens, 0),
+        jnp.maximum(page_indices, 0),
+        cu_q_lens,
+        jnp.maximum(num_seqs, 0).reshape(1),
+    )
     with jax.default_matmul_precision("highest"):
-        output = kernel(
-            q_flat,
-            pages_padded,
-            jnp.maximum(kv_lens, 0),
-            jnp.maximum(page_indices, 0),
-            cu_q_lens,
-            jnp.maximum(num_seqs, 0).reshape(1),
-        )
+        if groups == 1:
+            output = kernel(q_flat, pages_padded, *metadata)
+        else:
+            q_flat = q_flat.reshape(q.shape[0], groups, heads_per_group * q.shape[2], q_flat.shape[-1])
+            pages_padded = pages_padded.reshape(
+                *pages_padded.shape[:2], groups, 2 * heads_per_group, pages_padded.shape[-1]
+            )
+
+            def attend_group(group):
+                # ANY-memory Pallas operands require a whole compact array. vmap
+                # instead adds a sliced block mapping that TPU lowering rejects.
+                return kernel(q_flat[:, group], pages_padded[:, :, group], *metadata)
+
+            output = jax.lax.map(attend_group, jnp.arange(groups)).swapaxes(0, 1)
     output = output.reshape(q_padded.shape)[..., :original_dim].astype(q.dtype)
     valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs).valid
     return jnp.where(valid[:, None, None, None], output, 0)
