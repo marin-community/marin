@@ -23,6 +23,8 @@ from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from haliax import Axis
 from levanter.models.eagle3 import Eagle3Config, Eagle3Draft
 from levanter.testing.helpers import skip_if_no_torch
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 
 
 class _Checkpoint(NamedTuple):
@@ -675,3 +677,130 @@ def test_resident_eagle_stochastic_request_keeps_draws_when_peer_is_cancelled():
         assert interrupted.logprobs[1] == uninterrupted.logprobs[1]
         assert interrupted.tokens[0] == uninterrupted.tokens[0][: len(interrupted.tokens[0])]
         assert 0 < len(interrupted.tokens[0]) < len(uninterrupted.tokens[0])
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(tmp_path, dtype):
+    for dependency in ("fastapi", "openai", "uvicorn"):
+        pytest.importorskip(dependency)
+    from levanter.inference.openai import (  # noqa: PLC0415  # optional serving deps
+        InferenceContext,
+        InferenceServerConfig,
+    )
+
+    hf_config, weights, _ = _checkpoint()
+    trainer = TrainerConfig(
+        mesh=MeshConfig(
+            axes={"data": -1, "model": 1, "expert": 1, "context": 1},
+            dcn_axes={"replica_dcn": -1},
+            shared_mapping={"batch": ["replica_dcn", "data"], "heads": "model", "kv_head": "model"},
+            param_mapping={},
+        ),
+        use_explicit_mesh_axes=True,
+    )
+    config = InferenceEngineConfig(
+        max_seq_len=16,
+        max_seqs=1,
+        max_seqs_in_prefill=1,
+        max_pages=10,
+        page_size=2,
+        max_prefill_size=16,
+        max_tokens_per_round=4,
+        max_queued_tokens=16,
+        max_rounds=1,
+        compute_dtype=dtype,
+        num_eagle3_tokens=3,
+    )
+    request = Request([2, 7, 5], 17, dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(10)), 1)
+    with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
+        target = SnowballLMHeadModel.init(Axis("vocab", 32), _target_config(), key=jax.random.key(13))
+        target = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, target)
+        draft = Eagle3Draft.from_state_dict(
+            Eagle3Config.from_hf_config(hf_config), weights, target_embedding=target.transformer.token_embed
+        )
+        draft = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, draft)
+        engine = InferenceEngine.from_model_with_config(target, None, config, draft=draft)
+        context = InferenceContext(target, None, engine, InferenceServerConfig(trainer=trainer, service=config))
+        old = engine.generate([request])
+        caches = [np.asarray(x).copy() for x in jax.tree.leaves((engine.gen_state.cache, engine.gen_state.eagle3))]
+        assert any(np.any(x) for x in caches)
+        candidate = {name: np.asarray(value) for name, value in draft.trainable_state_dict().items()}
+        candidate["norm.weight"] = -candidate["norm.weight"]
+        incomplete = dict(candidate)
+        del incomplete["fc.weight"]
+        save_file(incomplete, tmp_path / "model.safetensors")
+        with pytest.raises(ValueError, match="tensor mismatch"):
+            context.reload_draft(
+                lambda current: current.with_trainable_checkpoint(tmp_path / "model.safetensors"), expected_version=0
+            )
+        assert context.model_version == 0
+        assert not context.pause_event.is_set()
+        assert engine.draft is draft
+        for actual, before in zip(
+            jax.tree.leaves((engine.gen_state.cache, engine.gen_state.eagle3)), caches, strict=True
+        ):
+            np.testing.assert_array_equal(actual, before)
+        unchanged = engine.generate([request])
+        assert unchanged.tokens == old.tokens
+        np.testing.assert_array_equal(unchanged.logprobs, old.logprobs)
+
+        save_file(candidate, tmp_path / "model.safetensors")
+        context.reload_draft(
+            lambda current: current.with_trainable_checkpoint(tmp_path / "model.safetensors"), expected_version=0
+        )
+        installed = engine.draft
+        assert installed is not None
+        assert context.model_version == 0
+        for value in jax.tree.leaves((engine.gen_state.cache, engine.gen_state.eagle3)):
+            np.testing.assert_array_equal(value, np.zeros_like(value))
+        np.testing.assert_array_equal(installed.embedding, draft.embedding)
+        np.testing.assert_array_equal(installed.lm_head, draft.lm_head)
+        np.testing.assert_array_equal(installed.draft_to_target, draft.draft_to_target)
+        # Actual draft logits change, while verified target behavior remains the same.
+        inputs = jnp.tile(jnp.array([[2, 7]], dtype=jnp.int32), (jax.device_count(), 1))
+        residuals = jnp.ones((jax.device_count(), 2, 48), dtype=dtype)
+        assert not np.array_equal(installed(inputs, residuals).logits, draft(inputs, residuals).logits)
+        updated = engine.generate([request])
+        assert updated.tokens == old.tokens
+        np.testing.assert_allclose(updated.logprobs, old.logprobs, atol=1e-4, rtol=1e-4)
+
+        replacement = eqx.tree_at(
+            lambda model: (model.transformer.token_embed, model.transformer.output_proj),
+            target,
+            (target.transformer.token_embed * 0.5, -target.transformer.output_proj),
+        )
+        assert context.reload(lambda _: replacement, expected_version=0) == 1
+        refreshed = engine.draft
+        assert refreshed is not None
+        np.testing.assert_array_equal(refreshed.embedding, replacement.transformer.token_embed)
+        np.testing.assert_array_equal(
+            refreshed.lm_head, np.asarray(replacement.transformer.output_proj)[:, np.asarray(draft.draft_to_target)]
+        )
+        np.testing.assert_array_equal(refreshed.final_norm.weight, candidate["norm.weight"])
+        for value in jax.tree.leaves((engine.gen_state.cache, engine.gen_state.eagle3)):
+            np.testing.assert_array_equal(value, np.zeros_like(value))
+        new = engine.generate([request])
+        fresh = InferenceEngine.from_model_with_config(replacement, None, config, draft=refreshed).generate([request])
+        assert new.tokens != old.tokens
+        assert new.tokens == fresh.tokens
+        np.testing.assert_array_equal(new.logprobs, fresh.logprobs)
+
+        def stage_across_target_publication(current):
+            staged = current.with_trainable_checkpoint(tmp_path / "model.safetensors")
+            context.reload(lambda _: target, expected_version=1)
+            return staged
+
+        with pytest.raises(ValueError, match="changed while draft weights were staged"):
+            context.reload_draft(stage_across_target_publication, expected_version=1)
+        assert context.model_version == 2
+        np.testing.assert_array_equal(engine.draft.embedding, target.transformer.token_embed)
+        np.testing.assert_array_equal(
+            engine.draft.lm_head, np.asarray(target.transformer.output_proj)[:, np.asarray(draft.draft_to_target)]
+        )
+        after_race = engine.generate([request])
+        race_oracle = InferenceEngine.from_model_with_config(target, None, config, draft=engine.draft).generate(
+            [request]
+        )
+        assert after_race.tokens == old.tokens
+        assert after_race.tokens == race_oracle.tokens
+        np.testing.assert_array_equal(after_race.logprobs, race_oracle.logprobs)
