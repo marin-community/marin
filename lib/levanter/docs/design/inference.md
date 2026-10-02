@@ -291,8 +291,8 @@ history to follow the existing page-sharing and clone lifecycle.
 The routed expert weights alone contain
 `48 × 384 × 3 × 3072² = 521,838,526,464` parameters, or
 1,043,677,052,928 BF16 bytes (0.94921875 TiB), excluding shared experts, trunk,
-embeddings, and serving state. This configuration cannot fit on four or eight
-80 GB H100s in BF16. Tiny fixture results do not establish its memory footprint
+embeddings, and serving state. Those weights exceed the aggregate HBM of four
+or eight 80 GB H100s. Tiny fixture results do not establish its memory footprint
 or serving throughput.
 
 For checkpoint-scale comparisons, set `--model-axis-size` and
