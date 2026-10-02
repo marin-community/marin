@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind the next Atlas coding sources to the existing cleanup converters."""
+"""Adapt archived code-contest and Python-test tasks for curation."""
 
 from collections.abc import Callable
 from dataclasses import replace

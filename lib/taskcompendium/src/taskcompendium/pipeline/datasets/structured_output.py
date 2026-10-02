@@ -18,7 +18,7 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs
+from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -36,13 +36,6 @@ from taskcompendium.verifiers.constraints import JsonSchemaVerifier, required_ob
 
 CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
 DELIVERY = "Write your final JSON to `/app/answer.txt`."
-SCHEMA_MARKERS = (
-    "Strictly follows the provided schema: ",
-    "Response Formatting Schema: ",
-    "Structure your response according to the following JSON schema specification: ",
-    "I'd like you to format your response as a JSON object matching the provided schema: ",
-    "Response format: ",
-)
 RUBRIC = ReviewRubric(
     id="structured-output-contract",
     version="2",
@@ -102,7 +95,7 @@ def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-structured",
         version="tasktrove-structured-v1",
-        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
+        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIG, "train"),
         inputs=tasktrove_inputs(CONFIG, REVISION),
         normalize=normalize,
         rubric=RUBRIC,
@@ -114,27 +107,6 @@ def recipe() -> DatasetRecipe:
             run=verification_report,
         ),
     )
-
-
-def protected_spans(task: TaskSpec) -> dict[str, str]:
-    """Preserve this source's authoritative contract and literal public schema."""
-    event = task.context.events[0]
-    if not isinstance(event, TextMessage):
-        raise ValueError("Structured-output repairs require a text instruction")
-    instruction = event.content
-    contract, separator, _ = instruction.partition("\n---\n")
-    if not instruction.startswith("# Evaluation contract\n") or not separator:
-        raise ValueError("No authoritative any-valid-instance contract was found")
-    for marker in SCHEMA_MARKERS:
-        if marker in instruction:
-            schema_text = instruction.partition(marker)[2]
-            # This template ends in either JSON or a Python dictionary literal.
-            # Preserve its original representation rather than regenerating it.
-            if marker == "Response format: ":
-                return {"evaluation_contract": contract, "public_schema": schema_text}
-            _, end = json.JSONDecoder().raw_decode(schema_text)
-            return {"evaluation_contract": contract, "public_schema": schema_text[:end]}
-    raise ValueError("No recognized public schema marker was found")
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:

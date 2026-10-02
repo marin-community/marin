@@ -15,7 +15,7 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs
+from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -123,7 +123,7 @@ def _recipe(name: str, config: str) -> DatasetRecipe:
     return DatasetRecipe(
         name=name,
         version=f"{name}-v1",
-        source=HFSource("open-thoughts/TaskTrove", REVISION, config, "train"),
+        source=HFSource(TASKTROVE_DATASET, REVISION, config, "train"),
         inputs=tasktrove_inputs(config, REVISION),
         normalize=normalize,
         rubric=RUBRIC,

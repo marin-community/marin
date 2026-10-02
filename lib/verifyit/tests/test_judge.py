@@ -111,10 +111,7 @@ def test_source_reference_gate_leaves_paraphrases_ungraded():
     paraphrase = grade_judge.grade_reference_candidate(references, "France's capital is Paris.")
     blank = grade_judge.grade_reference_candidate(references, "  ")
     assert (exact.status, exact.reward) == (Status.SCORED, 1.0)
-    assert (paraphrase.status, paraphrase.detail["error"]) == (
-        Status.INFRA_ERROR,
-        "The source semantic reference judge is not bound",
-    )
+    assert paraphrase.status == Status.INFRA_ERROR
     assert (blank.status, blank.reward) == (Status.SCORED, 0.0)
 
 

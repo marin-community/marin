@@ -18,7 +18,7 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs
+from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
@@ -148,7 +148,7 @@ def reasoning_recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-reasoning-gym",
         version="tasktrove-reasoning-gym-v1",
-        source=HFSource("open-thoughts/TaskTrove", REVISION, REASONING_CONFIG, "train"),
+        source=HFSource(TASKTROVE_DATASET, REVISION, REASONING_CONFIG, "train"),
         inputs=tasktrove_inputs(REASONING_CONFIG, REVISION),
         normalize=normalize_reasoning,
         rubric=REASONING_RUBRIC,
@@ -161,7 +161,7 @@ def puzzle_recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-puzzles",
         version="tasktrove-puzzles-v1",
-        source=HFSource("open-thoughts/TaskTrove", REVISION, PUZZLE_CONFIG, "train"),
+        source=HFSource(TASKTROVE_DATASET, REVISION, PUZZLE_CONFIG, "train"),
         inputs=tasktrove_inputs(PUZZLE_CONFIG, REVISION),
         normalize=normalize_puzzle,
         rubric=PUZZLE_RUBRIC,

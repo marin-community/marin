@@ -29,7 +29,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
 from taskcompendium.pipeline.datasets.shell_files import BASH
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs
+from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -42,7 +42,7 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
-from taskcompendium.runtime.shell import ShellFactory
+from taskcompendium.runtime.shell import INTERFACE, ShellFactory
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier, grade_submission
 
 CONFIGS = {
@@ -119,9 +119,9 @@ def normalize(row: RawRow, image: str, timeout: float, memory_mb: int) -> TaskSp
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
-            capabilities=("shell", "filesystem"), action_interfaces=("shell:v1",)
+            capabilities=("shell", "filesystem"), action_interfaces=(INTERFACE,)
         ),
-        fixture=EnvironmentFixture(interface="shell:v1", revision="1", initial_state_json="{}"),
+        fixture=EnvironmentFixture(interface=INTERFACE, revision="1", initial_state_json="{}"),
         interaction_tools=(BASH,),
         resources=tuple(resources),
         output_paths=paths,
@@ -147,7 +147,7 @@ def recipe(
     source_recipe = DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
-        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIGS[name], "train"),
+        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIGS[name], "train"),
         normalize=normalize_row,
         rubric=ReviewRubric(
             id=f"{name}-answerability",

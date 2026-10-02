@@ -22,7 +22,7 @@ from taskcompendium.models import (
     task_resource,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs, tasktrove_source
+from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -203,7 +203,7 @@ def recipe(name: str, *, rubric: ReviewRubric) -> DatasetRecipe:
     return DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
-        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIGS[name], "train"),
+        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIGS[name], "train"),
         inputs=tasktrove_inputs(CONFIGS[name], REVISION),
         normalize=normalize_row,
         rubric=rubric,

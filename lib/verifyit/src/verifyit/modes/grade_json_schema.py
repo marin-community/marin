@@ -66,29 +66,16 @@ def parse_candidate(text: str, candidate_format: SchemaFormat) -> Any:
 
 def grade_json_schema_candidate(schema: dict[str, Any], candidate_format: SchemaFormat, text: str) -> Reward:
     """Score a chat document against its already validated private schema."""
+    return scored(_score_document(schema, candidate_format, text).reward)
+
+
+def _score_document(schema: dict[str, Any], candidate_format: SchemaFormat, text: str) -> Reward:
     try:
         instance = parse_candidate(unwrap_fence(text), candidate_format)
-    except (ValueError, yaml.YAMLError):
-        return scored(0.0)
-    validator_class = validator_for(schema)
-    # pyrefly: ignore[bad-instantiation, missing-argument]  # jsonschema types the concrete class as a protocol.
-    validator = validator_class(schema)
-    return scored(float(validator.is_valid(instance)))
-
-
-def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
-    schema = load_schema(tests_dir / spec.schema)
-    text = read_output(spec, workspace)
-    if text is None:
-        return scored(0.0, reason="no_output")
-    try:
-        instance = parse_candidate(unwrap_fence(text), spec.format)
     except (ValueError, yaml.YAMLError) as error:
         return scored(0.0, reason="parse_error", error=str(error))
-
     validator_class = validator_for(schema)
-    # pyrefly: ignore[bad-instantiation, missing-argument]  # validator_for returns a concrete
-    # validator class; jsonschema types it as the Validator protocol.
+    # pyrefly: ignore[bad-instantiation, missing-argument]  # validator_for returns a concrete class.
     validator = validator_class(schema)
     errors = sorted(validator.iter_errors(instance), key=lambda error: [str(part) for part in error.path])
     if not errors:
@@ -101,3 +88,11 @@ def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
         path="/".join(str(part) for part in first.path),
         error=first.message,
     )
+
+
+def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
+    schema = load_schema(tests_dir / spec.schema)
+    text = read_output(spec, workspace)
+    if text is None:
+        return scored(0.0, reason="no_output")
+    return _score_document(schema, spec.format, text)

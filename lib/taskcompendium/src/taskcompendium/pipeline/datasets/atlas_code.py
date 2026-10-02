@@ -7,7 +7,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets.executable_tasks import REVISION, normalize
 from taskcompendium.pipeline.datasets.executable_tasks import verification_report as executable_verification_report
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs, tasktrove_source
+from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -61,7 +61,7 @@ def recipe(
     source_recipe = DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
-        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIGS[name], "train"),
+        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIGS[name], "train"),
         normalize=normalize_row,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,

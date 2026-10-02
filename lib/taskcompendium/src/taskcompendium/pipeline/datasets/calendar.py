@@ -31,6 +31,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
+from taskcompendium.runtime.calendar import INTERFACE
 from taskcompendium.verifiers.runtime import CalendarState, CalendarStateVerifier
 
 TOOLS = (
@@ -86,9 +87,9 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return TaskSpec(
         id=row.id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
-        environment_requirements=EnvironmentRequirements(action_interfaces=("calendar:v1",)),
+        environment_requirements=EnvironmentRequirements(action_interfaces=(INTERFACE,)),
         interaction_tools=TOOLS,
-        fixture=EnvironmentFixture(interface="calendar:v1", revision="1", initial_state_json=state.model_dump_json()),
+        fixture=EnvironmentFixture(interface=INTERFACE, revision="1", initial_state_json=state.model_dump_json()),
         answer_type=AnswerType.STATE,
         verifier=VerifierSpec(kind=VerifierKind.CALENDAR_STATE, parameters_json=verifier.model_dump_json()),
         source=row.source,

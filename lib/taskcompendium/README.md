@@ -1,25 +1,23 @@
 # TaskCompendium
 
-The bounded [task curation pipeline](../../docs/references/task-curation.md)
-normalizes pinned HF, generated and snapshot samples, exercises shared graders, applies
-dataset-specific review rubrics, and records filtering evidence. Runs
-write `audit.parquet` with every input and its reasons, review evidence and cleanup
-history, then export the accepted subset to `accepted.parquet`. Dataset recipes
-live in `src/taskcompendium/pipeline/datasets/`; the Marin launcher supplies the
-existing GLM bulk transport without adding a Marin dependency to this package.
-The ten-source exercise reuses TaskTrove converters for executable tasks and
-adds actual scheduling, puzzle, Reasoning Gym and open QA contracts. Native
-Parquet columns retain normalization edits, sample partitions and source locators.
-Filtering ends in keep/reject. Confidence and grader readiness are retained
-separately; an unbound open-QA judge does not block static quality assessment.
-The next ten sources have individual recipe/rubric files with shared code,
-math/QA and ARC/injection normalization helpers.
+The [task curation pipeline](../../docs/references/task-curation.md) downloads
+pinned sources, normalizes tasks, runs grading checks and GLM review, then writes
+final filtering decisions to sharded Parquet. Its audit view retains every input,
+source locator, normalization edit and rejection reason. Accepted tasks are also
+published in training, evaluation and executable views.
+
+Recipe families live in `src/taskcompendium/pipeline/datasets/`. Each recipe
+declares its inputs, normalization and rubric; the experiment supplies download
+artifacts and inference clients. Scoring rules live in [VerifyIT](../verifyit/README.md).
+Taskcompendium adapts submissions and captured state to those scorers. Confidence,
+quality and grader readiness are separate: an unbound semantic judge does not
+prevent static quality review.
 
 ## What problem does it solve?
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through a private verifier registry. The curation pipeline runs file and state tasks through Shellbox and calendar episodes. Harbor export still supports only direct chat; executable episodes use the separate TaskCompendium runtime.
+The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through a private verifier registry. Executable curation checks use Shellbox; a separate calendar prototype exercises stateful episodes. Harbor export still supports only direct chat; executable episodes use the separate TaskCompendium runtime.
 
 ## What does it contain?
 

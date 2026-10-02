@@ -46,6 +46,7 @@ def parse_time(value: object) -> int | None:
 
 
 def _clock_minutes(hour: str, minute: str | None, ampm: str | None) -> int | None:
+    """Return valid clock time as minutes after midnight, or None."""
     h, m = int(hour), int(minute or 0)
     if not (0 <= m <= 59):
         return None

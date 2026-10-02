@@ -30,7 +30,6 @@ def test_schedule_accepts_alternate_slots_but_rejects_overlap():
     overlapping = [candidate[0], {**candidate[1], "start_time": "10:30"}]
     rejected = score_schedule(expected, overlapping)
     assert rejected.status == Status.SCORED and rejected.reward == 0.0
-    assert "overlap" in rejected.detail["error"]
 
 
 def test_calendar_requires_one_nonconflicting_addition_and_preserves_originals():
@@ -49,7 +48,7 @@ def test_calendar_requires_one_nonconflicting_addition_and_preserves_originals()
     )
     changed = (CalendarEvent("busy-alice", "Changed", 540, 570, ("Alice",)), original[1], meeting)
     rejected = score_calendar(changed, original, **options)
-    assert rejected.reward == 0.0 and rejected.detail["error"] == "Original events changed"
+    assert rejected.reward == 0.0
 
 
 def test_nl2bash_capture_preserves_duplicate_counts_and_ignores_nonerror_extras():

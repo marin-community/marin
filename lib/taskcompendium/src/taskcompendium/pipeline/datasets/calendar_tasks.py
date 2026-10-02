@@ -20,7 +20,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.reasoning_tasks import snapshot_file
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs
+from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -113,7 +113,7 @@ def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-calendar",
         version="tasktrove-calendar-v1",
-        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
+        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIG, "train"),
         inputs=tasktrove_inputs(CONFIG, REVISION),
         normalize=normalize,
         rubric=RUBRIC,

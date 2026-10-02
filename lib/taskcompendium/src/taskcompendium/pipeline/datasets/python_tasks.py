@@ -13,7 +13,7 @@ from taskcompendium.models import ConversationInput, TextMessage, VerifierSpec
 from taskcompendium.pipeline.datasets.executable_tasks import normalize, verification_report
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
-from taskcompendium.pipeline.datasets.source_definitions import tasktrove_inputs, tasktrove_source
+from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
@@ -131,7 +131,7 @@ def recipe(
     source_recipe = DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
-        source=HFSource("open-thoughts/TaskTrove", revision, config, "train"),
+        source=HFSource(TASKTROVE_DATASET, revision, config, "train"),
         normalize=normalize_row,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,
