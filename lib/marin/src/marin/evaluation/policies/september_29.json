@@ -603,8 +603,8 @@
   "harbor": {
     "bfclparity-pi": {
       "sources": {
-        "standard": "sha256:9ac8e6153d9660a50de77e100669bae723728a22cbcbc804a40265c3323932c6",
-        "native32k": "sha256:9ac8e6153d9660a50de77e100669bae723728a22cbcbc804a40265c3323932c6"
+        "standard": "sha256:7eb3c555e8635ff19d962cc99fa28e613aa774175008156b57b0e28cff0eae49",
+        "native32k": "sha256:7eb3c555e8635ff19d962cc99fa28e613aa774175008156b57b0e28cff0eae49"
       },
       "model_info": {
         "max_input_tokens": 32768
