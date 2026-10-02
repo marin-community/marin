@@ -1010,7 +1010,7 @@ def _chat_token_logprobs(
             ChatCompletionTokenLogprob(
                 token=token,
                 logprob=float(logprob),
-                bytes=list(token.encode("utf-8")),
+                bytes=list(tokenizer.decode([token_id], skip_special_tokens=False).encode("utf-8", errors="replace")),
                 top_logprobs=(
                     [
                         TopLogprob(
@@ -1020,7 +1020,11 @@ def _chat_token_logprobs(
                                 else tokenizer.convert_ids_to_tokens(candidate)
                             ),
                             logprob=max(score, -9999.0),
-                            bytes=list(tokenizer.convert_ids_to_tokens(candidate).encode("utf-8")),
+                            bytes=list(
+                                tokenizer.decode([candidate], skip_special_tokens=False).encode(
+                                    "utf-8", errors="replace"
+                                )
+                            ),
                         )
                         for candidate, score in zip(
                             top_token_ids[index][:top_k], top_logprobs[index][:top_k], strict=True
