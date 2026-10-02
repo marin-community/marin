@@ -32,6 +32,7 @@ def ragged_paged_attention(
     sliding_window: int | None = None,
     soft_cap: float | None = None,
     implementation: PagedAttentionImplementation | None = None,
+    tpu_dma_buffers: int = 1,
 ) -> jax.Array:
     """Attend to cached prefixes and new tokens in a mixed prefill/decode batch.
 
@@ -45,6 +46,7 @@ def ragged_paged_attention(
         sm_scale: Query/key logit multiplier.
         sliding_window: Number of visible tokens, including the query itself.
         soft_cap: Optional tanh logit cap, applied before masking.
+        tpu_dma_buffers: One serial or two overlapping page DMA buffers for TPU decode.
         implementation: TPU Pallas or portable reference; defaults to TPU on TPU.
 
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
@@ -65,7 +67,11 @@ def ragged_paged_attention(
     if q.ndim != 4 or kv_pages.ndim != 4 or kv_pages.shape[2:] != (2 * q.shape[1], q.shape[3]):
         raise ValueError("Expected grouped queries and interleaved KV pages with matching heads and head_dim")
 
-    backend = {"tpu": _tpu_attention, "tpu_fp32_tiles": _tpu_decode_attention, "reference": _reference_attention}
+    backend = {
+        "tpu": _tpu_attention,
+        "tpu_fp32_tiles": partial(_tpu_decode_attention, dma_buffers=tpu_dma_buffers),
+        "reference": _reference_attention,
+    }
     fn = partial(
         backend[implementation],
         sm_scale=sm_scale,
@@ -239,7 +245,7 @@ def _tpu_kernel_attention(
 
 
 def _tpu_decode_attention(
-    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap
+    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap, dma_buffers
 ):
     reference = partial(
         _reference_attention,
@@ -269,6 +275,6 @@ def _tpu_decode_attention(
     decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
     return jax.lax.cond(
         decode_only,
-        lambda: tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale),
+        lambda: tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale, dma_buffers=dma_buffers),
         reference,
     )
