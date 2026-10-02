@@ -15,11 +15,13 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from rigging.provenance import launch_provenance
 
 from levanter.grug.attention import ragged_paged_attention
 
 WARMUP_STEPS = 3
+MAX_ERROR_EXAMPLES = 8
 TPU_RPA_MODULE = "tpu_inference.kernels.ragged_paged_attention.v3.kernel"
 
 
@@ -45,6 +47,23 @@ def _measure_jax(fn, inputs, repeats):
         compiled(*inputs).block_until_ready()
         times.append(time.perf_counter() - start)
     return _JaxMeasurements(output, compile_time, first_run_time, statistics.median(times))
+
+
+def _error_metrics(actual, expected):
+    actual = np.asarray(actual, dtype=np.float32)
+    expected = np.asarray(expected, dtype=np.float32)
+    difference = np.abs(actual - expected)
+    outside = difference > 1e-4 + 1e-4 * np.abs(expected)
+    return {
+        "max_abs": float(difference.max()),
+        "mean_abs": float(difference.mean()),
+        "elements_outside_atol_rtol_1e4": int(outside.sum()),
+        "elements": actual.size,
+        "mismatch_examples": [
+            {"index": index.tolist(), "actual": float(actual[tuple(index)]), "expected": float(expected[tuple(index)])}
+            for index in np.argwhere(outside)[:MAX_ERROR_EXAMPLES]
+        ],
+    }
 
 
 def main():
@@ -110,14 +129,20 @@ def main():
                 implementation="reference",
             )
         )(*inputs)
-        difference = jnp.abs(actual.astype(jnp.float32) - reference.astype(jnp.float32))
-        tolerance = 1e-4 + 1e-4 * jnp.abs(reference.astype(jnp.float32))
-        error = {
-            "max_abs_vs_reference": float(difference.max()),
-            "mean_abs_vs_reference": float(difference.mean()),
-            "elements_outside_atol_rtol_1e4": int(jnp.sum(difference > tolerance)),
-            "elements": actual.size,
-        }
+        error = {"vs_reference": _error_metrics(actual, reference)}
+        if args.implementation in ("gpu_pallas", "gpu_pallas_bf16_3x") and args.av_precision == "bf16_3x":
+            ieee = jax.jit(
+                partial(
+                    ragged_paged_attention,
+                    sm_scale=args.head_dim**-0.5,
+                    sliding_window=args.window,
+                    implementation="gpu_pallas",
+                    gpu_kv_splits=args.kv_splits,
+                    gpu_av_precision="ieee",
+                )
+            )(*inputs)
+            error["ieee_vs_reference"] = _error_metrics(ieee, reference)
+            error["vs_ieee"] = _error_metrics(actual, ieee)
     device_profile = None
     if args.profile_device:
         profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
