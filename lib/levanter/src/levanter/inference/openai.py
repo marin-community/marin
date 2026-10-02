@@ -72,6 +72,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_NAME = "levanter"
 TOKEN_ID_PREFIX = "token_id:"
+FILTERED_LOGPROB_FLOOR = -9999.0
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset(
     {"add_generation_prompt", "continue_final_message", "chat_template", "return_dict", "tokenize"}
 )
@@ -638,7 +639,7 @@ def _rollout_top_logprobs(
                 f"{TOKEN_ID_PREFIX}{token}"
                 if return_tokens_as_token_ids
                 else cast(str, tokenizer.convert_ids_to_tokens(token))
-            ): max(score, -9999.0)
+            ): max(score, FILTERED_LOGPROB_FLOOR)
             for token, score in zip(ids[:count], scores[:count], strict=True)
         }
         for ids, scores in zip(token_ids, logprobs, strict=True)
@@ -1019,7 +1020,7 @@ def _chat_token_logprobs(
                                 if return_tokens_as_token_ids
                                 else tokenizer.convert_ids_to_tokens(candidate)
                             ),
-                            logprob=max(score, -9999.0),
+                            logprob=max(score, FILTERED_LOGPROB_FLOOR),
                             bytes=list(
                                 tokenizer.decode([candidate], skip_special_tokens=False).encode(
                                     "utf-8", errors="replace"
