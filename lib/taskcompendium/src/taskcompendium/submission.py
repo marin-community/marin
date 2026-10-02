@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from tasktrove_verify.spec import Mode
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.models import (
@@ -18,6 +19,7 @@ from taskcompendium.models import (
     ConversationEvent,
     ConversationInput,
     ConversationTrace,
+    FunctionDefinition,
     TaskSpec,
     TextMessage,
     format_conversation,
@@ -25,6 +27,25 @@ from taskcompendium.models import (
 
 ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
+EJECT_CALL_NAME = "eject_button"
+EJECT_REASON_FIELD = "reason"
+
+
+def eject_button() -> FunctionDefinition:
+    """Return the optional terminal tool, independent of task solvability."""
+    return FunctionDefinition(
+        name=EJECT_CALL_NAME,
+        description=(
+            "End the interaction if the task cannot be solved or completing it would break guidelines. "
+            "Provide a nonempty string reason."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {EJECT_REASON_FIELD: {"type": "string"}},
+            "required": [EJECT_REASON_FIELD],
+            "additionalProperties": False,
+        },
+    )
 
 
 def answer_call_tool() -> dict[str, object]:
@@ -79,6 +100,16 @@ class StateSubmission:
 type Submission = TextSubmission | ActionSubmission | StateSubmission
 
 
+def is_ejection(submission: Submission) -> bool:
+    """Whether a submitted action is the sole terminal ejection call."""
+    return (
+        isinstance(submission, ActionSubmission)
+        and isinstance(submission.message, AssistantToolCalls)
+        and len(submission.message.calls) == 1
+        and submission.message.calls[0].name == EJECT_CALL_NAME
+    )
+
+
 class SubmissionFailure(ValueError):
     """The agent ended the interaction without a valid submission."""
 
@@ -105,7 +136,7 @@ class Convention(BaseModel, ABC):
 
     @abstractmethod
     async def extract(self, attempt: GradingAttempt) -> Submission:
-        """Read the agent's submission without access to expected values."""
+        """Read the normal submission without access to expected values."""
 
 
 class PlainText(Convention):
@@ -153,11 +184,27 @@ class AnswerCall(Convention):
         return TextSubmission(arguments[ANSWER_FIELD])
 
 
+TextConvention = Annotated[PlainText | JsonAnswer | AnswerCall, Field(discriminator="answer_format")]
+
+
 class FinalAction(Convention):
     answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
 
     require_call: bool = False
     max_calls: int | None = Field(default=None, gt=0)
+
+    normal_submission: TextConvention | None = None
+
+    @model_validator(mode="after")
+    def validate_normal_submission(self) -> Self:
+        if self.normal_submission is not None and (self.require_call or self.max_calls is not None):
+            raise ValueError("Normal presentation owns answer constraints")
+        return self
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        if self.normal_submission is not None:
+            return self.normal_submission.supports(answer_type)
+        return super().supports(answer_type)
 
     def validate_final_message(self, response: ConversationEvent) -> TextMessage | AssistantToolCalls:
         """Require the assistant's final message to honor the call contract."""
@@ -180,6 +227,23 @@ class FinalAction(Convention):
 
 
 SubmissionConvention = Annotated[PlainText | JsonAnswer | AnswerCall | FinalAction, Field(discriminator="answer_format")]
+
+
+async def extract_submission(convention: SubmissionConvention, attempt: GradingAttempt) -> Submission:
+    """Dispatch a terminal choice without expected answers or solvability labels."""
+    final = attempt.conversation.events[-1]
+    if not isinstance(final, AssistantToolCalls) or not any(call.name == EJECT_CALL_NAME for call in final.calls):
+        return await convention.extract(attempt)
+    if len(final.calls) != 1:
+        raise SubmissionFailure("Ejection requires a single terminal call")
+    arguments = final.calls[0].arguments
+    if (
+        set(arguments) != {EJECT_REASON_FIELD}
+        or not isinstance(arguments[EJECT_REASON_FIELD], str)
+        or not arguments[EJECT_REASON_FIELD].strip()
+    ):
+        raise SubmissionFailure("Ejection requires a nonempty string reason")
+    return ActionSubmission(final)
 
 
 def _text_answer(response: ConversationEvent) -> str:
@@ -205,12 +269,18 @@ def submission_compatibility(specification: TaskSpec, convention: SubmissionConv
         return SubmissionCompatibility(
             (f"{convention.answer_format.value} cannot carry {specification.answer_type.value}",)
         )
-    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+    if specification.verifier.kind == Mode.UNSOLVABLE and (
+        not isinstance(convention, FinalAction)
+        or not any(function.name == EJECT_CALL_NAME for function in specification.final_tools)
+    ):
+        return SubmissionCompatibility(("unsolvable tasks require final_action with ejection enabled",))
+    visible = visible_convention(convention)
+    if visible.answer_format == AnswerFormat.FINAL_ACTION:
         reasons = []
         if not specification.final_tools:
             reasons.append("final action requires at least one final tool")
         return SubmissionCompatibility(tuple(reasons))
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+    if visible.answer_format == AnswerFormat.ANSWER_CALL:
         reasons = []
         if any(function.name == ANSWER_CALL_NAME for function in specification.final_tools):
             reasons.append("final tool name collides with submit_answer")
@@ -218,7 +288,18 @@ def submission_compatibility(specification: TaskSpec, convention: SubmissionConv
     return SubmissionCompatibility(())
 
 
+def visible_convention(convention: SubmissionConvention) -> SubmissionConvention:
+    """Return the normal answer presentation, independent of private task labels."""
+    if isinstance(convention, FinalAction) and convention.normal_submission is not None:
+        return convention.normal_submission
+    return convention
+
+
 def submission_instruction(convention: SubmissionConvention) -> str:
+    return _normal_submission_instruction(visible_convention(convention))
+
+
+def _normal_submission_instruction(convention: SubmissionConvention) -> str:
     """Return the instruction added after a conversation prefix."""
     if convention.answer_format == AnswerFormat.PLAIN:
         return "Give your answer as plain text."
@@ -237,9 +318,10 @@ def render_instruction(specification: TaskSpec, convention: SubmissionConvention
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention {convention.id!r} is incompatible: {'; '.join(compatibility.reasons)}")
-    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+    instruction = submission_instruction(convention)
+    if not instruction:
         return format_conversation(context.events)
-    return f"{format_conversation(context.events)}\n\n{submission_instruction(convention)}\n"
+    return f"{format_conversation(context.events)}\n\n{instruction}\n"
 
 
 def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
@@ -288,14 +370,15 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
         {"type": "function", "function": function.model_dump(exclude_none=True)}
         for function in specification.final_tools
     ]
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+    visible = visible_convention(convention)
+    if visible.answer_format == AnswerFormat.ANSWER_CALL:
         tools.append(answer_call_tool())
         request.update(tool_choice="required", parallel_tool_calls=False)
     if tools:
         request["tools"] = tools
-    if isinstance(convention, FinalAction):
-        if convention.require_call:
+    if isinstance(visible, FinalAction):
+        if visible.require_call:
             request["tool_choice"] = "required"
-        if convention.max_calls == 1:
+        if visible.max_calls == 1:
             request["parallel_tool_calls"] = False
     return request

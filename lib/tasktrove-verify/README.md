@@ -22,6 +22,7 @@ process exit after a verdict has been written.
 
 | mode | contract |
 |---|---|
+| `unsolvable` | private confirmed-unsolvable label; acquired terminal candidates only, with no filesystem grader |
 | `structured_exact` | exact JSON values with distinct scalar types and ordered arrays |
 | `predicted_action` | unordered function calls with exact JSON types and optional float tolerance |
 | `mcq` | expected option letter |
@@ -62,6 +63,14 @@ all calls to match one to one. Argument objects stay decoded in JSON descriptors
 encodes each argument object and each structured reference as a JSON string in TOML so nested
 JSON null values survive `parse_spec`. Structured references must contain finite JSON values;
 invalid references omit reward files instead of receiving a zero.
+
+`UnsolvableSpec` carries an explicit private classification. A caller first validates
+and acquires a sole terminal ejection, then `grade_ejection_candidate(spec)` returns
+one for that spec and zero for ordinary candidate specs. Normal answer candidates
+receive zero for an unsolvable spec. The scorer receives no reason text, source
+problem, or workspace evidence. Unsupported runtimes, missing evidence, and grader
+errors do not establish unsolvability; filesystem dispatch for this mode raises
+`NotImplementedError`.
 
 ## Install and use
 

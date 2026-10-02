@@ -8,7 +8,7 @@ Callers own submission extraction. These graders neither read files nor inspect 
 
 from typing import Any
 
-from tasktrove_verify.grade import InvalidTask, Reward, numeric_tolerance
+from tasktrove_verify.grade import InvalidTask, Reward, numeric_tolerance, scored
 from tasktrove_verify.modes.grade_exact import grade_exact_candidate
 from tasktrove_verify.modes.grade_math import grade_numeric_candidate
 from tasktrove_verify.modes.grade_mcq import grade_mcq_candidate
@@ -21,15 +21,16 @@ from tasktrove_verify.spec import (
     NumericSpec,
     PredictedActionSpec,
     StructuredExactSpec,
+    UnsolvableSpec,
     spec_from_table,
 )
 
-TextSpec = ExactSpec | NumericSpec | McqSpec
+TextSpec = ExactSpec | NumericSpec | McqSpec | UnsolvableSpec
 CandidateSpec = TextSpec | PredictedActionSpec | StructuredExactSpec
 
 
 def supports_candidate_mode(mode: str) -> bool:
-    return mode in (Mode.EXACT, Mode.NUMERIC, Mode.MCQ, Mode.PREDICTED_ACTION, Mode.STRUCTURED_EXACT)
+    return mode in (Mode.EXACT, Mode.NUMERIC, Mode.MCQ, Mode.PREDICTED_ACTION, Mode.STRUCTURED_EXACT, Mode.UNSOLVABLE)
 
 
 def candidate_spec(mode: str, parameters: dict[str, Any]) -> CandidateSpec:
@@ -49,6 +50,8 @@ def candidate_spec(mode: str, parameters: dict[str, Any]) -> CandidateSpec:
     if isinstance(spec, McqSpec):
         grade_mcq_candidate(spec, spec.expected)
         return spec
+    if isinstance(spec, UnsolvableSpec):
+        return spec
     if isinstance(spec, StructuredExactSpec):
         validate_structured_exact(spec)
         return spec
@@ -59,6 +62,8 @@ def candidate_spec(mode: str, parameters: dict[str, Any]) -> CandidateSpec:
 
 def grade_text_candidate(spec: TextSpec, candidate: str) -> Reward:
     """Score text whose presentation has already been removed by the caller."""
+    if isinstance(spec, UnsolvableSpec):
+        return scored(0.0)
     if isinstance(spec, ExactSpec):
         return grade_exact_candidate(spec, candidate)
     if isinstance(spec, McqSpec):
@@ -68,3 +73,8 @@ def grade_text_candidate(spec: TextSpec, candidate: str) -> Reward:
     except ValueError:
         value = float("nan")
     return grade_numeric_candidate(spec, value)
+
+
+def grade_ejection_candidate(spec: CandidateSpec) -> Reward:
+    """Score a validated terminal ejection using only private task classification."""
+    return scored(float(isinstance(spec, UnsolvableSpec)))
