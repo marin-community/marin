@@ -11,6 +11,7 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention
+from levanter.grug.attention._paged_tpu import _exp_nonpositive, tpu_paged_decode
 
 
 class _PagedCase(NamedTuple):
@@ -107,10 +108,20 @@ def test_grug_tpu_paged_attention_matches_dense(window, runtime_scale, dtype, im
 @pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
 @pytest.mark.parametrize("heads,groups", [(3, 4), (5, 1), (5, 4), (6, 8), (12, 4)])
 def test_grug_tpu_bf16_unaligned_heads_match_float64(heads, groups):
+    args = _unaligned_head_case(heads, groups)
+    q = args.q
+    actual = jax.jit(
+        partial(ragged_paged_attention, sm_scale=128**-0.5, sliding_window=17, implementation="tpu_fp32_tiles")
+    )(*args)
+    expected = _dense_oracle(args, 17, None, 128**-0.5).astype(np.asarray(q).dtype)
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
+
+
+def _unaligned_head_case(heads, groups):
     rng = np.random.default_rng(38)
     q = jnp.asarray(rng.normal(size=(2, heads, groups, 128)), jnp.bfloat16)
     pages = jnp.asarray(rng.normal(size=(7, 16, 2 * heads, 128)), jnp.bfloat16)
-    args = _PagedCase(
+    return _PagedCase(
         q,
         pages,
         jnp.array([37, 18], jnp.int32),
@@ -118,8 +129,27 @@ def test_grug_tpu_bf16_unaligned_heads_match_float64(heads, groups):
         jnp.array([0, 1, 2], jnp.int32),
         jnp.array(2, jnp.int32),
     )
-    actual = jax.jit(
-        partial(ragged_paged_attention, sm_scale=128**-0.5, sliding_window=17, implementation="tpu_fp32_tiles")
-    )(*args)
-    expected = _dense_oracle(args, 17, None, 128**-0.5).astype(np.asarray(q).dtype)
-    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
+
+
+def test_tpu_decode_interpreter_matches_float64():
+    with jax.default_device(jax.devices("cpu")[0]):
+        args = _unaligned_head_case(5, 4)
+        bounds = jnp.array([[20, 37], [1, 18]], jnp.int32)
+        fn = jax.jit(partial(tpu_paged_decode, interpret=True))
+        actual = fn(args.q, args.kv_pages, args.page_indices, bounds, 128**-0.5)
+        expected = _dense_oracle(args, 17, None, 128**-0.5).astype(np.asarray(args.q).dtype)
+        np.testing.assert_allclose(
+            np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4
+        )
+        empty = fn(args.q, args.kv_pages, args.page_indices, jnp.zeros_like(bounds), 128**-0.5)
+        np.testing.assert_array_equal(empty, 0)
+
+
+def test_tpu_softmax_exp_matches_float64():
+    # Include exponent range-reduction boundaries as well as the softmax range.
+    values = np.concatenate((np.linspace(-87, 0, 10001), (np.arange(-125, 0) + 0.5) * np.log(2))).astype(np.float32)
+    with jax.default_device(jax.devices("cpu")[0]):
+        actual = jax.jit(_exp_nonpositive)(values)
+        masked = jax.jit(_exp_nonpositive)(jnp.array([-jnp.inf, -100.0, 0.0], jnp.float32))
+    np.testing.assert_allclose(actual, np.exp(values.astype(np.float64)), atol=0, rtol=1e-7)
+    np.testing.assert_array_equal(masked, [0, 0, 1])
