@@ -57,7 +57,7 @@ class StateAnswer(Convention):
     answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
     value: JsonValue
 
-    async def extract(self, attempt: GradingAttempt) -> StateSubmission:
+    async def extract(self, _attempt: GradingAttempt) -> StateSubmission:
         return StateSubmission(self.value)
 
 
@@ -80,7 +80,7 @@ class ChangingText(PlainText):
     answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
     _submitted: bool = PrivateAttr(default=False)
 
-    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+    async def extract(self, _attempt: GradingAttempt) -> TextSubmission:
         value = "different" if self._submitted else "first"
         self._submitted = True
         return TextSubmission(value)
