@@ -501,7 +501,11 @@ The comparison requires the same TPU allocation, native data=N/EP1/TP1 and
 vLLM SPMD data=N/EP1/TP1. Reports retain the runtime pins, discovered devices,
 effective sharding, and package versions. `enforce_eager` disables vLLM's Torch
 compilation path; TPU execution still uses JAX compilation. This is a prepared
-full-model correctness gate, not a measured TPU throughput result.
+full-model correctness gate, not a measured TPU throughput result. The pinned
+Torchax MoE currently bypasses Grug's custom router in its monolithic kernel
+path; a custom-routing bridge is required before this gate can establish
+architecture parity. The native JAX Grug fallback also lacks the current
+combine-weight normalization and is not an equivalent baseline.
 
 Hero remains unsupported by this pinned TPU fixture. The vLLM fork at
 `70ea9ae8f2601f06d820ee9d70e3afbdc52683b1` parses schema-v2 Hero, but its
