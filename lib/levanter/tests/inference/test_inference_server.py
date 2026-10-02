@@ -337,6 +337,10 @@ class _DeterministicCompletionScoringModel(eqx.Module):
         return hax.named(logits, (Pos, self.Vocab))
 
 
+def _sse_chunks(text: str) -> list[dict]:
+    return [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: ") and line != "data: [DONE]"]
+
+
 class _FakeCompletionContext:
     def __init__(self, max_seq_len: int = 4096):
         self.config = InferenceServerConfig(service=InferenceEngineConfig(max_seq_len=max_seq_len))
@@ -796,7 +800,7 @@ def test_chat_exact_token_continuation_matches_uninterrupted_decode(exact_token_
     assert prefix["logprobs"]["content"] + suffix["logprobs"]["content"] == expected["logprobs"]["content"]
     assert suffix["finish_reason"] == expected["finish_reason"] == "length"
     streamed = exact_token_client.post("/v1/chat/completions", json={**body, "stream": True})
-    chunks = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+    chunks = _sse_chunks(streamed.text)
     assert chunks[0]["prompt_token_ids"] == full["prompt_token_ids"]
     assert chunks[0]["choices"][0]["token_ids"] == expected["token_ids"]
     assert chunks[-1]["choices"][0]["finish_reason"] == "length"
@@ -901,11 +905,7 @@ def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
             response = pending.result(timeout=30)
             assert response.status_code == 200, response.text
             if stream:
-                chunks = [
-                    json.loads(line[6:])
-                    for line in response.text.splitlines()
-                    if line.startswith("data: ") and line != "data: [DONE]"
-                ]
+                chunks = _sse_chunks(response.text)
                 content = chunks[0]
                 finish_reason = chunks[-1]["choices"][0]["finish_reason"]
             else:
@@ -1030,11 +1030,7 @@ def test_weight_publication_stages_before_install_and_preserves_failed_version()
             }
             assert client.post("/v1/chat/completions", json=chat_request).json()["model_version"] == 2
             streamed = client.post("/v1/chat/completions", json={**chat_request, "stream": True})
-            chunks = [
-                json.loads(line[6:])
-                for line in streamed.text.splitlines()
-                if line.startswith("data: ") and line != "data: [DONE]"
-            ]
+            chunks = _sse_chunks(streamed.text)
             assert all(chunk["model_version"] == 2 for chunk in chunks)
     finally:
         server.inference_context.shutdown()
@@ -1086,11 +1082,7 @@ def test_individual_http_abort_preserves_peer_and_exact_continuation(stream):
                 survivor_response = survivor.result(timeout=30)
                 assert cancelled_response.status_code == survivor_response.status_code == 200
                 if stream:
-                    chunks = [
-                        json.loads(line[6:])
-                        for line in cancelled_response.text.splitlines()
-                        if line.startswith("data: ") and line != "data: [DONE]"
-                    ]
+                    chunks = _sse_chunks(cancelled_response.text)
                     partial = chunks[0]["choices"][0]
                     assert chunks[-1]["choices"][0]["finish_reason"] == "abort"
                 else:
