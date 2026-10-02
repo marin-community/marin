@@ -88,6 +88,21 @@ class _ExpertMlp(Protocol):
         active_group_sizes: Int[Array, "Echunk"],
     ) -> tuple[Float[Array, "C H"], tuple[jax.Array, ...]]: ...
 
+    def apply(
+        self,
+        x_dispatch: Float[Array, "C H"],
+        moe_w13_local: Float[Array, "Echunk H I2"],
+        moe_w2_local: Float[Array, "Echunk I H"],
+        physical_group_sizes: Int[Array, "Echunk"],
+        active_group_sizes: Int[Array, "Echunk"],
+    ) -> tuple[Float[Array, "C H"], object]:
+        """`forward`'s output without the residuals, for a forward pass whose backward recomputes.
+
+        Also returns the value the residuals' last-produced member stands for, so a caller can
+        order later work after the same stage as when it waits on `forward`'s residuals.
+        """
+        ...
+
     def backward(
         self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "C H"]
     ) -> tuple[Float[Array, "C H"], Float[Array, "Echunk H I2"], Float[Array, "Echunk I H"], Float[Array, "C"]]: ...
@@ -117,6 +132,10 @@ class _RaggedDotExpertMlp:
         out = self._apply(x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes)
         return out, (x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, out)
 
+    def apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        out = self._apply(x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes)
+        return out, out
+
     def backward(self, residuals, cotangent):
         x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, out = residuals
         _, vjp = jax.vjp(
@@ -138,17 +157,30 @@ class _CuteExpertMlp:
     leave trailing rows unspecified. SwiGLU is fused into the gate/up GEMM.
     """
 
-    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
-        del physical_group_sizes
-        # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
-        from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad_fwd  # noqa: PLC0415
-
+    @staticmethod
+    def _operands(moe_w13_local, moe_w2_local, active_group_sizes):
+        """The interleaved gate/up weights and the cumulative active group sizes QuACK's GEMMs take."""
         moe_dim = moe_w2_local.shape[1]
         w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
         cumulative_group_sizes = jnp.concatenate(
             [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
         )
+        return w13_interleaved, cumulative_group_sizes
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+        from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad_fwd  # noqa: PLC0415
+
+        w13_interleaved, cumulative_group_sizes = self._operands(moe_w13_local, moe_w2_local, active_group_sizes)
         return _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes)
+
+    def apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        from levanter.grug._moe.sonic_cute import _expert_mlp_quack_apply  # noqa: PLC0415
+
+        w13_interleaved, cumulative_group_sizes = self._operands(moe_w13_local, moe_w2_local, active_group_sizes)
+        return _expert_mlp_quack_apply(x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes)
 
     def backward(self, residuals, cotangent):
         from levanter.grug._moe.sonic_cute import _expert_mlp_quack_wgrad_backward  # noqa: PLC0415
@@ -456,6 +488,26 @@ def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _E
     return jax.lax.ragged_all_to_all(sorted_x, dispatch_init, *plan.dispatch_params, axis_name="expert")
 
 
+# One chunk's expert MLP: its output, its residuals, and the value the next chunk's dispatch waits on.
+_ChunkMlpCall = Callable[..., tuple[jax.Array, tuple[jax.Array, ...], object]]
+
+
+def _forward_with_residuals(expert_mlp: _ExpertMlp) -> _ChunkMlpCall:
+    def call(*args):
+        out, residuals = expert_mlp.forward(*args)
+        return out, residuals, residuals
+
+    return call
+
+
+def _forward_without_residuals(expert_mlp: _ExpertMlp) -> _ChunkMlpCall:
+    def call(*args):
+        out, ready = expert_mlp.apply(*args)
+        return out, (), ready
+
+    return call
+
+
 def _routed_experts_forward(
     sorted_x: Float[Array, "TK H"],
     weights: Float[Array, "Tlocal K"],
@@ -464,6 +516,7 @@ def _routed_experts_forward(
     staged: tuple[jax.Array, ...],
     routing: _ExpertRouting,
     layout: _ExpertLayout,
+    chunk_mlp: _ChunkMlpCall,
 ) -> tuple[Float[Array, "Tlocal H"], tuple[jax.Array, ...], tuple[_ChunkResiduals, ...]]:
     assignments, hidden_dim = sorted_x.shape
     plans = _chunk_plans(routing, layout)
@@ -473,10 +526,11 @@ def _routed_experts_forward(
     )  # [TK, H]
     chunk_residuals = []
     previous_dispatch = None
+    previous_ready = None
     for chunk_index, plan in enumerate(plans):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             source = sorted_x
-            if chunk_residuals and layout.schedule == _TransportSchedule.DEPENDENCY:
+            if previous_ready is not None and layout.schedule == _TransportSchedule.DEPENDENCY:
                 # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
                 # of every chunk at the same time, and the chunk buffers are all live at once,
                 # which is the memory the chunks exist to save. The barrier waits for the previous
@@ -484,8 +538,8 @@ def _routed_experts_forward(
                 # need the return, so a recompute for the backward drops it and must not be held
                 # to it. (Dispatching chunk c+1 during chunk c's MLP measured 3 ms per layer
                 # slower in a rematted four-GPU layer scan.)
-                source, _ = jax.lax.optimization_barrier((sorted_x, chunk_residuals[-1].expert_mlp))
-            elif chunk_residuals:
+                source, _ = jax.lax.optimization_barrier((sorted_x, previous_ready))
+            elif previous_ready is not None:
                 # Serialize the chunks' dispatches, as above, but on the previous chunk's dispatch
                 # rather than its MLP: the backward's recompute has no other compute to put beside
                 # this dispatch than the previous chunk's MLP. The dispatch also waits for the staged
@@ -497,12 +551,12 @@ def _routed_experts_forward(
                 # The first chunk's MLP waits for the staged overlap work, so the scheduler runs that
                 # work while the dispatch is in flight rather than leaving the dispatch bare.
                 x_dispatch, staged = jax.lax.optimization_barrier((x_dispatch, staged))
-            if chunk_residuals and layout.schedule == _TransportSchedule.LATENCY_HIDING:
+            if previous_ready is not None and layout.schedule == _TransportSchedule.LATENCY_HIDING:
                 # The chunks' MLPs run in order, so the previous chunk's MLP is the compute beside
                 # this chunk's dispatch, also in the backward's recompute.
-                x_dispatch, _ = jax.lax.optimization_barrier((x_dispatch, chunk_residuals[-1].expert_mlp))
+                x_dispatch, _ = jax.lax.optimization_barrier((x_dispatch, previous_ready))
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
-            out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
+            out_dispatch, expert_mlp_residuals, previous_ready = chunk_mlp(  # [C, H]
                 x_dispatch,
                 moe_w13_local[experts],
                 moe_w2_local[experts],
@@ -558,16 +612,34 @@ def _routed_experts(
     ``staged`` (possibly empty) comes back unchanged, but only once the first chunk's dispatch has
     landed, and the first chunk's MLP waits for it; see `DispatchOverlap`. Its cotangent passes
     straight through.
+
+    A forward pass whose residuals are recomputed for the backward rather than kept runs this
+    primal instead of the fwd rule (``optimize_remat``), so it skips the residuals' stores, such
+    as the gate/up pre-activations.
     """
     out, staged, _residuals = _routed_experts_forward(
-        sorted_x, weights, moe_w13_local, moe_w2_local, staged, routing, layout
+        sorted_x,
+        weights,
+        moe_w13_local,
+        moe_w2_local,
+        staged,
+        routing,
+        layout,
+        _forward_without_residuals(layout.expert_mlp),
     )
     return out, staged
 
 
 def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, staged, routing, layout):
     out, staged, chunk_residuals = _routed_experts_forward(
-        sorted_x, weights, moe_w13_local, moe_w2_local, staged, routing, layout
+        sorted_x,
+        weights,
+        moe_w13_local,
+        moe_w2_local,
+        staged,
+        routing,
+        layout,
+        _forward_with_residuals(layout.expert_mlp),
     )
     return (out, staged), (weights, routing, chunk_residuals)
 
@@ -676,7 +748,7 @@ def _routed_experts_bwd(layout, residuals, cotangents):
     )
 
 
-_routed_experts.defvjp(_routed_experts_fwd, _routed_experts_bwd)
+_routed_experts.defvjp(_routed_experts_fwd, _routed_experts_bwd, optimize_remat=True)
 
 
 def _dropped_total(
