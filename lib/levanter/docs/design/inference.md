@@ -225,8 +225,8 @@ This supports chunked prefill, incremental decode, and kernels wider than a page
 partial page receives independent convolution history. Padding does not update
 the rings. The implementation uses a JAX scan and matches the existing
 short-convolution reference's lag-ordered arithmetic. CPU FP32/BF16 parity covers
-mixed request order, page crossings, clone divergence, and reset. This component
-has not yet been integrated into a native Hero model or validated on accelerators.
+mixed request order, page crossings, clone divergence, and reset. The native Hero model uses this history for incremental decode; accelerator
+validation remains pending.
 
 ### Native Hero schema-v2 model
 
