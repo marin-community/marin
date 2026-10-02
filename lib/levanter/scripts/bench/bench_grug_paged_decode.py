@@ -11,12 +11,39 @@ import statistics
 import time
 from functools import partial
 from importlib import metadata
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 from rigging.provenance import launch_provenance
 
 from levanter.grug.attention import ragged_paged_attention
+
+WARMUP_STEPS = 3
+
+
+class _JaxMeasurements(NamedTuple):
+    output: jax.Array
+    compile_time: float
+    first_run_time: float
+    steady_state_time: float
+
+
+def _measure_jax(fn, inputs, repeats):
+    start = time.perf_counter()
+    compiled = jax.jit(fn).lower(*inputs).compile()
+    compile_time = time.perf_counter() - start
+    start = time.perf_counter()
+    output = compiled(*inputs).block_until_ready()
+    first_run_time = time.perf_counter() - start
+    for _ in range(WARMUP_STEPS):
+        compiled(*inputs).block_until_ready()
+    times = []
+    for _ in range(repeats):
+        start = time.perf_counter()
+        compiled(*inputs).block_until_ready()
+        times.append(time.perf_counter() - start)
+    return _JaxMeasurements(output, compile_time, first_run_time, statistics.median(times))
 
 
 def main():
@@ -61,20 +88,9 @@ def main():
             gpu_kv_splits=args.kv_splits,
         )
     )
-    start = time.perf_counter()
-    compiled = fn.lower(*inputs).compile()
-    compile_time = time.perf_counter() - start
-    start = time.perf_counter()
-    actual = compiled(*inputs).block_until_ready()
-    first_run_time = time.perf_counter() - start
-    for _ in range(3):
-        compiled(*inputs).block_until_ready()
-    times = []
-    for _ in range(args.repeats):
-        start = time.perf_counter()
-        compiled(*inputs).block_until_ready()
-        times.append(time.perf_counter() - start)
-    elapsed = statistics.median(times)
+    measurements = _measure_jax(fn, inputs, args.repeats)
+    actual = measurements.output
+    elapsed = measurements.steady_state_time
     visible = args.context if args.window is None else min(args.context, args.window)
     kv_bytes = 2 * args.batch_size * visible * args.kv_heads * args.head_dim * dtype.itemsize
     flops = 4 * args.batch_size * visible * args.kv_heads * args.groups * args.head_dim
@@ -94,8 +110,8 @@ def main():
                     if args.implementation == "gpu_pallas"
                     else None
                 ),
-                "compile_time": compile_time,
-                "first_run_time": first_run_time,
+                "compile_time": measurements.compile_time,
+                "first_run_time": measurements.first_run_time,
                 "steady_state_time": elapsed,
                 "error": None,
                 "git_sha": launch_provenance().base_commit,
@@ -150,7 +166,7 @@ def _flashinfer_baseline(inputs, expected, args):
     fn()
     torch.cuda.synchronize()
     first_run = time.perf_counter() - start
-    for _ in range(3):
+    for _ in range(WARMUP_STEPS):
         fn()
     torch.cuda.synchronize()
     times = []
@@ -213,19 +229,8 @@ def _tpu_vllm_baseline(inputs, expected, args):
         return output.reshape(q.shape).astype(q.dtype)
 
     # The outer wrapper owns no donated inputs; repeated timings reuse immutable cache/query arrays.
-    start = time.perf_counter()
-    compiled = jax.jit(attend).lower(*inputs).compile()
-    compile_time = time.perf_counter() - start
-    start = time.perf_counter()
-    actual = compiled(*inputs).block_until_ready()
-    first_run = time.perf_counter() - start
-    for _ in range(3):
-        compiled(*inputs).block_until_ready()
-    times = []
-    for _ in range(args.repeats):
-        start = time.perf_counter()
-        compiled(*inputs).block_until_ready()
-        times.append(time.perf_counter() - start)
+    measurements = _measure_jax(attend, inputs, args.repeats)
+    actual = measurements.output
     difference = jnp.abs(actual.astype(jnp.float32) - expected.astype(jnp.float32))
     return {
         "kernel": "tpu_vllm_rpa_v3",
@@ -240,9 +245,9 @@ def _tpu_vllm_baseline(inputs, expected, args):
         "device_count": 1,
         "block_sizes": "fork_default",
         "timing_boundary": "host_submit_and_synchronize",
-        "compile_time": compile_time,
-        "first_run_time": first_run,
-        "steady_state_time": statistics.median(times),
+        "compile_time": measurements.compile_time,
+        "first_run_time": measurements.first_run_time,
+        "steady_state_time": measurements.steady_state_time,
         "error": {"max_abs_vs_grug": float(difference.max()), "mean_abs_vs_grug": float(difference.mean())},
         "git_sha": launch_provenance().base_commit,
         "xla_flags": os.environ.get("XLA_FLAGS", ""),
