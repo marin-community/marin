@@ -7,12 +7,12 @@ import argparse
 import json
 import os
 import statistics
-import subprocess
 import time
 from functools import partial
 
 import jax
 import jax.numpy as jnp
+from rigging.provenance import launch_provenance
 
 from levanter.grug.attention import ragged_paged_attention
 
@@ -89,7 +89,7 @@ def main():
                 "first_run_time": first_run_time,
                 "steady_state_time": elapsed,
                 "error": None,
-                "git_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                "git_sha": launch_provenance().base_commit,
                 "xla_flags": os.environ.get("XLA_FLAGS", ""),
                 "backend_env": {"LIBTPU_INIT_ARGS": os.environ.get("LIBTPU_INIT_ARGS", "")},
                 "logical_kv_bytes": kv_bytes,
