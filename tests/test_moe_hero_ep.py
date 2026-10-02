@@ -630,6 +630,33 @@ def test_the_carry_offload_refuses_a_ragged_run_with_the_scheduler_off(monkeypat
         train.run_grug(config)
 
 
+def test_a_ragged_run_without_the_offload_runs_collectives_synchronously(monkeypatch):
+    # The overlap limit binds only the latency-hiding scheduler, which this configuration keeps off.
+    inherited = f"{train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}=ALLREDUCE"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}={train.SYNC_COLLECTIVES}" in flags
+
+
+def test_the_carry_offload_keeps_collectives_asynchronous(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert not any(f.startswith(train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG) for f in flags)
+
+
 def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
     # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
     # skips the offload has to keep the posture it was measured under.
