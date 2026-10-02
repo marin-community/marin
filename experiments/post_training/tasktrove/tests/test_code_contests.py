@@ -6,7 +6,7 @@
 import json
 from pathlib import Path
 
-from tasktrove_verify.spec import Compare, StdioSpec, parse_spec
+from verifyit.spec import Compare, StdioSpec, parse_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus

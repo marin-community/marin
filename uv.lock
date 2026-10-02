@@ -661,7 +661,7 @@ members = [
     "marin-rigging",
     "marin-root",
     "marin-zephyr",
-    "tasktrove-verify",
+    "verifyit",
 ]
 constraints = [
     { name = "opentelemetry-instrumentation", specifier = ">=0.41b0" },
@@ -5946,7 +5946,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
-    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -5978,7 +5978,7 @@ test = [
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
 ]
 
 [package.metadata]
@@ -6081,7 +6081,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
-    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
+    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
@@ -6113,7 +6113,7 @@ test = [
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
+    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
 ]
 
 [[package]]
@@ -7139,7 +7139,7 @@ dependencies = [
     { name = "marin-zephyr" },
     { name = "seaborn" },
     { name = "sqlalchemy" },
-    { name = "tasktrove-verify", extra = ["answer", "reasoning-gym", "schema"] },
+    { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
     { name = "watchdog" },
 ]
 
@@ -7184,7 +7184,7 @@ requires-dist = [
     { name = "quack-kernels", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==0.6.1" },
     { name = "seaborn", specifier = ">=0.13" },
     { name = "sqlalchemy", specifier = ">=2" },
-    { name = "tasktrove-verify", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/tasktrove-verify" },
+    { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==2.11.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-root", extra = "pipeline" } },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = ">=3.6.0,<3.7" },
     { name = "watchdog" },
@@ -11579,9 +11579,9 @@ wheels = [
 ]
 
 [[package]]
-name = "tasktrove-verify"
+name = "verifyit"
 version = "0.1.0"
-source = { editable = "lib/tasktrove-verify" }
+source = { editable = "lib/verifyit" }
 dependencies = [
     { name = "tomlkit" },
 ]
@@ -11625,7 +11625,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
     { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1" },
     { name = "sympy", marker = "extra == 'answer'", specifier = ">=1.12" },
-    { name = "tasktrove-verify", extras = ["answer", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "lib/tasktrove-verify" },
+    { name = "verifyit", extras = ["answer", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "lib/verifyit" },
     { name = "tomlkit", specifier = ">=0.13" },
 ]
 provides-extras = ["answer", "schema", "judge", "reasoning-gym", "all"]
