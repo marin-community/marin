@@ -455,6 +455,14 @@ def _reshard_tree_to_mesh(tree, mesh: Mesh):
     return jax.tree.map(move, tree)
 
 
+def dropless_moe_implementation(cfg: GrugModelConfig) -> MoeImplementation:
+    """The dropless MoE kernel for evals and probes: sonic needs equal expert read and write widths; scatter also
+    handles ``latent_out_dim`` and the full-width tail layers of ``latent_out_full_layers``."""
+    if cfg.expert_in_dim == cfg.expert_out_dim and not cfg.latent_out_full_layers:
+        return "sonic"
+    return "scatter"
+
+
 def _to_dropless_local(
     model: Transformer, *, implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
 ) -> Transformer:
@@ -1096,9 +1104,11 @@ def _fact_probe_hook(
         probe_mesh = compact_grug_mesh(
             expert_axis_size=1, replica_axis_size=mesh.shape["replica_dcn"], model_axis_size=mesh.shape["model"]
         )
-        implementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
-        if config.eval is not None:
-            implementation = config.eval.dropless_eval_moe_implementation
+        implementation = (
+            dropless_moe_implementation(config.model)
+            if config.eval is None
+            else config.eval.dropless_eval_moe_implementation
+        )
         transform = functools.partial(_to_dropless_local, implementation=implementation)
     else:
         probe_mesh, transform = mesh, lambda model: model
