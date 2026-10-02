@@ -23,9 +23,10 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import click
 import yaml
@@ -105,6 +106,7 @@ class PolicySpec:
     serve_gen_kwargs: tuple[tuple[str, str], ...] = ()
     # Pre-existing model artifact; None mirrors the HF model via model_step.
     adopted_model: ArtifactStep[LevanterCheckpoint] | None = None
+    trainer_config: dict[str, Any] = field(default_factory=lambda: {"strategy": "fsdp2"})
 
 
 QWEN_POLICY = PolicySpec(
@@ -118,6 +120,16 @@ QWEN_POLICY = PolicySpec(
     enable_thinking=False,
     task_memory="128GB",
     serve_gpus=1,
+    trainer_config={
+        "strategy": "megatron",
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "context_parallel_size": 1,
+            "expert_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+        },
+    },
 )
 
 # Adopted in place from the exports prefix (~134GB referenced, not copied).
@@ -550,7 +562,7 @@ environment:
   env_class: gsm8k
 
 trainer:
-  strategy: fsdp2
+  strategy: {policy.trainer_config["strategy"]}
   flash_attn: true
   use_sample_packing: false
   algorithm:
@@ -595,6 +607,14 @@ data:
 """
     )
     trainer = config["trainer"]
+    if trainer["strategy"] == "megatron":
+        trainer.pop("micro_forward_batch_size_per_gpu")
+        trainer["policy"].pop("fsdp_config")
+        megatron_config = policy.trainer_config["megatron_config"].copy()
+        trainer["policy"]["megatron_config"] = megatron_config
+        trainer["ref"] = {"megatron_config": megatron_config.copy()}
+        config["generator"].pop("async_engine")
+        config["generator"].pop("batched")
     generator = config["generator"]
     data = config["data"]
     trainer["hf_hub_repo_id"] = None
@@ -668,7 +688,13 @@ def build_arm(
             name=user_owned_name(rl_base_name),
             version=version or resolve_version(rl_base_name, None),
             config_yaml=rl_config_yaml(preset, spec, policy),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+            runtime=SkyRLRuntime(
+                profile=(
+                    SkyRLRuntimeProfile.MEGATRON
+                    if policy.trainer_config["strategy"] == "megatron"
+                    else SkyRLRuntimeProfile.FSDP
+                )
+            ),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,

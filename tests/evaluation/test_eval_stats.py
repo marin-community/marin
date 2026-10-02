@@ -46,6 +46,10 @@ def test_task_item_count_rejects_fractional_counts():
     assert task_item_count({"total_examples": 3.5}) is None
 
 
+def test_task_item_count_uses_scored_count_before_attempted_total():
+    assert task_item_count({"total_examples": 3, "scored_count": 2}) == 2
+
+
 def _measurement(
     *,
     benchmark: str = "gsm8k",

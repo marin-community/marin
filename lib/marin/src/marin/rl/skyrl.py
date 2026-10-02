@@ -382,10 +382,13 @@ class IrisSkyRLExecution:
     parent_cluster_config: str | None
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
+    job_timeout_seconds: int = 0
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
             raise ValueError("SkyRL coordinator_timeout_hours must be positive")
+        if self.job_timeout_seconds < 0:
+            raise ValueError("SkyRL job_timeout_seconds cannot be negative")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
@@ -719,6 +722,13 @@ def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunc
     )
 
 
+def _launch_data_source(source: ResolvedDataSource) -> dict:
+    value = asdict(source)
+    if isinstance(source, ResolvedTaskTroveDataSource):
+        value["selection"]["tag_match"] = source.selection.tag_match.value
+    return value
+
+
 def _launch_config_yaml(
     spec: SkyRLSpec,
     execution: IrisSkyRLExecution,
@@ -775,7 +785,7 @@ def _launch_config_yaml(
             },
             "priority": execution.priority,
             "max_retries": execution.max_retries,
-            "timeout": 0,
+            "timeout": execution.job_timeout_seconds,
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
         },
@@ -806,8 +816,8 @@ def _launch_config_yaml(
                 if _declared_config_value(recipe, "data.kind") is not _MISSING_CONFIG_VALUE
                 else "tasks"
             ),
-            "train_data": [asdict(source) for source in train_data],
-            "validation_data": [asdict(source) for source in validation_data],
+            "train_data": [_launch_data_source(source) for source in train_data],
+            "validation_data": [_launch_data_source(source) for source in validation_data],
         },
         "skyrl": recipe,
     }

@@ -1,0 +1,46 @@
+{
+  "model": {
+    "name": "YOUR_SERVED_MODEL",
+    "revision": "MODEL_CHECKPOINT_COMMIT",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "api_key_env": "REVIEW_API_KEY",
+    "parameters": {
+      "temperature": 0.7,
+      "max_tokens": 8192
+    },
+    "timeout": 600
+  },
+  "runtime": {
+    "marinskyrl_checkout": "/path/to/MarinSkyRL",
+    "gym_python": "/path/to/MarinSkyRL/skyrl-gym/.venv/bin/python",
+    "harbor_checkout": "/path/to/harbor",
+    "harbor_python": "/path/to/harbor/.venv/bin/python",
+    "gym_config": {},
+    "max_turns": 50,
+    "agent_timeout": 1800,
+    "worker_timeout": 2400,
+    "harbor_agent": {
+      "name": "terminus-2",
+      "kwargs": {
+        "model_info": {
+          "max_input_tokens": 65536,
+          "max_output_tokens": 8192,
+          "input_cost_per_token": 0.0,
+          "output_cost_per_token": 0.0
+        }
+      }
+    },
+    "harbor_environment": {
+      "type": "docker",
+      "delete": true
+    },
+    "harbor_verifier": {}
+  },
+  "source": {
+    "repository": "HuggingFaceH4/MATH-500",
+    "revision": null,
+    "source_id": "math500",
+    "format": "skyrl_prepared",
+    "tasks_path": "artifacts/prepared-source/train.parquet"
+  }
+}
