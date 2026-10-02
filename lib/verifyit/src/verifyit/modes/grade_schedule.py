@@ -34,6 +34,7 @@ def normalized_name(value: object) -> str | None:
 
 
 def parse_time(value: object) -> int | None:
+    """Return minutes since midnight, or None for an invalid HH:MM value."""
     if not isinstance(value, str):
         return None
     match = _TIME_RE.fullmatch(value.strip())

@@ -36,6 +36,7 @@ class ScriptedActor:
     index: int = field(default=0, init=False)
 
     def respond(self, task: ActorTask, events: Sequence[ConversationEvent]) -> AssistantMessage:
+        del task, events
         if self.index == len(self.responses):
             return TextMessage(role="assistant", content="Done.")
         response = self.responses[self.index]

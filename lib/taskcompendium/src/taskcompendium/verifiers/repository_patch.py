@@ -19,6 +19,7 @@ class RepositoryPatchVerifier(Verifier):
     source_environment_sha256: str
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
+        del attempt
         return GradeResult(
             Outcome.INFRA_ERROR,
             None,

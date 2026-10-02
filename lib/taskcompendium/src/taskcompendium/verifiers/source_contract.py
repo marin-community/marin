@@ -17,6 +17,7 @@ class SourceContractVerifier(Verifier):
     runtime_requirements: tuple[str, ...]
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
+        del attempt
         return GradeResult(
             Outcome.INFRA_ERROR,
             None,

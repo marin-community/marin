@@ -18,6 +18,7 @@ from taskcompendium.pipeline.review_transport import BatchClient, batch_output, 
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
+DEFAULT_REVIEW_MAX_TOKENS = 4096
 DEFAULT_PROMPT_CHARACTERS = 512000
 RESOURCE_PREVIEW_CHARACTERS = 8192
 PRIVATE_REASONING_PREVIEW_CHARACTERS = 512
@@ -334,7 +335,7 @@ class BatchReviewer:
     client: BatchClient
     model: str
     model_revision: str
-    max_tokens: int = 2048
+    max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
     max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS
     poll_seconds: float = 5.0
     max_attempts: int = 2

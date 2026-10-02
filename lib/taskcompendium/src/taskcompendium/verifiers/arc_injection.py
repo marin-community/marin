@@ -46,6 +46,7 @@ class ArcTransformVerifier(Verifier):
     submission_paths: tuple[str, ...] = ("/app/solution.py", "/app/answer.txt")
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
+        del attempt
         return GradeResult(Outcome.INFRA_ERROR, None, "ARC transform requires an isolated source Python grader")
 
 

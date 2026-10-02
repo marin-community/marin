@@ -122,6 +122,7 @@ def normalize_verifiable_code(row: RawRow) -> TaskSpec | ImportRejection:
 
 
 def select_eurus_code(row: dict[str, Any], staged_root: StoragePath) -> bool:
+    del staged_root
     return row["ability"] == "code"
 
 

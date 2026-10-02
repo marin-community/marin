@@ -34,6 +34,7 @@ class PreferenceEvidenceVerifier(Verifier):
     source_metadata: dict[str, JsonValue]
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
+        del attempt
         return GradeResult(
             Outcome.INFRA_ERROR,
             None,

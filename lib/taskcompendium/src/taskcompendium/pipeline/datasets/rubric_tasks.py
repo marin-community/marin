@@ -147,6 +147,7 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
+    del task
     return VerificationReport(
         checks=[
             CheckResult(

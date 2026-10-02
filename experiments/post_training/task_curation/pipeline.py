@@ -24,7 +24,7 @@ from marin.inference.openai_batch import OpenAIBatchClient
 from pydantic import TypeAdapter
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
 from taskcompendium.pipeline.models import DatasetRecipe, EnvironmentInventory, FilterPolicy, ReviewRubric
-from taskcompendium.pipeline.review import DEFAULT_PROMPT_CHARACTERS, BatchReviewer
+from taskcompendium.pipeline.review import DEFAULT_PROMPT_CHARACTERS, DEFAULT_REVIEW_MAX_TOKENS, BatchReviewer
 from taskcompendium.pipeline.rewriting import REWRITE_INSTRUCTIONS, BatchRewriter
 from taskcompendium.pipeline.sources import source_files_identity
 from taskcompendium.pipeline.stages import (
@@ -342,7 +342,7 @@ def build_workflow(
 @click.option("--model", default=GLM_MODEL, show_default=True)
 @click.option("--all-rows", is_flag=True, help="Process every selected source record instead of applying --limit.")
 @click.option("--model-revision", required=True)
-@click.option("--max-tokens", type=int, default=4096, show_default=True)
+@click.option("--max-tokens", type=int, default=DEFAULT_REVIEW_MAX_TOKENS, show_default=True)
 @click.option("--prompt-budget", type=int, default=DEFAULT_PROMPT_CHARACTERS, show_default=True)
 @click.option("--base-url", help="GLM batch endpoint, required with --run.")
 @click.option("--review-cache", help="Stable FineStore query cache location, shared across catalog versions.")

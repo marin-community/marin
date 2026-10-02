@@ -33,7 +33,13 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     TaskAudit,
 )
-from taskcompendium.pipeline.review import BASE_RUBRIC, DEFAULT_PROMPT_CHARACTERS, BatchReviewer, Reviewer
+from taskcompendium.pipeline.review import (
+    BASE_RUBRIC,
+    DEFAULT_PROMPT_CHARACTERS,
+    DEFAULT_REVIEW_MAX_TOKENS,
+    BatchReviewer,
+    Reviewer,
+)
 from taskcompendium.pipeline.rewriting import BatchRewriter
 from taskcompendium.pipeline.sources import staged_file_rows, staged_files
 from taskcompendium.pipeline.transforms import (
@@ -59,7 +65,7 @@ class ReviewConfig:
     model: str
     model_revision: str
     prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
-    max_tokens: int = 4096
+    max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
     max_attempts: int = 2
     retry_max_tokens: int = 8192
     retry_prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
