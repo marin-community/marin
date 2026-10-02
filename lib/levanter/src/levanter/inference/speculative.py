@@ -135,8 +135,9 @@ def verify_snowball_proposals(
     present but are outside the visible prefix and overwritten on continuation.
     The recovered/bonus output is pending: its KV is written by the next call.
 
-    Returned auxiliary states [sequence, K+1, features] align with emitted tokens;
-    padding, rejected suffixes and cancelled rows are zero. This entry point does
+    Auxiliary states [sequence, K+1, features] describe each input position that
+    predicts an emitted token, not the emitted token itself. Padding, rejected
+    suffixes and cancelled rows are zero. This entry point does
     not allocate/free pages or run a draft model and is not used by the scheduler.
     """
     if max_draft_tokens < 1:

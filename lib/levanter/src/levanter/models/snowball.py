@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Optional, Type
+from typing import Any, NamedTuple, Optional, Type
 
 import equinox as eqx
 import jax
@@ -774,6 +774,12 @@ class SnowballTransformer(eqx.Module):
 # --- LmHeadModel adapter -----------------------------------------------------------------------
 
 
+class SnowballAuxiliaryOutput(NamedTuple):
+    logits: NamedArray
+    cache: ListCache[KvPageCache]
+    auxiliary_states: NamedArray
+
+
 class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[SnowballConfig]):
     """Levanter ``LmHeadModel`` boundary over the array-first Snowball transformer.
 
@@ -865,7 +871,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pos_ids: NamedArray,
         *,
         layers: tuple[int, ...],
-    ) -> tuple[NamedArray, ListCache[KvPageCache], NamedArray]:
+    ) -> SnowballAuxiliaryOutput:
         """Return EAGLE target residual states alongside paged logits and KV state.
 
         Boundary zero is the normalized/gated embedding; boundary i is the residual
@@ -877,7 +883,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             raise ValueError("Auxiliary boundaries must be between zero and the number of layers")
         logits, cache, auxiliary = self._decode(input_ids, kv_cache, batch_info, pos_ids, layers)
         assert auxiliary is not None
-        return logits, cache, auxiliary
+        return SnowballAuxiliaryOutput(logits, cache, auxiliary)
 
     @named_call
     def _decode(

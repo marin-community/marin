@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import NamedTuple
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -47,6 +49,12 @@ def _target():
     return eqx.tree_at(lambda m: m.transformer.blocks, model, blocks)
 
 
+class _PackedInputs(NamedTuple):
+    tokens: hax.NamedArray
+    batch_info: PageBatchInfo
+    positions: hax.NamedArray
+
+
 def _packed(chunks, starts):
     capacity = 16 * jax.device_count()
     # Separate requests span noncontiguous pages, including proposals across a page boundary.
@@ -70,7 +78,9 @@ def _packed(chunks, starts):
         new_token_dests=hax.named(jnp.asarray(dests), "position"),
         page_size=2,
     )
-    return hax.named(jnp.asarray(tokens), "position"), info, hax.named(jnp.asarray(positions), "position")
+    return _PackedInputs(
+        hax.named(jnp.asarray(tokens), "position"), info, hax.named(jnp.asarray(positions), "position")
+    )
 
 
 def _logprobs(logits):
@@ -84,7 +94,7 @@ def test_paged_target_verification_matches_sequential_decode_and_discards_reject
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         model = _target()
         cache = model.initial_cache(PageTableSpec(12, 2), dtype=jnp.float32)
-        decode = eqx.filter_jit(lambda m, c, args: m.decode(args[0], c, args[1], args[2]))
+        decode = eqx.filter_jit(lambda m, c, args: m.decode(args.tokens, c, args.batch_info, args.positions))
         _, cache = decode(model, cache, _packed([[2, 7], [4, 6], [1, 3]], [0, 0, 0]))
         # The oracle runs ordinary one-token decoding, independently of verification.
         sequential_cache = cache
@@ -107,10 +117,10 @@ def test_paged_target_verification_matches_sequential_decode_and_discards_reject
         verify = eqx.filter_jit(
             lambda m, c, a: verify_snowball_proposals(
                 m,
-                a[0],
+                a.tokens,
                 c,
-                a[1],
-                a[2],
+                a.batch_info,
+                a.positions,
                 jnp.zeros(3),
                 jnp.full(3, 10),
                 jnp.zeros(3, dtype=bool),
@@ -138,10 +148,10 @@ def test_paged_target_verification_matches_sequential_decode_and_discards_reject
         limited = eqx.filter_jit(
             lambda m, c, a: verify_snowball_proposals(
                 m,
-                a[0],
+                a.tokens,
                 c,
-                a[1],
-                a[2],
+                a.batch_info,
+                a.positions,
                 jnp.zeros(3),
                 jnp.array([2, 10, 1]),
                 jnp.array([False, True, False]),
@@ -167,18 +177,18 @@ def test_auxiliary_boundaries_match_full_forward_and_preserve_default_decode():
         cache = model.initial_cache(PageTableSpec(12, 2), dtype=jnp.float32)
         chunks = [[2, 7, 5], [4, 6], [1]]
         args = _packed(chunks, [0, 0, 0])
-        ordinary = eqx.filter_jit(lambda m, c: m.decode(args[0], c, args[1], args[2]))(model, cache)
+        ordinary = eqx.filter_jit(lambda m, c: m.decode(args.tokens, c, args.batch_info, args.positions))(model, cache)
         observed = eqx.filter_jit(
             lambda m, c: m.decode_with_auxiliary_states(
-                args[0],
+                args.tokens,
                 c,
-                args[1],
-                args[2],
+                args.batch_info,
+                args.positions,
                 layers=(2, 0, 1, 1),
             )
         )(model, cache)
-        np.testing.assert_allclose(observed[0].array, ordinary[0].array, rtol=1e-5, atol=1e-5)
-        for actual, expected in zip(observed[1], ordinary[1], strict=True):
+        np.testing.assert_allclose(observed.logits.array, ordinary[0].array, rtol=1e-5, atol=1e-5)
+        for actual, expected in zip(observed.cache, ordinary[1], strict=True):
             np.testing.assert_allclose(actual.kv_pages.array, expected.kv_pages.array, rtol=1e-5, atol=1e-5)
 
         @eqx.filter_jit
@@ -203,8 +213,10 @@ def test_auxiliary_boundaries_match_full_forward_and_preserve_default_decode():
         for chunk in chunks:
             tokens = jnp.broadcast_to(jnp.asarray(chunk), (jax.device_count(), len(chunk)))
             expected.append(np.asarray(full_states(model, tokens))[0])
-        np.testing.assert_allclose(np.asarray(observed[2].array)[:6], np.concatenate(expected), rtol=1e-4, atol=1e-4)
-        np.testing.assert_array_equal(np.asarray(observed[2].array)[6:], 0)
+        np.testing.assert_allclose(
+            np.asarray(observed.auxiliary_states.array)[:6], np.concatenate(expected), rtol=1e-4, atol=1e-4
+        )
+        np.testing.assert_array_equal(np.asarray(observed.auxiliary_states.array)[6:], 0)
 
 
 @pytest.mark.parametrize("mode", ["raw_logprobs", "processed_logprobs"])

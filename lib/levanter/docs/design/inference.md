@@ -291,8 +291,9 @@ JSON records batch output throughput and mean time from first token to batch
 completion per remaining output token. This amortized measure includes host
 scheduling, synchronization, and extraction; it is not a distribution of device
 kernel or per-token latencies. Incomplete generations fail instead of producing
-a throughput number. The OpenAI server currently renders streaming events from
-a finished response, so its HTTP first event cannot measure native prefill time.
+a throughput number. Non-echo HTTP streaming emits token deltas after prefill
+and at host decode boundaries. Its first-token time also includes HTTP transport;
+echo-mode completions are buffered until the response finishes.
 
 ### Checkpoint-backed comparison
 
@@ -342,8 +343,8 @@ python -m levanter.main.vllm_inference_benchmark \
   --output /tmp/vllm-result.json
 ```
 
-This uses the public [LLMEngine step interface](https://docs.vllm.ai/en/v0.10.2/api/vllm/engine/llm_engine.html)
-and cumulative output token IDs. First-token observations include admission and
+This uses `AsyncLLM.generate` with concurrent requests and cumulative output
+token IDs. First-token observations include admission and
 scheduling. If vLLM admits requests across multiple prefills, its first-token
 and decode overlap differs from Levanter's single-prefill measurement. Compare
 end-to-end throughput with that scheduling difference recorded. The adapter
