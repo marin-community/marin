@@ -13,8 +13,18 @@ def test_archive_retains_harbor_evidence_and_runtime_identity(tmp_path, monkeypa
     publisher = importlib.import_module("publish_review")
     files = {
         "tasks/0000/execution-000/review-f634561b1d8dd2b88908/agent/trajectory.json": '{"steps": [1, 2]}',
+        "tasks/0000/execution-000/review-f634561b1d8dd2b88908/agent/trajectory.summarization-1-questions.json": (
+            '{"steps": [{"content": "Which task requirements remain?"}]}'
+        ),
+        "tasks/0000/execution-000/review-f634561b1d8dd2b88908/agent/trajectory.summarization-1-answers.json": (
+            '{"steps": [{"content": "Write the final scorecard."}]}'
+        ),
+        "tasks/0000/execution-000/review-f634561b1d8dd2b88908/agent/trajectory.summarization-1-summary.json": (
+            '{"steps": [{"content": "Analysis is complete; the final artifact is still missing."}]}'
+        ),
         "tasks/0000/execution-000/review-f634561b1d8dd2b88908/agent/offline-tooling.json": '{"return_code": 0}',
         "tasks/0001/execution-000/trial/agent/trajectory.json": '{"steps": [3]}',
+        "tasks/0001/execution-000/trial/agent/trajectory.continuation-1.json": '{"steps": [4]}',
         "tasks/0000/attempt.json": '{"verification": {"status": "verified"}}',
         "run.json": '{"config": {"model": {"name": "solver", "parameters": {"temperature": 0.7}}}}',
         "quality-review.schema.json": '{"type": "object"}',

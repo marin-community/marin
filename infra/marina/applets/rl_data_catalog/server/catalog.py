@@ -45,7 +45,7 @@ TASKTROVE_CLASSIFICATION = {
 class Snapshot:
     origin: str
     revision: str
-    revised_at: str
+    revised_at: str | None
     rows: list[dict[str, Any]]
 
 
@@ -198,7 +198,10 @@ def harbor_snapshot(sources: Sequence[HarborSource] = HARBOR_SOURCES) -> Snapsho
     if len({row["id"] for row in rows}) != len(rows):
         raise ValueError("Harbor registrations contain duplicate source IDs")
     return Snapshot(
-        HARBOR_ORIGIN, hashlib.sha256(content).hexdigest(), max(source.metadata_checked_at for source in sources), rows
+        HARBOR_ORIGIN,
+        hashlib.sha256(content).hexdigest(),
+        max((source.metadata_checked_at for source in sources), default=None),
+        rows,
     )
 
 

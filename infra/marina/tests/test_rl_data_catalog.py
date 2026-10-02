@@ -228,6 +228,27 @@ def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(cata
     assert result["results"][1]["changed"]
 
 
+def test_removing_last_harbor_source_retires_row_and_preserves_review(catalog_connection: Connection) -> None:
+    connection = catalog_connection
+    source_id = "Harbor Hub:example/tasks"
+    save_snapshot(connection, Snapshot(HARBOR_ORIGIN, "release1", "2026-10-01", [{"id": source_id}]))
+    save_snapshot(connection, Snapshot("Task Trove", "trove1", "2026-09-01", [{"id": "trove:keep"}]))
+    connection.execute(text("UPDATE catalog_sources SET review_id = 'review1' WHERE id = :id"), {"id": source_id})
+
+    save_snapshot(connection, harbor_snapshot(()))
+
+    active = set(connection.execute(text("SELECT id FROM catalog_sources WHERE active")).scalars())
+    assert active == {"trove:keep"}
+    assert (
+        connection.execute(text("SELECT review_id FROM catalog_sources WHERE id = :id"), {"id": source_id}).scalar_one()
+        == "review1"
+    )
+    refresh = connection.execute(
+        text("SELECT row_count, revised_at FROM catalog_refreshes WHERE origin = :origin"), {"origin": HARBOR_ORIGIN}
+    ).one()
+    assert refresh == (0, None)
+
+
 def test_snapshot_replacement_retires_removed_rows_without_affecting_other_origin(
     catalog_connection: Connection,
 ) -> None:
