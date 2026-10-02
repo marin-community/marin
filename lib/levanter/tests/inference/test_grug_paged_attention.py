@@ -124,7 +124,7 @@ def test_grug_gpu_paged_attention_interpreter_matches_dense(window, cap, dtype, 
         q, pages, _, indices, _, _ = args
         upper = jnp.array([37, 18, 0, 0], jnp.int32)
         lower = jnp.zeros_like(upper) if window is None else jnp.maximum(0, upper - window)
-        bounds = jnp.stack((lower, upper), axis=-1)
+        bounds = jnp.stack((lower, upper), axis=-1).at[2].set(jnp.array([1, 1], jnp.int32))
         table = jnp.maximum(indices[jnp.array([0, 1, 0, 0])], 0)
         actual = jax.jit(partial(gpu_paged_attention, soft_cap=cap, av_precision=av_precision, interpret=True))(
             q, pages, table, bounds, 0.17

@@ -20,6 +20,7 @@ from rigging.provenance import launch_provenance
 from levanter.grug.attention import ragged_paged_attention
 
 WARMUP_STEPS = 3
+TPU_RPA_MODULE = "tpu_inference.kernels.ragged_paged_attention.v3.kernel"
 
 
 class _JaxMeasurements(NamedTuple):
@@ -65,7 +66,7 @@ def main():
     args = parser.parse_args()
     if args.baseline in ("tpu_vllm_rpa", "tpu_vllm_rpa_fp32"):
         # The optional fork sets its environment before initializing JAX devices.
-        importlib.import_module("tpu_inference.kernels.ragged_paged_attention.v3.kernel")
+        importlib.import_module(TPU_RPA_MODULE)
     dtype = jnp.dtype(args.dtype)
     pages_per_sequence = (args.context + args.page_size - 1) // args.page_size
     page_count = args.batch_size * pages_per_sequence
@@ -219,7 +220,7 @@ def _flashinfer_baseline(inputs, expected, args):
 
 
 def _tpu_vllm_baseline(inputs, expected, args):
-    rpa = importlib.import_module("tpu_inference.kernels.ragged_paged_attention.v3.kernel")
+    rpa = importlib.import_module(TPU_RPA_MODULE)
     if jax.default_backend() != "tpu":
         raise ValueError("The vLLM RPA comparison requires TPU")
     package = metadata.distribution("tpu-inference")
