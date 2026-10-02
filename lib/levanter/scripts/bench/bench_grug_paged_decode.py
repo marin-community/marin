@@ -9,6 +9,7 @@ import importlib
 import os
 import statistics
 import time
+from contextlib import ExitStack
 from functools import partial
 from importlib import metadata
 from typing import NamedTuple
@@ -62,11 +63,19 @@ def _measure_jax(fn, inputs, repeats):
     return _JaxMeasurements(output, compile_time, first_run_time, statistics.median(times))
 
 
-def _profile_tpu(fn, inputs, repeats):
+def _profile_tpu(fn, inputs, repeats, output_dir=None):
     # Use the XPlane reader also used by bench_ce_hero_shape. Module events
     # measure device execution without summing nested per-operation events.
-    with TemporaryDirectory(prefix="grug-tpu-profile-") as directory:
-        with jax.profiler.trace(directory):
+    with ExitStack() as stack:
+        directory = (
+            str(output_dir)
+            if output_dir is not None
+            else stack.enter_context(TemporaryDirectory(prefix="grug-tpu-profile-"))
+        )
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        options = jax.profiler.ProfileOptions()
+        options.enable_hlo_proto = output_dir is not None
+        with jax.profiler.trace(directory, profiler_options=options):
             for step in range(repeats):
                 with jax.profiler.StepTraceAnnotation("paged_decode", step_num=step):
                     jax.block_until_ready(fn(*inputs))
@@ -101,6 +110,7 @@ def _profile_tpu(fn, inputs, repeats):
             "median_time": max(module_times) if module_times else None,
             "availability": "measured" if module_times else "no_matching_module_line",
             "device_lines": lines,
+            "trace_files": [str(path) for path in paths] if output_dir is not None else [],
         }
 
 
@@ -179,6 +189,7 @@ def _parse_args():
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--av-precision", choices=["ieee", "bf16_3x"], default="ieee")
     parser.add_argument("--profile-device", action="store_true")
+    parser.add_argument("--profile-output-dir", type=Path, help="Retain TPU XPlane traces and HLO metadata here.")
     parser.add_argument("--tpu-dma-buffers", type=int, choices=[1, 2], default=1)
     parser.add_argument("--check-reference", action="store_true")
     parser.add_argument("--kv-splits", type=int, choices=[8, 16], default=8)
@@ -216,9 +227,9 @@ def _comparison_errors(inputs, actual, args):
     return error
 
 
-def _device_profile(fn, inputs, repeats):
+def _device_profile(fn, inputs, repeats, output_dir):
     if jax.default_backend() == "tpu":
-        device_profile = _profile_tpu(fn, inputs, repeats)
+        device_profile = _profile_tpu(fn, inputs, repeats, output_dir / "native" if output_dir is not None else None)
     else:
         profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
 
@@ -270,7 +281,9 @@ def main():
     actual = measurements.output
     elapsed = measurements.steady_state_time
     error = _comparison_errors(inputs, actual, args) if args.check_reference else None
-    device_profile = _device_profile(fn, inputs, args.repeats) if args.profile_device else None
+    device_profile = (
+        _device_profile(fn, inputs, args.repeats, args.profile_output_dir) if args.profile_device else None
+    )
     visible = args.context if args.window is None else min(args.context, args.window)
     kv_bytes = 2 * args.batch_size * visible * args.kv_heads * args.head_dim * dtype.itemsize
     flops = 4 * args.batch_size * visible * args.kv_heads * args.groups * args.head_dim
@@ -417,7 +430,16 @@ def _tpu_vllm_baseline(inputs, expected, args):
     # The outer wrapper owns no donated inputs; repeated timings reuse immutable cache/query arrays.
     measurements = _measure_jax(attend, inputs, args.repeats)
     actual = measurements.output
-    device_profile = _profile_tpu(jax.jit(attend), inputs, args.repeats) if args.profile_device else None
+    device_profile = (
+        _profile_tpu(
+            jax.jit(attend),
+            inputs,
+            args.repeats,
+            args.profile_output_dir / args.baseline if args.profile_output_dir is not None else None,
+        )
+        if args.profile_device
+        else None
+    )
     difference = jnp.abs(actual.astype(jnp.float32) - expected.astype(jnp.float32))
     return {
         "kernel": "tpu_vllm_rpa_v3",
