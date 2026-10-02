@@ -12,7 +12,7 @@ reproducing the gate and the tool's own judge replacing ``rewardkit``.
 """
 
 
-from tasktrove_verify.spec import JudgeSpec
+from verifyit.spec import JudgeSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

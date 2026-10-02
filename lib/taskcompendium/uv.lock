@@ -2082,7 +2082,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
-    { name = "tasktrove-verify" },
+    { name = "verifyit" },
 ]
 
 [package.optional-dependencies]
@@ -2101,7 +2101,7 @@ test = [
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "tasktrove-verify", editable = "../tasktrove-verify" },
+    { name = "verifyit", editable = "../verifyit" },
 ]
 provides-extras = ["harbor"]
 
@@ -2109,34 +2109,6 @@ provides-extras = ["harbor"]
 test = [
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
-    { name = "pytest-timeout" },
-]
-
-[[package]]
-name = "tasktrove-verify"
-version = "0.1.0"
-source = { editable = "../tasktrove-verify" }
-dependencies = [
-    { name = "tomlkit" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
-    { name = "math-verify", marker = "extra == 'answer'", specifier = ">=0.7" },
-    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.40" },
-    { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
-    { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1" },
-    { name = "sympy", marker = "extra == 'answer'", specifier = ">=1.12" },
-    { name = "tasktrove-verify", extras = ["answer", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../tasktrove-verify" },
-    { name = "tomlkit", specifier = ">=0.13" },
-]
-provides-extras = ["answer", "schema", "judge", "reasoning-gym", "all"]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
 ]
 
@@ -2329,6 +2301,35 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5d/ad/04bbb797c84fc1f26cb171f7394716f4865ffb8d8c5e1eef42565c2dfa6b/uvicorn-0.53.0.tar.gz", hash = "sha256:a9356f0cb89b3b8621529c5d5eebd69bfe154f4c3f68b4cf2de47e45fa855c2e", size = 110881, upload-time = "2026-09-14T07:44:23.815Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/76/18/0eea75741ee812e9f598b687619ce2454f6c3a1c5cd21ea990ec6bd26f45/uvicorn-0.53.0-py3-none-any.whl", hash = "sha256:e8dca71ec86dce5f04e333f0d56cdedf942446e6643b9cea1af0d6d3a02cb03e", size = 87081, upload-time = "2026-09-14T07:44:22.179Z" },
+]
+
+[[package]]
+name = "verifyit"
+version = "0.1.0"
+source = { editable = "../verifyit" }
+dependencies = [
+    { name = "tomlkit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
+    { name = "math-verify", marker = "extra == 'answer'", specifier = ">=0.7" },
+    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.40" },
+    { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
+    { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1" },
+    { name = "sympy", marker = "extra == 'answer'", specifier = ">=1.12" },
+    { name = "tomlkit", specifier = ">=0.13" },
+    { name = "verifyit", extras = ["answer", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../verifyit" },
+]
+provides-extras = ["answer", "schema", "judge", "reasoning-gym", "all"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-json-report", specifier = ">=1.5" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]

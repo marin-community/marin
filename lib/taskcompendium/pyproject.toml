@@ -7,7 +7,7 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Semantic answer tasks and Harbor direct-chat lowerings"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.0", "tasktrove-verify"]
+dependencies = ["pydantic>=2.0", "verifyit"]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
@@ -19,7 +19,7 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 
 [tool.uv.sources]
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
-tasktrove-verify = { path = "../tasktrove-verify", editable = true }
+verifyit = { path = "../verifyit", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
