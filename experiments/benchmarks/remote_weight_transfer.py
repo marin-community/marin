@@ -12,9 +12,11 @@ import argparse
 import asyncio
 import dataclasses
 import json
+import logging
 import os
 import socket
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -38,12 +40,14 @@ from levanter.testing.weight_broadcast import broadcast_source
 from levanter.tokenizers import load_tokenizer
 from skyrl_train.inference_engines import remote_inference_engine
 
+logger = logging.getLogger(__name__)
+
 SKYRL_REVISION = "b3297eddfe67358004ee925a42c9ffca81ac8f6e"
 
 
 class ReadyServer(uvicorn.Server):
     def __init__(self, app, ready):
-        super().__init__(uvicorn.Config(app, log_level="error"))
+        super().__init__(uvicorn.Config(app, log_level="error", timeout_graceful_shutdown=10))
         self.ready = ready
 
     async def startup(self, sockets=None):
@@ -191,14 +195,14 @@ async def run(args):
                 assert new["response_ids"] == [[0, 0]] and new["response_ids"] != old["response_ids"]
                 # A token-independent output projection gives uniform logits, independent of the prior cache contents.
                 np.testing.assert_allclose(new["response_logprobs"], -np.log(16), rtol=0, atol=1e-6)
+                logger.warning("Numerical and publication checks passed; closing both transport ranks")
+                source.stop()
                 await client.teardown()
                 report = {
                     "backend": args.backend,
                     "dtype": args.dtype,
                     "skyrl_revision": revision,
-                    "marin_revision": (
-                        subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
-                    ),
+                    "marin_revision": args.marin_revision,
                     "receiver": receiver,
                     "sender": sender,
                     "old": old,
@@ -206,10 +210,21 @@ async def run(args):
                     "model_version": server.model_version,
                     "parameter_bytes": sum(v.nbytes for v in weights.values()),
                 }
+            except BaseException:
+                logger.exception("Weight transfer validation failed before cleanup")
+                raise
             finally:
+                primary_error = sys.exception()
+                source.stop()
                 http_server.should_exit = True
-                await asyncio.wait_for(serving, 30)
-                server.inference_context.shutdown()
+                try:
+                    await asyncio.wait_for(serving, 30)
+                except BaseException:
+                    if primary_error is None:
+                        raise
+                    logger.exception("HTTP cleanup failed while handling %r", primary_error)
+                finally:
+                    server.inference_context.shutdown()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
 
