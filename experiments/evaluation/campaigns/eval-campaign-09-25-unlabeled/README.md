@@ -12,6 +12,16 @@ policy. Policy conformance requires the independently trusted evidence and verif
 in [PR #9461](https://github.com/marin-community/marin/pull/9461) must consume that trusted decision
 before presenting a run as policy-conformant.
 
+SWE-bench uses the native mini-SWE 2.1.0 harness with Marin's context-limited adapter.
+Its 32,768-token budget includes the rendered prompt and the requested reply. Before each
+completion, the adapter counts the prompt, including tools and the generation prefix, through
+the serving model's `/tokenize` endpoint. It caps the reply to the remaining context and the
+model's output limit. When no reply fits, the harness exits through its normal limit handling
+so Harbor can verify the existing patch. It does not truncate or summarize the conversation.
+The total context limit and imported adapter are policy inputs recorded in the launch snapshot;
+results from the previous adapter have a different policy digest and cannot be resumed under
+this configuration.
+
 Pass `--version LABEL` only when a submitter-controlled cohort label is useful. The launcher forwards
 the label to Marin unchanged. It remains provenance metadata and does not alter the conformance
 boundary above.

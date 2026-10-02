@@ -181,6 +181,15 @@ both values named. A limit neither the model nor the policy states falls back to
 default, 32768 input and 8192 output tokens. `--dry-run` prints the resolved pair per Harbor eval
 and `record.json` keeps it under `eval.harbor`.
 
+Installed harnesses must enforce these limits themselves. The unlabeled September campaign's
+SWE-bench policy selects `marin.evaluation.harbor.mini_swe_agent:ContextLimitedMiniSweAgent`
+and declares `kwargs.max_context_tokens: 32768` alongside `kwargs.model_info`. This adapter
+supports the native mini-SWE 2.1.0 configuration and requires the serving endpoint's `/tokenize`
+route. It counts the rendered prompt with its tool schema, caps the completion to the remaining
+total context, and exits through mini-SWE's limit handling when the prompt leaves no room.
+Its trajectory records the effective input, output, and total context budgets. Declaring
+`model_info` alone does not enforce a limit in Harbor's upstream mini-SWE adapter.
+
 ## Results
 
 Each Harbor evaluation writes:
