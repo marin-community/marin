@@ -14,7 +14,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.attention._paged_gpu import GpuPagedAvPrecision, gpu_paged_attention
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
-PagedAttentionImplementation = Literal["reference", "tpu", "gpu_pallas", "gpu_pallas_bf16_3x"]
+PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32_tiles", "gpu_pallas", "gpu_pallas_bf16_3x"]
 
 
 def ragged_paged_attention(
@@ -52,9 +52,10 @@ def ragged_paged_attention(
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. The TPU path uses JAX's existing ragged kernel
     for FP32 inputs; lower-precision inputs use the reference to preserve accuracy.
-    GPU and CPU default to the reference implementation. The opt-in ``gpu_pallas``
-    backend accelerates decode-only batches and uses the reference for prefill.
-    ``gpu_pallas_bf16_3x`` selects the same backend with three-component BF16 AV dots.
+    ``tpu_fp32_tiles`` promotes BF16 cache tiles to FP32 inside the TPU kernel,
+    preserving the cache storage dtype. GPU and CPU default to the reference.
+    The opt-in ``gpu_pallas`` backend accelerates decode-only batches and uses
+    the reference for prefill. ``gpu_pallas_bf16_3x`` selects three-component BF16 AV dots.
     Only the KV-head axis is partitioned; sequence metadata and pages are replicated.
     """
     if implementation is None:
@@ -62,7 +63,7 @@ def ragged_paged_attention(
     if implementation == "gpu_pallas_bf16_3x":
         implementation = "gpu_pallas"
         gpu_av_precision = "bf16_3x"
-    if implementation not in ("tpu", "reference", "gpu_pallas"):
+    if implementation not in ("tpu", "tpu_fp32_tiles", "reference", "gpu_pallas"):
         raise ValueError(f"Unknown paged attention implementation: {implementation}")
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError("sliding_window must be positive")
@@ -71,9 +72,14 @@ def ragged_paged_attention(
     if q.ndim != 4 or kv_pages.ndim != 4 or kv_pages.shape[2:] != (2 * q.shape[1], q.shape[3]):
         raise ValueError("Expected grouped queries and interleaved KV pages with matching heads and head_dim")
 
-    backend = {"tpu": _tpu_attention, "reference": _reference_attention, "gpu_pallas": _gpu_attention}[implementation]
+    backend = {
+        "tpu": _tpu_attention,
+        "tpu_fp32_tiles": _tpu_kernel_attention,
+        "reference": _reference_attention,
+        "gpu_pallas": _gpu_attention,
+    }
     fn = partial(
-        backend,
+        backend[implementation],
         sm_scale=sm_scale,
         sliding_window=sliding_window,
         soft_cap=soft_cap,
@@ -172,11 +178,27 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
             sliding_window=sliding_window,
             soft_cap=soft_cap,
         )
+    return _tpu_kernel_attention(
+        q,
+        kv_pages,
+        kv_lens,
+        page_indices,
+        cu_q_lens,
+        num_seqs,
+        sm_scale=sm_scale,
+        sliding_window=sliding_window,
+        soft_cap=soft_cap,
+    )
+
+
+def _tpu_kernel_attention(
+    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap
+):
     original_dim = q.shape[-1]
     padding = (-original_dim) % 128
     q_padded = jnp.pad(q, ((0, 0), (0, 0), (0, 0), (0, padding)))
     pages_padded = jnp.pad(kv_pages, ((0, 0), (0, 0), (0, 0), (0, padding)))
-    q_flat = q_padded.reshape(q.shape[0], -1, q_padded.shape[-1])
+    q_flat = q_padded.astype(jnp.float32).reshape(q.shape[0], -1, q_padded.shape[-1])
     if isinstance(sm_scale, (float, int)):
         kernel_scale = sm_scale
     else:
@@ -192,6 +214,10 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
             cu_q_lens,
             jnp.maximum(num_seqs, 0).reshape(1),
             sm_scale=kernel_scale,
+            # Unit dequantization scales cast loaded tiles to the FP32 query dtype
+            # in VMEM, without materializing a full FP32 cache in HBM.
+            k_scale=1.0 if kv_pages.dtype != jnp.float32 else None,
+            v_scale=1.0 if kv_pages.dtype != jnp.float32 else None,
             sliding_window=sliding_window,
             soft_cap=soft_cap,
         )
