@@ -181,6 +181,7 @@ _MAX_POD_NAME_LEN = 63
 _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
     "pool": "iris.pool",
     "region": "iris.region",
+    COSCHEDULE_NVLINK_DOMAIN: CW_LABEL_NVLINK_DOMAIN,
 }
 
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.
@@ -343,7 +344,19 @@ def _constraints_to_node_selector(
         label_key = _CONSTRAINT_KEY_TO_NODE_LABEL.get(c.key)
         if label_key is None:
             continue
+        if c.key == COSCHEDULE_NVLINK_DOMAIN and (
+            c.mode != job_pb2.CONSTRAINT_MODE_REQUIRED
+            or not c.value.HasField("string_value")
+            or not c.value.string_value
+        ):
+            raise PodManifestError("nvlink.domain requires a nonempty string value and a required constraint")
         if c.op == job_pb2.CONSTRAINT_OP_EQ and c.HasField("value"):
+            if (
+                c.key == COSCHEDULE_NVLINK_DOMAIN
+                and label_key in node_selector
+                and node_selector[label_key] != c.value.string_value
+            ):
+                raise PodManifestError(f"Conflicting constraints for key={c.key!r}")
             node_selector[label_key] = c.value.string_value
         else:
             raise PodManifestError(
@@ -1054,6 +1067,18 @@ def _build_pod_manifest(
         node_selector[managed_label] = "true"
     if node_selector:
         spec["nodeSelector"] = node_selector
+    if rack := node_selector.get(CW_LABEL_NVLINK_DOMAIN):
+        # Kueue's topology ungater can replace its own label in nodeSelector.
+        # Keep the requested rack required after that update as well.
+        spec["affinity"] = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [
+                        {"matchExpressions": [{"key": CW_LABEL_NVLINK_DOMAIN, "operator": "In", "values": [rack]}]}
+                    ]
+                }
+            }
+        }
 
     if gpu_count > 0:
         spec.setdefault("tolerations", []).append(NVIDIA_GPU_TOLERATION)

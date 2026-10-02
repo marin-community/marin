@@ -15,6 +15,8 @@ from iris.cluster.backends.k8s.tasks import (
     PodConfig,
 )
 from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.constraints import Constraint, ConstraintOp
+from iris.cluster.controller.codec import constraints_from_json, constraints_to_json
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -674,6 +676,21 @@ def test_constraints_to_node_selector_region():
 
     manifest = _build_pod_manifest(req, pod_config())
     assert manifest["spec"]["nodeSelector"] == {"iris.region": "US-WEST-04A"}
+
+
+def test_named_rack_constraint_survives_storage_and_pins_pod():
+    rack = "DH1-392-US-EAST-08A"
+    label = "ds.coreweave.com/nvlink.domain"
+    request = make_run_req("/rack-job/0")
+    constraint = Constraint.create(key="nvlink.domain", op=ConstraintOp.EQ, value=rack).to_proto()
+    stored = constraints_to_json([constraint])
+    request.constraints.extend(c.to_proto() for c in constraints_from_json(stored))
+
+    manifest = _build_pod_manifest(request, pod_config())
+    assert manifest["spec"]["nodeSelector"][label] == rack
+    assert manifest["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"] == {
+        "nodeSelectorTerms": [{"matchExpressions": [{"key": label, "operator": "In", "values": [rack]}]}]
+    }
 
 
 def test_constraints_to_node_selector_multiple():
