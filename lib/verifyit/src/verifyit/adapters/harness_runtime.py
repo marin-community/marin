@@ -4,7 +4,7 @@
 """Execute a trusted harness corpus scorer under the script mode boundary.
 
 This is a retained-runtime integration, not a native correctness projection.
-The script returns every sample observation and corpus point metric; its zero
+The script returns bounded observation batches and corpus point metrics; its zero
 reward deliberately does not reinterpret unbounded or differently scaled metrics.
 """
 
@@ -18,7 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from verifyit.file_ops.read import read_regular_bytes
 from verifyit.grade import InvalidTask, Reward, Status, invalid_task, run
+from verifyit.json_objects import unique_object
 from verifyit.spec import ScriptSpec, render_spec
 
 
@@ -185,6 +187,11 @@ def score_corpus(
     ``source_root`` and ``config_path`` are task-owned installation metadata,
     never candidate-selected paths. Samples contain only ``doc`` and already
     filtered ``responses``. The source runner checks its narrow metric contract.
+    It writes nonempty JSON arrays of observations into the input's
+    ``observations_dir``, with each file within the standard artifact size limit.
+    Its compact verdict detail names those files in order as ``observation_batches``
+    and retains source-owned ``aggregates``. Each batch path must be a filename.
+    Observations are returned separately from the compact verdict in BatchResult.
     """
     source_root = source_root.resolve()
     config_path = config_path.resolve()
@@ -198,15 +205,23 @@ def score_corpus(
         seed = validate_aggregation_seed(aggregation_seed) if aggregation_seed is not None else None
     except InvalidTask as error:
         return BatchResult((), {}, invalid_task(str(error)))
-    try:
-        serialized = json.dumps(
-            {"config": str(config_path), "samples": list(samples), "stage": stage, "aggregation_seed": seed},
-            allow_nan=False,
-        )
-    except (TypeError, ValueError) as error:
-        return BatchResult((), {}, invalid_task(f"corpus samples must be finite JSON data: {error}"))
     with tempfile.TemporaryDirectory(prefix="verifyit-harness-corpus-") as directory:
         tests = Path(directory)
+        observations_dir = tests / "observations"
+        observations_dir.mkdir()
+        try:
+            serialized = json.dumps(
+                {
+                    "config": str(config_path),
+                    "samples": list(samples),
+                    "stage": stage,
+                    "aggregation_seed": seed,
+                    "observations_dir": str(observations_dir),
+                },
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as error:
+            return BatchResult((), {}, invalid_task(f"corpus samples must be finite JSON data: {error}"))
         payload = tests / "samples.json"
         payload.write_text(serialized, encoding="utf-8")
         (tests / "producer.sh").write_text('exec "$@"\n', encoding="utf-8")
@@ -219,16 +234,14 @@ def score_corpus(
         spec_path = tests / "verifier.toml"
         spec_path.write_text(render_spec(spec), encoding="utf-8")
         verdict = run(spec_path, tests)
-    if verdict.status != Status.SCORED:
-        return BatchResult((), {}, verdict)
-    observations = verdict.detail.get("observations")
+        if verdict.status != Status.SCORED:
+            return BatchResult((), {}, verdict)
+        if verdict.reward != 0:
+            raise RuntimeError("retained corpus runtime cannot imply a correctness reward")
+        observations = _read_observations(verdict.detail.get("observation_batches"), observations_dir, len(samples))
     aggregates = verdict.detail.get("aggregates")
-    if not isinstance(observations, list) or not all(isinstance(item, dict) for item in observations):
-        raise RuntimeError("trusted corpus producer returned malformed observations")
     if len(observations) != len(samples) or not isinstance(aggregates, dict):
         raise RuntimeError("trusted corpus producer omitted samples or aggregate metrics")
-    if verdict.reward != 0:
-        raise RuntimeError("retained corpus runtime cannot imply a correctness reward")
     if stage == "observations":
         if aggregates or not observations or any(set(item) != set(observations[0]) for item in observations):
             raise RuntimeError("observation stage returned inconsistent metrics or premature aggregates")
@@ -241,3 +254,31 @@ def score_corpus(
     ):
         raise RuntimeError("trusted corpus producer returned invalid corpus point metrics")
     return BatchResult(tuple(observations), aggregates, verdict)
+
+
+def _read_observations(batches: object, directory: Path, sample_count: int) -> list[dict[str, Any]]:
+    if not isinstance(batches, list) or len(batches) > sample_count:
+        raise RuntimeError("trusted corpus producer returned malformed observation batches")
+    filenames: set[str] = set()
+    observations = []
+    for filename in batches:
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or filename in {".", ".."}
+            or Path(filename).name != filename
+            or filename in filenames
+        ):
+            raise RuntimeError("observation batches must name distinct files within the observations directory")
+        filenames.add(filename)
+        try:
+            batch = json.loads(read_regular_bytes(directory / filename).decode(), object_pairs_hook=unique_object)
+            json.dumps(batch, allow_nan=False)
+        except (OSError, ValueError, RecursionError) as error:
+            raise RuntimeError("trusted corpus producer returned an unreadable observation batch") from error
+        if not isinstance(batch, list) or not batch or not all(isinstance(item, dict) for item in batch):
+            raise RuntimeError("trusted corpus producer returned malformed observations")
+        if len(observations) + len(batch) > sample_count:
+            raise RuntimeError("trusted corpus producer returned too many sample observations")
+        observations.extend(batch)
+    return observations
