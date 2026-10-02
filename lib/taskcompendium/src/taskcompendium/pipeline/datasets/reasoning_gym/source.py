@@ -12,7 +12,7 @@ import numpy as np
 import reasoning_gym
 from reasoning_gym.factory import DATASETS
 
-from taskcompendium.pipeline.datasets.reasoning_gym_generated import REVISION
+from taskcompendium.pipeline.datasets.reasoning_gym.generated import REVISION
 
 ROWS_PER_TASK = 1000
 GENERATION_SEED = 42

@@ -79,7 +79,7 @@ class Output:
 
 @dataclass
 class BatchService:
-    """Fake external inference service; requests and acknowledged batches survive callers."""
+    """Fake external inference service that records submitted requests."""
 
     confidence: str = "high"
     quality: str = "good"
@@ -284,8 +284,6 @@ def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, appl
         reviewer=reviewer,
         policy=strict_policy,
     )
-    review_path = next((tmp_path / "audited/evidence").glob("*/attempt-*/review"))
-    assert json.loads((review_path / "batch-state.json").read_text())["batch_id"] == "batch-0"
     assert resumed["dispositions"] == {"reject": 1}
     pending_audit = stage_table(tmp_path).to_pylist()[0]
     accepted = run_stages(
@@ -701,7 +699,7 @@ class PartialBatchService(BatchService):
         return result
 
 
-def test_query_cache_resumes_partial_batch_in_same_evidence_directory(tmp_path, apple_row):
+def test_query_cache_fetches_only_missing_completions_in_same_evidence_directory(tmp_path, apple_row):
     service = PartialBatchService()
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     normalized = [

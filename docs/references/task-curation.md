@@ -133,6 +133,12 @@ A failed mapper can submit its unfinished review batch again. The audit records
 the final result for each task. Earlier attempt files are debug logs; they do not
 create extra rejected rows after a successful retry.
 
+Zephyr forms review windows and writes completed audit shards. The provider
+protocol lives in `pipeline/review_transport.py`; it submits requests and saves
+responses without a separate local resume mechanism. JSONL and Parquet exports
+use Zephyr writers. The optional rewrite stage still scans source files itself;
+it uses the shared writers but does not yet use Zephyr shard execution.
+
 ## Outputs
 
 Each source has audited and filtered artifacts. One canonical artifact contains:

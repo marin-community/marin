@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Columnar task annotations and the final accepted-task export."""
+"""Columnar task annotations for curation exports."""
 
 import json
 from collections.abc import Sequence
@@ -9,11 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
+from zephyr.writers import write_parquet_file
 
 from taskcompendium.models import TextMessage
-from taskcompendium.pipeline.models import Disposition, TaskAudit
+from taskcompendium.pipeline.models import TaskAudit
 from taskcompendium.pipeline.verification import grader_readiness
 
 TASK_SCHEMA = pa.schema(
@@ -122,20 +121,8 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
     }
 
 
-def _write_table(path: Path, table: pa.Table) -> None:
-    temporary = path.with_suffix(".tmp")
-    pq.write_table(table, temporary, compression="zstd")
-    temporary.replace(path)
-
-
 def write_task_parquet(path: Path, audits: Sequence[TaskAudit]) -> pa.Table:
     """Persist every annotated task, including rejected rows and incomplete attempts."""
     table = pa.Table.from_pylist([audit_columns(audit) for audit in audits], schema=TASK_SCHEMA)
-    _write_table(path, table)
+    write_parquet_file(table.to_batches(), str(path), schema=TASK_SCHEMA)
     return table
-
-
-def write_accepted_parquet(path: Path, table: pa.Table) -> None:
-    """Export only accepted rows, preserving all annotation columns and their schema."""
-    keep = pc.call_function("equal", [table["filter_status"], pa.scalar(Disposition.KEEP.value)])
-    _write_table(path, table.filter(keep))

@@ -91,7 +91,7 @@ def generated_rows(archive_path: StoragePath) -> Iterator[dict[str, Any]]:
         }
         with TemporaryFile(mode="w+t") as errors:
             process = subprocess.Popen(
-                [sys.executable, "-m", "taskcompendium.pipeline.reasoning_gym_source"],
+                [sys.executable, "-m", "taskcompendium.pipeline.datasets.reasoning_gym.source"],
                 stdout=subprocess.PIPE,
                 stderr=errors,
                 text=True,

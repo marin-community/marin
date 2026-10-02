@@ -106,8 +106,8 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "taskcompendium.pipeline.datasets.numeric_answers",
-        "factory": "RECIPES",
+        "module": "experiments.post_training.task_curation.source_bindings",
+        "factory": "source_recipe",
         "key": "aime24",
         "normalizer_module": "taskcompendium.pipeline.datasets.numeric_answers",
         "normalizer_function": "normalize_aime24"
@@ -340,9 +340,9 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "taskcompendium.pipeline.datasets.gpqa",
-        "factory": "recipe",
-        "key": null,
+        "module": "experiments.post_training.task_curation.source_bindings",
+        "factory": "source_recipe",
+        "key": "gpqa",
         "normalizer_module": "taskcompendium.pipeline.datasets.gpqa",
         "normalizer_function": "normalize"
       },
@@ -3958,7 +3958,7 @@
         "module": "experiments.post_training.task_curation.source_bindings",
         "factory": "source_recipe",
         "key": "reasoning_gym_generated",
-        "normalizer_module": "taskcompendium.pipeline.datasets.reasoning_gym_generated",
+        "normalizer_module": "taskcompendium.pipeline.datasets.reasoning_gym.generated",
         "normalizer_function": "normalize"
       },
       "bound_source": {
@@ -4072,8 +4072,8 @@
       "disposition": "converted",
       "mapping_basis": "exact_dataset_revision_and_component",
       "converter": {
-        "module": "taskcompendium.pipeline.datasets.numeric_answers",
-        "factory": "RECIPES",
+        "module": "experiments.post_training.task_curation.source_bindings",
+        "factory": "source_recipe",
         "key": "svamp",
         "normalizer_module": "taskcompendium.pipeline.datasets.numeric_answers",
         "normalizer_function": "normalize_svamp"
@@ -6847,9 +6847,9 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "taskcompendium.pipeline.datasets.structured_output",
-        "factory": "recipe",
-        "key": null,
+        "module": "experiments.post_training.task_curation.source_bindings",
+        "factory": "source_recipe",
+        "key": "structured_output",
         "normalizer_module": "taskcompendium.pipeline.datasets.structured_output",
         "normalizer_function": "normalize"
       },
@@ -6925,9 +6925,9 @@
       "disposition": "converted",
       "mapping_basis": "declared_pinned_upstream_lineage",
       "converter": {
-        "module": "taskcompendium.pipeline.datasets.instruction_following",
-        "factory": "recipe",
-        "key": null,
+        "module": "experiments.post_training.task_curation.source_bindings",
+        "factory": "source_recipe",
+        "key": "instruction_following",
         "normalizer_module": "taskcompendium.pipeline.datasets.instruction_following",
         "normalizer_function": "normalize"
       },

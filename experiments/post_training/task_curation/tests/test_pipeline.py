@@ -272,10 +272,11 @@ def test_graph_changes_one_model_binding_without_reacquiring_sources(artifact_st
     assert revised.sources[1].accepted.path() == workflow.sources[1].accepted.path()
 
 
-def test_cli_plans_download_and_pipeline_without_credentials(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source", ["math500", "aime24", "svamp", "gpqa", "instruction_following", "structured_output"])
+def test_cli_plans_download_and_pipeline_without_credentials(tmp_path, monkeypatch, source):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
-    result = CliRunner().invoke(main, ["--source", "math500", "--limit", "10", "--model-revision", "fixture"])
+    result = CliRunner().invoke(main, ["--source", source, "--limit", "10", "--model-revision", "fixture"])
     assert result.exit_code == 0, result.output
     assert "task-curation/canonical" in result.output
     assert not (tmp_path / "artifacts").exists()

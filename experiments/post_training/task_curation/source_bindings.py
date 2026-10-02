@@ -14,25 +14,29 @@ from taskcompendium.pipeline.datasets import (
     code_contracts,
     competitive_coding,
     executable_tasks,
+    gpqa,
     gretel_text_to_sql,
     if_calendar,
+    instruction_following,
     instruction_tasks,
     math_answers,
     multichallenge,
     nemo_actions,
+    numeric_answers,
     openscience,
     preference_tasks,
     python_tasks,
     qa_tasks,
-    reasoning_gym_generated,
     reasoning_tasks,
     repository_tasks,
     rubric_tasks,
+    structured_output,
     tasktrove_math,
 )
 from taskcompendium.pipeline.datasets.nemotron import structured_outputs
 from taskcompendium.pipeline.datasets.nemotron_ultra.catalog import NEMOTRON_SOURCES
 from taskcompendium.pipeline.datasets.nemotron_ultra.source import recipe_for_source
+from taskcompendium.pipeline.datasets.reasoning_gym import generated as reasoning_gym_generated
 from taskcompendium.pipeline.models import DatasetRecipe
 
 from experiments.post_training.task_curation.competitive import convert_competitive_coding
@@ -47,7 +51,11 @@ SANDBOX_TIMEOUT = 120.0
 SANDBOX_MEMORY_MB = 512
 
 RECIPES = (
-    math_answers.RECIPES | instruction_tasks.RECIPES | code_contracts.RECIPES | {"nemo_actions": nemo_actions.recipe}
+    math_answers.RECIPES
+    | numeric_answers.RECIPES
+    | instruction_tasks.RECIPES
+    | code_contracts.RECIPES
+    | {"nemo_actions": nemo_actions.recipe, "gpqa": gpqa.recipe}
 )
 FAMILY_SOURCES = {
     name: family
@@ -62,6 +70,8 @@ FAMILY_SOURCES = {
     for name in family.SOURCES
 }
 SOURCE_FACTORIES = {
+    "instruction_following": instruction_following.recipe,
+    "structured_output": structured_output.recipe,
     "gretel_text_to_sql": gretel_text_to_sql.recipe,
     "openscience": openscience.recipe,
     "reasoning_gym_generated": reasoning_gym_generated.recipe,

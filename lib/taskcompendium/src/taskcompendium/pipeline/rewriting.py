@@ -16,10 +16,11 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.readers import load_jsonl
+from zephyr.writers import write_jsonl_file, write_parquet_file
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
-from taskcompendium.pipeline.batches import BatchClient, batch_output, typed_batch_records
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -39,8 +40,8 @@ from taskcompendium.pipeline.models import (
     TaskAudit,
 )
 from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns, write_task_parquet
-from taskcompendium.pipeline.records import read_jsonl
 from taskcompendium.pipeline.review import CHAT_ENDPOINT, Reviewer
+from taskcompendium.pipeline.review_transport import BatchClient, batch_output, typed_batch_records
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.pipeline.zephyr import persist_evidence
 
@@ -75,16 +76,18 @@ def write_rewrite_audit(
     Call with empty assessments after proposals. Before exporting accepted tasks,
     supply candidate assessments and retained original assessments for other inputs.
     """
-    originals = [TaskSpec.model_validate(row) for row in read_jsonl(output_path / "originals.jsonl")]
-    records = [RewriteRecord.model_validate_json(json.dumps(row)) for row in read_jsonl(output_path / "proposals.jsonl")]
+    originals = [TaskSpec.model_validate(row) for row in load_jsonl(str(output_path / "originals.jsonl"))]
+    records = [
+        RewriteRecord.model_validate_json(json.dumps(row)) for row in load_jsonl(str(output_path / "proposals.jsonl"))
+    ]
     records_by_id = {record.task_id: record for record in records}
     if len(records) != len(originals) or set(records_by_id) != {task.id for task in originals}:
         raise ValueError("Cleanup records do not account for every original task")
-    candidates = [TaskSpec.model_validate(row) for row in read_jsonl(output_path / "candidates.jsonl")]
+    candidates = [TaskSpec.model_validate(row) for row in load_jsonl(str(output_path / "candidates.jsonl"))]
     candidates_by_id = {candidate.id: candidate for candidate in candidates}
     lineage = {
         item.parent_id: item
-        for item in (RewriteLineage.model_validate(row) for row in read_jsonl(output_path / "lineage.jsonl"))
+        for item in (RewriteLineage.model_validate(row) for row in load_jsonl(str(output_path / "lineage.jsonl")))
     }
     reviews_by_id = {review.task_id: review for review in reviews}
     decisions_by_id = {decision.task_id: decision for decision in decisions}
@@ -213,7 +216,7 @@ class BatchRewriter:
         if config_path.exists() and config_path.read_text() != config_text:
             raise ValueError("Output directory belongs to another rewrite run")
         config_path.write_text(config_text)
-        (output_path / "originals.jsonl").write_text("".join(task.model_dump_json() + "\n" for task in tasks))
+        write_jsonl_file((task.model_dump(mode="json") for task in tasks), str(output_path / "originals.jsonl"))
         requests, pending = [], []
         for task in tasks:
             if (
@@ -299,13 +302,13 @@ class BatchRewriter:
                     rewrite=identity,
                 )
             )
-        (output_path / "candidates.jsonl").write_text(
-            "".join(candidate.model_dump_json() + "\n" for candidate in candidates)
+        write_jsonl_file(
+            (candidate.model_dump(mode="json") for candidate in candidates), str(output_path / "candidates.jsonl")
         )
-        (output_path / "lineage.jsonl").write_text(
-            "".join(row.model_dump_json(exclude_none=True) + "\n" for row in lineage)
+        write_jsonl_file(
+            (row.model_dump(mode="json", exclude_none=True) for row in lineage), str(output_path / "lineage.jsonl")
         )
-        (output_path / "proposals.jsonl").write_text("".join(record.model_dump_json() + "\n" for record in validated))
+        write_jsonl_file((record.model_dump(mode="json") for record in validated), str(output_path / "proposals.jsonl"))
         write_rewrite_audit(output_path, checks={}, reviews=(), decisions=())
         return validated
 
@@ -340,11 +343,12 @@ def rewrite_audit_source(
         evidence_stack.callback(persist_evidence, work, evidence)
         proposals = rewriter.rewrite(list(originals.values()), rewrite_rubric, work)
         candidates_by_id = {
-            task.id: task for task in (TaskSpec.model_validate(row) for row in read_jsonl(work / "candidates.jsonl"))
+            task.id: task
+            for task in (TaskSpec.model_validate(row) for row in load_jsonl(str(work / "candidates.jsonl")))
         }
         lineage = {
             item.parent_id: item
-            for item in (RewriteLineage.model_validate(row) for row in read_jsonl(work / "lineage.jsonl"))
+            for item in (RewriteLineage.model_validate(row) for row in load_jsonl(str(work / "lineage.jsonl")))
         }
         candidates = {parent: candidates_by_id[item.task_id] for parent, item in lineage.items()}
         checks = {}
@@ -428,12 +432,10 @@ def rewrite_audit_source(
                 dispositions[row["filter_status"]] += 1
                 reasons.update(row["filter_reasons"])
             target = output / "audit" / f"part-{index:05d}.parquet"
-            with target.open("wb", auto_mkdir=True) as stream:
-                pq.write_table(pa.Table.from_pylist(updated, schema=TASK_SCHEMA), stream)
+            write_parquet_file(updated, str(target), schema=TASK_SCHEMA)
             accepted = [row for row in updated if row["filter_status"] == "keep"]
             accepted_path = output / "accepted" / f"part-{index:05d}.parquet"
-            with accepted_path.open("wb", auto_mkdir=True) as stream:
-                pq.write_table(pa.Table.from_pylist(accepted, schema=TASK_SCHEMA), stream)
+            write_parquet_file(accepted, str(accepted_path), schema=TASK_SCHEMA)
         manifest: dict[str, object] = {
             **counts,
             "dispositions": dict(dispositions),

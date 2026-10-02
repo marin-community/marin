@@ -11,7 +11,7 @@ from typing import Any
 
 from finestore.cache import PersistentKvCache
 
-from taskcompendium.pipeline.batches import BatchClient, batch_output
+from taskcompendium.pipeline.review_transport import BatchClient, batch_output
 
 
 def cached_batch_output(

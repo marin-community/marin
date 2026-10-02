@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 import pyarrow.parquet as pq
 import pytest
+from zephyr.readers import load_jsonl
 
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.datasets import instruction_following, structured_output
@@ -26,8 +27,7 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
     TaskAudit,
 )
-from taskcompendium.pipeline.parquet import write_accepted_parquet, write_task_parquet
-from taskcompendium.pipeline.records import read_jsonl
+from taskcompendium.pipeline.parquet import write_task_parquet
 from taskcompendium.pipeline.rewriting import (
     BatchRewriter,
     protected_text_checks,
@@ -133,7 +133,7 @@ def structured_task():
     return task
 
 
-def test_rewrite_reuses_acknowledged_batch_in_same_directory_and_retains_lineage(tmp_path, structured_task):
+def test_rewrite_retry_resubmits_batch_and_retains_lineage(tmp_path, structured_task):
     old_text = "Parse the document and recover all values."
     replacement = structured_task.context.events[0].content.replace(old_text, "Generate a schema-valid instance.")
     service = RewriteService(
@@ -148,10 +148,11 @@ def test_rewrite_reuses_acknowledged_batch_in_same_directory_and_retains_lineage
     rewriter = BatchRewriter(service, "model", "deployment")
     rubric = ReviewRubric("repair", "1", ("Preserve the schema.",))
     with pytest.raises(TimeoutError):
-        rewriter.rewrite([structured_task], rubric, tmp_path)
+        rewriter.rewrite([structured_task], rubric, tmp_path / "failed-attempt")
     rewriter.rewrite([structured_task], rubric, tmp_path)
-    rewriter.rewrite([structured_task], rubric, tmp_path)
-    assert len(service.batches) == 1
+    assert len(service.batches) == 2
+    assert json.loads((tmp_path / "failed-attempt/batch-submission.json").read_text())["batch_id"] == "batch-0"
+    assert json.loads((tmp_path / "batch-submission.json").read_text())["batch_id"] == "batch-1"
     original = TaskSpec.model_validate_json((tmp_path / "originals.jsonl").read_text())
     candidate = TaskSpec.model_validate_json((tmp_path / "candidates.jsonl").read_text())
     assert original == structured_task
@@ -184,7 +185,7 @@ def test_final_rewrite_audit_keeps_original_decision_and_rejects_failed_candidat
     BatchRewriter(service, "model", "deployment").rewrite(
         [structured_task, original], ReviewRubric("repair", "1", ()), tmp_path
     )
-    candidate = TaskSpec.model_validate(read_jsonl(tmp_path / "candidates.jsonl")[0])
+    candidate = TaskSpec.model_validate(next(load_jsonl(str(tmp_path / "candidates.jsonl"))))
     checks = verify_witness(candidate, '{"count": 0}', "__invalid__")
     review = ReviewRecord(task_id=candidate.id, status=ReviewStatus.UNAVAILABLE, verdict=None, detail="No review")
     decision = task_decision(candidate.id, checks, review, FilterPolicy())
@@ -203,13 +204,12 @@ def test_final_rewrite_audit_keeps_original_decision_and_rejects_failed_candidat
         detail="",
     )
     original_decision = task_decision(original.id, original_checks, original_review, FilterPolicy())
-    table = write_rewrite_audit(
+    write_rewrite_audit(
         tmp_path,
         checks={candidate.id: checks, original.id: original_checks},
         reviews=[review, original_review],
         decisions=[decision, original_decision],
     )
-    write_accepted_parquet(tmp_path / "accepted.parquet", table)
     audit = pq.read_table(tmp_path / "audit.parquet").to_pylist()
     assert [row["parent_id"] for row in audit] == [structured_task.id, original.id]
     assert audit[0]["task_id"] == candidate.id
@@ -223,8 +223,6 @@ def test_final_rewrite_audit_keeps_original_decision_and_rejects_failed_candidat
     assert audit[1]["filter_status"] == "keep"
     assert audit[1]["review_evidence"] == original_review.verdict.evidence
     assert audit[1]["checks"] == [check.model_dump(mode="json") for check in original_checks]
-    accepted = pq.read_table(tmp_path / "accepted.parquet").to_pylist()
-    assert [row["task_id"] for row in accepted] == [original.id]
 
 
 @pytest.mark.parametrize("fault", ["missing", "duplicate"])

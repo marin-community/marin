@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from taskcompendium.models import ResourceVisibility, TaskSpec, VerifierKind
-from taskcompendium.pipeline.batches import BatchClient, batch_output, typed_batch_records
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import cached_batch_output
+from taskcompendium.pipeline.review_transport import BatchClient, batch_output, typed_batch_records
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -329,7 +329,7 @@ def review_records(output: str, task_ids: Sequence[str]) -> list[ReviewRecord]:
 
 @dataclass(frozen=True)
 class BatchReviewer:
-    """Review one task per request and resume an acknowledged batch submission."""
+    """Review one task per provider batch request."""
 
     client: BatchClient
     model: str
