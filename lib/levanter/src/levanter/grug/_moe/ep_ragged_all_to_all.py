@@ -30,6 +30,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
+from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.availability import quack_grouped_gemm_available
 from levanter.grug._moe.common import (
@@ -279,6 +280,81 @@ def _transport_buffer(
     return jax.lax.broadcast(marker.astype(dtype), (rows, hidden_dim))
 
 
+@jax.custom_vjp
+def forward_barrier(values):
+    """``optimization_barrier`` in the forward pass only; cotangents pass straight through.
+
+    A plain barrier's transpose ties the cotangents together too: it would hold one input's
+    cotangent until every other one exists, and between a weight gradient's all-reduce and the
+    slice back to its FSDP shard it stops XLA from fusing the pair into a reduce-scatter.
+    """
+    return jax.lax.optimization_barrier(values)
+
+
+def _forward_barrier_fwd(values):
+    return forward_barrier(values), None
+
+
+def _forward_barrier_bwd(_, cotangents):
+    return (cotangents,)
+
+
+forward_barrier.defvjp(_forward_barrier_fwd, _forward_barrier_bwd)
+
+
+class _TransportSchedule(StrEnum):
+    """How the chunked pipeline orders its transports against its compute."""
+
+    # Data dependencies plus the barrier that keeps one chunk's buffers live at a time. Even this
+    # order leaves a chunk's return and the next chunk's dispatch free to run together: only XLA's
+    # latency-hiding scheduler with one collective in flight, or synchronous collectives, keeps
+    # two device-initiated transports from being in flight at once, which can deadlock.
+    DEPENDENCY = auto()
+    # Also ties that put compute beside every transport under the latency-hiding scheduler with
+    # one collective in flight. They free more transports from the compute between them, so the
+    # program needs that scheduler.
+    LATENCY_HIDING = auto()
+
+
+class RoutingWeightGradient(StrEnum):
+    """How the ragged expert-parallel backend differentiates the combine weights."""
+
+    # <dout, y> for each assignment, read from the expert outputs, which the backward keeps.
+    EXACT = auto()
+    # <h, dh> / w for each expert row, from the expert MLP's own backward, where dh is the cotangent
+    # of the activation h and the row's output cotangent is w * dout. The backward needs neither the
+    # expert outputs nor their return transport, but the gradient is zero or inexact wherever
+    # w * dout rounds to zero in the cotangent dtype: at w = 0, and in float16 also for normal weights
+    # times small output cotangents.
+    EXPERT_SIDE = auto()
+
+
+# Small values the dispatch-overlap schedule computes before the first dispatch and ties to it. A
+# recompute for the backward replays that tie, so it needs them again; saving them keeps their
+# collectives out of the recompute.
+DISPATCH_OVERLAP_SAVE_NAME = "grug_moe_dispatch_overlap_saved"
+
+
+class DispatchOverlap(NamedTuple):
+    """Caller compute that the ragged MoE runs while its first chunk's dispatch is in flight.
+
+    ``fn(params, x)`` runs on this shard's tokens once the dispatch buffer is ready, and the first
+    chunk's expert MLP waits for its result. With one collective in flight at a time, this puts
+    the work beside the dispatch, which otherwise has no independent compute, in the forward and
+    in the backward's recompute alike. ``fn`` must return a pytree of ``[Tlocal, ...]`` arrays.
+
+    Passing one also orders the rest of the pipeline for XLA's latency-hiding scheduler with one
+    collective in flight (`_TransportSchedule.LATENCY_HIDING`); the program needs that scheduler.
+    It also moves the layer's capacity-drop count ahead of the first dispatch and tags it
+    `DISPATCH_OVERLAP_SAVE_NAME`: a remat policy should save that name, or the recompute for the
+    backward reruns the count's all-reduce to replay the ordering.
+    """
+
+    fn: Callable[[object, jax.Array], object]
+    params: object
+    x: jax.Array
+
+
 def _accepted_assignments(
     flat_selected: Int[Array, "TK"],
     sorted_indices: Int[Array, "TK"],
@@ -304,19 +380,6 @@ def _accepted_assignments(
     )
 
 
-class RoutingWeightGradient(StrEnum):
-    """How the ragged expert-parallel backend differentiates the combine weights."""
-
-    # <dout, y> for each assignment, read from the expert outputs, which the backward keeps.
-    EXACT = auto()
-    # <h, dh> / w for each expert row, from the expert MLP's own backward, where dh is the cotangent
-    # of the activation h and the row's output cotangent is w * dout. The backward needs neither the
-    # expert outputs nor their return transport, but the gradient is zero or inexact wherever
-    # w * dout rounds to zero in the cotangent dtype: at w = 0, and in float16 also for normal weights
-    # times small output cotangents.
-    EXPERT_SIDE = auto()
-
-
 class _ExpertRouting(NamedTuple):
     """This shard's routing, all integer or boolean, shared by the forward and the backward."""
 
@@ -339,6 +402,7 @@ class _ExpertLayout:
     chunk_experts: int
     chunk_capacity: int
     expert_mlp: _ExpertMlp
+    schedule: _TransportSchedule
     weight_gradient: RoutingWeightGradient
 
     @property
@@ -411,9 +475,10 @@ def _routed_experts_forward(
     weights: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    staged: tuple[jax.Array, ...],
     routing: _ExpertRouting,
     layout: _ExpertLayout,
-) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...], Float[Array, "TK H"]]:
+) -> tuple[Float[Array, "Tlocal H"], tuple[jax.Array, ...], tuple[_ChunkResiduals, ...], Float[Array, "TK H"]]:
     assignments, hidden_dim = sorted_x.shape
     plans = _chunk_plans(routing, layout)
     # Rows no chunk writes are the dropped assignments, which the combine skips.
@@ -421,10 +486,11 @@ def _routed_experts_forward(
         assignments, hidden_dim, sorted_x.dtype, routing.group_sizes, site=_TransportBufferSite.RETURN_OUTPUT
     )  # [TK, H]
     chunk_residuals = []
+    previous_dispatch = None
     for chunk_index, plan in enumerate(plans):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             source = sorted_x
-            if chunk_residuals:
+            if chunk_residuals and layout.schedule == _TransportSchedule.DEPENDENCY:
                 # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
                 # of every chunk at the same time, and the chunk buffers are all live at once,
                 # which is the memory the chunks exist to save. The barrier waits for the previous
@@ -433,7 +499,22 @@ def _routed_experts_forward(
                 # to it. (Dispatching chunk c+1 during chunk c's MLP measured 3 ms per layer
                 # slower in a rematted four-GPU layer scan.)
                 source, _ = jax.lax.optimization_barrier((sorted_x, chunk_residuals[-1].expert_mlp))
+            elif chunk_residuals:
+                # Serialize the chunks' dispatches, as above, but on the previous chunk's dispatch
+                # rather than its MLP: the backward's recompute has no other compute to put beside
+                # this dispatch than the previous chunk's MLP. The dispatch also waits for the staged
+                # overlap work, so that work runs beside the first dispatch rather than this one.
+                source, _ = jax.lax.optimization_barrier((sorted_x, (previous_dispatch, staged)))
             x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+            previous_dispatch = x_dispatch
+            if chunk_index == 0 and staged:
+                # The first chunk's MLP waits for the staged overlap work, so the scheduler runs that
+                # work while the dispatch is in flight rather than leaving the dispatch bare.
+                x_dispatch, staged = jax.lax.optimization_barrier((x_dispatch, staged))
+            if chunk_residuals and layout.schedule == _TransportSchedule.LATENCY_HIDING:
+                # The chunks' MLPs run in order, so the previous chunk's MLP is the compute beside
+                # this chunk's dispatch, also in the backward's recompute.
+                x_dispatch, _ = jax.lax.optimization_barrier((x_dispatch, chunk_residuals[-1].expert_mlp))
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
                 x_dispatch,
@@ -457,18 +538,19 @@ def _routed_experts_forward(
             tokens_per_shard=layout.tokens_per_shard,
             topk=layout.topk,
         ).astype(sorted_x.dtype)
-    return out, tuple(chunk_residuals), returned
+    return out, staged, tuple(chunk_residuals), returned
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(5,))
+@functools.partial(jax.custom_vjp, nondiff_argnums=(6,))
 def _routed_experts(
     sorted_x: Float[Array, "TK H"],
     weights: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    staged: tuple[jax.Array, ...],
     routing: _ExpertRouting,
     layout: _ExpertLayout,
-) -> Float[Array, "Tlocal H"]:
+) -> tuple[Float[Array, "Tlocal H"], tuple[jax.Array, ...]]:
     """Dispatch the sorted rows to their experts, run the expert MLP, return and combine.
 
     ``weights`` must be zero for every assignment that ``routing.accepted`` marks as dropped.
@@ -481,23 +563,28 @@ def _routed_experts(
     and when the combined output is saved for the backward, a recompute for the backward runs only
     the dispatch and the gate/up projection. But where ``w * dout`` rounds to zero in the cotangent
     dtype, the row's cotangent carries no information, and the weight gradient is zero or inexact.
+
+    ``staged`` (possibly empty) comes back unchanged, but only once the first chunk's dispatch has
+    landed, and the first chunk's MLP waits for it; see `DispatchOverlap`. Its cotangent passes
+    straight through.
     """
-    out, _residuals, _returned = _routed_experts_forward(
-        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
+    out, staged, _residuals, _returned = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, staged, routing, layout
     )
-    return out
+    return out, staged
 
 
-def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout):
-    out, chunk_residuals, returned = _routed_experts_forward(
-        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
+def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, staged, routing, layout):
+    out, staged, chunk_residuals, returned = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, staged, routing, layout
     )
     if layout.weight_gradient == RoutingWeightGradient.EXPERT_SIDE:
         returned = None
-    return out, (weights, routing, chunk_residuals, returned)
+    return (out, staged), (weights, routing, chunk_residuals, returned)
 
 
-def _routed_experts_bwd(layout, residuals, out_cotangent):
+def _routed_experts_bwd(layout, residuals, cotangents):
+    out_cotangent, staged_cotangent = cotangents
     weights, routing, chunk_residuals, returned = residuals
     expert_side = layout.weight_gradient == RoutingWeightGradient.EXPERT_SIDE
     assignments = routing.sorted_indices.shape[0]
@@ -520,6 +607,12 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
             sorted_weights = weights_f32.reshape(-1)[routing.sorted_indices]
             token_cotangent = out_cotangent[routing.sorted_indices // layout.topk].astype(jnp.float32)
             returned_cotangent = (token_cotangent * sorted_weights[:, None]).astype(out_cotangent.dtype)
+    latency_hiding = layout.schedule == _TransportSchedule.LATENCY_HIDING
+    if latency_hiding:
+        # Send the output cotangents only once the first chunk's MLP inputs exist. In a recompute for
+        # the backward, that MLP is then the compute beside the second chunk's dispatch, and the
+        # second chunk's MLP the compute beside the first cotangent dispatch.
+        returned_cotangent, _ = jax.lax.optimization_barrier((returned_cotangent, chunk_residuals[0].expert_mlp))
 
     dispatch_cotangent = _transport_buffer(
         assignments,
@@ -534,6 +627,7 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
         )  # [TK, 1]
     moe_w13_cotangents = []
     moe_w2_cotangents = []
+    previous_row_output_dot = None
     for chunk_index in reversed(range(layout.chunks)):
         plan, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
@@ -544,13 +638,26 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
                 plan.return_params.recv_sizes,
                 site=_TransportBufferSite.RETURN_COTANGENT,
             )
+            chunk_cotangent = returned_cotangent
+            if latency_hiding and previous_row_output_dot is not None:
+                # This chunk's cotangent dispatch waits for the previous chunk's first backward GEMM,
+                # so the rest of that chunk's backward is the compute beside it, rather than nothing.
+                chunk_cotangent, _ = jax.lax.optimization_barrier((returned_cotangent, previous_row_output_dot))
             # Each transport's cotangent travels back along its mirror transfer.
             out_dispatch_cotangent = jax.lax.ragged_all_to_all(
-                returned_cotangent, out_dispatch_init, *plan.dispatch_params, axis_name="expert"
+                chunk_cotangent, out_dispatch_init, *plan.dispatch_params, axis_name="expert"
             )
             x_dispatch_cotangent, w13_cotangent, w2_cotangent, row_output_dot = layout.expert_mlp.backward(
                 expert_mlp_residuals, out_dispatch_cotangent
             )
+            sent_row_output_dot = row_output_dot
+            if latency_hiding:
+                # The row dots leave after the input cotangent's GEMM, so that GEMM is the compute
+                # beside the next chunk's cotangent dispatch, which waits only for this chunk's first
+                # GEMM.
+                sent_row_output_dot, x_dispatch_cotangent = jax.lax.optimization_barrier(
+                    (row_output_dot, x_dispatch_cotangent)
+                )
             # Chunks read disjoint rows of the sorted buffer, so each writes its rows of one
             # shared cotangent buffer, and the rows no chunk writes are the dropped assignments.
             dispatch_cotangent = jax.lax.ragged_all_to_all(
@@ -559,8 +666,9 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
             if expert_side:
                 # Each row's <y, dy> travels back to its assignment's sorted position like y did.
                 output_dot = jax.lax.ragged_all_to_all(
-                    row_output_dot[:, None], output_dot, *plan.return_params, axis_name="expert"
+                    sent_row_output_dot[:, None], output_dot, *plan.return_params, axis_name="expert"
                 )
+            previous_row_output_dot = row_output_dot
             moe_w13_cotangents.append(w13_cotangent)
             moe_w2_cotangents.append(w2_cotangent)
 
@@ -592,11 +700,20 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
         weights_cotangent,
         jnp.concatenate(moe_w13_cotangents[::-1], axis=0),
         jnp.concatenate(moe_w2_cotangents[::-1], axis=0),
+        staged_cotangent,
         None,
     )
 
 
 _routed_experts.defvjp(_routed_experts_fwd, _routed_experts_bwd)
+
+
+def _dropped_total(
+    group_sizes: Int[Array, "E"], accepted_group_sizes: Int[Array, "E"], token_sharding_axes: tuple[str, ...]
+) -> Int[Array, ""]:
+    with jax.named_scope("combine"):
+        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(accepted_group_sizes, dtype=jnp.int32)
+        return jax.lax.psum(dropped_local, token_sharding_axes)
 
 
 def _moe_mlp_ep_ragged_a2a_local(
@@ -613,6 +730,38 @@ def _moe_mlp_ep_ragged_a2a_local(
     token_sharding_axes: tuple[str, ...],
     routing_weight_gradient: RoutingWeightGradient,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
+    out_local, drops, _ = _ragged_a2a_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        token_valid_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        token_sharding_axes=token_sharding_axes,
+        routing_weight_gradient=routing_weight_gradient,
+        overlap=None,
+    )
+    return out_local, drops
+
+
+def _ragged_a2a_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    token_valid_local: Bool[Array, "Tlocal"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    token_sharding_axes: tuple[str, ...],
+    routing_weight_gradient: RoutingWeightGradient,
+    overlap: DispatchOverlap | None,
+) -> tuple[Float[Array, "Tlocal H"], CapacityDrops, object]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -686,14 +835,36 @@ def _moe_mlp_ep_ragged_a2a_local(
         chunk_experts=chunk_experts,
         chunk_capacity=chunk_capacity,
         expert_mlp=_select_expert_mlp(activation_fn),
+        schedule=_TransportSchedule.DEPENDENCY if overlap is None else _TransportSchedule.LATENCY_HIDING,
         weight_gradient=routing_weight_gradient,
     )
+    dropped_total = None
+    if overlap is not None:
+        # Every collective of the layer other than the transports completes before the first
+        # dispatch: with one collective in flight, one issued between the transports takes the
+        # slot, and the scheduler spends compute meant for a transport on it.
+        dropped_total = tree_checkpoint_name(
+            _dropped_total(group_sizes, accepted_group_sizes, token_sharding_axes), DISPATCH_OVERLAP_SAVE_NAME
+        )
+        sorted_x, dropped_total = forward_barrier((sorted_x, dropped_total))
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.
     weights = jnp.where(accepted, combine_weights_local, 0)
-    out_local = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
-
-    with jax.named_scope("combine"):
-        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(accepted_group_sizes, dtype=jnp.int32)
-        dropped_total = jax.lax.psum(dropped_local, token_sharding_axes)
-    return out_local, CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
+    staged: tuple[jax.Array, ...] = ()
+    staged_tree = None
+    if overlap is not None:
+        # The overlap work starts no earlier than the dispatch can: it waits for the dispatch buffer
+        # and the clipped group sizes the transfer sizes derive from.
+        (sorted_x, chunk_clipped_group_sizes), overlap_x = forward_barrier(
+            ((sorted_x, routing.chunk_clipped_group_sizes), overlap.x)
+        )
+        routing = routing._replace(chunk_clipped_group_sizes=chunk_clipped_group_sizes)
+        staged_leaves, staged_tree = jax.tree.flatten(overlap.fn(overlap.params, overlap_x))
+        staged = tuple(staged_leaves)
+    out_local, staged = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, staged, routing, layout)
+    if dropped_total is None:
+        dropped_total = _dropped_total(group_sizes, accepted_group_sizes, token_sharding_axes)
+    drops = CapacityDrops(sender_dropped=dropped_total, receiver_dropped=jnp.zeros_like(dropped_total))
+    if staged_tree is None:
+        return out_local, drops, None
+    return out_local, drops, jax.tree.unflatten(staged_tree, staged)
