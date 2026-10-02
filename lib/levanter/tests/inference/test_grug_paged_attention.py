@@ -145,8 +145,7 @@ def test_grug_gpu_paged_attention_decode_matches_dense(window, dtype, av_precisi
             ragged_paged_attention,
             sm_scale=0.17,
             sliding_window=window,
-            implementation="gpu_pallas",
-            gpu_av_precision=av_precision,
+            implementation="gpu_pallas" if av_precision == "ieee" else "gpu_pallas_bf16_3x",
         )
     )
     actual = compiled(*args)
