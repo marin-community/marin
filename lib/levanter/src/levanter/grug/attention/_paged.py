@@ -159,8 +159,9 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
         # to avoid rounding BF16 queries before their dot product.
         q_flat = q_flat.astype(jnp.float32) * sm_scale
         kernel_scale = 1.0
-    # TPU default float32 dots truncate operands to BF16, including softmax weights.
-    with jax.default_matmul_precision("highest"):
+    # FP32 inputs need full precision; Mosaic rejects FP32 precision on BF16 dots.
+    precision = "highest" if q_flat.dtype == jnp.float32 else "default"
+    with jax.default_matmul_precision(precision):
         output = tpu_ragged_paged_attention(
             q_flat,
             pages_padded,
