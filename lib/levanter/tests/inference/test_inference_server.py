@@ -1,8 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import dataclasses
+import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import equinox as eqx
@@ -11,6 +14,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from levanter.inference.jit_scheduler import FinishReason
+from levanter.layers.kv_cache import KvPageCache
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
@@ -22,10 +27,13 @@ try:
     from openai.types import Completion
 
     from levanter.inference.engine import (
+        InferenceEngine,
         InferenceEngineConfig,
         score_token_sequence_logprobs,
     )
     from levanter.inference.openai import (
+        InferenceBatch,
+        InferenceContext,
         InferenceResponse,
         InferenceServer,
         InferenceServerConfig,
@@ -306,6 +314,13 @@ class _DeterministicCompletionScoringModel(eqx.Module):
     def __init__(self):
         self.Vocab = hax.Axis("vocab", 4)
 
+    def initial_cache(self, spec, *, dtype):
+        return KvPageCache.init(spec, hax.Axis("kv_head", 1), hax.Axis("embed", 1), dtype=dtype)
+
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        logits = hax.nn.one_hot(3, self.Vocab, dtype=jnp.float32).broadcast_axis(input_ids.resolve_axis("position"))
+        return logits, cache
+
     def __call__(
         self,
         input_ids: hax.NamedArray,
@@ -335,7 +350,7 @@ class _FakeCompletionContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: list[int] | None,
+        stop_tokens: list[list[int]] | None,
         seed: int | None,
         future,
         n_generations: int = 1,
@@ -361,6 +376,8 @@ class _FakeCompletionContext:
                     tokens=[3],
                     prompt_tokens=len(prompt_tokens),
                     completion_tokens=1,
+                    finish_reason=FinishReason.LENGTH,
+                    model_version=0,
                     logprobs=[-123.0],
                     echo_token_ids=echo_token_ids,
                     echo_logprobs=score_token_sequence_logprobs(self.model, echo_token_ids, echo_logprobs_top_k),
@@ -370,7 +387,8 @@ class _FakeCompletionContext:
         return "req_0"
 
 
-def test_completion_echo_logprobs_are_lm_eval_aligned():
+@pytest.mark.parametrize("as_token_ids", [False, True])
+def test_completion_echo_logprobs_are_lm_eval_aligned(as_token_ids):
     ctx = _FakeCompletionContext()
     app = InferenceServer._create_app(ctx)
 
@@ -385,6 +403,7 @@ def test_completion_echo_logprobs_are_lm_eval_aligned():
                 "logprobs": 1,
                 "seed": 1234,
                 "echo": True,
+                "return_tokens_as_token_ids": as_token_ids,
             },
         )
 
@@ -394,15 +413,17 @@ def test_completion_echo_logprobs_are_lm_eval_aligned():
     expected_prompt_logprob = float(jax.nn.log_softmax(jnp.array([-8.0, 4.0, -8.0, -8.0]))[1])
     expected_completion_logprob = float(jax.nn.log_softmax(jnp.array([-8.0, -8.0, -8.0, 3.0]))[3])
 
+    assert choice["finish_reason"] == "length"
     assert choice["text"] == "A B X"
-    assert logprobs["tokens"] == ["A", " B", " X"]
+    token_labels = ["token_id:0", "token_id:1", "token_id:3"] if as_token_ids else ["A", " B", " X"]
+    assert logprobs["tokens"] == token_labels
     assert logprobs["token_logprobs"] == pytest.approx([0.0, expected_prompt_logprob, expected_completion_logprob])
     assert logprobs["text_offset"] == [0, 1, 3]
     assert len(logprobs["tokens"]) == len(logprobs["token_logprobs"])
     assert len(logprobs["tokens"]) == len(logprobs["top_logprobs"])
-    assert logprobs["top_logprobs"][0] == {"A": 0.0}
-    assert logprobs["top_logprobs"][1][" B"] == pytest.approx(expected_prompt_logprob)
-    assert logprobs["top_logprobs"][2][" X"] == pytest.approx(expected_completion_logprob)
+    assert logprobs["top_logprobs"][0] == {token_labels[0]: 0.0}
+    assert logprobs["top_logprobs"][1][token_labels[1]] == pytest.approx(expected_prompt_logprob)
+    assert logprobs["top_logprobs"][2][token_labels[2]] == pytest.approx(expected_completion_logprob)
 
 
 def test_completion_echo_logprobs_rejects_scored_sequence_over_context():
@@ -533,7 +554,7 @@ def test_reload_with_zeros_clears_outputs(test_client):
     def _new_model(old_model):
         return jax.tree_util.tree_map(lambda x: x * 0, old_model)
 
-    server.reload(_new_model)
+    server.reload(_new_model, expected_version=server.model_version)
 
     # Make a request after reload - should get all zero tokens in theory
     response2 = client.post(
@@ -561,7 +582,7 @@ def test_reload_with_zeros_clears_outputs(test_client):
     def _original_model(old_model):
         return original_model
 
-    server.reload(_original_model)
+    server.reload(_original_model, expected_version=server.model_version)
     response3 = client.post(
         "/v1/completions",
         json={
@@ -611,3 +632,406 @@ def test_tokens_endpoint(test_client):
         assert all(isinstance(t, int) for t in token_list["tokens"])
 
     print(f"Tokenization results: {result['results']}")
+
+
+def test_completion_stop_alternatives_and_length_report_actual_termination():
+    config = InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=8,
+            max_pages=4,
+            max_seqs=2,
+            page_size=4,
+            max_queued_tokens=4,
+            max_seqs_in_prefill=2,
+            compute_dtype=jnp.float32,
+        )
+    )
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _DeterministicCompletionScoringModel(), _OpenAITestTokenizer())
+    request = {"model": "gpt2", "prompt": "A", "temperature": 0, "max_tokens": 3}
+    try:
+        with TestClient(server.app) as client:
+            length_response = client.post("/v1/completions", json=request)
+            stop_response = client.post("/v1/completions", json={**request, "stop": ["A B", " X"]})
+        assert length_response.status_code == stop_response.status_code == 200
+        assert length_response.json()["choices"][0]["finish_reason"] == "length"
+        assert length_response.json()["usage"]["completion_tokens"] == 3
+        assert stop_response.json()["choices"][0]["finish_reason"] == "stop"
+        assert stop_response.json()["usage"]["completion_tokens"] == 1
+    finally:
+        server.inference_context.shutdown()
+
+
+class _AliasingChatTokenizer(_OpenAITestTokenizer):
+    # IDs 2 and 3 decode identically, but encode chooses 2. Retokenizing sampled
+    # text would therefore change the model's next-token distribution.
+    _id_to_piece = {0: "A", 1: " B", 2: " X", 3: " X"}
+    chat_template = "test"
+
+    def encode(self, text, add_special_tokens=False):
+        return [2] if text == " X" else super().encode(text, add_special_tokens)
+
+    def apply_chat_template(self, messages, *, add_generation_prompt, continue_final_message, **kwargs):
+        if continue_final_message:
+            return [0, 1, 2]
+        return [0, 1] if add_generation_prompt else [0]
+
+
+class _TokenSensitiveCompletionModel(_DeterministicCompletionScoringModel):
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        return hax.nn.one_hot((input_ids + 2) % 4, self.Vocab, dtype=jnp.float32), cache
+
+
+def _exact_token_config():
+    return InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=8,
+            max_pages=4,
+            max_seqs=2,
+            page_size=4,
+            max_queued_tokens=4,
+            max_seqs_in_prefill=2,
+            compute_dtype=jnp.float32,
+        )
+    )
+
+
+@pytest.fixture
+def exact_token_server():
+    config = _exact_token_config()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _TokenSensitiveCompletionModel(), _AliasingChatTokenizer())
+    try:
+        yield server
+    finally:
+        server.inference_context.shutdown()
+
+
+@pytest.fixture
+def exact_token_client(exact_token_server):
+    with TestClient(exact_token_server.app) as client:
+        yield client
+
+
+def test_completion_integer_prompts_keep_token_identity_through_stopping(exact_token_client):
+    response = exact_token_client.post(
+        "/v1/completions",
+        json={
+            "model": "gpt2",
+            "prompt": [[0, 3], [0, 2]],
+            "temperature": 0,
+            "max_tokens": 3,
+            "stop_token_ids": [1],
+            "return_token_ids": True,
+            "return_tokens_as_token_ids": True,
+            "logprobs": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
+    first, second = response.json()["choices"]
+    assert first["prompt_token_ids"] == [0, 3]
+    assert second["prompt_token_ids"] == [0, 2]
+    assert first["token_ids"] == [1]
+    assert second["token_ids"] == [0, 2, 0]
+    assert [first["finish_reason"], second["finish_reason"]] == ["stop", "length"]
+    assert first["logprobs"]["tokens"] == ["token_id:1"]
+    assert len(second["logprobs"]["token_logprobs"]) == 3
+    flat = exact_token_client.post(
+        "/v1/completions",
+        json={
+            "model": "gpt2",
+            "prompt": [0, 3],
+            "temperature": 0,
+            "max_tokens": 1,
+            "return_token_ids": True,
+        },
+    )
+    assert flat.status_code == 200, flat.text
+    assert flat.json()["choices"][0]["token_ids"] == [1]
+
+
+def test_chat_exact_token_continuation_matches_uninterrupted_decode(exact_token_client):
+    messages = [{"role": "user", "content": "A B"}]
+    tokenized = exact_token_client.post(
+        "/tokenize",
+        json={
+            "model": "gpt2",
+            "messages": messages,
+            "add_generation_prompt": True,
+        },
+    )
+    assert tokenized.status_code == 200, tokenized.text
+    assert tokenized.json() == {"tokens": [0, 1], "count": 2, "max_model_len": 8}
+    body = {
+        "model": "gpt2",
+        "messages": messages,
+        "temperature": 0,
+        "max_completion_tokens": 2,
+        "return_token_ids": True,
+        "logprobs": True,
+    }
+    full_response = exact_token_client.post("/v1/chat/completions", json=body)
+    partial_response = exact_token_client.post("/v1/chat/completions", json={**body, "max_completion_tokens": 1})
+    assert full_response.status_code == partial_response.status_code == 200
+    full, partial = full_response.json(), partial_response.json()
+    assert full["prompt_token_ids"] == partial["prompt_token_ids"] == [0, 1]
+    assert partial["choices"][0]["token_ids"] == [3]
+    retry = {
+        **body,
+        "max_completion_tokens": 1,
+        "continue_final_message": True,
+        "add_generation_prompt": False,
+        "_skyrl_exact_prompt_token_ids": [0, 1, 3],
+        "messages": [*messages, partial["choices"][0]["message"]],
+    }
+    resumed_response = exact_token_client.post("/v1/chat/completions", json=retry)
+    assert resumed_response.status_code == 200, resumed_response.text
+    resumed = resumed_response.json()
+    assert resumed["prompt_token_ids"] == [0, 1, 3]
+    prefix, suffix, expected = partial["choices"][0], resumed["choices"][0], full["choices"][0]
+    assert prefix["token_ids"] + suffix["token_ids"] == expected["token_ids"] == [3, 1]
+    assert prefix["logprobs"]["content"] + suffix["logprobs"]["content"] == expected["logprobs"]["content"]
+    assert suffix["finish_reason"] == expected["finish_reason"] == "length"
+    streamed = exact_token_client.post("/v1/chat/completions", json={**body, "stream": True})
+    chunks = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+    assert chunks[0]["prompt_token_ids"] == full["prompt_token_ids"]
+    assert chunks[0]["choices"][0]["token_ids"] == expected["token_ids"]
+    assert chunks[-1]["choices"][0]["finish_reason"] == "length"
+
+
+def test_paused_server_returns_abort_then_resumes_exact_generation(exact_token_server):
+    request = {
+        "model": "gpt2",
+        "prompt": [0, 1],
+        "temperature": 0,
+        "max_tokens": 2,
+        "return_token_ids": True,
+        "logprobs": 0,
+    }
+    with TestClient(exact_token_server.app) as client:
+        before = client.post("/v1/completions", json=request)
+        exact_token_server.pause_generation()
+        aborted = client.post("/v1/completions", json=request)
+        echo_aborted = client.post("/v1/completions", json={**request, "echo": True, "logprobs": 1})
+        exact_token_server.resume_generation()
+        after = client.post("/v1/completions", json=request)
+    assert before.status_code == aborted.status_code == after.status_code == 200
+    assert aborted.json()["choices"][0]["finish_reason"] == "abort"
+    assert aborted.json()["choices"][0]["token_ids"] == []
+    assert aborted.json()["choices"][0]["logprobs"]["token_logprobs"] == []
+    assert aborted.json()["usage"]["completion_tokens"] == 0
+    assert echo_aborted.status_code == 200
+    assert echo_aborted.json()["choices"][0]["finish_reason"] == "abort"
+    assert echo_aborted.json()["choices"][0]["logprobs"] is None
+    assert before.json()["choices"] == after.json()["choices"]
+    assert after.json()["choices"][0]["token_ids"] == [3, 1]
+
+
+@pytest.mark.asyncio
+async def test_pause_invalidates_requests_collected_before_the_barrier():
+    config = _exact_token_config()
+    model = _TokenSensitiveCompletionModel()
+    tokenizer = _AliasingChatTokenizer()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        engine = InferenceEngine.from_model_with_config(model, tokenizer, config.service)
+        context = InferenceContext(model, tokenizer, engine, config)
+        future = asyncio.get_running_loop().create_future()
+        context.submit_request([0, 1], 2, 0.0, 1.0, None, 0, future)
+        # The batching thread can have removed a request from its queue when pause begins.
+        collected = InferenceBatch([context.request_queue.get_nowait()])
+        context.pause_generation()
+        context.resume_generation()
+        context._execute_batch(collected)
+        aborted = await future
+        assert aborted[0].finish_reason == FinishReason.ABORT
+        assert aborted[0].tokens == aborted[0].logprobs == []
+        resumed_future = asyncio.get_running_loop().create_future()
+        context.submit_request([0, 1], 2, 0.0, 1.0, None, 0, resumed_future)
+        context._execute_batch(InferenceBatch([context.request_queue.get_nowait()]))
+        resumed = await resumed_future
+    assert resumed[0].finish_reason == FinishReason.LENGTH
+    assert resumed[0].tokens == [3, 1]
+
+
+class _BlockingTokenModel(_TokenSensitiveCompletionModel):
+    entered: threading.Event = eqx.field(static=True)
+    release: threading.Event = eqx.field(static=True)
+
+    def __init__(self, entered, release):
+        super().__init__()
+        self.entered = entered
+        self.release = release
+
+    def _wait_for_release(self):
+        self.entered.set()
+        assert self.release.wait(30), "test did not release the in-flight model call"
+
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        jax.debug.callback(self._wait_for_release)
+        return super().decode(input_ids, cache, batch_info, pos_ids)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_http_pause_preserves_partial_tokens_and_logprobs(stream):
+    entered, release = threading.Event(), threading.Event()
+    config = _exact_token_config()
+    model = _BlockingTokenModel(entered, release)
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, model, _AliasingChatTokenizer())
+    request = {
+        "model": "gpt2",
+        "messages": [{"role": "user", "content": "A"}],
+        "max_completion_tokens": 3,
+        "temperature": 0,
+        "logprobs": True,
+        "return_token_ids": True,
+        "stream": stream,
+    }
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+            pending = pool.submit(client.post, "/v1/chat/completions", json=request)
+            assert entered.wait(30), "generation did not reach the model"
+            pausing = pool.submit(server.pause_generation)
+            assert server.inference_context.pause_event.wait(5)
+            release.set()
+            pausing.result(timeout=30)
+            response = pending.result(timeout=30)
+            assert response.status_code == 200, response.text
+            if stream:
+                chunks = [
+                    json.loads(line[6:])
+                    for line in response.text.splitlines()
+                    if line.startswith("data: ") and line != "data: [DONE]"
+                ]
+                content = chunks[0]
+                finish_reason = chunks[-1]["choices"][0]["finish_reason"]
+            else:
+                content = response.json()
+                finish_reason = content["choices"][0]["finish_reason"]
+            choice = content["choices"][0]
+            assert finish_reason == "abort"
+            assert content["prompt_token_ids"] == [0, 1]
+            assert choice["token_ids"] == [3]
+            partial_logprobs = choice["logprobs"]["content"]
+            assert len(partial_logprobs) == 1
+            server.resume_generation()
+            full = client.post("/v1/chat/completions", json={**request, "stream": False}).json()
+            continuation = client.post(
+                "/v1/chat/completions",
+                json={
+                    **request,
+                    "stream": False,
+                    "max_completion_tokens": 2,
+                    "_skyrl_exact_prompt_token_ids": [0, 1, 3],
+                },
+            ).json()
+            assert choice["token_ids"] + continuation["choices"][0]["token_ids"] == full["choices"][0]["token_ids"]
+            assert (
+                partial_logprobs + continuation["choices"][0]["logprobs"]["content"]
+                == full["choices"][0]["logprobs"]["content"]
+            )
+    finally:
+        release.set()
+        server.inference_context.shutdown()
+
+
+class _WeightedTokenModel(_TokenSensitiveCompletionModel):
+    bias: jax.Array
+
+    def __init__(self):
+        super().__init__()
+        self.bias = jnp.zeros(4)
+
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        logits, _ = super().decode(input_ids, cache, batch_info, pos_ids)
+        cache = dataclasses.replace(cache, kv_pages=cache.kv_pages + 1)
+        return logits + hax.named(self.bias, self.Vocab), cache
+
+
+def test_weight_publication_stages_before_install_and_preserves_failed_version():
+    config = _exact_token_config()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _WeightedTokenModel(), _AliasingChatTokenizer())
+    request = {
+        "model": "gpt2",
+        "prompt": [0, 1],
+        "max_tokens": 2,
+        "temperature": 0,
+        "return_token_ids": True,
+        "logprobs": 0,
+    }
+
+    def staging_failure(model):
+        raise ValueError("checkpoint staging failed")
+
+    try:
+        with TestClient(server.app) as client:
+            before = client.post("/v1/completions", json=request).json()["choices"][0]
+            assert before["token_ids"] == [3, 1]
+            assert before["model_version"] == 0
+            assert bool(jnp.any(server.inference_context.engine.gen_state.cache.kv_pages.array))
+            with pytest.raises(ValueError, match="checkpoint staging failed"):
+                server.reload(staging_failure, expected_version=0)
+            with pytest.raises(ValueError, match="shape, dtype, and sharding"):
+                server.reload(lambda model: eqx.tree_at(lambda m: m.bias, model, jnp.ones(8)), expected_version=0)
+            assert server.model_version == 0
+            assert not server.inference_context.pause_event.is_set()
+            assert client.post("/v1/completions", json=request).json()["choices"][0] == before
+
+            def replacement(model):
+                return eqx.tree_at(lambda m: m.bias, model, model.bias.at[0].set(8))
+
+            server.pause_generation()
+            assert server.reload(replacement, expected_version=0) == 1
+            assert server.inference_context.pause_event.is_set()
+            assert not bool(jnp.any(server.inference_context.engine.gen_state.cache.kv_pages.array))
+            server.resume_generation()
+            after = client.post("/v1/completions", json=request).json()["choices"][0]
+            assert after["token_ids"] == [0, 0]
+            assert after["model_version"] == 1
+            with pytest.raises(ValueError, match="Expected model version 0, serving 1"):
+                server.reload(staging_failure, expected_version=0)
+            assert client.post("/v1/completions", json=request).json()["choices"][0] == after
+
+            staging, release = threading.Event(), threading.Event()
+
+            def delayed_replacement(model):
+                staging.set()
+                assert release.wait(30)
+                return replacement(model)
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(server.reload, delayed_replacement, expected_version=1)
+                try:
+                    assert staging.wait(5)
+                    assert client.post("/v1/completions", json=request).json()["choices"][0] == after
+                    assert (
+                        server.reload(
+                            lambda model: eqx.tree_at(lambda m: m.bias, model, model.bias * 0), expected_version=1
+                        )
+                        == 2
+                    )
+                finally:
+                    release.set()
+                with pytest.raises(ValueError, match="Expected model version 1, serving 2"):
+                    pending.result(timeout=30)
+            restored = client.post("/v1/completions", json=request).json()["choices"][0]
+            assert restored["token_ids"] == before["token_ids"]
+            assert restored["model_version"] == 2
+            chat_request = {
+                "model": "gpt2",
+                "messages": [{"role": "user", "content": "A"}],
+                "max_completion_tokens": 1,
+                "temperature": 0,
+                "return_token_ids": True,
+            }
+            assert client.post("/v1/chat/completions", json=chat_request).json()["model_version"] == 2
+            streamed = client.post("/v1/chat/completions", json={**chat_request, "stream": True})
+            chunks = [
+                json.loads(line[6:])
+                for line in streamed.text.splitlines()
+                if line.startswith("data: ") and line != "data: [DONE]"
+            ]
+            assert all(chunk["model_version"] == 2 for chunk in chunks)
+    finally:
+        server.inference_context.shutdown()
