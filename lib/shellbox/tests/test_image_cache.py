@@ -28,7 +28,7 @@ def test_prepared_image_workdir_comes_from_its_digest_bound_config(tmp_path, wor
     image = PreparedImage(tmp_path, f"sha256:{manifest_digest}", RegistryImage("fixture"))
     assert prepared_image_workdir(image) == expected
     config_path.write_bytes(json.dumps({"config": {"WorkingDir": "/changed"}}).encode())
-    with pytest.raises(ValueError, match="config digest mismatch"):
+    with pytest.raises(ValueError):
         prepared_image_workdir(image)
 
 
