@@ -14,6 +14,7 @@ from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import get_mi
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention._paged_gpu import GpuPagedAvPrecision, gpu_paged_attention
+from levanter.grug.attention._paged_tpu import tpu_paged_decode
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
 PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32_tiles", "gpu_pallas", "gpu_pallas_bf16_3x"]
@@ -77,7 +78,7 @@ def ragged_paged_attention(
 
     backend = {
         "tpu": _tpu_attention,
-        "tpu_fp32_tiles": _tpu_kernel_attention,
+        "tpu_fp32_tiles": _tpu_decode_attention,
         "reference": _reference_attention,
         "gpu_pallas": _gpu_attention,
     }
@@ -302,4 +303,35 @@ def _gpu_attention(
             sliding_window=sliding_window,
             soft_cap=soft_cap,
         ),
+    )
+
+
+def _tpu_decode_attention(
+    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap
+):
+    reference = partial(
+        _reference_attention,
+        q,
+        kv_pages,
+        kv_lens,
+        page_indices,
+        cu_q_lens,
+        num_seqs,
+        sm_scale=sm_scale,
+        sliding_window=sliding_window,
+        soft_cap=soft_cap,
+    )
+    if soft_cap is not None or kv_pages.shape[1] < 16 or kv_pages.shape[1] % 16 or q.shape[-1] % 128:
+        return reference()
+    metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+    upper = jnp.where(metadata.valid, metadata.position + 1, 0)
+    lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
+    bounds = jnp.stack((lower, upper), axis=-1)
+    token_pages = jnp.maximum(page_indices[metadata.sequence], 0)
+    active = jnp.arange(kv_lens.shape[0]) < num_seqs.reshape(())
+    decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
+    return jax.lax.cond(
+        decode_only,
+        lambda: tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale),
+        reference,
     )
