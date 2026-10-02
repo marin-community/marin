@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pytest
 import yaml
+from marin.evaluation.campaign_policy import CAMPAIGN
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
-from marin.evaluation.harbor.driver_config import _driver_environment, preflight_harbor_configs
+from marin.evaluation.harbor.driver_config import _driver_environment, harbor_runtime_project, preflight_harbor_configs
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 
@@ -44,6 +46,18 @@ _INVALID_SOURCE_DOCUMENTS = {
         "datasets": [{"name": "aime"}],
     },
 }
+
+
+def test_campaign_bfcl_preflight_preserves_the_pinned_pi_version():
+    policy = _ROOT / "experiments/evaluation/campaigns/eval-campaign-09-25/harbor-configs/bfclparity-pi.yaml"
+    (config,) = preflight_harbor_configs(
+        [(policy, {"thinking_format": "chat-template"})],
+        runtime_project=harbor_runtime_project(CAMPAIGN.runtimes["harbor"]),
+    )
+    # Exercise Harbor's strict policy parser and hosted Pi constructor, not just YAML loading.
+    parsed = json.loads(config.stable_policy_json)
+    assert parsed["agents"][0]["kwargs"]["version"] == "0.87.0"
+    assert source_config_digest(policy) == CAMPAIGN.harbor["bfclparity-pi"].sources["standard"]
 
 
 def _external_python(
