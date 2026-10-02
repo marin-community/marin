@@ -151,6 +151,7 @@ def install_final_state_capture(model) -> None:
 
 
 def remove_final_state_capture(model) -> list[dict]:
+    """Remove the hooks and return all captured token, stage, and weight records."""
     records, handles, restores = model.prefix_diagnostic_capture
     for handle in handles:
         handle.remove()
