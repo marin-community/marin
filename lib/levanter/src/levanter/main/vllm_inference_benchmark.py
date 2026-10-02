@@ -4,6 +4,7 @@
 """Benchmark the same token workload in a separately provisioned vLLM environment."""
 
 import argparse
+import dataclasses
 import importlib.metadata
 import json
 import logging
@@ -71,6 +72,7 @@ def main():
     result = measure_batches(
         workload, generate, warmup_batches=args.warmup_batches, measured_batches=args.measured_batches
     )
+    result = dataclasses.asdict(result)
     result["provenance"] = {
         **provenance,
         "backend": "vllm",

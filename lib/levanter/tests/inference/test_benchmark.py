@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import pytest
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
 
@@ -21,8 +23,9 @@ def test_benchmark_excludes_compile_and_warmup_from_steady_state():
         for elapsed in [60, 10, 2, 3]
     )
     result = measure_batches(workload, lambda _: next(measurements), warmup_batches=1, measured_batches=2)
-    assert result["first_batch_including_compile"]["elapsed"] == 60
-    assert result["warmup"][0]["elapsed"] == 10
+    assert result.first_batch_including_compile.elapsed == 60
+    assert result.warmup[0].elapsed == 10
+    result = dataclasses.asdict(result)
     # Six generated tokens in 2 and 3 seconds; prompts must not enter the numerator.
     assert result["median_output_tokens_per_second"] == 2.5
     assert result["samples"][0]["mean_time_after_first_token_per_output_token"] == 0.625

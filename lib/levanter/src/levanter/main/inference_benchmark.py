@@ -160,6 +160,7 @@ def main():
             warmup_batches=args.warmup_batches,
             measured_batches=args.measured_batches,
         )
+    result = dataclasses.asdict(result)
     result["provenance"] = {
         "backend": "levanter",
         "evidence_kind": "synthetic_random_weights" if converter is None else "checkpoint",
