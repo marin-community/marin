@@ -128,6 +128,15 @@ def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
     return y, (x_dispatch, w13_il, moe_w2, gu, h, cu)
 
 
+def _expert_mlp_quack_apply(x_dispatch, w13_il, moe_w2, cu):
+    """``_expert_mlp_quack_wgrad_fwd``'s output alone, without writing the pre-activations.
+
+    Returns ``(y, h)``: ``h`` is the gate/up stage's output, the last residual the fwd produces.
+    """
+    h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, **_QUACK_GATED_KW)
+    return quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW), h
+
+
 def _expert_mlp_quack_wgrad_backward(res, dy):
     """The backward of ``_expert_mlp_quack_wgrad_fwd``, plus each row's ``<y, dy>``.
 
