@@ -31,6 +31,7 @@ _INITIALIZATION_SEED = 17
 _AUXILIARY_SEED = 23
 _MANIFEST_FILENAME = "manifest.json"
 _WORKLOAD_FILENAME = "workload.json"
+_TINY_KV_CACHE_BYTES = 64 * 1024**2
 
 
 def export_fixture(root: Path, recipe: str) -> None:
@@ -146,7 +147,9 @@ def run_native(root: Path, hardware_label: str, expert_axis_size: int) -> None:
     print(output.read_text(), flush=True)
 
 
-def run_vllm(root: Path, hardware_label: str, execution_mode: str, expert_axis_size: int) -> None:
+def run_vllm(
+    root: Path, hardware_label: str, execution_mode: str, expert_axis_size: int, kv_cache_memory_bytes: int
+) -> None:
     """Measure the exported checkpoint using the promoted Marin CUDA fork."""
     manifest = json.loads((root / _MANIFEST_FILENAME).read_text())
     manifest["hardware_label"] = hardware_label
@@ -166,7 +169,7 @@ def run_vllm(root: Path, hardware_label: str, execution_mode: str, expert_axis_s
                 "max_num_batched_tokens": 256,
                 "enable_prefix_caching": False,
                 "enforce_eager": execution_mode == "eager",
-                "gpu_memory_utilization": 0.3,
+                "kv_cache_memory_bytes": kv_cache_memory_bytes,
             },
             indent=2,
         )
@@ -219,14 +222,21 @@ def main() -> None:
         run.add_argument("--hardware-label", required=True)
         run.add_argument("--expert-axis-size", type=int, default=1)
         if backend == "vllm":
-            run.add_argument("--execution-mode", choices=["eager", "cuda-graph"], default="eager")
+            run.add_argument("--execution-mode", choices=["eager", "compiled"], default="eager")
+            run.add_argument("--kv-cache-memory-bytes", type=int, default=_TINY_KV_CACHE_BYTES)
     args = parser.parse_args()
     if args.command == "export":
         export_fixture(args.output.resolve(), args.recipe)
     elif args.command == "native":
         run_native(args.fixture.resolve(), args.hardware_label, args.expert_axis_size)
     else:
-        run_vllm(args.fixture.resolve(), args.hardware_label, args.execution_mode, args.expert_axis_size)
+        run_vllm(
+            args.fixture.resolve(),
+            args.hardware_label,
+            args.execution_mode,
+            args.expert_axis_size,
+            args.kv_cache_memory_bytes,
+        )
 
 
 if __name__ == "__main__":
