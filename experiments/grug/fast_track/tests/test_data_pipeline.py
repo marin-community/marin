@@ -1,21 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import pytest
-from marin.execution.artifact import ArtifactRecord, write_record
+from marin.datakit.normalize import NormalizedData
+from marin.execution.artifact import ArtifactRecord, write_artifact, write_record
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.step_spec import StepSpec
 
 from experiments.datakit.reference_pipeline import TokenizerSpec
 from experiments.datakit.store.datakit_store import BucketCacheStats, ClusteredStoreData
 from experiments.datakit.store.mixture import MixtureWeighting, store_mixture
+from experiments.datakit.testbed.sampler import SampleManifest
+from experiments.grug.fast_track import data_pipeline
 from experiments.grug.fast_track.data_pipeline import (
-    FastTrackDataConfig,
     FastTrackDataStore,
-    RegistryDataSource,
     build_fast_track_data,
     store_mixture_for_step,
 )
-from experiments.grug.fast_track.launch import DataKitTrainingSource, build_h100_ladder_run
+from experiments.grug.fast_track.launch import (
+    DataKitTrainingSource,
+    SourceMode,
+    _data_source_from_options,
+    build_h100_ladder_run,
+)
 
 
 def _store(*buckets: BucketCacheStats) -> ClusteredStoreData:
@@ -97,25 +106,37 @@ def test_store_mixture_loads_cached_fast_track_artifact(tmp_path, monkeypatch):
         weighting=MixtureWeighting.UNIFORM,
         min_tokens_per_component=1,
         tokenizer="hero-bpe-v16384",
+        training_tokens=400,
     )
 
     assert set(mixture.components) == {"c01q0", "c07q2"}
     assert mixture.train_weights == {"c01q0": 1.0, "c07q2": 1.0}
     assert mixture.components["c01q0"].cache_dir == str(tmp_path / "datakit/store/cluster=1/quality=0")
 
+    with pytest.raises(ValueError, match="Build a larger testbed sample"):
+        store_mixture_for_step(
+            ctx=context,
+            store_step=store_step,
+            weighting=MixtureWeighting.TOKEN_PROPORTIONAL,
+            min_tokens_per_component=1,
+            tokenizer="hero-bpe-v16384",
+            training_tokens=401,
+        )
 
-def test_fast_track_data_fingerprint_tracks_tokenizer_content():
+
+def test_fast_track_data_fingerprint_tracks_tokenizer_content(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
     def data_step(tokenizer_identity: str) -> ArtifactStep[FastTrackDataStore]:
-        config = FastTrackDataConfig(
+        return build_fast_track_data(
             run_id="tokenizer-content-test",
-            source=RegistryDataSource(source_names=("source",)),
+            sources={"source": StepSpec(name="normalized-source", hash_attrs={"v": 1})},
             quality_model="quality-model",
             quality_model_version="test",
-            pool_workers=1,
             tokenizer=TokenizerSpec("hero-bpe-v16384", tokenizer_identity),
             tokenizer_vocab=16_384,
+            version="test-dev",
         )
-        return build_fast_track_data(config, version="test-dev")
 
     assert data_step("sha256:first").fingerprint() != data_step("sha256:second").fingerprint()
 
@@ -148,3 +169,47 @@ def test_fast_track_keeps_data_store_when_it_adds_validation_data():
     assert weights["datakit-uniform"] == 1.0
     assert all(weight == 0.0 for name, weight in weights.items() if name != "datakit-uniform")
     assert training.deps[0] is store_step
+
+
+def test_fast_track_fingerprint_tracks_upstream_recipe(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+
+    def fingerprint(source_version: int = 1) -> str:
+        return build_fast_track_data(
+            run_id="recipe-test",
+            sources={"source": StepSpec(name="normalized-source", hash_attrs={"v": source_version})},
+            quality_model="quality-model",
+            quality_model_version="test",
+            tokenizer=TokenizerSpec("test-tokenizer", "sha256:test"),
+            tokenizer_vocab=16_384,
+            version="test-dev",
+        ).fingerprint()
+
+    original = fingerprint()
+    assert fingerprint(source_version=2) != original
+    scale = data_pipeline.SMOKE_SCALE
+    monkeypatch.setattr(data_pipeline, "SMOKE_SCALE", replace(scale, cluster=replace(scale.cluster, cluster_view=16)))
+    assert fingerprint() != original
+
+
+def test_sample_selection_requires_completed_source_set(tmp_path):
+    prefix = str(tmp_path / "sample")
+    source_paths = {name: f"normalized/{name}" for name in ("first", "second")}
+    write_artifact(SampleManifest(source_paths=source_paths, target_total_tokens_b=100), output_path=prefix)
+    write_artifact(
+        NormalizedData(main_output_dir=f"{prefix}/first/outputs/main", dup_output_dir="", counters={}),
+        output_path=f"{prefix}/first",
+    )
+
+    with pytest.raises(ValueError, match="completion record"):
+        _data_source_from_options(source_mode=SourceMode.SAMPLE, sources=None, sample_prefix=prefix)
+
+    write_artifact(
+        NormalizedData(main_output_dir=f"{prefix}/second/outputs/main", dup_output_dir="", counters={}),
+        output_path=f"{prefix}/second",
+    )
+    selected = _data_source_from_options(source_mode=SourceMode.SAMPLE, sources=None, sample_prefix=prefix)
+    assert selected is not None
+    assert {name: step.output_path for name, step in selected.items()} == {
+        name: f"{prefix}/{name}" for name in source_paths
+    }
