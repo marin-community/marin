@@ -12,6 +12,9 @@ from dataclasses import dataclass
 
 from rigging.provenance import Provenance
 
+PREFIX_DIAGNOSTIC_TOP_K = 20
+BATCH_TIMING_BOUNDARY = "offline_batch_host_submission_to_host_tokens"
+
 
 @dataclass(frozen=True)
 class TokenWorkload:
@@ -86,6 +89,8 @@ class BenchmarkReport:
     warmup: list[BatchSummary]
     samples: list[BatchSummary]
     median_output_tokens_per_second: float
+    validation_tokens: list[list[int]]
+    validation_output_sha256: str
 
 
 def measure_batches(
@@ -101,9 +106,11 @@ def measure_batches(
     cold = summarize_batch(workload, generate(workload))
     warmup = [summarize_batch(workload, generate(workload)) for _ in range(warmup_batches)]
     samples = [summarize_batch(workload, generate(workload)) for _ in range(measured_batches)]
+    validation = generate(workload)
+    validation_summary = summarize_batch(workload, validation)
     return BenchmarkReport(
-        schema_version=1,
-        timing_boundary="offline_batch_host_submission_to_host_tokens",
+        schema_version=2,
+        timing_boundary=BATCH_TIMING_BOUNDARY,
         workload=workload,
         workload_sha256=workload.sha256,
         compile_only=None,
@@ -111,6 +118,8 @@ def measure_batches(
         warmup=warmup,
         samples=samples,
         median_output_tokens_per_second=statistics.median(row.output_tokens_per_second for row in samples),
+        validation_tokens=validation.tokens,
+        validation_output_sha256=validation_summary.output_sha256,
     )
 
 

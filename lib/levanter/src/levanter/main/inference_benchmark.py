@@ -174,6 +174,11 @@ def main():
         "devices": [str(device) for device in jax.devices()],
         "device_kind": [device.device_kind for device in jax.devices()],
         "mesh": dict(mesh.shape),
+        "effective_execution": {
+            "runtime": "jax_jit",
+            "matmul_precision": jax.config.jax_default_matmul_precision,
+            "paged_attention": config.inference_attention_implementation,
+        },
         "engine_config": {**dataclasses.asdict(engine_config), "compute_dtype": str(dtype)},
         "versions": {name: importlib.metadata.version(name) for name in ["jax", "jaxlib", "marin-levanter"]},
         "git_commit": source.revision,

@@ -38,7 +38,13 @@ from levanter.layers.kv_cache import PageCache, KvPageCache, ListCache
 from levanter.layers.paged_short_conv import ShortConvPageCache, paged_short_conv
 from levanter.models.hero import HeroConfig
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.snowball import RMSNorm, GatedNorm, rms_norm, _init_weight
+from levanter.models.snowball import (
+    RMSNorm,
+    GatedNorm,
+    rms_norm,
+    _init_weight,
+    _reshard_sequence as _reshard_sequence_axis,
+)
 from levanter.sharding import partition_spec_of
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -112,14 +118,6 @@ def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> F
 def _sequence_axis_of(x: jax.Array) -> str | None:
     spec = partition_spec_of(x)
     return spec[1] if spec is not None and len(spec) > 1 else None
-
-
-def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
-    """Move ``x``'s sequence axis onto ``axis`` (None replicates it), keeping its other axes."""
-    spec = partition_spec_of(x)
-    if spec is None:
-        return x
-    return reshard(x, P(spec[0], axis, *spec[2:]))
 
 
 def _apply_rotary_embedding_fused(
@@ -246,13 +244,6 @@ class HeroAttention(eqx.Module):
         if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None:
             stored_kv_heads = self.cfg.stored_kv_heads
 
-            # Both branches must agree on sharding, not just shape: `lax.cond` compares full types
-            # under explicit mesh axes. The pass-through case keeps the projection's `model`-sharded
-            # head axis, while the align case slices to one head -- which cannot stay sharded -- and
-            # broadcasts back, giving an identical shape with a different sharding. Reshard both to
-            # the same spec. This is a no-op wherever the mesh leaves `model` at one, which is why
-            # the hero shape never hit it despite also setting local_kv_heads != global_kv_heads.
-            #
             # Replicate the head axis rather than pinning it to `model`: a shape can carry fewer
             # KV heads than the model axis is wide (d768 stores one), and the KV tensors are small
             # enough -- at most a dozen heads of 128 -- that replication is not worth a special case.

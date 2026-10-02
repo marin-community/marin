@@ -140,6 +140,7 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 _LONG_LAYER_STRIDE = 4
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
+_ROUTING_DENOM_EPS = 1e-9
 _EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
 # June 67B qk_mult (YaRN mscale 1.3*(0.1*ln(65536/8192)+1)); used as the field default and the
@@ -647,7 +648,7 @@ class SnowballMoEMLP(eqx.Module):
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + _ROUTING_DENOM_EPS))
         combine_weights = combine_weights_f.astype(x.dtype)
 
         routed_flat = self.expert_mlp(

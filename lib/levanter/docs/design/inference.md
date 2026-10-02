@@ -220,13 +220,12 @@ python -m levanter.main.vllm_inference_benchmark \
   --output /tmp/vllm-result.json
 ```
 
-This uses the public [LLMEngine step interface](https://docs.vllm.ai/en/v0.10.2/api/vllm/engine/llm_engine.html)
-and cumulative output token IDs. First-token observations include admission and
-scheduling. If vLLM admits requests across multiple prefills, its first-token
-and decode overlap differs from Levanter's single-prefill measurement. Compare
-end-to-end throughput with that scheduling difference recorded. The adapter
-requires validation against the deployed vLLM version, including the Marin
-GrugMoE model registration. It has not been validated on a TPU vLLM runtime.
+This consumes `AsyncLLM.generate` streams with cumulative output token IDs.
+First-token observations include admission and scheduling. Prefill/decode overlap
+can differ between runtimes; compare end-to-end throughput with the effective
+scheduling configuration recorded. The adapter requires the Marin GrugMoE model
+registration for these checkpoints. The tiny TPU validation below uses the same
+streaming interface.
 
 ### Coverage and remaining model work
 
@@ -240,14 +239,6 @@ output hashes or token arrays and investigate differences before reporting a
 speed ratio. Production checkpoint loading and real serving latency remain separate
 validation steps.
 
-| Target | Native Snowball benchmark | Native Hero benchmark | vLLM comparison |
-| --- | --- | --- | --- |
-| H100 | Driver available; unmeasured | Driver available; unmeasured | Baseline adapter; unmeasured |
-| GB200 | Driver available; unmeasured | Driver available; unmeasured | Baseline adapter; unmeasured |
-| TPU v4 | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
-| TPU v5p | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
-| TPU v6e | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
-
 Hero's `experiments/grug/moe_hero_ep/heuristic.py:HERO_MODEL` uses 48 layers,
 width 6144, 384 experts with top-8 routing, two shared experts, latent dimension
 3072, short convolutions, and 12 local / 6 global KV heads. Snowball pins the
@@ -258,8 +249,270 @@ For a random-weight Hero smoke benchmark, use `config/inference/hero_tiny.json`
 with the same token workload and driver arguments as Snowball. Synthetic results
 measure the tiny configuration, not the production Hero model.
 
+### Validated tiny Hero on v5p
+
+On 2026-10-02, `hero-v5p-layout-lifecycle-20261002` completed twelve bridge/cache
+cases, then ran both runtimes on the same BF16 checkpoint
+`b81bf066dcfc54333753343606f1b1b5ca420714a5ee66263919e8a01845b830`.
+The fixture has two layers, width 256, 16 experts, latent width 128, and
+kernel-four convolutions at all three sites. Its global-attention interval is
+four, and the final layer is always global; the fixture exercises both local
+and global attention.
+Two eight-token prompts each generate 16 tokens; both runtimes and every timed
+batch agree on all 32 output tokens, hash
+`cada82e418dc0e8e8ceae101483bad4dc0c9996f1225ebe6c593e7c5eadb240c`.
+
+The v5p-8 allocation exposes four JAX devices. Both runtimes use data parallelism
+four, tensor/model parallelism one, and expert parallelism one. Native JAX JIT
+measures 790.72 output tokens/second; vLLM with `enforce_eager=true` measures
+358.54, a 2.205× ratio for this tiny workload only. Source is Marin `d818b8d1d6`,
+vLLM `70ea9ae8f2601f06d820ee9d70e3afbdc52683b1`, and tpu-inference
+`35d05a3f1e408458ca3c164cc3a55382548888f3` with the bridge/cache fixes in
+[tpu-inference #30](https://github.com/marin-community/tpu-inference/pull/30) and
+[#31](https://github.com/marin-community/tpu-inference/pull/31). Native JAX is
+0.11.1; the isolated vLLM runtime uses JAX 0.11.0 and libtpu 0.0.44.
+This result does not measure production Hero throughput or compiled vLLM serving.
+
+### Production Hero cache accounting
+
+These dimensions refer specifically to
+[`HERO_MODEL` in `moe_hero_ep/heuristic.py`, lines 85–115](https://github.com/marin-community/marin/blob/2edea8e28c731e36ecd24bd1997b1a5f87ba88e4/experiments/grug/moe_hero_ep/heuristic.py#L85-L115),
+not every checkpoint called Hero. It has 48 layers, hidden width 6144, latent
+and expert intermediate widths 3072, 384 routed experts, and stored KV width
+`12 × 128 = 1536`. Kernel size four retains three previous inputs at each of
+its K, attention-output, and MLP-output convolution sites. K convolution runs
+before the global-layer head reduction, so its history width is 1536 in all
+48 layers; attention and MLP histories each have width 6144.
+
+The native [cache initializer](https://github.com/marin-community/marin/blob/2edea8e28c731e36ecd24bd1997b1a5f87ba88e4/lib/levanter/src/levanter/models/hero_model.py#L682-L708)
+allocates these BF16 arrays for one physical page of 128 tokens:
+
+| Arrays | Shape per array | Total bytes |
+| --- | --- | ---: |
+| 48 KV arrays | `(1, 128, 24, 128)` | 37,748,736 |
+| 48 K histories | `(1, 3, 1536)` | 442,368 |
+| 96 attention/MLP histories | `(1, 3, 6144)` | 3,538,944 |
+
+A CPU allocation of the actual initializer confirmed the sum, 41,730,048 bytes
+(39.796875 MiB), without initializing model weights. These are logical array
+bytes; physical memory also depends on sharding, replication, and execution
+buffers. Convolution history alone costs
+`48 × 3 × (1536 + 6144 + 6144) × 2 = 3,981,312` bytes per physical page.
+A 4096-token request spanning 32 such pages therefore occupies 121.5 MiB of
+history. One history slot per request would require 3.796875 MiB before
+allocation padding. The native implementation currently retains per-page
+history to follow the existing page-sharing and clone lifecycle.
+
+The routed expert weights alone contain
+`48 × 384 × 3 × 3072² = 521,838,526,464` parameters, or
+1,043,677,052,928 BF16 bytes (0.94921875 TiB), excluding shared experts, trunk,
+embeddings, and serving state. Those weights exceed the aggregate HBM of four
+or eight 80 GB H100s. Tiny fixture results do not establish its memory footprint
+or serving throughput.
+
 For checkpoint-scale comparisons, set `--model-axis-size` and
 `--expert-axis-size` to match the vLLM tensor and expert parallel configuration.
 The remaining local devices partition the data axis; the result records the
 complete effective mesh and device list. Both drivers must use the same
 checkpoint identity, tokens, dtype, and device allocation.
+
+### Matched synthetic checkpoint smoke comparison
+
+`experiments.benchmarks.matched_inference` writes a small BF16 checkpoint with
+head dimension 128, a tokenizer, an immutable weight digest, and a token workload.
+It verifies every exported tensor through native HF loading. Both backends then
+load this identical checkpoint from local disk; this measures a complete small
+model and does not represent a production Snowball or Hero checkpoint.
+
+Run the following on one CUDA accelerator, with the same single device visible
+to both processes. Keep the fixture directory on that worker. The vLLM command
+uses Marin serving's promoted fork, PyTorch pin, and CUDA toolchain through an
+isolated environment. It does not install vLLM into the JAX environment.
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+uv run python -m experiments.benchmarks.matched_inference export \
+  --recipe hero --output /tmp/hero-comparison
+uv run python -m experiments.benchmarks.matched_inference native \
+  --fixture /tmp/hero-comparison --hardware-label H100x1
+uv run python -m experiments.benchmarks.matched_inference vllm \
+  --fixture /tmp/hero-comparison --hardware-label H100x1
+```
+
+Use `--recipe snowball` and a separate fixture directory for Snowball. Both
+measurement commands print their result JSON for remote log retention. Compare
+workload and generated-token hashes before comparing throughput. vLLM uses eager
+execution for this startup smoke test. Pass `--execution-mode compiled` to
+allow vLLM compilation and supported CUDA graph capture; effective compilation
+and graph modes are recorded separately from requested engine arguments. The
+promoted fork disables CUDA graphs for Hero short convolutions. Tiny fixtures
+reserve 64 MiB of KV cache per rank; override `--kv-cache-memory-bytes` for larger
+workloads. Both modes use a fresh per-invocation Triton
+cache so inherited JAX cache settings cannot disable vLLM kernel compilation.
+FlashInfer builds use two Ninja workers by default (`--compile-workers`) and one
+nvcc thread per command. These limits and the effective execution modes are
+recorded in the report; eager inference can still compile CUDA kernels during startup.
+For the GB200 SM100 startup gate, `--flashinfer-jit-cache-wheel URL#sha256=DIGEST`
+installs an explicit compatible precompiled cache in the isolated runtime. It
+loads and hashes `fused_moe_100.so` before engine initialization and records its
+path, package versions, and successful load. JIT compilation is disabled for
+this gate: missing or incompatible precompiled modules fail instead of starting
+a long build. FlashInfer 0.6.18.post1's
+[installer](https://github.com/flashinfer-ai/flashinfer/blob/8bc3b578027791336c6ae87db5c9d76f82cef8bc/flashinfer/__main__.py#L108)
+selects its CUDA 13.0 cache for CUDA 13.2, and the
+[official ARM64 wheel](https://flashinfer.ai/whl/cu130/flashinfer-jit-cache/)
+contains this MoE library. This cache
+selection preserves the backend and autotuning configuration; accelerator
+validation is still required for a given wheel/runtime pair.
+
+The async vLLM client distributes requests across data-parallel ranks when
+configured, while preserving per-request first-token timestamps. Larger
+workloads require a separate benchmark configuration.
+
+After both runtime commands finish, write the paired report:
+
+```bash
+uv run python -m experiments.benchmarks.matched_inference compare --fixture /tmp/hero-comparison
+```
+
+`comparison.json` checks checkpoint identity, loaded HF configuration, architecture,
+dtype, exact token workload, accelerator allocation label and kinds, and the
+supported parallelism pairing: native EP=N/TP1/data1 versus local vLLM DP=N with
+EP enabled for N>1. Backend attention selectors remain visible execution choices.
+Other configuration differences reject the comparison.
+
+Each runtime saves one additional validation batch after the timed samples. Its
+tokens and hash remain outside the throughput summary. The comparison records
+hash agreement across every batch, the first differing request and output-token
+position, and effective execution modes. It withholds the throughput ratio if
+outputs differ across backends or batches. Reports from before this validation
+capture must be rerun; timing hashes alone cannot identify a divergent token.
+
+For a divergent Snowball token, write a prefixes JSON with `sequences` containing
+both original prompts followed by their common generated tokens, and
+`prefill_length` equal to the original prompt length. The bounded diagnostics
+support Snowball with at most two layers, width512, vocabulary4096, eight
+equal-length sequences, and 128 tokens:
+
+```bash
+uv run python -m experiments.benchmarks.diagnose_native_prefix \
+  --fixture /tmp/snowball-comparison --prefixes prefixes.json --expert-axis-size 2
+```
+
+Run `python -m levanter.main.vllm_prefix_diagnostic` in the same isolated vLLM
+environment, passing the fixture's `--engine-args`, `--provenance`, the same
+`--prefixes`, and an `--output` path. It records next-token top-20 logprobs from a
+single prefill. The native diagnostic records full-vocabulary logits from both
+a single prefill and the original prefill followed by forced one-token steps.
+It independently varies BF16/FP32 router weights and baseline/highest matmul
+precision, recording all four combinations for each input mode. These diagnostic
+interventions do not change the model's training or serving defaults.
+These passes are numerical diagnostics and do not produce throughput claims.
+
+A separate 2x2 intervention promotes SiLU and sigmoid independently to FP32
+inside the embedding gate only, then casts back to the projection dtype. All
+other gates and model operations remain unchanged. The report includes output
+logits and digests of the embedding norm and gate weights in a common FP32
+layout. Both runtime captures retain the norm, gate projections, and SiLU
+output; vLLM records a separate sigmoid recomputation from the captured input.
+Current June and Hero training gates apply both unary functions in the projection
+dtype. The promoted variants are diagnostic and do not change that contract.
+
+To examine the unary arithmetic independently of model projections and fusion,
+run the exhaustive finite-BF16 diagnostic in each runtime environment:
+
+```bash
+python -m experiments.benchmarks.diagnose_sigmoid_precision \
+  --runtime jax --platform gpu --output /tmp/jax-sigmoid.json
+# Run this command inside the same isolated Torch environment as the vLLM benchmark.
+python -m experiments.benchmarks.diagnose_sigmoid_precision \
+  --runtime torch --platform gpu --output /tmp/torch-sigmoid.json
+```
+
+Both invocations enumerate all 65,280 finite BF16 bit patterns and record the
+same input digest. The independent reference evaluates stable sigmoid in NumPy
+FP64, then rounds once to BF16. Reports separate normal, subnormal, and saturated
+reference outputs, plus the `abs(input) <= 0.04` range observed in the embedding
+gate captures. They record exact mismatch counts and errors without an acceptance
+tolerance. Compare runtime and device provenance as well as the input digest;
+standalone unary agreement does not establish fused model or generation parity.
+
+After both fixture runtimes finish, run full generation with the same loaded
+weights and saved native engine configuration:
+
+```bash
+uv run python -m experiments.benchmarks.diagnose_embedding_generation \
+  --fixture /tmp/snowball-comparison --output /tmp/embedding-generation.json
+```
+
+This pass uses the ordinary inference engine without activation tracing. It
+requires the unchanged baseline to reproduce the saved native validation tokens,
+then compares an embedding-only FP32 SiLU-plus-sigmoid intervention against the
+saved vLLM tokens. It retains exact tokens, first divergence, weight digests,
+and execution provenance. The changed arithmetic is diagnostic; it produces no
+throughput comparison and does not alter serving or training defaults.
+
+The default fixture has all-one normalization weights. To exercise learned norm
+scaling and its rounding boundaries, export a separate fixture with
+`export --recipe snowball --norm-weights nonunit --output /tmp/snowball-nonunit`.
+This deterministically changes only norm scales, records the seed and affected
+tensors, and verifies the complete native checkpoint roundtrip. Run both
+backends against that same export; its checkpoint identity differs from the
+all-one fixture.
+
+The native trace returns embedding, attention, routed and shared expert outputs,
+residuals, router choices and combine weights, final normalization, and actual
+logits together from the same paged layer scan. It retains the serving decoder's
+attention and expert implementations. Auxiliary JIT outputs can change fusion,
+so the report includes the maximum logit difference and top-token agreement
+against the ordinary decoder. This replaces separate identity-head probes.
+
+The vLLM diagnostic installs hooks after startup and records the same stages
+and actual router outputs without modifying them. It removes the hooks after
+the probe. A named worker extension saves rank-tagged captures from every local
+DP worker using the same concurrent requests. The RPC uses method
+names and plain results; callable serialization is not needed. Capture requires
+eager execution and TP1. Token IDs and positions align the data-parallel rows.
+Both sides digest the output-head weights in a common layout and record a host FP64 projection
+using the exact BF16 head weights. These are untimed diagnostic passes; the FP64
+projection does not change serving precision.
+
+### Matched TPU fixture gate
+
+The `vllm-tpu` fixture command provisions the existing `IsolatedTpuVllm` fork
+pins, JAX 0.11.0, and libtpu 0.0.44 in a separate environment. It selects
+`MODEL_IMPL_TYPE=vllm` explicitly and uses single-process SPMD data parallelism.
+The native command uses `expert-axis-size=1`, leaving the remaining devices on
+its data axis. Set `data-parallel-size` to the actual local JAX device count;
+the driver discovers the devices in a subprocess that exits before vLLM starts.
+
+```bash
+uv run python -m experiments.benchmarks.matched_inference export \
+  --recipe snowball --output /tmp/snowball-tpu-fixture
+uv run python -m experiments.benchmarks.matched_inference native \
+  --fixture /tmp/snowball-tpu-fixture --hardware-label v6e-local4 --expert-axis-size 1
+uv run python -m experiments.benchmarks.matched_inference vllm-tpu \
+  --fixture /tmp/snowball-tpu-fixture --hardware-label v6e-local4 --data-parallel-size 4
+uv run python -m experiments.benchmarks.matched_inference compare \
+  --fixture /tmp/snowball-tpu-fixture
+```
+
+The comparison requires the same TPU allocation, native data=N/EP1/TP1 and
+vLLM SPMD data=N/EP1/TP1. Reports retain the runtime pins, discovered devices,
+effective sharding, and package versions. `enforce_eager` disables vLLM's Torch
+compilation path; TPU execution still uses JAX compilation. Pass
+`--tpu-inference-ref 'tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@<commit>'`
+to select a separately validated fork revision. The Grug custom-router and
+CPU-weight storage fixes in tpu-inference #28 and #29 allow the tiny Snowball
+fixture to complete both runtimes on v5p. Generated tokens still differ at a
+near-tie, so the comparison withholds a speed ratio. The native JAX Grug fallback
+lacks the current combine-weight normalization and is not an equivalent baseline.
+
+Hero requires the additional Grug short-convolution Torchax bridge. The driver
+imports and registers that bridge in an isolated preflight before starting the
+engine, then records the selected module and runtime pin. A runtime without the
+bridge fails before loading model weights. The bridge supports data parallelism
+with TP1/EP1, no context parallelism, prefix caching, or speculation. It preserves
+all configured convolutions and their request histories. Real TPU custom-op and
+full-model Hero validation are separate gates; module availability alone does
+not establish numerical parity or serving support.

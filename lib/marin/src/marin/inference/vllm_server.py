@@ -256,6 +256,14 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         install = self._install()
+        return self._command(install.executable, install.executable_args)
+
+    def python_command(self, args: tuple[str, ...]) -> list[str]:
+        """Build a Python command with the same vLLM wheel, PyTorch, and CUDA toolchain as serving."""
+        return self._command("python", args)
+
+    def _command(self, executable: str, executable_args: tuple[str, ...]) -> list[str]:
+        install = self._install()
         command = [
             "uvx",
             "--from",
@@ -276,8 +284,8 @@ class IsolatedCudaVllm:
                 "python",
                 "-c",
                 _CUDA_NVCC_BOOTSTRAP,
-                install.executable,
-                *install.executable_args,
+                executable,
+                *executable_args,
             )
         )
         return command
@@ -326,6 +334,13 @@ class IsolatedTpuVllm:
     torch_backend: str = "cpu"
 
     def command(self) -> list[str]:
+        return self._command("vllm", ())
+
+    def python_command(self, args: tuple[str, ...]) -> list[str]:
+        """Build a Python command using the same pinned TPU runtime as serving."""
+        return self._command("python", args)
+
+    def _command(self, executable: str, args: tuple[str, ...]) -> list[str]:
         return [
             "uvx",
             "--from",
@@ -336,7 +351,8 @@ class IsolatedTpuVllm:
             self.python_version,
             "--torch-backend",
             self.torch_backend,
-            "vllm",
+            executable,
+            *args,
         ]
 
     def env(self) -> dict[str, str]:
