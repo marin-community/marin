@@ -3,6 +3,7 @@
 
 import concurrent.futures
 import dataclasses
+import faulthandler
 import functools
 import gc
 import glob
@@ -12,6 +13,8 @@ import logging
 import math
 import os
 import re
+import subprocess
+import sys
 import time
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -1334,6 +1337,27 @@ def _init_unigram_bias(state: GrugTrainState, train_loader, *, num_batches: int)
 ROUTING_DUMP_FILE = "routing_step{step}.npz"
 
 
+_PY_SPY_TIMEOUT = 60
+
+
+def _stall_diagnostic(timeout) -> None:
+    """Before the progress watchdog kills a stalled process: every Python thread's stack, then a native (C++) dump of
+    this process from py-spy when the container allows it, so a hang in compilation or a collective is visible."""
+    logger.critical("stall diagnostic: %s; Python thread stacks follow", timeout)
+    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+    try:
+        dump = subprocess.run(
+            ["py-spy", "dump", "--native", "--pid", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            timeout=_PY_SPY_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.critical("py-spy dump unavailable: %s", e)
+        return
+    logger.critical("py-spy native dump (exit %d):\n%s%s", dump.returncode, dump.stdout, dump.stderr)
+
+
 def _dump_final_params(params, patterns: tuple[str, ...], path: str) -> None:
     """Gather the params matching ``patterns`` from every process and write them to ``path`` (process 0)."""
     selected = {}
@@ -1697,7 +1721,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # Armed before the state is built or restored. The watchdog's step and process deadlines only
     # arm once a step reports progress, so its startup deadline is the only thing bounding a stall
     # in initialization, checkpoint restore, cache construction or compilation.
-    progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
+    progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index(), diagnostic=_stall_diagnostic)
 
     checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
     dashboard = (

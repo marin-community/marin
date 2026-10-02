@@ -200,6 +200,8 @@ WATCH_INTERVAL = 10
 RESUME_SAVE_INTERVAL = timedelta(minutes=20)
 STEP_TIMEOUT = timedelta(minutes=15)
 PROCESS_STALL_TIMEOUT = timedelta(hours=1)
+# Budget for the stall diagnostic (thread stacks and a py-spy native dump) before the watchdog exits.
+STALL_DIAGNOSTIC_TIMEOUT = timedelta(seconds=90)
 STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 MAX_RETRIES_FAILURE = 3
 Z_LOSS_WEIGHT = 1e-4
@@ -576,6 +578,7 @@ def build_h100_ladder_run(
                 step_timeout=STEP_TIMEOUT,
                 process_timeout=PROCESS_STALL_TIMEOUT,
                 startup_timeout=STARTUP_TIMEOUT,
+                diagnostic_timeout=STALL_DIAGNOSTIC_TIMEOUT,
             ),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
