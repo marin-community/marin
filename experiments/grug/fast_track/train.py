@@ -1072,10 +1072,13 @@ def _make_probe_loss(mp: jmp.Policy):
 _captured_params = jax.jit(capture_matrices)
 
 
-# Each process autotunes the probe program alone. With sharded autotuning (XLA's default for multi-process GPU jobs)
-# all 8 processes of lc1-fact20g deadlocked in the first probe compile, each waiting in
-# ConfigAssigner::AssignConfigs for autotune results the others never published.
-_FACT_PROBE_COMPILER_OPTIONS = {"xla_gpu_shard_autotuning": False}
+# The probe program issues ~200 small cross-process collectives (one-hot row selections). With sharded autotuning (XLA's
+# default for multi-process GPU jobs) all 8 processes of lc1-fact20g deadlocked in its first compile, each waiting in
+# ConfigAssigner::AssignConfigs for autotune results the others never published. Autotuning per process instead
+# (lc1-fact20h-ue) hung every process in the program's collectives: the latency-hiding scheduler orders async
+# collectives by per-process cost estimates, so the processes can issue them in different orders. Program order
+# is identical everywhere.
+_FACT_PROBE_COMPILER_OPTIONS = {"xla_gpu_shard_autotuning": False, "xla_gpu_enable_latency_hiding_scheduler": False}
 
 
 def _make_fact_probe_scores(
