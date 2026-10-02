@@ -161,7 +161,7 @@ def _mismatch_oracle(inputs, args, comparisons, actual, reference):
     }
 
 
-def main():
+def _parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--implementation",
@@ -186,6 +186,57 @@ def main():
     args = parser.parse_args()
     if args.implementation == "gpu_pallas_bf16_3x":
         args.av_precision = "bf16_3x"
+    return args
+
+
+def _comparison_errors(inputs, actual, args):
+    reference = jax.jit(
+        partial(
+            ragged_paged_attention,
+            sm_scale=args.head_dim**-0.5,
+            sliding_window=args.window,
+            implementation="reference",
+        )
+    )(*inputs)
+    error = {"vs_reference": _error_metrics(actual, reference)}
+    if args.implementation in ("gpu_pallas", "gpu_pallas_bf16_3x") and args.av_precision == "bf16_3x":
+        ieee = jax.jit(
+            partial(
+                ragged_paged_attention,
+                sm_scale=args.head_dim**-0.5,
+                sliding_window=args.window,
+                implementation="gpu_pallas",
+                gpu_kv_splits=args.kv_splits,
+                gpu_av_precision="ieee",
+            )
+        )(*inputs)
+        error["ieee_vs_reference"] = _error_metrics(ieee, reference)
+        error["vs_ieee"] = _error_metrics(actual, ieee)
+    error["mismatch_float64_oracle"] = _mismatch_oracle(inputs, args, list(error.values()), actual, reference)
+    return error
+
+
+def _device_profile(fn, inputs, repeats):
+    if jax.default_backend() == "tpu":
+        device_profile = _profile_tpu(fn, inputs, repeats)
+    else:
+        profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
+
+        _, kernel_runs = profiler.measure(fn, aggregate=False, iterations=repeats)(*inputs)
+        if kernel_runs is None:
+            raise RuntimeError("CUPTI did not capture GPU kernels")
+        if repeats == 1:
+            kernel_runs = [kernel_runs]
+        device_profile = {
+            "timing_boundary": "cupti_sum_of_kernel_durations",
+            "median_time": statistics.median(sum(duration for _, duration in run) for run in kernel_runs) / 1000,
+            "kernel_runs_ms": kernel_runs,
+        }
+    return device_profile
+
+
+def main():
+    args = _parse_args()
     if args.baseline in ("tpu_vllm_rpa", "tpu_vllm_rpa_fp32"):
         # The optional fork sets its environment before initializing JAX devices.
         importlib.import_module(TPU_RPA_MODULE)
@@ -218,47 +269,8 @@ def main():
     measurements = _measure_jax(fn, inputs, args.repeats)
     actual = measurements.output
     elapsed = measurements.steady_state_time
-    error = None
-    if args.check_reference:
-        reference = jax.jit(
-            partial(
-                ragged_paged_attention,
-                sm_scale=args.head_dim**-0.5,
-                sliding_window=args.window,
-                implementation="reference",
-            )
-        )(*inputs)
-        error = {"vs_reference": _error_metrics(actual, reference)}
-        if args.implementation in ("gpu_pallas", "gpu_pallas_bf16_3x") and args.av_precision == "bf16_3x":
-            ieee = jax.jit(
-                partial(
-                    ragged_paged_attention,
-                    sm_scale=args.head_dim**-0.5,
-                    sliding_window=args.window,
-                    implementation="gpu_pallas",
-                    gpu_kv_splits=args.kv_splits,
-                    gpu_av_precision="ieee",
-                )
-            )(*inputs)
-            error["ieee_vs_reference"] = _error_metrics(ieee, reference)
-            error["vs_ieee"] = _error_metrics(actual, ieee)
-        error["mismatch_float64_oracle"] = _mismatch_oracle(inputs, args, list(error.values()), actual, reference)
-    device_profile = None
-    if args.profile_device and jax.default_backend() == "tpu":
-        device_profile = _profile_tpu(fn, inputs, args.repeats)
-    elif args.profile_device:
-        profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
-
-        _, kernel_runs = profiler.measure(fn, aggregate=False, iterations=args.repeats)(*inputs)
-        if kernel_runs is None:
-            raise RuntimeError("CUPTI did not capture GPU kernels")
-        if args.repeats == 1:
-            kernel_runs = [kernel_runs]
-        device_profile = {
-            "timing_boundary": "cupti_sum_of_kernel_durations",
-            "median_time": statistics.median(sum(duration for _, duration in run) for run in kernel_runs) / 1000,
-            "kernel_runs_ms": kernel_runs,
-        }
+    error = _comparison_errors(inputs, actual, args) if args.check_reference else None
+    device_profile = _device_profile(fn, inputs, args.repeats) if args.profile_device else None
     visible = args.context if args.window is None else min(args.context, args.window)
     kv_bytes = 2 * args.batch_size * visible * args.kv_heads * args.head_dim * dtype.itemsize
     flops = 4 * args.batch_size * visible * args.kv_heads * args.groups * args.head_dim
