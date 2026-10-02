@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
+TOKEN_ID_PREFIX = "token_id:"
 RESERVED_CHAT_TEMPLATE_KWARGS = frozenset(
     {"add_generation_prompt", "continue_final_message", "chat_template", "return_dict", "tokenize"}
 )
@@ -519,7 +520,7 @@ def _completion_logprobs(
     top_logprobs = [
         {
             (
-                f"token_id:{token_id}"
+                f"{TOKEN_ID_PREFIX}{token_id}"
                 if return_tokens_as_token_ids
                 else tokenizer.decode([token_id], skip_special_tokens=False)
             ): logprob
@@ -528,7 +529,7 @@ def _completion_logprobs(
         for token_logprobs in sequence_logprobs.top_token_logprobs
     ]
     return CompletionLogprobData(
-        tokens=[f"token_id:{token_id}" for token_id in token_ids] if return_tokens_as_token_ids else tokens,
+        tokens=[f"{TOKEN_ID_PREFIX}{token_id}" for token_id in token_ids] if return_tokens_as_token_ids else tokens,
         token_logprobs=sequence_logprobs.token_logprobs,
         top_logprobs=top_logprobs,
         text_offset=_token_text_offsets(tokens),
@@ -650,7 +651,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                             for token_id, lp in zip(generated_tokens, generation.logprobs):
                                 # Use convert_ids_to_tokens to preserve BPE format
                                 token_str = (
-                                    f"token_id:{token_id}"
+                                    f"{TOKEN_ID_PREFIX}{token_id}"
                                     if request.return_tokens_as_token_ids
                                     else ctx.tokenizer.convert_ids_to_tokens(token_id)
                                 )
@@ -813,10 +814,8 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 content_logprobs = []
                 assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
                 for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
-                    # Use convert_ids_to_tokens to preserve BPE format (e.g., Ġ for spaces)
-                    # This allows the client to round-trip: convert_tokens_to_ids(token_str) == token_id
                     token_str = (
-                        f"token_id:{token_id}"
+                        f"{TOKEN_ID_PREFIX}{token_id}"
                         if request.return_tokens_as_token_ids
                         else ctx.tokenizer.convert_ids_to_tokens(token_id)
                     )
