@@ -20,7 +20,7 @@ def install_final_state_capture(model) -> None:
     handles = []
     model.prefix_diagnostic_capture = (records, handles)
 
-    def capture_inputs(module, args, kwargs):
+    def capture_inputs(_module, _args, kwargs):
         records.append(
             {
                 "site": "model_inputs",
@@ -29,7 +29,7 @@ def install_final_state_capture(model) -> None:
             }
         )
 
-    def capture_norm(module, args, output):
+    def capture_norm(_module, args, output):
         records.append(
             {
                 "site": "final_norm",
@@ -38,7 +38,7 @@ def install_final_state_capture(model) -> None:
             }
         )
 
-    def capture_gate(module, args, output):
+    def capture_gate(_module, _args, output):
         records.append({"site": "final_gate", "post_final_gate": output.detach().float().cpu().tolist()})
 
     def capture_projection(module, args, output):
