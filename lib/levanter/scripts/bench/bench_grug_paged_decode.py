@@ -92,7 +92,9 @@ def _mismatch_oracle(inputs, args, comparisons):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--implementation", choices=["reference", "tpu", "gpu_pallas", "gpu_pallas_bf16_3x"], required=True
+        "--implementation",
+        choices=["reference", "tpu", "tpu_fp32_tiles", "gpu_pallas", "gpu_pallas_bf16_3x"],
+        required=True,
     )
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--context", type=int, required=True)
