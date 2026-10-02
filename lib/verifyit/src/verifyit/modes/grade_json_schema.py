@@ -11,6 +11,7 @@ validation error in the detail.
 
 import datetime
 import json
+import math
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ import yaml
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
+from verifyit.file_ops.read import read_text
 from verifyit.grade import InvalidTask, Reward, read_output, scored
 from verifyit.modes.extract import unwrap_fence
 from verifyit.spec import JsonSchemaSpec, SchemaFormat
@@ -35,18 +37,33 @@ def stringify_dates(node: Any) -> Any:
     return node
 
 
+def has_nonfinite_number(node: Any) -> bool:
+    """JSON numbers must be finite, including inside nested candidate values."""
+    if isinstance(node, float):
+        return not math.isfinite(node)
+    if isinstance(node, dict):
+        return any(has_nonfinite_number(value) for value in node.values())
+    if isinstance(node, list):
+        return any(has_nonfinite_number(value) for value in node)
+    return False
+
+
 def load_schema(path: Path) -> dict:
     """The JSON Schema at ``path``. Raises ``InvalidTask`` when it is absent or not a schema."""
     if not path.is_file():
         raise InvalidTask(f"schema file not found: {path}")
     try:
-        schema = json.loads(path.read_text())
-    except ValueError as error:
+        schema = json.loads(read_text(path))
+    except (ValueError, RecursionError) as error:
         raise InvalidTask(f"schema file {path} is not JSON: {error}") from error
     if not isinstance(schema, dict):
         raise InvalidTask(f"schema file {path} must hold a JSON object")
     try:
+        if has_nonfinite_number(schema):
+            raise InvalidTask(f"schema file {path} contains a nonfinite number")
         validator_for(schema).check_schema(schema)
+    except RecursionError as error:
+        raise InvalidTask(f"schema file {path} exceeds nesting limit") from error
     except SchemaError as error:
         raise InvalidTask(f"schema file {path} is not a valid JSON Schema: {error.message}") from error
     return schema
@@ -64,21 +81,25 @@ def parse_candidate(text: str, candidate_format: SchemaFormat) -> Any:
     return stringify_dates(document)
 
 
-def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
-    schema = load_schema(tests_dir / spec.schema)
-    text = read_output(spec, workspace)
-    if text is None:
-        return scored(0.0, reason="no_output")
+def grade_json_schema_candidate(schema: dict, instance: Any) -> Reward:
+    """Validate an already decoded candidate against a JSON Schema."""
     try:
-        instance = parse_candidate(unwrap_fence(text), spec.format)
-    except (ValueError, yaml.YAMLError) as error:
-        return scored(0.0, reason="parse_error", error=str(error))
-
-    validator_class = validator_for(schema)
-    # pyrefly: ignore[bad-instantiation, missing-argument]  # validator_for returns a concrete
-    # validator class; jsonschema types it as the Validator protocol.
-    validator = validator_class(schema)
-    errors = sorted(validator.iter_errors(instance), key=lambda error: [str(part) for part in error.path])
+        if has_nonfinite_number(schema):
+            raise InvalidTask("schema contains a nonfinite number")
+        validator_class = validator_for(schema)
+        validator_class.check_schema(schema)
+    except RecursionError as error:
+        raise InvalidTask("schema exceeds nesting limit") from error
+    except SchemaError as error:
+        raise InvalidTask(f"invalid JSON Schema: {error.message}") from error
+    try:
+        if has_nonfinite_number(instance):
+            return scored(0.0, reason="nonfinite_number")
+        # pyrefly: ignore[bad-instantiation, missing-argument]  # validator_for returns a concrete validator.
+        validator = validator_class(schema)
+        errors = sorted(validator.iter_errors(instance), key=lambda error: [str(part) for part in error.path])
+    except RecursionError:
+        return scored(0.0, reason="candidate_nesting_limit")
     if not errors:
         return scored(1.0, reason="valid")
     first = errors[0]
@@ -89,3 +110,16 @@ def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
         path="/".join(str(part) for part in first.path),
         error=first.message,
     )
+
+
+def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:
+    schema = load_schema(tests_dir / spec.schema)
+    text = read_output(spec, workspace)
+    if text is None:
+        return scored(0.0, reason="no_output")
+    try:
+        instance = parse_candidate(unwrap_fence(text), spec.format)
+    except (ValueError, yaml.YAMLError, RecursionError) as error:
+        return scored(0.0, reason="parse_error", error=str(error))
+
+    return grade_json_schema_candidate(schema, instance)
