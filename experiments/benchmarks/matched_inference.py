@@ -29,6 +29,8 @@ from transformers import PreTrainedTokenizerFast
 
 from experiments.benchmarks.matched_comparison import MANIFEST_FILENAME, WORKLOAD_FILENAME, compare_fixture
 
+_WARMUP_BATCHES = 2
+_MEASURED_BATCHES = 3
 _INITIALIZATION_SEED = 17
 _AUXILIARY_SEED = 23
 _FIXTURE_MAX_SEQ_LEN = 128
@@ -139,9 +141,9 @@ def run_native(root: Path, hardware_label: str, expert_axis_size: int) -> None:
             "--expert-axis-size",
             str(expert_axis_size),
             "--warmup-batches",
-            "2",
+            str(_WARMUP_BATCHES),
             "--measured-batches",
-            "3",
+            str(_MEASURED_BATCHES),
         ],
         check=True,
     )
@@ -198,9 +200,9 @@ def run_vllm(
         "--output",
         str(output),
         "--warmup-batches",
-        "2",
+        str(_WARMUP_BATCHES),
         "--measured-batches",
-        "3",
+        str(_MEASURED_BATCHES),
     )
     command = launcher.python_command(args)
     if flashinfer_jit_cache_wheel is not None:
