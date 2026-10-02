@@ -258,10 +258,8 @@ def _vllm_benchmark_args(root: Path) -> tuple[str, ...]:
 def run_tpu_vllm(
     root: Path, hardware_label: str, data_parallel_size: int, kv_cache_memory_bytes: int, tpu_inference_ref: str
 ) -> None:
-    """Run the pinned Torchax Snowball path with single-process SPMD data parallelism."""
+    """Run a Torchax fixture with explicit runtime pins and SPMD data parallelism."""
     manifest = json.loads((root / MANIFEST_FILENAME).read_text())
-    if manifest["model_config"].get("sconv", False):
-        raise ValueError("Pinned TPU runtime has no Torchax grug_moe_short_conv implementation; Hero is unsupported")
     launcher = IsolatedTpuVllm(VLLM_FORK_REQUIREMENT, tpu_inference_ref)
     repo = Path(__file__).resolve().parents[2]
     environment = {
@@ -283,6 +281,15 @@ def run_tpu_vllm(
     command = launcher.python_command(_vllm_benchmark_args(root))
     for dependency in dependencies:
         command[1:1] = ["--with", dependency]
+    short_conv_bridge = None
+    if manifest["model_config"].get("sconv", False):
+        short_conv_bridge = "tpu_inference.layers.vllm.custom_ops.grug_short_conv"
+        preflight = launcher.python_command(
+            ("-c", f"from {short_conv_bridge} import register_grug_short_conv; register_grug_short_conv()")
+        )
+        for dependency in dependencies:
+            preflight[1:1] = ["--with", dependency]
+        subprocess.run(preflight, env=environment, check=True)
     # Discover in a separate process that exits before the serving worker acquires libtpu.
     discovery = launcher.python_command(
         (
@@ -304,6 +311,7 @@ def run_tpu_vllm(
                 "vllm_requirement": launcher.vllm_ref,
                 "tpu_inference_requirement": launcher.tpu_inference_ref,
                 "dependencies": dependencies,
+                "short_conv_bridge": short_conv_bridge,
                 "model_impl_type": environment["MODEL_IMPL_TYPE"],
                 "multiprocess_dp": environment["TPU_MULTIPROCESS_DP"],
                 "new_model_design": environment["NEW_MODEL_DESIGN"],

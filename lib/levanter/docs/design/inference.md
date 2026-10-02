@@ -429,17 +429,19 @@ uv run python -m experiments.benchmarks.matched_inference compare \
 The comparison requires the same TPU allocation, native data=N/EP1/TP1 and
 vLLM SPMD data=N/EP1/TP1. Reports retain the runtime pins, discovered devices,
 effective sharding, and package versions. `enforce_eager` disables vLLM's Torch
-compilation path; TPU execution still uses JAX compilation. This is a prepared
-full-model correctness gate, not a measured TPU throughput result. The pinned
-Torchax MoE currently bypasses Grug's custom router in its monolithic kernel
-path; a custom-routing bridge is required before this gate can establish
-architecture parity. The native JAX Grug fallback also lacks the current
-combine-weight normalization and is not an equivalent baseline.
+compilation path; TPU execution still uses JAX compilation. Pass
+`--tpu-inference-ref 'tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@<commit>'`
+to select a separately validated fork revision. The Grug custom-router and
+CPU-weight storage fixes in tpu-inference #28 and #29 allow the tiny Snowball
+fixture to complete both runtimes on v5p. Generated tokens still differ at a
+near-tie, so the comparison withholds a speed ratio. The native JAX Grug fallback
+lacks the current combine-weight normalization and is not an equivalent baseline.
 
-Hero remains unsupported by this pinned TPU fixture. The vLLM fork at
-`70ea9ae8f2601f06d820ee9d70e3afbdc52683b1` parses schema-v2 Hero, but its
-`grug_moe_short_conv` operator has no Torchax bridge in tpu-inference
-`29548fbab663b7ea946546ca7efaa473dab55ba5`. The separate native JAX Grug model
-accepts only schema v1. A Hero TPU baseline needs a cache-preserving short-conv
-bridge and full-model parity before timing; disabling short convolutions would
-change the model.
+Hero requires the additional Grug short-convolution Torchax bridge. The driver
+imports and registers that bridge in an isolated preflight before starting the
+engine, then records the selected module and runtime pin. A runtime without the
+bridge fails before loading model weights. The bridge supports data parallelism
+with TP1/EP1, no context parallelism, prefix caching, or speculation. It preserves
+all configured convolutions and their request histories. Real TPU custom-op and
+full-model Hero validation are separate gates; module availability alone does
+not establish numerical parity or serving support.
