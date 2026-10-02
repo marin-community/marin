@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for fray actor support via LocalClient."""
+"""Tests for fray actor support, run against every backend the client fixture offers."""
 
 import threading
 
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError, current_actor
+from fray.client import Client
 from fray.local_backend import LocalClient
 
 
@@ -43,37 +44,30 @@ class FailSecondActor:
         return self._index
 
 
-@pytest.fixture
-def client():
-    c = LocalClient(max_threads=4)
-    yield c
-    c.shutdown(wait=True)
-
-
-def test_create_actor_and_call_remote(client: LocalClient):
+def test_create_actor_and_call_remote(client: Client):
     actor = client.create_actor(Counter, name="counter")
     result = actor.increment.remote(5).result()
     assert result == 5
     assert actor.get.remote().result() == 5
 
 
-def test_create_actor_synchronous_call(client: LocalClient):
+def test_create_actor_synchronous_call(client: Client):
     actor = client.create_actor(Counter, start=10, name="counter")
     assert actor.get() == 10
     actor.increment(3)
     assert actor.get() == 13
 
 
-def test_create_actor_with_args(client: LocalClient):
+def test_create_actor_with_args(client: Client):
     actor = client.create_actor(Counter, 42, name="counter")
     assert actor.get.remote().result() == 42
 
 
-def test_actor_group_create_and_wait_ready(client: LocalClient):
+def test_actor_group_create_and_wait_ready(client: Client):
     group = client.create_actor_group(Counter, name="counters", count=3)
-    assert group.ready_count == 3
     handles = group.wait_ready()
     assert len(handles) == 3
+    assert group.ready_count == 3
 
     for i, h in enumerate(handles):
         h.increment.remote(i + 1).result()
@@ -82,13 +76,13 @@ def test_actor_group_create_and_wait_ready(client: LocalClient):
     assert values == [1, 2, 3]
 
 
-def test_actor_group_wait_ready_partial(client: LocalClient):
+def test_actor_group_wait_ready_partial(client: Client):
     group = client.create_actor_group(Counter, name="counters", count=5)
     handles = group.wait_ready(count=2)
     assert len(handles) == 2
 
 
-def test_actor_group_shutdown(client: LocalClient):
+def test_actor_group_shutdown(client: Client):
     group = client.create_actor_group(Counter, name="counters", count=2)
     handles = group.wait_ready()
     assert len(handles) == 2
@@ -97,16 +91,17 @@ def test_actor_group_shutdown(client: LocalClient):
         handles[0].get()
 
 
-def test_actor_group_construction_failure_removes_ready_actors(client: LocalClient):
+def test_actor_group_construction_failure_removes_ready_actors(local_client: LocalClient):
+    """In-process actors mutate the driver's list and fail synchronously; the Ray twin lives in test_ray_backend."""
     handles: list[ActorHandle] = []
     with pytest.raises(_ActorConstructionError):
-        client.create_actor_group(FailSecondActor, handles, name="failing-actors", count=2)
+        local_client.create_actor_group(FailSecondActor, handles, name="failing-actors", count=2)
 
     with pytest.raises(ActorUnavailableError):
         handles[0].get()
 
 
-def test_concurrent_remote_calls_thread_safety(client: LocalClient):
+def test_concurrent_remote_calls_thread_safety(client: Client):
     """Multiple threads calling .remote() on the same actor should be safe."""
     actor = client.create_actor(Counter, name="counter")
     num_threads = 10
@@ -129,7 +124,7 @@ def test_concurrent_remote_calls_thread_safety(client: LocalClient):
     assert sorted(results) == list(range(1, num_threads + 1))
 
 
-def test_actor_method_with_kwargs(client: LocalClient):
+def test_actor_method_with_kwargs(client: Client):
     actor = client.create_actor(Adder, name="adder")
     assert actor.add.remote(a=3, b=4).result() == 7
     assert actor.add(a=10, b=20) == 30
