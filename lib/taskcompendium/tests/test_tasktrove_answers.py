@@ -61,7 +61,7 @@ def test_import_removes_source_submission_instructions():
 
 def test_imported_mcqa_matches_source_grading(tmp_path):
     specification = import_task(_archive())
-    assert specification.verifier.kind is VerifierKind.MCQ_ANSWER
+    assert specification.verifier.kind == VerifierKind.MCQ_ANSWER
     assert json.loads(specification.verifier.parameters_json) == {"expected": "C", "options": 10}
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)

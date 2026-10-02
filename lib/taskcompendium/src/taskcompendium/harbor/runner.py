@@ -21,6 +21,7 @@ from taskcompendium.lowering import (
     validate_environment_config,
 )
 from taskcompendium.submission import chat_request
+from taskcompendium.verifier_registry import validate_verifier
 
 DEFAULT_CHAT_TIMEOUT = 120
 
@@ -48,6 +49,7 @@ async def run_trial(
         raise ValueError("Launch environment configuration differs from the exported task")
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     validate_environment_config(specification, environment_config)
+    validate_verifier(specification.verifier)
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
     agent = {
         "import_path": "taskcompendium.harbor.adapter:ChatAgent",
