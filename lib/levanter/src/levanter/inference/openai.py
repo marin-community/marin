@@ -17,7 +17,7 @@ import queue
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, List, Optional, Union, cast
 
 import equinox as eqx
@@ -29,6 +29,7 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request as HttpRequest
 from fastapi.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 from openai.types import Completion, CompletionUsage, Model
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.chat.chat_completion import Choice as ChatCompletionChoice
@@ -40,6 +41,7 @@ from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
 from levanter.inference.engine import (
+    DecodeResult,
     InferenceEngine,
     InferenceEngineConfig,
     Request,
@@ -94,6 +96,19 @@ class InferenceServerConfig:
     port: int = 0  # auto-assign port
 
 
+@dataclass(frozen=True)
+class InferenceDelta:
+    """New output for one choice, delivered at a host decode boundary."""
+
+    index: int
+    text: str
+    tokens: list[int]
+    logprobs: list[float]
+    finish_reason: FinishReason
+    model_version: int
+    prompt_tokens: list[int]
+
+
 @dataclass
 class InferenceRequest:
     """Internal request structure for the inference thread"""
@@ -107,6 +122,7 @@ class InferenceRequest:
     seed: int | None
     future: asyncio.Future
     cancel_event: threading.Event | None = None
+    on_delta: collections.abc.Callable[[InferenceDelta], None] | None = None
     admission_epoch: int = 0
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
@@ -129,7 +145,7 @@ class InferenceResponse:
 
 
 def _complete_future(future: asyncio.Future, outcome: list[InferenceResponse] | Exception) -> None:
-    if future.cancelled():
+    if future.done():
         return
     if isinstance(outcome, Exception):
         future.set_exception(outcome)
@@ -297,6 +313,7 @@ class InferenceContext:
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
         cancel_event: threading.Event | None = None,
+        on_delta: collections.abc.Callable[[InferenceDelta], None] | None = None,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -315,6 +332,7 @@ class InferenceContext:
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
             cancel_event=cancel_event,
+            on_delta=on_delta,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -327,6 +345,8 @@ class InferenceContext:
         return request_id
 
     def _abort_request(self, request: InferenceRequest) -> None:
+        if request.future.cancelled():
+            return
         responses = [
             InferenceResponse(
                 request_id=request.request_id,
@@ -340,6 +360,12 @@ class InferenceContext:
             )
             for _ in range(request.n_generations)
         ]
+        if request.on_delta is not None:
+            for index in range(request.n_generations):
+                delta = InferenceDelta(
+                    index, "", [], [], FinishReason.ABORT, self.model_version, request.prompt_tokens
+                )
+                request.future.get_loop().call_soon_threadsafe(request.on_delta, delta)
         request.future.get_loop().call_soon_threadsafe(_complete_future, request.future, responses)
 
     def _inference_loop(self) -> None:
@@ -471,53 +497,67 @@ class InferenceContext:
             event = requests[index].cancel_event
             return self.pause_event.is_set() or (event is not None and event.is_set())
 
-        result = self.engine.generate(service_requests, should_abort=should_abort)
+        published: dict[tuple[int, int], tuple[int, str, FinishReason]] = {}
+        completed: set[int] = set()
+
+        def publish(index: int, choices: list[DecodeResult]) -> None:
+            if index in completed:
+                return
+            req = requests[index]
+            if req.future.cancelled():
+                completed.add(index)
+                return
+            for choice in choices if req.on_delta is not None else []:
+                count, previous_text, reason = published.get((index, choice.choice), (0, "", FinishReason.RUNNING))
+                if count == len(choice.token_list) and reason == choice.finish_reason:
+                    continue
+                text = self.tokenizer.decode(choice.token_list, skip_special_tokens=True)
+                # Byte-level tokenizers may end an unfinished Unicode character with U+FFFD.
+                stable_text = text if choice.done else text.rstrip("\ufffd")
+                if not stable_text.startswith(previous_text):
+                    raise ValueError("Tokenizer changed already-emitted text during incremental decoding")
+                delta = InferenceDelta(
+                    choice.choice,
+                    stable_text[len(previous_text) :],
+                    choice.token_list[count:].copy(),
+                    choice.logprobs[count:].copy(),
+                    choice.finish_reason,
+                    self.model_version,
+                    req.prompt_tokens,
+                )
+                req.future.get_loop().call_soon_threadsafe(req.on_delta, delta)
+                published[index, choice.choice] = (len(choice.token_list), stable_text, choice.finish_reason)
+            if not all(choice.done for choice in choices):
+                return
+            responses = []
+            for choice in choices:
+                tokens = choice.token_list.copy()
+                echo_tokens = req.prompt_tokens + tokens if req.echo_logprobs_top_k is not None else None
+                echo_logprobs = (
+                    self.engine.score_token_logprobs(echo_tokens, req.echo_logprobs_top_k)
+                    if echo_tokens is not None
+                    else None
+                )
+                responses.append(
+                    InferenceResponse(
+                        request_id=req.request_id,
+                        text=self.tokenizer.decode(tokens, skip_special_tokens=True),
+                        tokens=tokens,
+                        logprobs=choice.logprobs.copy(),
+                        prompt_tokens=len(req.prompt_tokens),
+                        completion_tokens=len(tokens),
+                        finish_reason=choice.finish_reason,
+                        model_version=self.model_version,
+                        echo_token_ids=echo_tokens,
+                        echo_logprobs=echo_logprobs,
+                    )
+                )
+            completed.add(index)
+            req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, responses)
+
+        result = self.engine.generate(service_requests, should_abort=should_abort, output_callback=publish)
         duration = time.time() - start_time
         logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
-
-        # Return results to futures
-        output_idx = 0
-        for req in requests:
-            try:
-                req_outputs = []
-                for _ in range(req.n_generations):
-                    if output_idx < len(result.tokens):
-                        generated_tokens = result.tokens[output_idx]
-                        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-
-                        result_logprobs = result.logprobs[output_idx] if result.logprobs is not None else None
-                        echo_token_ids = None
-                        echo_logprobs = None
-                        if req.echo_logprobs_top_k is not None:
-                            echo_token_ids = req.prompt_tokens + generated_tokens
-                            echo_logprobs = self.engine.score_token_logprobs(
-                                echo_token_ids,
-                                req.echo_logprobs_top_k,
-                            )
-
-                        req_outputs.append(
-                            InferenceResponse(
-                                text=text,
-                                tokens=result.tokens[output_idx],
-                                logprobs=result_logprobs,
-                                prompt_tokens=len(req.prompt_tokens),
-                                completion_tokens=len(generated_tokens),
-                                finish_reason=result.finish_reasons[output_idx],
-                                model_version=self.model_version,
-                                request_id=req.request_id,
-                                echo_token_ids=echo_token_ids,
-                                echo_logprobs=echo_logprobs,
-                            )
-                        )
-                        output_idx += 1
-                    else:
-                        raise RuntimeError(f"Missing output for request {req.request_id}")
-
-                # Set the future result
-                req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, req_outputs)
-            except Exception as e:
-                logger.error(f"Error processing result for {req.request_id}: {e}")
-                req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, e)
 
 
 def _health_check() -> dict:
@@ -529,50 +569,10 @@ def _sse_event(payload: str) -> str:
     return f"data: {payload}\n\n"
 
 
-def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Iterator[str]:
-    """Render a finished chat completion as an OpenAI server-sent-event stream.
-
-    The engine returns each generation whole, so a choice is delivered as one content chunk
-    followed by a chunk carrying its finish reason: the events are well-formed but not
-    incremental, and a client sees the whole completion in the first delta it receives.
-    """
-    for choice in completion.choices:
-        logprobs = (
-            ChunkChoiceLogprobs(content=choice.logprobs.content, refusal=choice.logprobs.refusal)
-            if choice.logprobs is not None
-            else None
-        )
-        content = ChatCompletionChunkChoice(
-            index=choice.index,
-            delta=ChoiceDelta(role="assistant", content=choice.message.content),
-            logprobs=logprobs,
-        )
-        if choice.model_extra and "token_ids" in choice.model_extra:
-            content = content.model_copy(update={"token_ids": choice.model_extra["token_ids"]})
-        finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta()).model_copy(
-            update={"finish_reason": choice.finish_reason}
-        )
-        for chunk_choice in (content, finish):
-            chunk = ChatCompletionChunk(
-                id=completion.id,
-                object="chat.completion.chunk",
-                created=completion.created,
-                model=completion.model,
-                choices=[chunk_choice],
-            )
-            if completion.model_extra and "model_version" in completion.model_extra:
-                chunk = chunk.model_copy(update={"model_version": completion.model_extra["model_version"]})
-            if completion.model_extra and "prompt_token_ids" in completion.model_extra:
-                chunk = chunk.model_copy(update={"prompt_token_ids": completion.model_extra["prompt_token_ids"]})
-            yield _sse_event(chunk.model_dump_json())
-    yield _sse_event("[DONE]")
-
-
 def _completion_events(completion: Completion) -> collections.abc.Iterator[str]:
     """Render a finished text completion as an OpenAI server-sent-event stream.
 
-    The streaming and non-streaming completion payloads share a shape, so each choice rides
-    its own event. As with chat, the events are well-formed but not incremental.
+    Echo requests use this path because their logprobs rescore the complete sequence.
     """
     for choice in completion.choices:
         chunk = Completion(
@@ -664,7 +664,10 @@ def _validate_prompt_ids(ctx: InferenceContext, tokens: list[int]) -> None:
 
 
 async def _create_completion(
-    ctx: InferenceContext, request: CompletionRequest, cancel_event: threading.Event | None = None
+    ctx: InferenceContext,
+    request: CompletionRequest,
+    cancel_event: threading.Event | None = None,
+    updates: asyncio.Queue[InferenceDelta] | None = None,
 ) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
@@ -696,7 +699,14 @@ async def _create_completion(
             _validate_prompt_ids(ctx, prompt_tokens)
             total_prompt_tokens += len(prompt_tokens)
 
-        for prompt_tokens in prompt_token_lists:
+        for prompt_index, prompt_tokens in enumerate(prompt_token_lists):
+            on_delta = None
+            if updates is not None:
+                offset = prompt_index * (request.n or 1)
+
+                def on_delta(delta: InferenceDelta, offset=offset) -> None:
+                    updates.put_nowait(replace(delta, index=offset + delta.index))
+
             # Create future for this request
             future: asyncio.Future = asyncio.Future()
             futures.append(future)
@@ -713,6 +723,7 @@ async def _create_completion(
                 n_generations=request.n or 1,
                 echo_logprobs_top_k=echo_logprobs_top_k,
                 cancel_event=cancel_event,
+                on_delta=on_delta,
             )
 
         # Wait for all results
@@ -877,7 +888,10 @@ async def _fetch_tokens(ctx: InferenceContext, request: TokensRequest) -> Tokens
 
 
 async def _create_chat_completion(
-    ctx: InferenceContext, request: ChatCompletionRequest, cancel_event: threading.Event | None = None
+    ctx: InferenceContext,
+    request: ChatCompletionRequest,
+    cancel_event: threading.Event | None = None,
+    updates: asyncio.Queue[InferenceDelta] | None = None,
 ) -> ChatCompletion:
     """Create a chat completion using OpenAI API format."""
     try:
@@ -912,6 +926,7 @@ async def _create_chat_completion(
             future=future,
             n_generations=request.n or 1,
             cancel_event=cancel_event,
+            on_delta=updates.put_nowait if updates is not None else None,
         )
 
         # Wait for result
@@ -985,14 +1000,101 @@ async def _create_chat_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _http_generation[RequestT, ResponseT](
+def _delta_events(
+    delta: InferenceDelta,
+    request: CompletionRequest | ChatCompletionRequest,
+    tokenizer: MarinTokenizer,
+    response_id: str,
+    created: int,
+    first: bool,
+) -> collections.abc.Iterator[str]:
+    token_text = [
+        f"{TOKEN_ID_PREFIX}{token}" if request.return_tokens_as_token_ids else tokenizer.convert_ids_to_tokens(token)
+        for token in delta.tokens
+    ]
+    finish_reason = {
+        FinishReason.RUNNING: None,
+        FinishReason.STOP: "stop",
+        FinishReason.LENGTH: "length",
+        FinishReason.ABORT: "abort",
+    }[delta.finish_reason]
+    extra: dict[str, Any] = {"model_version": delta.model_version}
+    if request.return_token_ids:
+        extra["prompt_token_ids"] = delta.prompt_tokens
+    if isinstance(request, ChatCompletionRequest):
+        logprobs = None
+        if request.logprobs:
+            logprobs = ChunkChoiceLogprobs(
+                content=[
+                    ChatCompletionTokenLogprob(
+                        token=text, logprob=lp, bytes=list(text.encode("utf-8")), top_logprobs=[]
+                    )
+                    for text, lp in zip(token_text, delta.logprobs, strict=True)
+                ]
+            )
+        content = ChatCompletionChunkChoice(
+            index=delta.index,
+            delta=ChoiceDelta(role="assistant" if first else None, content=delta.text),
+            logprobs=logprobs,
+        )
+        if request.return_token_ids:
+            content = content.model_copy(update={"token_ids": delta.tokens})
+        choices = [content] if first or delta.tokens or delta.text else []
+        if finish_reason is not None:
+            choices.append(
+                ChatCompletionChunkChoice(index=delta.index, delta=ChoiceDelta()).model_copy(
+                    update={"finish_reason": finish_reason}
+                )
+            )
+        for choice in choices:
+            chunk = ChatCompletionChunk(
+                id=response_id,
+                object="chat.completion.chunk",
+                created=created,
+                model=request.model,
+                choices=[choice],
+            ).model_copy(update=extra)
+            yield _sse_event(chunk.model_dump_json())
+    else:
+        logprobs = None
+        if request.logprobs is not None:
+            logprobs = Logprobs(tokens=token_text, token_logprobs=delta.logprobs, text_offset=None, top_logprobs=None)
+        content = CompletionChoice(index=delta.index, text=delta.text, finish_reason="length", logprobs=logprobs)
+        choice_extra: dict[str, Any] = {**extra, "finish_reason": finish_reason}
+        if request.return_token_ids:
+            choice_extra["token_ids"] = delta.tokens
+        content = content.model_copy(update=choice_extra)
+        chunk = Completion(
+            id=response_id, object="text_completion", created=created, model=request.model, choices=[content]
+        )
+        yield _sse_event(chunk.model_dump_json())
+
+
+class _GenerationStreamingResponse(StreamingResponse):
+    def __init__(self, content, cleanup: collections.abc.Callable[[], collections.abc.Awaitable[None]]):
+        super().__init__(content, media_type="text/event-stream")
+        self.cleanup = cleanup
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Own cleanup even if sending headers fails before the body iterator starts.
+            await self.cleanup()
+
+
+async def _http_generation[RequestT: (
+    CompletionRequest,
+    ChatCompletionRequest,
+), ResponseT: (Completion, ChatCompletion)](
     ctx: InferenceContext,
     raw_request: HttpRequest,
     create_completion: collections.abc.Callable[
-        [InferenceContext, RequestT, threading.Event | None], collections.abc.Coroutine[Any, Any, ResponseT]
+        [InferenceContext, RequestT, threading.Event | None, asyncio.Queue[InferenceDelta] | None],
+        collections.abc.Coroutine[Any, Any, ResponseT],
     ],
     request: RequestT,
-) -> ResponseT:
+) -> (ResponseT | StreamingResponse):
     request_id = raw_request.headers.get("x-request-id") or uuid.uuid4().hex
     event = threading.Event()
     with ctx.admission_lock:
@@ -1005,22 +1107,86 @@ async def _http_generation[RequestT, ResponseT](
             pass
         event.set()
 
-    generation = asyncio.create_task(create_completion(ctx, request, event))
+    # Echo logprobs rescore the complete sequence and retain their completed-response path.
+    incremental = request.stream and not (isinstance(request, CompletionRequest) and request.echo)
+    updates: asyncio.Queue[InferenceDelta] = asyncio.Queue()
+    generation = asyncio.create_task(create_completion(ctx, request, event, updates if incremental else None))
     disconnect = asyncio.create_task(wait_for_disconnect())
-    try:
-        done, _ = await asyncio.wait((generation, disconnect), return_when=asyncio.FIRST_COMPLETED)
-        if generation not in done:
-            await disconnect
-            generation.cancel()
-            raise asyncio.CancelledError
-        return await generation
-    finally:
+
+    async def cleanup() -> None:
         event.set()
         disconnect.cancel()
         generation.cancel()
         await asyncio.gather(generation, disconnect, return_exceptions=True)
         with ctx.admission_lock:
             del ctx.active_requests[request_id]
+
+    async def stream(first_delta: InferenceDelta | None) -> collections.abc.AsyncIterator[str]:
+        response_id = ("chatcmpl-" if isinstance(request, ChatCompletionRequest) else "cmpl-") + uuid.uuid4().hex[:8]
+        created = int(time.time())
+        seen: set[int] = set()
+        next_update = None
+        try:
+            delta = first_delta
+            while True:
+                if delta is not None:
+                    for chunk in _delta_events(
+                        delta, request, ctx.tokenizer, response_id, created, delta.index not in seen
+                    ):
+                        yield chunk
+                    seen.add(delta.index)
+                if not updates.empty():
+                    delta = updates.get_nowait()
+                    continue
+                if generation.done():
+                    await generation
+                    break
+                next_update = asyncio.create_task(updates.get())
+                done, _ = await asyncio.wait((next_update, generation), return_when=asyncio.FIRST_COMPLETED)
+                if next_update in done:
+                    delta = next_update.result()
+                else:
+                    next_update.cancel()
+                    await asyncio.gather(next_update, return_exceptions=True)
+                    delta = None if next_update.cancelled() else next_update.result()
+            yield _sse_event("[DONE]")
+        finally:
+            if next_update is not None:
+                next_update.cancel()
+                await asyncio.gather(next_update, return_exceptions=True)
+
+    first_update = asyncio.create_task(updates.get()) if incremental else None
+    try:
+        waiting = [generation, disconnect]
+        if first_update is not None:
+            waiting.append(first_update)
+        done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+        if disconnect in done:
+            await disconnect
+            raise asyncio.CancelledError
+        if incremental:
+            first_delta = first_update.result() if first_update in done else None
+            if generation in done:
+                await generation  # Preserve validation errors before sending HTTP headers.
+            if first_delta is None:
+                first_update.cancel()
+                await asyncio.gather(first_update, return_exceptions=True)
+                first_delta = None if first_update.cancelled() else first_update.result()
+            # StreamingResponse owns disconnect handling once response headers are sent.
+            disconnect.cancel()
+            await asyncio.gather(disconnect, return_exceptions=True)
+            return _GenerationStreamingResponse(stream(first_delta), cleanup)
+        completion = await generation
+        await cleanup()
+        if request.stream:
+            return StreamingResponse(_completion_events(cast(Completion, completion)), media_type="text/event-stream")
+        return completion
+    except BaseException:
+        if first_update is not None:
+            first_update.cancel()
+            await asyncio.gather(first_update, return_exceptions=True)
+        await cleanup()
+        raise
 
 
 class InferenceServer:
@@ -1086,17 +1252,11 @@ class InferenceServer:
         # untouched; `response_model` still describes the non-streaming body.
         @app.post("/v1/chat/completions", response_model=ChatCompletion)
         async def create_chat_completion(request: ChatCompletionRequest, raw_request: HttpRequest):
-            completion = await _http_generation(inference_context, raw_request, _create_chat_completion, request)
-            if not request.stream:
-                return completion
-            return StreamingResponse(_chat_completion_events(completion), media_type="text/event-stream")
+            return await _http_generation(inference_context, raw_request, _create_chat_completion, request)
 
         @app.post("/v1/completions", response_model=Completion)
         async def create_completion(request: CompletionRequest, raw_request: HttpRequest):
-            completion = await _http_generation(inference_context, raw_request, _create_completion, request)
-            if not request.stream:
-                return completion
-            return StreamingResponse(_completion_events(completion), media_type="text/event-stream")
+            return await _http_generation(inference_context, raw_request, _create_completion, request)
 
         @app.post("/tokenize", response_model=ChatTokenizeResponse)
         async def tokenize_chat(request: ChatTokenizeRequest) -> ChatTokenizeResponse:
