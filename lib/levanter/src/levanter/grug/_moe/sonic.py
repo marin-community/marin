@@ -15,7 +15,7 @@ import os
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
-from haliax.nn.ragged_dot import ragged_dot
+from haliax.nn.ragged_dot import Implementation, ragged_dot
 from jax.typing import DTypeLike
 from jaxtyping import Array, Bool, Float, Int
 
@@ -362,6 +362,7 @@ def _moe_mlp_local_sonic(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    ragged_dot_implementation: Implementation = "auto",
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     """Local raw-Sonic path: JAX grouped GEMMs plus Sonic Triton gather/combine."""
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
@@ -378,11 +379,16 @@ def _moe_mlp_local_sonic(
     with jax.named_scope("moe_up_down"):
         # Rows past the last group are unspecified kernel output; every consumer before the
         # gather-sum is row-local or group-bounded, so only `out_dispatch` needs zeroing.
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out = tree_checkpoint_name(
+            ragged_dot(x_dispatch, moe_w13, group_sizes, implementation=ragged_dot_implementation),
+            _CHECKPOINT_EXPERT_HIDDEN,
+        )
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         hidden = activation_fn(gate) * up
-        out_dispatch = _zero_inactive_grouped_rows(ragged_dot(hidden, moe_w2, group_sizes), cumulative_group_sizes)
+        out_dispatch = _zero_inactive_grouped_rows(
+            ragged_dot(hidden, moe_w2, group_sizes, implementation=ragged_dot_implementation), cumulative_group_sizes
+        )
         out = tree_checkpoint_name(
             sonic_gather_sum(out_dispatch, dispatch_positions, jnp.where(token_valid[:, None], combine_weights, 0)),
             _CHECKPOINT_MOE_OUTPUT,

@@ -18,6 +18,7 @@ import jax.numpy as jnp
 from einops import rearrange
 from haliax.jax_utils import named_call
 from haliax.nn import ArrayStacked
+from haliax.nn.ragged_dot import Implementation as RaggedDotImplementation
 from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
@@ -111,6 +112,7 @@ class GrugModelConfig:
     disable_long_rope: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    ragged_dot_implementation: RaggedDotImplementation = "auto"
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
@@ -514,6 +516,7 @@ class MoEMLP(eqx.Module):
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
                 implementation=cfg.moe_implementation,
+                ragged_dot_implementation=cfg.ragged_dot_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
             ),

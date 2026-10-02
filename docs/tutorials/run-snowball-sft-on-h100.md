@@ -6,6 +6,8 @@ This is a 32,768-token, ten-step starting recipe on 32 H100s. A prior [Snowball 
 
 The mesh splits each sequence over four H100s and shards experts across the other eight mesh ranks. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The recipe keeps conversations separate (`pack=False`) because Snowball does not yet consume Levanter's packed-document attention mask. Its scan layers are checkpointed during reverse mode to bound activation memory.
 
+`SnowballConfig.ragged_dot_implementation` selects the grouped matrix multiplication kernel independently of `moe_implementation`, which selects dispatch and communication. The default is `auto`; explicit choices are `xla`, `triton`, and `megablox`. Set the field in the recipe, or pass `--model.ragged_dot_implementation xla` to Levanter's `train_lm` CLI with a Snowball configuration. Explicit selections apply to local scatter/sonic and ring expert parallelism; other expert-parallel implementations and `sonic_cute` require `auto`. A concrete choice takes precedence over `RAGGED_DOT_IMPL`. That environment variable only overrides `auto`. Haliax logs the selected kernel at debug level during tracing.
+
 ## Prepare
 
 Install the workspace and CUDA-enabled JAX packages as described in [Setting up a Local GPU Environment](local-gpu.md):

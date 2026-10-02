@@ -376,15 +376,13 @@ def _ragged_dot_xla_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array)
 
 
 def _preferred_implementations(implementation: Implementation) -> tuple[Implementation, ...]:
-    # Allow override via env var for A/B benchmarking:
-    #   RAGGED_DOT_IMPL=xla     → force XLA
-    #   RAGGED_DOT_IMPL=triton  → force Triton
-    env_override = os.environ.get("RAGGED_DOT_IMPL")
-    if env_override is not None:
-        return (env_override,)  # type: ignore[return-value]
-
     if implementation != "auto":
         return (implementation,)
+
+    # Preserve the process-wide benchmark override only for automatic selection.
+    env_override = os.environ.get("RAGGED_DOT_IMPL")
+    if env_override is not None and env_override != "auto":
+        return (env_override,)  # type: ignore[return-value]
 
     if jax.default_backend() == "tpu":
         return ("megablox", "xla")
@@ -422,6 +420,7 @@ def ragged_dot(
         implementation: Backend selection. ``"auto"`` selects per-platform default.
             ``"triton"`` forces GPU Pallas Triton kernel. ``"megablox"`` forces
             TPU megablox. ``"xla"`` forces ``jax.lax.ragged_dot_general``.
+            ``RAGGED_DOT_IMPL`` overrides only ``"auto"``; explicit choices win.
 
     Returns:
         A [tokens, out] array.
@@ -433,12 +432,14 @@ def ragged_dot(
 
     out = None
 
-    for impl in _preferred_implementations(implementation):
+    implementations = _preferred_implementations(implementation)
+    for index, impl in enumerate(implementations):
         try:
             out = _run_impl(impl, lhs_, rhs_, group_sizes_)
+            logger.debug("ragged_dot selected implementation=%s (requested=%s)", impl, implementation)
             break
         except _AUTO_FALLBACK_EXCEPTIONS as exc:
-            if implementation == "auto" and impl != "xla":
+            if index + 1 < len(implementations):
                 global _HAS_WARNED_AUTO_FALLBACK
                 if not _HAS_WARNED_AUTO_FALLBACK:
                     warnings.warn(

@@ -1392,11 +1392,14 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
         np.testing.assert_array_equal(returned[s], expected)
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+@pytest.mark.parametrize(
+    "implementation,ragged_dot_implementation", [("ring", "auto"), ("ring", "xla"), ("ragged_all_to_all", "auto")]
+)
 @pytest.mark.parametrize("padded", [False, True], ids=["all_valid", "padded"])
 def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
     implementation: MoeImplementation,
     padded: bool,
+    ragged_dot_implementation,
     monkeypatch: pytest.MonkeyPatch,
 ):
     mesh = _make_ep_mesh_or_none()
@@ -1404,10 +1407,12 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         pytest.skip("requires an even number of >=2 devices")
 
     platform = jax.devices()[0].platform
-    if platform == "cpu":
+    if platform == "cpu" and implementation == "ragged_all_to_all":
         pytest.skip("ragged_all_to_all is not implemented on XLA:CPU")
     if platform == "tpu":
         monkeypatch.setenv("RAGGED_DOT_IMPL", "megablox")
+    if ragged_dot_implementation == "xla":
+        monkeypatch.setenv("RAGGED_DOT_IMPL", "invalid")
 
     tokens = len(jax.devices()) * 8
     gpu_runtime = platform == "gpu"
@@ -1472,6 +1477,7 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
             w_down,
             token_valid=token_valid,
             implementation=implementation,
+            ragged_dot_implementation=ragged_dot_implementation,
             mesh=mesh,
             report_capacity_overflow=True,
             capacity_factor=2.0,

@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Bool, Float, Int
 
-from haliax.nn.ragged_dot import ragged_dot
+from haliax.nn.ragged_dot import Implementation, ragged_dot
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
@@ -32,6 +32,7 @@ def _moe_mlp_local_scatter(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    ragged_dot_implementation: Implementation = "auto",
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
@@ -49,11 +50,14 @@ def _moe_mlp_local_scatter(
         # Rows past the last group are unspecified kernel output. Every consumer between the
         # two projections is row-local or group-bounded, so only the combine boundary below
         # needs zeroing (a zero weight times an unspecified row is not zero).
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out = tree_checkpoint_name(
+            ragged_dot(x_dispatch, moe_w13, group_sizes, implementation=ragged_dot_implementation),
+            _CHECKPOINT_EXPERT_HIDDEN,
+        )
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
+            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes, implementation=ragged_dot_implementation),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
