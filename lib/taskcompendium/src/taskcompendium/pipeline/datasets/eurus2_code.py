@@ -3,17 +3,15 @@
 
 """Pinned eurus2_code source and its private evaluator contract."""
 
-from pathlib import Path
-
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets.direct_contracts import contract_task
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 
 DATASET = "PRIME-RL/Eurus-2-RL-Data"
@@ -22,8 +20,6 @@ CONFIG = "default"
 SPLIT = "train"
 SOURCE_FILE = "train.parquet"
 SOURCE_FORMAT = "parquet"
-ACQUISITION = "viewer"
-VIEWER_OFFSET = 455261
 
 RUBRIC = ReviewRubric(
     id="eurus2_code-quality",
@@ -56,11 +52,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="eurus2_code",
         version="eurus2_code-v1",
-        source=SnapshotSource(DATASET, REVISION, CONFIG, SPLIT, str(snapshot)),
+        source=HFSource(DATASET, REVISION, CONFIG, SPLIT),
         normalize=normalize,
         intended_use=IntendedUse.TRAIN,
         rubric=RUBRIC,

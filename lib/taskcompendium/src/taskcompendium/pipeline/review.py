@@ -249,7 +249,14 @@ class Reviewer(Protocol):
     @property
     def identity(self) -> dict[str, Any]: ...
 
-    def review(self, tasks: Sequence[TaskSpec], rubric: ReviewRubric, output_path: Path) -> list[ReviewRecord]: ...
+    def review(
+        self,
+        tasks: Sequence[TaskSpec],
+        rubric: ReviewRubric,
+        output_path: Path,
+        *,
+        originals: Mapping[str, TaskSpec] | None = None,
+    ) -> list[ReviewRecord]: ...
 
 
 def completion_body(

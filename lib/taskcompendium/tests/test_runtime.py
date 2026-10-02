@@ -15,7 +15,6 @@ from taskcompendium.models import FunctionCall, Source, TaskSpec
 from taskcompendium.pipeline.datasets import calendar, nemo_actions, shell_files
 from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.pipeline.review import BatchReviewer
-from taskcompendium.pipeline.runner import run_pipeline
 from taskcompendium.pipeline.verification import PLAIN, verify_task
 from taskcompendium.runtime.calendar import CalendarFactory
 from taskcompendium.runtime.checks import calendar_controls, check_episodes, episode_suite, tool_turn
@@ -25,6 +24,7 @@ from taskcompendium.runtime.shell import ShellFactory
 from taskcompendium.verifier_registry import resolve_verifier
 from taskcompendium.verifiers.runtime import CalendarStateVerifier
 
+from .pipeline_stages import run_stages
 from .test_pipeline import BatchService
 
 
@@ -167,16 +167,19 @@ async def test_environment_failure_is_recorded_without_reward(calendar_task):
 def test_calendar_pipeline_persists_controls_and_replays_without_runtime(tmp_path):
     recipe = replace(calendar.recipe, check_suite=episode_suite(CalendarFactory(), max_steps=4))
     reviewer = BatchReviewer(BatchService(), "fake", "1")
-    first = run_pipeline(recipe, calendar.generate_rows(2), output_path=tmp_path, limit=2, reviewer=reviewer)
+    first = run_stages(recipe, calendar.generate_rows(2), output_path=tmp_path, limit=2, reviewer=reviewer)
     assert first["dispositions"] == {"keep": 2}
     rollouts = [
-        RolloutRecord.model_validate_json(line) for line in (tmp_path / "rollouts.jsonl").read_text().splitlines()
+        RolloutRecord.model_validate(row)
+        for evidence in (tmp_path / "audited/evidence").glob("*/attempt-*/checks.json")
+        for checks in json.loads(evidence.read_text()).values()
+        for row in checks["rollouts"]
     ]
     assert len(rollouts) == 10
     unavailable = replace(
         recipe, check_suite=replace(recipe.check_suite, run=lambda task: pytest.fail("Runtime was called during replay"))
     )
-    second = run_pipeline(unavailable, iter(()), output_path=tmp_path, limit=2, reviewer=reviewer)
+    second = run_stages(unavailable, iter(()), output_path=tmp_path, limit=2, reviewer=reviewer)
     assert first == second
 
 

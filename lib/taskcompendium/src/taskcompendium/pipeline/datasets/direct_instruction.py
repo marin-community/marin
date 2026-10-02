@@ -5,7 +5,6 @@
 
 import json
 from collections.abc import Callable
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -20,11 +19,11 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
@@ -48,10 +47,7 @@ CRITERIA = (
         "The canonical source rewards the fraction of constraints satisfied; TaskTrove similarly named "
         "checks can differ in counting and punctuation semantics."
     ),
-    (
-        "Missing requested documents or inputs are defects; an unbound canonical evaluator alone is not a "
-        "content defect."
-    ),
+    ("Missing requested documents or inputs are defects; an unbound canonical evaluator alone is not a content defect."),
 )
 
 
@@ -76,10 +72,7 @@ def normalize(row: RawRow, messages_key: str, constraints_key: str) -> TaskSpec 
                 "constraints": constraints,
                 "aggregation": "fraction_satisfied",
                 "source_metadata": {
-                    key: value
-                    for key, value in row.data.items()
-                    if key not in {messages_key, constraints_key, "path", "source_byte_offset"}
-                    and not key.startswith("sample_")
+                    key: value for key, value in row.data.items() if key not in {messages_key, constraints_key, "path"}
                 },
                 "source_transform": (
                     "infra/rl_data/sources.py:_prepare_nemotron_if"
@@ -103,7 +96,6 @@ def normalize(row: RawRow, messages_key: str, constraints_key: str) -> TaskSpec 
 
 def recipe(
     name: str,
-    snapshot: Path,
     *,
     dataset: str,
     revision: str,
@@ -114,7 +106,7 @@ def recipe(
     return DatasetRecipe(
         name=name,
         version=f"{name}-v1",
-        source=SnapshotSource(dataset, revision, "default", split, str(snapshot)),
+        source=HFSource(dataset, revision, "default", split),
         normalize=normalize_row,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,

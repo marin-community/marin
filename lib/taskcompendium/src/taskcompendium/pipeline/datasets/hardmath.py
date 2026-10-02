@@ -3,32 +3,32 @@
 
 """Pinned HARDMath training questions with their symbolic and list references."""
 
-from pathlib import Path
-
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets.hf_math import math_controls, normalize_math
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
+from taskcompendium.pipeline.sources import SourceFiles, SourceFormat
 
 REVISION = "937e9f10356e31e854f6efb9a2507f1e200c8b25"
+SOURCE_FILES = SourceFiles(patterns=("data/train-00000-of-00001.parquet",), format=SourceFormat.PARQUET)
 
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return normalize_math(row, "question", "ground_truths")
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="hardmath",
         version="hardmath-v1",
-        source=SnapshotSource("pafitis/HARDMath_processed_training", REVISION, "default", "train", str(snapshot)),
+        source=HFSource("pafitis/HARDMath_processed_training", REVISION, "default", "train"),
         normalize=normalize,
         intended_use=IntendedUse.TRAIN,
         rubric=ReviewRubric(

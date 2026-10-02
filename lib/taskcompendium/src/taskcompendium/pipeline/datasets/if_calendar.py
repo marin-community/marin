@@ -3,8 +3,6 @@
 
 """Instruction-following calendar source with its final-schedule contract."""
 
-from pathlib import Path
-
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.datasets.calendar_tasks import normalize as normalize_calendar
 from taskcompendium.pipeline.datasets.calendar_tasks import verification_report
@@ -12,13 +10,13 @@ from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     NormalizationChange,
     NormalizedTask,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 
 CONFIG = "laion__nemotron-gym-instruction-following-calendar-v3"
@@ -60,11 +58,11 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     return NormalizedTask(task, changes)
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-if_calendar",
         version="tasktrove-if_calendar-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

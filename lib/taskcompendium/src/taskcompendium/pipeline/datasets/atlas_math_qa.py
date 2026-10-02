@@ -5,7 +5,6 @@
 
 import base64
 import re
-from pathlib import Path
 
 from pydantic import ValidationError
 from verifyit.grade import InvalidTask
@@ -23,16 +22,17 @@ from taskcompendium.models import (
     task_resource,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
@@ -51,8 +51,7 @@ OPTION_LINE = re.compile(r"^[ \t]*([A-Z])[.):][ \t]", re.MULTILINE)
 MCQ_REGEX = r"Answer\s*:\s*(?!Answer)\s*([A-Za-z0-9])\s*"
 MCQ_BOXED_REGEX = r"\\boxed\{\s*([A-Za-z0-9])\s*\}"
 MCQ_FORMAT_PREFIX = (
-    "Answer the following multiple choice question. The last line of your response "
-    "should be in the following format: "
+    "Answer the following multiple choice question. The last line of your response should be in the following format: "
 )
 ABSTENTION_SUBMISSION = "\n## Submitting your answer (IMPORTANT)\n"
 MATH_SUBMISSION = "\n## Submitting the answer\n"
@@ -195,7 +194,7 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=checks)
 
 
-def recipe(name: str, snapshot: Path, *, rubric: ReviewRubric) -> DatasetRecipe:
+def recipe(name: str, *, rubric: ReviewRubric) -> DatasetRecipe:
     """Bind one pinned source and its content rubric to the common pipeline."""
 
     def normalize_row(row: RawRow) -> TaskSpec | ImportRejection:
@@ -204,9 +203,105 @@ def recipe(name: str, snapshot: Path, *, rubric: ReviewRubric) -> DatasetRecipe:
     return DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, CONFIGS[name], "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIGS[name], "train"),
         normalize=normalize_row,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(id=f"{name}-answer-controls", revision="1", parameters={}, run=verification_report),
     )
+
+
+SOURCES = {
+    "advanced_calculations": tasktrove_source(
+        config=CONFIGS["advanced_calculations"],
+        revision=REVISION,
+        rubric=ReviewRubric(
+            id="advanced_calculations-answerability",
+            version="1",
+            criteria=(
+                "The wrapper grades only the final requested expression. Preserve that scope, but reject "
+                "contradictory requests for multiple answers or methods requiring tools absent from the "
+                "public task.",
+                "Independently compute the requested final quantity when feasible. Check radians versus "
+                "degrees, units, domain errors, precision, rounding, and the declared absolute/relative "
+                "tolerance.",
+            ),
+        ),
+    ),
+    "knowledge_mcqa": tasktrove_source(
+        config=CONFIGS["knowledge_mcqa"],
+        revision=REVISION,
+        rubric=ReviewRubric(
+            id="knowledge_mcqa-answerability",
+            version="1",
+            criteria=(
+                "Require a complete question and all labeled options. Check whether exactly one option is "
+                "defensible from the stated context, and whether the reference selects it. Overlapping "
+                "answers or unstated assumptions behind strongest/best claims are concrete defects.",
+                "Specialized medical or scientific knowledge is allowed. Unsupported specificity, "
+                "contradictory premises, and fabricated distinctions between near-identical options are "
+                "defects; unfamiliarity alone is not.",
+            ),
+        ),
+    ),
+    "math_openreasoning": tasktrove_source(
+        config=CONFIGS["math_openreasoning"],
+        revision=REVISION,
+        rubric=ReviewRubric(
+            id="math_openreasoning-answerability",
+            version="1",
+            criteria=(
+                "Check the full mathematical problem, givens, notation, units, diagrams, and requested "
+                "result. Reject absent diagrams, contradictory assumptions, or a private key inconsistent "
+                "with a demonstrated solution.",
+                "Independently verify short calculations. For long proofs, assess whether the problem is "
+                "well posed; difficulty and inability to solve immediately are not defects. Do not invent a"
+                " reference conflict.",
+                "The private typed math key is graded by the cleanup math-verify comparator. Original SymPy"
+                " comparator parity has not been established. Scalar, equation, interval, set, and ordered "
+                "sequence distinctions matter.",
+            ),
+        ),
+    ),
+    "qa_abstention": tasktrove_source(
+        config=CONFIGS["qa_abstention"],
+        revision=REVISION,
+        rubric=ReviewRubric(
+            id="qa_abstention-answerability",
+            version="1",
+            criteria=(
+                "Judge answerability from the actual question. The wrapper's claim that every question is "
+                "knowable does not supply omitted passages, diagrams, personal facts, or needed "
+                "experimental conditions.",
+                "An optional [IDK] response does not repair an unanswerable task. The source rejects "
+                "abstention for ordinary answerable rows. Check reference accuracy and whether it fully "
+                "answers the question.",
+                "The semantic paraphrase judge is unbound. That is a grading integration annotation, not a "
+                "reason to reject an otherwise coherent static task. Do not confuse output delivery with "
+                "subject matter.",
+            ),
+        ),
+    ),
+    "web_search_mcqa": tasktrove_source(
+        config=CONFIGS["web_search_mcqa"],
+        revision=REVISION,
+        rubric=ReviewRubric(
+            id="web_search_mcqa-answerability",
+            version="1",
+            criteria=(
+                "Require a complete question, labeled options, and one defensible answer. The dataset name "
+                "does not provide a browser, search results, or citations. Reject questions that require "
+                "missing live evidence.",
+                "Check overlapping options and unsupported strongest/best claims. A question answerable "
+                "from stable knowledge does not require a browsing tool merely because of its dataset name.",
+            ),
+        ),
+    ),
+}
+
+
+def recipe_for_source(
+    name: str,
+) -> DatasetRecipe:
+    source = SOURCES[name]
+    return recipe(name, rubric=source.rubric)

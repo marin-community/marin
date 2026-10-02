@@ -11620,6 +11620,7 @@ pipeline = [
     { name = "datasets" },
     { name = "marin-finestore" },
     { name = "marin-zephyr" },
+    { name = "numpy" },
 ]
 
 [package.metadata]
@@ -11629,6 +11630,7 @@ requires-dist = [
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "lib/finestore" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "lib/zephyr" },
+    { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "verifyit", extras = ["answer", "judge", "reasoning-gym", "schema"], git = "https://github.com/marin-community/verifyit.git?rev=a398c65d851941ce8e39e2986993c6108dd2e10b" },

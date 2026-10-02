@@ -8,7 +8,6 @@ import base64
 import json
 import shlex
 from dataclasses import replace
-from pathlib import Path
 
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.machine import DockerImage, MachineSpec, NetworkPolicy
@@ -34,11 +33,11 @@ from taskcompendium.pipeline.models import (
     CheckStatus,
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.runtime.shell import ShellFactory
@@ -129,8 +128,8 @@ def normalize(row: RawRow, image: str, timeout: float, memory_mb: int) -> TaskSp
     )
 
 
-def recipe(name: str, snapshot: Path, image: str, *, timeout: float, memory_mb: int) -> DatasetRecipe:
-    """Bind one converted snapshot and explicit sandbox limits to the common stages."""
+def recipe(name: str, image: str, *, timeout: float, memory_mb: int) -> DatasetRecipe:
+    """Bind one converted source and explicit sandbox limits to the common stages."""
 
     def normalize_row(row: RawRow) -> TaskSpec | ImportRejection:
         return normalize(row, image, timeout, memory_mb)
@@ -138,7 +137,7 @@ def recipe(name: str, snapshot: Path, image: str, *, timeout: float, memory_mb: 
     return DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, CONFIGS[name], "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIGS[name], "train"),
         normalize=normalize_row,
         rubric=ReviewRubric(
             id=f"{name}-answerability",

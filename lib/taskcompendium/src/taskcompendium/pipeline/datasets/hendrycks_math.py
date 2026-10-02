@@ -3,21 +3,21 @@
 
 """The pinned algebra training split of MATH, separate from evaluation splits."""
 
-from pathlib import Path
-
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets.hf_math import math_controls, normalize_math
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
+from taskcompendium.pipeline.sources import SourceFiles, SourceFormat
 
 REVISION = "21a5633873b6a120296cce3e2df9d5550074f4a3"
+SOURCE_FILES = SourceFiles(patterns=("algebra/train-00000-of-00001.parquet",), format=SourceFormat.PARQUET)
 
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:
@@ -27,11 +27,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return normalize_math(row, "problem", "solution")
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="hendrycks_math",
         version="hendrycks-math-algebra-train-v1",
-        source=SnapshotSource("EleutherAI/hendrycks_math", REVISION, "algebra", "train", str(snapshot)),
+        source=HFSource("EleutherAI/hendrycks_math", REVISION, "algebra", "train"),
         normalize=normalize,
         intended_use=IntendedUse.TRAIN,
         rubric=ReviewRubric(

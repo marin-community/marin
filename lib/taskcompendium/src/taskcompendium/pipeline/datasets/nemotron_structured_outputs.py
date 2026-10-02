@@ -6,7 +6,6 @@
 import base64
 import csv
 import io
-from pathlib import Path
 
 from pydantic import ValidationError
 from verifyit.spec import SchemaFormat
@@ -25,13 +24,13 @@ from taskcompendium.pipeline.datasets.structured_output import verification_repo
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     NormalizationChange,
     NormalizedTask,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
@@ -124,11 +123,11 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     return NormalizedTask(task, changes)
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-structured_outputs",
         version="tasktrove-structured_outputs-v2",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

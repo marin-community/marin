@@ -3,31 +3,26 @@
 
 """Curation code and task-content identities."""
 
-import hashlib
-import inspect
 import json
-from pathlib import Path
-
-import verifyit
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import ResourceVisibility, TaskSpec, VerifierKind
 from taskcompendium.pipeline.models import DatasetRecipe
 
+NORMALIZATION_STAGE_REVISION = "2"
+VERIFICATION_STAGE_REVISION = "1"
+REVIEW_STAGE_REVISION = "1"
 
-def code_digest(recipe: DatasetRecipe) -> str:
-    """Fingerprint the semantic package, shared scorers, and recipe module."""
-    roots = (Path(__file__).parents[1], Path(verifyit.__file__).parent)
-    digest = hashlib.sha256()
-    for root in roots:
-        for file in sorted(root.rglob("*.py")):
-            digest.update(str(file.relative_to(root)).encode())
-            digest.update(file.read_bytes())
-    module_path = inspect.getsourcefile(recipe.normalize)
-    if module_path is None:
-        raise ValueError("A recipe normalizer must be defined in a Python source file")
-    digest.update(Path(module_path).read_bytes())
-    return digest.hexdigest()
+
+def recipe_code_identity(recipe: DatasetRecipe) -> dict[str, str]:
+    """Declare which code revisions can change this recipe's audit."""
+    return {
+        "normalization_stage": NORMALIZATION_STAGE_REVISION,
+        "family": recipe.normalize.__module__,
+        "family_revision": recipe.version,
+        "verification_stage": VERIFICATION_STAGE_REVISION,
+        "review_stage": REVIEW_STAGE_REVISION,
+    }
 
 
 def semantic_digest(task: TaskSpec, include_reference: bool) -> str:

@@ -5,7 +5,6 @@
 
 import re
 from collections.abc import Callable
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -19,14 +18,16 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.source_definitions import SourceDefinition
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
+from taskcompendium.pipeline.sources import SourceFiles, SourceFormat
 from taskcompendium.verifiers.preference import BinaryPreference, PairwisePreference, PreferenceEvidenceVerifier
 
 PREFERENCE_CRITERIA = (
@@ -77,11 +78,7 @@ def normalize_hh(row: RawRow) -> TaskSpec | ImportRejection:
         return ImportRejection(reason="invalid_preference_prompt", detail="Public history must end in a user request")
     verifier = PreferenceEvidenceVerifier(
         evidence=PairwisePreference(chosen=(chosen[-1],), rejected=(rejected[-1],)),
-        source_metadata={
-            key: value
-            for key, value in row.data.items()
-            if key not in {"chosen", "rejected", "path", "source_byte_offset"} and not key.startswith("sample_")
-        },
+        source_metadata={key: value for key, value in row.data.items() if key not in {"chosen", "rejected", "path"}},
     )
     return preference_task(row, ConversationInput(events=chosen[:-1]), verifier)
 
@@ -96,10 +93,7 @@ def normalize_binary(row: RawRow) -> TaskSpec | ImportRejection:
         verifier = PreferenceEvidenceVerifier(
             evidence=BinaryPreference(response=transcript.events[len(prompt) :], preferred=row.data["label"]),
             source_metadata={
-                key: value
-                for key, value in row.data.items()
-                if key not in {"prompt", "completion", "label", "path", "source_byte_offset"}
-                and not key.startswith("sample_")
+                key: value for key, value in row.data.items() if key not in {"prompt", "completion", "label", "path"}
             },
         )
     except (ValidationError, ValueError, KeyError, TypeError) as error:
@@ -113,7 +107,6 @@ def normalize_binary(row: RawRow) -> TaskSpec | ImportRejection:
 
 def recipe(
     name: str,
-    snapshot: Path,
     *,
     dataset: str,
     revision: str,
@@ -124,8 +117,117 @@ def recipe(
     return DatasetRecipe(
         name=name,
         version=f"{name}-v1",
-        source=SnapshotSource(dataset, revision, config, "train", str(snapshot)),
+        source=HFSource(dataset, revision, config, "train"),
         normalize=normalize,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,
+    )
+
+
+SOURCES = {
+    "hh_harmless_base": SourceDefinition(
+        dataset="Anthropic/hh-rlhf",
+        revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        config="harmless-base",
+        split="train",
+        files=SourceFiles(patterns=("harmless-base/train.jsonl.gz",), format=SourceFormat.JSONL),
+        rubric=ReviewRubric(
+            id="hh_harmless_base-answerability",
+            version="1",
+            criteria=(
+                (
+                    "Assess whether the public request is intelligible and whether a safe response is possible; "
+                    "harmful requests can have meaningful refusal responses."
+                ),
+                *PREFERENCE_CRITERIA,
+            ),
+        ),
+    ),
+    "hh_helpful_base": SourceDefinition(
+        dataset="Anthropic/hh-rlhf",
+        revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        config="helpful-base",
+        split="train",
+        files=SourceFiles(patterns=("helpful-base/train.jsonl.gz",), format=SourceFormat.JSONL),
+        rubric=ReviewRubric(
+            id="hh_helpful_base-answerability",
+            version="1",
+            criteria=(
+                (
+                    "Assess the helpfulness task using the full conversation, including earlier assistant turns and "
+                    "any missing requested inputs."
+                ),
+                *PREFERENCE_CRITERIA,
+            ),
+        ),
+    ),
+    "hh_helpful_online": SourceDefinition(
+        dataset="Anthropic/hh-rlhf",
+        revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        config="helpful-online",
+        split="train",
+        files=SourceFiles(patterns=("helpful-online/train.jsonl.gz",), format=SourceFormat.JSONL),
+        rubric=ReviewRubric(
+            id="hh_helpful_online-answerability",
+            version="1",
+            criteria=(
+                (
+                    "Assess the full online-feedback conversation; source preference alone does not certify factual "
+                    "accuracy or completeness."
+                ),
+                *PREFERENCE_CRITERIA,
+            ),
+        ),
+    ),
+    "hh_helpful_rejection_sampled": SourceDefinition(
+        dataset="Anthropic/hh-rlhf",
+        revision="09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+        config="helpful-rejection-sampled",
+        split="train",
+        files=SourceFiles(patterns=("helpful-rejection-sampled/train.jsonl.gz",), format=SourceFormat.JSONL),
+        rubric=ReviewRubric(
+            id="hh_helpful_rejection_sampled-answerability",
+            version="1",
+            criteria=(
+                (
+                    "Assess the underlying public task independently of the rejection-sampled candidate ranking and "
+                    "any candidate errors."
+                ),
+                *PREFERENCE_CRITERIA,
+            ),
+        ),
+    ),
+    "kto_mix": SourceDefinition(
+        dataset="trl-lib/kto-mix-14k",
+        revision="4470f033f33364e7d064c9f920c3df54d0cce767",
+        config="default",
+        split="train",
+        files=SourceFiles(patterns=("data/train-00000-of-00001.parquet",), format=SourceFormat.PARQUET),
+        rubric=ReviewRubric(
+            id="kto-mix-answerability",
+            version="1",
+            criteria=(
+                "Read the complete public prompt messages; the labeled candidate completion remains private.",
+                "The boolean label is an unpaired preference observation; do not invent a chosen/rejected counterpart.",
+                "Assess public task coherence separately from candidate quality or the source preference label.",
+                "The pinned mixture has no contributor column; do not claim a sampled row belongs to a named "
+                "contributor.",
+                "Missing inputs and contradictions are task defects; an unbound reward model alone is not.",
+            ),
+        ),
+    ),
+}
+
+
+def recipe_for_source(
+    name: str,
+) -> DatasetRecipe:
+    source = SOURCES[name]
+    return recipe(
+        name,
+        dataset=source.dataset,
+        revision=source.revision,
+        config=source.config,
+        rubric=source.rubric,
+        normalize=normalize_binary if name == "kto_mix" else normalize_hh,
     )

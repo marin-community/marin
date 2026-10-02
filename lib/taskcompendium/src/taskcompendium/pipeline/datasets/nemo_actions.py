@@ -3,9 +3,6 @@
 
 """Next-action prediction using the existing NeMo importer and comparator."""
 
-from dataclasses import replace
-from pathlib import Path
-
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
@@ -21,7 +18,6 @@ from taskcompendium.pipeline.models import (
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
@@ -84,8 +80,3 @@ recipe = DatasetRecipe(
     intended_use=IntendedUse.TRAIN,
     check_suite=CheckSuite(id="next-action-schema-and-controls", revision="1", parameters={}, run=verification_report),
 )
-
-
-def snapshot_recipe(snapshot: Path) -> DatasetRecipe:
-    """Bind bounded real rows while retaining the streaming recipe interface."""
-    return replace(recipe, source=SnapshotSource(DATASET, REVISION, "default", "train", str(snapshot)))

@@ -4,7 +4,6 @@
 """Pinned Nemotron stdin/stdout coding source and case-alignment rubric."""
 
 from dataclasses import replace
-from pathlib import Path
 
 from verifyit.modes.extract import collapse_whitespace
 
@@ -29,10 +28,9 @@ RUBRIC = ReviewRubric(
 )
 
 
-def recipe(snapshot: Path, image: str, *, timeout: float, memory_mb: int) -> DatasetRecipe:
+def recipe(image: str, *, timeout: float, memory_mb: int) -> DatasetRecipe:
     source_recipe = python_tasks.recipe(
         "competitive_coding",
-        snapshot,
         image,
         config=CONFIG,
         revision=REVISION,

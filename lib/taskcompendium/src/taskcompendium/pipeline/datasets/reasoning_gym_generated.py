@@ -3,8 +3,6 @@
 
 """Direct generated Reasoning Gym entries with their pinned native scorer contract."""
 
-from pathlib import Path
-
 from pydantic import BaseModel, ValidationError
 
 from taskcompendium.models import (
@@ -21,11 +19,11 @@ from taskcompendium.pipeline.models import (
     CheckStatus,
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
@@ -137,11 +135,11 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=checks)
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="reasoning_gym_generated",
         version="reasoning-gym-direct-v1",
-        source=SnapshotSource(DATASET, REVISION, "generated", "generated", str(snapshot)),
+        source=HFSource(DATASET, REVISION, "generated", "generated"),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

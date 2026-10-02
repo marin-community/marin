@@ -5,7 +5,6 @@
 
 import base64
 import tomllib
-from pathlib import Path
 
 from taskcompendium.pipeline.datasets import rubric_tasks
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
@@ -53,10 +52,9 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     return rubric_tasks.normalized_task(row, verifier)
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return rubric_tasks.recipe(
         "multichallenge",
-        snapshot,
         config=CONFIG,
         revision=REVISION,
         rubric=RUBRIC,

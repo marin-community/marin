@@ -3,19 +3,15 @@
 
 """Pinned dapo_math source recipe."""
 
-from pathlib import Path
-
 from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.datasets.direct_math import math_task
-from taskcompendium.pipeline.datasets.hf_math import math_controls
+from taskcompendium.pipeline.datasets.direct_math import math_recipe, math_task
 from taskcompendium.pipeline.models import (
-    CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 
 DATASET = "BytedTsinghua-SIA/DAPO-Math-17k"
@@ -24,8 +20,6 @@ CONFIG = "default"
 SPLIT = "train"
 SOURCE_FILE = "data/dapo-math-17k.parquet"
 SOURCE_FORMAT = "parquet"
-ACQUISITION = "viewer"
-VIEWER_OFFSET = 0
 
 RUBRIC = ReviewRubric(
     id="dapo_math-quality",
@@ -50,15 +44,5 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return math_task(row, events, str(reward["ground_truth"]), evidence)
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
-    return DatasetRecipe(
-        name="dapo_math",
-        version="dapo_math-v1",
-        source=SnapshotSource(DATASET, REVISION, CONFIG, SPLIT, str(snapshot)),
-        normalize=normalize,
-        intended_use=IntendedUse.TRAIN,
-        rubric=RUBRIC,
-        check_suite=CheckSuite(
-            id="dapo_math-controls", revision="1", parameters={"comparator": "cleanup-math-verify"}, run=math_controls
-        ),
-    )
+def recipe() -> DatasetRecipe:
+    return math_recipe("dapo_math", HFSource(DATASET, REVISION, CONFIG, SPLIT), normalize, IntendedUse.TRAIN, RUBRIC)

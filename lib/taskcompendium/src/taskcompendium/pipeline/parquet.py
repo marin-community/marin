@@ -23,10 +23,6 @@ TASK_SCHEMA = pa.schema(
         ("source_revision", pa.string()),
         ("source_row", pa.string()),
         ("intended_use", pa.string()),
-        ("sample_partition", pa.string()),
-        ("sample_group", pa.string()),
-        ("source_sample_index", pa.int64()),
-        ("source_byte_offset", pa.int64()),
         (
             "normalization_changes",
             pa.list_(
@@ -65,7 +61,7 @@ TASK_SCHEMA = pa.schema(
         ("cleanup_detail", pa.string()),
         ("cleanup_lineage_json", pa.string()),
     ],
-    metadata={b"taskcompendium.curation_schema": b"4"},
+    metadata={b"taskcompendium.curation_schema": b"6"},
 )
 
 
@@ -98,10 +94,6 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
         "source_revision": audit.source.revision,
         "source_row": audit.source.row,
         "intended_use": audit.intended_use.value if audit.intended_use is not None else None,
-        "sample_partition": data.get("sample_partition"),
-        "sample_group": data.get("sample_group"),
-        "source_sample_index": data.get("sample_index"),
-        "source_byte_offset": data.get("sample_byte_offset"),
         "normalization_changes": changes,
         "task_json": audit.normalized.model_dump_json() if audit.normalized is not None else None,
         "raw_json": json.dumps(audit.raw, ensure_ascii=False, allow_nan=False) if audit.raw is not None else None,

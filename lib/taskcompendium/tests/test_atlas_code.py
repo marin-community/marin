@@ -9,13 +9,13 @@ import pytest
 from verifyit.spec import StdioSpec, spec_to_table
 
 from taskcompendium.models import ResourceVisibility, Source, TaskSpec
-from taskcompendium.pipeline.datasets import code_contests, codenet
+from taskcompendium.pipeline.datasets import atlas_code
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier
 
 
-@pytest.mark.parametrize("factory", [code_contests.recipe, codenet.recipe], ids=["code_contests", "codenet"])
-def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle(factory, tmp_path):
+@pytest.mark.parametrize("name", ["code_contests", "codenet"])
+def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle(name):
     payloads = {
         "tests/cases/input_0.txt": b"3 4\r\n",
         "tests/cases/output_0.txt": b"7\n",
@@ -23,7 +23,7 @@ def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle(factory, tmp
         "tests/cases/output_1.txt": b"-2\n",
     }
     oracle = b"printf 'print(sum(map(int,input().split())))' > /app/solution.py\n"
-    dataset = factory(tmp_path / "sample.jsonl", "sha256:local", timeout=30.0, memory_mb=256)
+    dataset = atlas_code.recipe_for_source(name, "sha256:local", timeout=30.0, memory_mb=256)
     row = RawRow(
         id="sum",
         source=Source(dataset=dataset.source.dataset, revision=dataset.source.revision, row="1", importer_revision="1"),

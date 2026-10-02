@@ -10,11 +10,11 @@ from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from functools import partial
-from itertools import chain, islice
 from math import ceil
 from pathlib import Path
 from tempfile import SpooledTemporaryFile, TemporaryDirectory
 from typing import Any, Literal
+from uuid import uuid4
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
@@ -33,31 +33,20 @@ from taskcompendium.pipeline.models import (
     Decision,
     Disposition,
     FilterPolicy,
-    GeneratedSource,
-    HFSource,
     ImportRejection,
     NormalizedTask,
     RawRow,
     ReviewRecord,
-    SnapshotSource,
     TaskAudit,
 )
 from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.review import BASE_RUBRIC, DEFAULT_PROMPT_CHARACTERS, BatchReviewer, Reviewer
-from taskcompendium.pipeline.sources import source_rows
+from taskcompendium.pipeline.sources import SourceFiles, staged_file_rows, staged_files
 from taskcompendium.pipeline.verification import verify_task
 
-ACQUISITION_SHARD_ROWS = 1000
 GROUP_MEMORY_BYTES = 1024 * 1024
-AUDIT_SHARD_ROWS = 100
+AUDIT_SHARDS = 64
 OUTPUT_SHARD_ROWS = 100000
-
-
-@dataclass(frozen=True)
-class SourceAcquisition:
-    source: HFSource | GeneratedSource | SnapshotSource
-    limit: int | None
-    sample_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,43 +79,6 @@ def _write_json(path: StoragePath, value: Any) -> None:
 def _read_json(path: StoragePath) -> Any:
     with path.open("rt") as stream:
         return json.load(stream)
-
-
-def acquire_source(acquisition: SourceAcquisition, output_path: str) -> dict[str, Any]:
-    """Copy a bounded sample or a complete finite source into durable raw shards."""
-    if acquisition.limit is not None and acquisition.limit <= 0:
-        raise ValueError("A positive sample limit is required")
-    source = acquisition.source
-    output = StoragePath(output_path)
-    if isinstance(source, SnapshotSource) and acquisition.sample_sha256 is not None:
-        digest = hashlib.sha256()
-        with StoragePath(source.path).open("rb") as stream:
-            for chunk in iter(lambda: stream.read(GROUP_MEMORY_BYTES), b""):
-                digest.update(chunk)
-        if digest.hexdigest() != acquisition.sample_sha256:
-            raise ValueError("Snapshot bytes do not match the pinned sample digest")
-    digest = hashlib.sha256()
-    count = 0
-    rows = iter(source_rows(source, acquisition.limit))
-    while (first := next(rows, None)) is not None:
-        path = output / "raw" / f"part-{count // ACQUISITION_SHARD_ROWS:05d}.jsonl"
-        with path.open("wt", auto_mkdir=True) as stream:
-            for data in chain((first,), islice(rows, ACQUISITION_SHARD_ROWS - 1)):
-                record = json.dumps({"index": count, "data": data}, ensure_ascii=False, allow_nan=False) + "\n"
-                stream.write(record)
-                digest.update(record.encode())
-                count += 1
-    if acquisition.limit is not None and count != acquisition.limit:
-        raise ValueError(f"Source yielded {count} rows; expected {acquisition.limit}")
-    manifest = {
-        "acquisition": asdict(acquisition),
-        "input_rows": count,
-        "raw_sample_sha256": digest.hexdigest(),
-        "row_selection": "all_rows" if acquisition.limit is None else "prefix",
-        "source_exhausted": acquisition.limit is None,
-    }
-    _write_json(output / "manifest.json", manifest)
-    return manifest
 
 
 def _merge_record(row: dict[str, Any]) -> dict[str, Any]:
@@ -234,7 +186,7 @@ def _normalize(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
     source = Source(
         dataset=recipe.source.dataset,
         revision=recipe.source.revision,
-        row=f"{recipe.source.config}:{recipe.source.split}:{record['index']}",
+        row=f"{recipe.source.config}:{recipe.source.split}:{record['locator']}",
         importer_revision=recipe.version,
     )
     task_id = f"{recipe.name}-{canonical_sha256(source.model_dump())}"
@@ -278,7 +230,7 @@ def _normalize(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
         public_key = deduplication_key(result)
         semantic_key = semantic_digest(result, include_reference=True)
     return {
-        "index": record["index"],
+        "locator": record["locator"],
         "public_key": public_key,
         "semantic_key": semantic_key,
         "audit": audit.model_dump(mode="json"),
@@ -289,8 +241,9 @@ def _public_key(record: dict[str, Any]) -> str:
     return record["public_key"]
 
 
-def _index(record: dict[str, Any]) -> int:
-    return record["index"]
+def _locator(record: dict[str, Any]) -> str:
+    path, index = record["locator"].rsplit(":", 1)
+    return f"{path}:{int(index):020d}"
 
 
 def _deduplicate(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
@@ -343,7 +296,7 @@ def _audit_batch(
         yield from (audit_columns(audit) for audit in audits)
         return
     batch_id = canonical_sha256({"task_ids": [task.id for task in candidates]})
-    evidence = output_path / "evidence" / batch_id
+    evidence = output_path / "evidence" / batch_id / f"attempt-{uuid4().hex}"
     with TemporaryDirectory(prefix="task-curation-review-") as directory:
         local = Path(directory)
         try:
@@ -381,7 +334,7 @@ def _audit_batch(
                     )
                 yield audit_columns(audit)
         finally:
-            # Raw transport records are evidence; completed Parquet shards are the cache.
+            # Each attempt retains its transport evidence, including failed attempts.
             _persist_evidence(local, evidence)
 
 
@@ -406,7 +359,13 @@ def _manifest(path: StoragePath) -> dict[str, Any]:
 
 
 def audit_source(
-    source_path: str, output_path: str, recipe: DatasetRecipe, review: ReviewConfig, execution: AuditExecution
+    source_path: str,
+    output_path: str,
+    recipe: DatasetRecipe,
+    review: ReviewConfig,
+    execution: AuditExecution,
+    files: SourceFiles,
+    limit: int | None,
 ) -> dict[str, Any]:
     """Normalize, deduplicate, verify, and review each row with Zephyr workers."""
     reviewer = execution.reviewer
@@ -428,14 +387,16 @@ def audit_source(
             raise ValueError("Review configuration differs from the executing reviewer")
     source = StoragePath(source_path)
     output = StoragePath(output_path)
-    acquired = _read_json(source / "manifest.json")
-    # Partition identity depends on the sample, never on the executing worker count.
-    shards = max(1, ceil(acquired["input_rows"] / AUDIT_SHARD_ROWS))
+    relative_files = staged_files(str(source), files)
+    selected = (
+        Dataset.from_list(list(relative_files)).flat_map(partial(staged_file_rows, str(source), spec=files)).reshard(1)
+    )
+    if limit is not None:
+        selected = selected.take_per_shard(limit)
     dataset = (
-        Dataset.from_files(str(source / "raw/*.jsonl"))
-        .load_jsonl()
+        selected.reshard(AUDIT_SHARDS)
         .map(partial(_normalize, recipe=recipe))
-        .group_by(_public_key, reducer=_deduplicate, sort_by=_index, num_output_shards=shards)
+        .group_by(_public_key, reducer=_deduplicate, sort_by=_locator, num_output_shards=AUDIT_SHARDS)
         .window(execution.review_batch_size)
         .flat_map(partial(_audit_batch, recipe=recipe, reviewer=reviewer, output_path=output))
         .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA, skip_existing=True)
@@ -450,8 +411,6 @@ def audit_source(
         "reviewer": reviewer.identity,
         "rubric": asdict(recipe.rubric),
     }
-    if manifest.get("input_rows", 0) != acquired["input_rows"]:
-        raise ValueError("Audit ledger does not account for every acquired source row")
     _write_json(output / "manifest.json", manifest)
     return manifest
 

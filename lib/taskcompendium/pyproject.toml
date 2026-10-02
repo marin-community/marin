@@ -11,7 +11,7 @@ dependencies = ["pyarrow>=15.0", "pydantic>=2.0", "verifyit[answer,judge,reasoni
 
 [project.optional-dependencies]
 harbor = ["harbor"]
-pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr", "marin-finestore"]
+pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr", "marin-finestore", "numpy>=1.26"]
 
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]

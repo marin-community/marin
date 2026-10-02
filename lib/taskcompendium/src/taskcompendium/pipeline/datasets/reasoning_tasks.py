@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize pinned TaskTrove Reasoning Gym and all-puzzles snapshots."""
+"""Normalize pinned TaskTrove Reasoning Gym and all-puzzles sources."""
 
 import base64
 import json
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -22,11 +21,11 @@ from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
@@ -144,11 +143,11 @@ def puzzle_checks(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=verify_witness(task, verifier.expected, "__incorrect_puzzle_answer__"))
 
 
-def reasoning_recipe(snapshot: Path) -> DatasetRecipe:
+def reasoning_recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-reasoning-gym",
         version="tasktrove-reasoning-gym-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, REASONING_CONFIG, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, REASONING_CONFIG, "train"),
         normalize=normalize_reasoning,
         rubric=REASONING_RUBRIC,
         intended_use=IntendedUse.TRAIN,
@@ -156,11 +155,11 @@ def reasoning_recipe(snapshot: Path) -> DatasetRecipe:
     )
 
 
-def puzzle_recipe(snapshot: Path) -> DatasetRecipe:
+def puzzle_recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-puzzles",
         version="tasktrove-puzzles-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, PUZZLE_CONFIG, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, PUZZLE_CONFIG, "train"),
         normalize=normalize_puzzle,
         rubric=PUZZLE_RUBRIC,
         intended_use=IntendedUse.TRAIN,

@@ -3,19 +3,15 @@
 
 """Pinned math500 source recipe."""
 
-from pathlib import Path
-
-from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.datasets.direct_math import math_task
-from taskcompendium.pipeline.datasets.hf_math import math_controls
+from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.datasets.direct_math import field_math_task, math_recipe
 from taskcompendium.pipeline.models import (
-    CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 
 DATASET = "HuggingFaceH4/MATH-500"
@@ -24,8 +20,6 @@ CONFIG = "default"
 SPLIT = "test"
 SOURCE_FILE = "test.jsonl"
 SOURCE_FORMAT = "jsonl"
-ACQUISITION = "file"
-VIEWER_OFFSET = 0
 
 RUBRIC = ReviewRubric(
     id="math500-quality",
@@ -40,22 +34,8 @@ RUBRIC = ReviewRubric(
 
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:
-    problem, expected = row.data.get("problem"), row.data.get("answer")
-    if not isinstance(problem, str) or not isinstance(expected, str):
-        return ImportRejection(reason="missing_prompt_or_reference", detail="problem and answer strings are required")
-    evidence = {key: row.data[key] for key in ("answer", "solution", "subject", "level", "unique_id")}
-    return math_task(row, (TextMessage(role="user", content=problem),), expected, evidence)
+    return field_math_task(row, "problem", "answer", ("answer", "solution", "subject", "level", "unique_id"))
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
-    return DatasetRecipe(
-        name="math500",
-        version="math500-v1",
-        source=SnapshotSource(DATASET, REVISION, CONFIG, SPLIT, str(snapshot)),
-        normalize=normalize,
-        intended_use=IntendedUse.EVAL,
-        rubric=RUBRIC,
-        check_suite=CheckSuite(
-            id="math500-controls", revision="1", parameters={"comparator": "cleanup-math-verify"}, run=math_controls
-        ),
-    )
+def recipe() -> DatasetRecipe:
+    return math_recipe("math500", HFSource(DATASET, REVISION, CONFIG, SPLIT), normalize, IntendedUse.EVAL, RUBRIC)

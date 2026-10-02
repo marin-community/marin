@@ -3,8 +3,6 @@
 
 """Snapshot adapters for TaskTrove knowledge and science open-ended QA."""
 
-from pathlib import Path
-
 from pydantic import ValidationError
 
 from taskcompendium.models import (
@@ -22,11 +20,11 @@ from taskcompendium.pipeline.models import (
     CheckStatus,
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import answer_checks
@@ -112,19 +110,19 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=checks)
 
 
-def knowledge_recipe(snapshot: Path) -> DatasetRecipe:
-    return _recipe(snapshot, "knowledge-openqa", KNOWLEDGE_CONFIG)
+def knowledge_recipe() -> DatasetRecipe:
+    return _recipe("knowledge-openqa", KNOWLEDGE_CONFIG)
 
 
-def science_recipe(snapshot: Path) -> DatasetRecipe:
-    return _recipe(snapshot, "science-openqa", SCIENCE_CONFIG)
+def science_recipe() -> DatasetRecipe:
+    return _recipe("science-openqa", SCIENCE_CONFIG)
 
 
-def _recipe(snapshot: Path, name: str, config: str) -> DatasetRecipe:
+def _recipe(name: str, config: str) -> DatasetRecipe:
     return DatasetRecipe(
         name=name,
         version=f"{name}-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, config, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, config, "train"),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

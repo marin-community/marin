@@ -5,7 +5,6 @@
 
 import json
 import re
-from pathlib import Path
 
 from verifyit.modes.extract import extract_boxed
 
@@ -21,11 +20,11 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
@@ -37,8 +36,6 @@ CONFIG = "OS-Q2.5-32B-4"
 SPLIT = "train"
 SOURCE_FILE = "OS-Q2.5-32B-4.jsonl"
 SOURCE_FORMAT = "jsonl"
-ACQUISITION = "file"
-VIEWER_OFFSET = 0
 
 RUBRIC = ReviewRubric(
     id="openscience-quality",
@@ -94,11 +91,11 @@ def controls(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=verify_witness(task, verifier.expected, wrong))
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="openscience",
         version="openscience-v1",
-        source=SnapshotSource(DATASET, REVISION, CONFIG, SPLIT, str(snapshot)),
+        source=HFSource(DATASET, REVISION, CONFIG, SPLIT),
         normalize=normalize,
         intended_use=IntendedUse.TRAIN,
         rubric=RUBRIC,

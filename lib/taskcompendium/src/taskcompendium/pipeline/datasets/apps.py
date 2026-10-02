@@ -4,17 +4,16 @@
 """Pinned apps source and its private evaluator contract."""
 
 import json
-from pathlib import Path
 
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets.direct_contracts import contract_task
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 
 DATASET = "codeparrot/apps"
@@ -23,8 +22,6 @@ CONFIG = "default"
 SPLIT = "train"
 SOURCE_FILE = "train.jsonl"
 SOURCE_FORMAT = "jsonl"
-ACQUISITION = "file"
-VIEWER_OFFSET = 0
 
 RUBRIC = ReviewRubric(
     id="apps-quality",
@@ -57,11 +54,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="apps",
         version="apps-v1",
-        source=SnapshotSource(DATASET, REVISION, CONFIG, SPLIT, str(snapshot)),
+        source=HFSource(DATASET, REVISION, CONFIG, SPLIT),
         normalize=normalize,
         intended_use=IntendedUse.TRAIN,
         rubric=RUBRIC,

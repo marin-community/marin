@@ -1,63 +1,35 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Wire sampled Atlas source recipes without reading or converting their rows."""
+"""Wire pinned Atlas source recipes without reading or converting their rows."""
 
-import hashlib
 import re
 from dataclasses import replace
 from importlib import import_module
-from pathlib import Path
 from typing import Protocol, cast
 
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets import (
-    advanced_calculations,
-    arc_inductive,
-    arc_transductive,
+    atlas_arc_injection,
     atlas_code,
+    atlas_math_qa,
     calendar_tasks,
-    code_contests,
-    codenet,
-    codereview,
     competitive_coding,
-    curriculum_easy,
-    curriculum_medium,
     deepscaler,
-    e2egit,
-    e2egit_large,
     executable_tasks,
-    glaive_code,
     hardmath,
     hendrycks_math,
     if_calendar,
-    indirect_injection,
-    knowledge_mcqa,
-    math_gym,
-    math_openreasoning,
-    math_oracle,
-    math_prism,
-    math_stack,
     multichallenge,
-    multifile,
     nemo_actions,
     nemotron_structured_outputs,
-    pymethods,
-    pymethods_large,
-    qa_abstention,
+    preference_tasks,
+    python_tasks,
     qa_tasks,
     reasoning_tasks,
-    safety,
-    stack_overflow,
-    stack_pytest,
-    superuser,
-    swe_rebench,
-    swesmith,
-    tezos,
-    unitsyn_large,
-    unix,
-    web_search_mcqa,
-    wizard_orca,
+    repository_tasks,
+    rubric_tasks,
+    tasktrove_math,
 )
 from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_SOURCES
 from taskcompendium.pipeline.datasets.nemotron_ultra_source import recipe_for_source
@@ -78,8 +50,8 @@ from experiments.post_training.tasktrove.converters.nemotron_structured_outputs 
 from experiments.post_training.tasktrove.converters.python_unit_tests import convert as convert_python
 
 
-class SnapshotRecipeModule(Protocol):
-    def recipe(self, snapshot: Path) -> DatasetRecipe: ...
+class RecipeModule(Protocol):
+    def recipe(self) -> DatasetRecipe: ...
 
 
 SANDBOX_TIMEOUT = 120.0
@@ -99,121 +71,85 @@ ADDITIONAL_SOURCE_NAMES = (
     "openscience",
     "rlvr_math",
     "verifiable_code",
-    "hh_harmless_base",
-    "hh_helpful_base",
-    "hh_helpful_online",
-    "hh_helpful_rejection_sampled",
-    "kto_mix",
     "nemotron_if",
     "rlvr_ifeval",
     "reasoning_gym_generated",
 )
 
-RUBRIC_SOURCES = {
-    "codereview": codereview,
-    "glaive_code": glaive_code,
-    "if_calendar": if_calendar,
-    "multichallenge": multichallenge,
-    "safety": safety,
-    "stack_overflow": stack_overflow,
-    "superuser": superuser,
-    "tezos": tezos,
-    "unix": unix,
-    "wizard_orca": wizard_orca,
+FAMILY_SOURCES = {
+    name: family
+    for family in (
+        atlas_arc_injection,
+        atlas_math_qa,
+        preference_tasks,
+        repository_tasks,
+        rubric_tasks,
+        tasktrove_math,
+    )
+    for name in family.SOURCES
 }
-MATH_SOURCES = {
-    "math_prism": math_prism,
-    "math_stack": math_stack,
-    "math_gym": math_gym,
-    "math_oracle": math_oracle,
-}
+SOURCE_DEFINITIONS = (
+    {name: family.SOURCES[name] for name, family in FAMILY_SOURCES.items()} | atlas_code.SOURCES | python_tasks.SOURCES
+)
 SOURCE_FACTORIES = {
-    **{name: module.recipe for name, module in MATH_SOURCES.items()},
-    "swe_rebench": swe_rebench.recipe,
-    "swesmith": swesmith.recipe,
     "hardmath": hardmath.recipe,
     "hendrycks_math": hendrycks_math.recipe,
     "deepscaler": deepscaler.recipe,
-    **{name: module.recipe for name, module in RUBRIC_SOURCES.items()},
+    "if_calendar": if_calendar.recipe,
+    "multichallenge": multichallenge.recipe,
     "calendar": calendar_tasks.recipe,
     "reasoning_gym": reasoning_tasks.reasoning_recipe,
     "all_puzzles": reasoning_tasks.puzzle_recipe,
-    "nemo_actions": nemo_actions.snapshot_recipe,
     "knowledge_openqa": qa_tasks.knowledge_recipe,
     "science_openqa": qa_tasks.science_recipe,
-    "math_openreasoning": math_openreasoning.recipe,
-    "advanced_calculations": advanced_calculations.recipe,
-    "knowledge_mcqa": knowledge_mcqa.recipe,
-    "web_search_mcqa": web_search_mcqa.recipe,
-    "qa_abstention": qa_abstention.recipe,
-    "arc_transductive": arc_transductive.recipe,
-    "arc_inductive": arc_inductive.recipe,
-    "indirect_injection": indirect_injection.recipe,
-}
-PYTHON_SOURCES = {
-    "curriculum_easy": curriculum_easy,
-    "curriculum_medium": curriculum_medium,
-    "e2egit_large": e2egit_large,
-    "e2egit": e2egit,
-    "multifile": multifile,
-    "pymethods_large": pymethods_large,
-    "pymethods": pymethods,
-    "stack_pytest": stack_pytest,
-    "unitsyn_large": unitsyn_large,
 }
 SOURCE_NAMES = (
     *SOURCE_FACTORIES,
+    *FAMILY_SOURCES,
     *executable_tasks.CONFIGS,
     *atlas_code.CONFIGS,
-    *PYTHON_SOURCES,
+    *python_tasks.SOURCES,
+    "nemo_actions",
     "structured_outputs",
     "competitive_coding",
     *ADDITIONAL_SOURCE_NAMES,
 )
 
 
-def converter_digest() -> str:
-    """Include borrowed converter code in the audit artifact's identity."""
-    directory = Path(__file__).parent
-    files = [
-        directory / "task_curation_executable.py",
-        directory / "task_curation_next_code.py",
-        directory / "task_curation_competitive.py",
-    ]
-    files.extend(sorted((directory / "tasktrove").rglob("*.py")))
-    digest = hashlib.sha256()
-    for file in files:
-        digest.update(str(file.relative_to(directory)).encode())
-        digest.update(file.read_bytes())
-    return digest.hexdigest()
-
-
-def source_recipe(name: str, snapshot: Path, image: str | None) -> DatasetRecipe:
-    """Bind raw samples; executable conversion happens inside audit workers."""
+def source_recipe(name: str, image: str | None) -> DatasetRecipe:
+    """Bind a pinned source; executable conversion happens inside audit workers."""
     if name in NEMOTRON_SOURCES:
-        return recipe_for_source(NEMOTRON_SOURCES[name], snapshot)
+        return recipe_for_source(NEMOTRON_SOURCES[name])
     if name in ADDITIONAL_SOURCE_NAMES:
-        return cast(SnapshotRecipeModule, import_module(f"taskcompendium.pipeline.datasets.{name}")).recipe(snapshot)
+        return cast(RecipeModule, import_module(f"taskcompendium.pipeline.datasets.{name}")).recipe()
+    if name in FAMILY_SOURCES:
+        return FAMILY_SOURCES[name].recipe_for_source(name)
+    if name == "nemo_actions":
+        return nemo_actions.recipe
     if name in SOURCE_FACTORIES:
-        return SOURCE_FACTORIES[name](snapshot)
+        return SOURCE_FACTORIES[name]()
     if name == "structured_outputs":
-        recipe = nemotron_structured_outputs.recipe(snapshot)
+        recipe = nemotron_structured_outputs.recipe()
         converter = convert_nemotron_structured_outputs
+        converter_revision = "structured-outputs-v1"
     elif image is None or re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-fA-F]{64}", image) is None:
         raise ValueError(f"Executable source {name} requires an immutable grader image")
     elif name == "competitive_coding":
-        recipe = competitive_coding.recipe(snapshot, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
+        recipe = competitive_coding.recipe(image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
         converter = convert_competitive_coding
-    elif name in PYTHON_SOURCES:
-        recipe = PYTHON_SOURCES[name].recipe(snapshot, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
+        converter_revision = "competitive-coding-v1"
+    elif name in python_tasks.SOURCES:
+        recipe = python_tasks.recipe_for_source(name, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
         converter = convert_python
+        converter_revision = "python-unit-tests-v1"
     elif name in atlas_code.CONFIGS:
-        factory = {"code_contests": code_contests.recipe, "codenet": codenet.recipe}[name]
-        recipe = factory(snapshot, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
+        recipe = atlas_code.recipe_for_source(name, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
         converter = NEXT_CODE_CONVERTERS[name]
+        converter_revision = f"{name}-v1"
     else:
-        recipe = executable_tasks.recipe(name, snapshot, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
+        recipe = executable_tasks.recipe(name, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
         converter = None
+        converter_revision = f"{name}-v1"
     normalize = recipe.normalize
 
     def normalize_raw(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
@@ -234,5 +170,5 @@ def source_recipe(name: str, snapshot: Path, image: str | None) -> DatasetRecipe
         recipe,
         version=f"{recipe.version}-raw-conversion-v1",
         normalize=normalize_raw,
-        check_suite=replace(suite, parameters={**suite.parameters, "converter_sha256": converter_digest()}),
+        check_suite=replace(suite, parameters={**suite.parameters, "converter_revision": converter_revision}),
     )

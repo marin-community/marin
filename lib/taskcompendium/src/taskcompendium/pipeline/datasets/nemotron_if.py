@@ -3,8 +3,6 @@
 
 """Pinned direct nemotron_if instruction-following source."""
 
-from pathlib import Path
-
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets import direct_instruction
 from taskcompendium.pipeline.models import DatasetRecipe, ImportRejection, RawRow, ReviewRubric
@@ -23,10 +21,9 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return direct_instruction.normalize(row, "input", "args")
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return direct_instruction.recipe(
         "nemotron_if",
-        snapshot,
         dataset=DATASET,
         revision=REVISION,
         split=SPLIT,

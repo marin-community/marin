@@ -24,10 +24,17 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     ReviewStatus,
     ReviewVerdict,
+    TaskAudit,
 )
-from taskcompendium.pipeline.parquet import write_accepted_parquet
+from taskcompendium.pipeline.parquet import write_accepted_parquet, write_task_parquet
 from taskcompendium.pipeline.records import read_jsonl
-from taskcompendium.pipeline.rewriting import BatchRewriter, protected_text_checks, rewrite_records, write_rewrite_audit
+from taskcompendium.pipeline.rewriting import (
+    BatchRewriter,
+    protected_text_checks,
+    rewrite_audit_source,
+    rewrite_records,
+    write_rewrite_audit,
+)
 from taskcompendium.pipeline.verification import verify_witness
 
 
@@ -126,7 +133,7 @@ def structured_task():
     return task
 
 
-def test_rewrite_resumes_and_retains_original_grader_and_lineage(tmp_path, structured_task):
+def test_rewrite_reuses_acknowledged_batch_in_same_directory_and_retains_lineage(tmp_path, structured_task):
     old_text = "Parse the document and recover all values."
     replacement = structured_task.context.events[0].content.replace(old_text, "Generate a schema-valid instance.")
     service = RewriteService(
@@ -300,6 +307,82 @@ def test_rewrite_cannot_pass_public_schema_changes_with_an_unchanged_private_gra
     original_schema = json.loads(structured_task.verifier.parameters_json)["document_schema_json"]
     checks = protected_text_checks(candidate, {"public_schema": original_schema})
     assert [(check.check, check.status.value) for check in checks] == [("preserve:public_schema", "fail")]
+
+
+def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, structured_task):
+    original = TaskAudit(
+        task_id=structured_task.id,
+        source=structured_task.source,
+        raw={"data": {"instruction": structured_task.context.events[0].content}},
+        normalized=structured_task,
+        normalization_rejection=None,
+        checks=[],
+        review=None,
+        decision=Decision(task_id=structured_task.id, disposition=Disposition.REJECT, reasons=["review:bad"]),
+    )
+    source = tmp_path / "filtered"
+    (source / "audit").mkdir(parents=True)
+    write_task_parquet(source / "audit/part-00000.parquet", [original])
+    service = RewriteService(
+        [
+            rewrite_response(
+                structured_task.id,
+                "rewrite",
+                [
+                    {
+                        "old_text": "Parse the document and recover all values.",
+                        "replacement": "Generate a schema-valid instance.",
+                    }
+                ],
+            )
+        ],
+        interrupted=False,
+    )
+
+    class CandidateReviewer:
+        @property
+        def identity(self):
+            return {"model": "fixture"}
+
+        def review(self, tasks, rubric, output_path, *, originals=None):
+            assert originals is not None
+            assert {task.id for task in tasks} == set(originals)
+            return [
+                ReviewRecord(
+                    task_id=task.id,
+                    status=ReviewStatus.REVIEWED,
+                    verdict=ReviewVerdict(
+                        task_id=task.id,
+                        quality=Quality.GOOD,
+                        confidence=Confidence.HIGH,
+                        reference_status=ReferenceStatus.CONSISTENT,
+                        defects=[],
+                        evidence="The repaired instruction preserves the schema contract.",
+                    ),
+                    detail="",
+                )
+                for task in tasks
+            ]
+
+    output = tmp_path / "rewritten"
+    manifest = rewrite_audit_source(
+        str(source),
+        str(output),
+        structured_output.recipe(),
+        FilterPolicy(),
+        ReviewRubric("repair", "1", ("Preserve the schema.",)),
+        BatchRewriter(service, "model", "deployment"),
+        CandidateReviewer(),
+        (structured_task.id,),
+    )
+    row = pq.read_table(output / "audit/part-00000.parquet").to_pylist()[0]
+    assert manifest["dispositions"] == {"keep": 1}
+    assert row["parent_id"] == structured_task.id
+    assert row["task_id"] != structured_task.id
+    assert row["checks"] and all(check["status"] != "fail" for check in row["checks"])
+    lineage = json.loads(row["cleanup_lineage_json"])
+    assert lineage["original_audit"]["filter_reasons"] == ["review:bad"]
+    assert pq.read_table(output / "accepted/part-00000.parquet").num_rows == 1
 
 
 @pytest.mark.parametrize(

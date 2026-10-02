@@ -3,27 +3,23 @@
 
 """Pinned verifiable_code source and its private evaluator contract."""
 
-from pathlib import Path
-
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets.direct_contracts import contract_task
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 
 DATASET = "open-r1/verifiable-coding-problems-python"
 REVISION = "b761a24a95fa03289a231d2d31c183636ffb9833"
 CONFIG = "default"
 SPLIT = "train"
-SOURCE_FILE = "data/train-00000-of-00011.parquet"
+SOURCE_FILE = "data/train-*.parquet"
 SOURCE_FORMAT = "parquet"
-ACQUISITION = "file"
-VIEWER_OFFSET = 0
 
 RUBRIC = ReviewRubric(
     id="verifiable_code-quality",
@@ -65,11 +61,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="verifiable_code",
         version="verifiable_code-v1",
-        source=SnapshotSource(DATASET, REVISION, CONFIG, SPLIT, str(snapshot)),
+        source=HFSource(DATASET, REVISION, CONFIG, SPLIT),
         normalize=normalize,
         intended_use=IntendedUse.TRAIN,
         rubric=RUBRIC,

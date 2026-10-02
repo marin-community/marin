@@ -3,32 +3,32 @@
 
 """DeepScaleR's pinned training blend, with solutions kept as private evidence."""
 
-from pathlib import Path
-
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets.hf_math import math_controls, normalize_math
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
+from taskcompendium.pipeline.sources import SourceFiles, SourceFormat
 
 REVISION = "b6ae8c60f5c1f2b594e2140b91c49c9ad0949e29"
+SOURCE_FILES = SourceFiles(patterns=("deepscaler.json",), format=SourceFormat.JSON)
 
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return normalize_math(row, "problem", "answer")
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="deepscaler",
         version="deepscaler-v1",
-        source=SnapshotSource("agentica-org/DeepScaleR-Preview-Dataset", REVISION, "default", "train", str(snapshot)),
+        source=HFSource("agentica-org/DeepScaleR-Preview-Dataset", REVISION, "default", "train"),
         normalize=normalize,
         intended_use=IntendedUse.TRAIN,
         rubric=ReviewRubric(

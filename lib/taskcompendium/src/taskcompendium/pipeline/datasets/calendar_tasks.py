@@ -4,7 +4,6 @@
 """Normalize actual TaskTrove calendar conversations and final-schedule contracts."""
 
 import json
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -26,11 +25,11 @@ from taskcompendium.pipeline.models import (
     CheckStatus,
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
@@ -109,11 +108,11 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=verify_witness(task, witness_json, negative))
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-calendar",
         version="tasktrove-calendar-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

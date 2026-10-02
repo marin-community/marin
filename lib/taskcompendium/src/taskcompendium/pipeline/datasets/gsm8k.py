@@ -3,19 +3,15 @@
 
 """Pinned gsm8k source recipe."""
 
-from pathlib import Path
-
 from taskcompendium.models import TaskSpec, TextMessage
-from taskcompendium.pipeline.datasets.direct_math import math_task
-from taskcompendium.pipeline.datasets.hf_math import math_controls
+from taskcompendium.pipeline.datasets.direct_math import math_recipe, math_task
 from taskcompendium.pipeline.models import (
-    CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 
 DATASET = "openai/gsm8k"
@@ -24,8 +20,6 @@ CONFIG = "main"
 SPLIT = "train"
 SOURCE_FILE = "main/train-00000-of-00001.parquet"
 SOURCE_FORMAT = "parquet"
-ACQUISITION = "file"
-VIEWER_OFFSET = 0
 
 RUBRIC = ReviewRubric(
     id="gsm8k-quality",
@@ -49,15 +43,5 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return math_task(row, (TextMessage(role="user", content=problem),), expected, {"answer": answer})
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
-    return DatasetRecipe(
-        name="gsm8k",
-        version="gsm8k-v1",
-        source=SnapshotSource(DATASET, REVISION, CONFIG, SPLIT, str(snapshot)),
-        normalize=normalize,
-        intended_use=IntendedUse.TRAIN,
-        rubric=RUBRIC,
-        check_suite=CheckSuite(
-            id="gsm8k-controls", revision="1", parameters={"comparator": "cleanup-math-verify"}, run=math_controls
-        ),
-    )
+def recipe() -> DatasetRecipe:
+    return math_recipe("gsm8k", HFSource(DATASET, REVISION, CONFIG, SPLIT), normalize, IntendedUse.TRAIN, RUBRIC)

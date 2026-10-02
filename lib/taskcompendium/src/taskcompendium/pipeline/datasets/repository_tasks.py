@@ -7,7 +7,6 @@ import base64
 import hashlib
 import json
 import re
-from pathlib import Path
 
 from taskcompendium.models import (
     AnswerType,
@@ -21,17 +20,19 @@ from taskcompendium.models import (
     VerifierSpec,
     task_resource,
 )
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.shell_files import BASH
+from taskcompendium.pipeline.datasets.source_definitions import tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.verifiers.repository_patch import RepositoryPatchVerifier
@@ -123,11 +124,11 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     )
 
 
-def recipe(name: str, snapshot: Path, *, config: str, revision: str, rubric: ReviewRubric) -> DatasetRecipe:
+def recipe(name: str, *, config: str, revision: str, rubric: ReviewRubric) -> DatasetRecipe:
     return DatasetRecipe(
         name=f"tasktrove-{name}",
         version=f"tasktrove-{name}-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", revision, config, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", revision, config, "train"),
         normalize=normalize,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,
@@ -135,3 +136,50 @@ def recipe(name: str, snapshot: Path, *, config: str, revision: str, rubric: Rev
             id="repository-contract-unbound-runtime", revision="1", parameters={}, run=verification_report
         ),
     )
+
+
+REPOSITORY_COMMON_CRITERIA = (
+    "The public repository and checkout identify necessary context; unavailable local checkout is a "
+    "runtime limitation rather than proof that the issue is underspecified.",
+    "Flag hidden requirements unrelated to the public issue, wrong base references, and inconsistent test IDs.",
+    "Repository source, multi-file changes, dependencies, and trusted-test restoration require an "
+    "isolated runtime; do not certify a repair using a generic solution.py sandbox.",
+    "Source oracle scripts are private review controls; their existence does not prove the issue or grader correct.",
+    "Distinguish installation/network failures from task defects and retain concrete unresolved evidence.",
+)
+
+SOURCES = {
+    "swe_rebench": tasktrove_source(
+        config="DCAgent__swe_rebench_v2_patched_oracle-v2",
+        revision=REVISION,
+        rubric=ReviewRubric(
+            id="swe_rebench-answerability",
+            version="1",
+            criteria=(
+                "Compare the issue request and source checkout with the hidden test patch, restored trusted paths, "
+                "and test IDs.",
+                *REPOSITORY_COMMON_CRITERIA,
+            ),
+        ),
+    ),
+    "swesmith": tasktrove_source(
+        config="laion__swesmith-oracle-filtered-v2",
+        revision=REVISION,
+        rubric=ReviewRubric(
+            id="swesmith-answerability",
+            version="1",
+            criteria=(
+                "Compare the stated repository bug and behavioral requirements with FAIL_TO_PASS and PASS_TO_PASS "
+                "tests.",
+                *REPOSITORY_COMMON_CRITERIA,
+            ),
+        ),
+    ),
+}
+
+
+def recipe_for_source(
+    name: str,
+) -> DatasetRecipe:
+    source = SOURCES[name]
+    return recipe(name, config=source.config, revision=source.revision, rubric=source.rubric)

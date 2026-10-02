@@ -4,7 +4,6 @@
 """Import original NeMo Gym requests without replacing their agent reward contracts."""
 
 import json
-from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -28,13 +27,13 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.datasets.nemotron_placeholders import restore_placeholder
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     NormalizationChange,
     NormalizedTask,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
 )
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
@@ -159,11 +158,7 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
         "nemotron-agent:" + row.data["agent_ref"]["name"],
         "upstream-NeMo-Gym-binding:unverified",
     )
-    contract = {
-        key: value
-        for key, value in data.items()
-        if key not in {"responses_create_params", "path", "source_byte_offset"} and not key.startswith("sample_")
-    }
+    contract = {key: value for key, value in data.items() if key not in {"responses_create_params", "path"}}
     contract["request_options"] = {key: value for key, value in request.items() if key not in {"input", "tools"}}
     reasoning = [item for item in request["input"] if item.get("type") == "reasoning"]
     if reasoning:
@@ -206,16 +201,14 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
     return NormalizedTask(task, (*placeholder_changes, *changes))
 
 
-def recipe(
-    name: str, snapshot: Path, blend: str, selector: str, family: str, rubric: ReviewRubric, *, component: str
-) -> DatasetRecipe:
+def recipe(name: str, blend: str, selector: str, family: str, rubric: ReviewRubric, *, component: str) -> DatasetRecipe:
     def normalize_row(row: RawRow) -> NormalizedTask | ImportRejection:
         return normalize(row, selector, family)
 
     return DatasetRecipe(
         name=name,
         version=name + "-v1",
-        source=SnapshotSource(DATASET, REVISION, f"{blend}/{component}", "train", str(snapshot)),
+        source=HFSource(DATASET, REVISION, f"{blend}/{component}", "train"),
         normalize=normalize_row,
         rubric=rubric,
         intended_use=IntendedUse.TRAIN,

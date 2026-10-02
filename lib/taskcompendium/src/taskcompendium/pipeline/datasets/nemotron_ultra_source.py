@@ -5,7 +5,6 @@
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 from taskcompendium.pipeline.datasets.nemotron_ultra import recipe
 from taskcompendium.pipeline.models import DatasetRecipe, ReviewRubric
@@ -35,11 +34,12 @@ class NemotronSource:
     family_module: str
 
 
-def recipe_for_source(source: NemotronSource, snapshot: Path) -> DatasetRecipe:
-    """Bind a retained snapshot to its original source and reward contract."""
+def recipe_for_source(
+    source: NemotronSource,
+) -> DatasetRecipe:
+    """Bind a selected component to its pinned source and reward contract."""
     return recipe(
         source.name,
-        snapshot,
         source.blend,
         source.selector,
         source.family,

@@ -8,14 +8,11 @@ Marin storage prefix and a GLM batch endpoint.
 """
 
 import hashlib
-import json
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from enum import StrEnum
-from importlib import import_module
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any
 
 import click
 from fray.types import ResourceConfig
@@ -25,15 +22,15 @@ from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower, r
 from marin.execution.remote import remote
 from marin.inference.openai_batch import OpenAIBatchClient
 from pydantic import TypeAdapter
-from taskcompendium.pipeline.fingerprints import code_digest
-from taskcompendium.pipeline.models import DatasetRecipe, EnvironmentInventory, FilterPolicy, SnapshotSource
+from taskcompendium.pipeline.fingerprints import recipe_code_identity
+from taskcompendium.pipeline.models import DatasetRecipe, EnvironmentInventory, FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.review import DEFAULT_PROMPT_CHARACTERS, BatchReviewer
+from taskcompendium.pipeline.rewriting import BatchRewriter, rewrite_audit_source
+from taskcompendium.pipeline.sources import SourceFiles, source_files_identity
 from taskcompendium.pipeline.zephyr import (
     AuditExecution,
     ReviewConfig,
-    SourceAcquisition,
 )
-from taskcompendium.pipeline.zephyr import acquire_source as acquire_source_rows
 from taskcompendium.pipeline.zephyr import (
     audit_source as audit_source_rows,
 )
@@ -46,16 +43,21 @@ from taskcompendium.pipeline.zephyr import (
 )
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
-from experiments.post_training.task_curation_source_bindings import SOURCE_NAMES, SnapshotRecipeModule, source_recipe
+from experiments.post_training.task_curation_downloads import source_download
+from experiments.post_training.task_curation_source_bindings import SOURCE_NAMES, source_recipe
 
-PIPELINE_VERSION = "2026.10.01.1"
+PIPELINE_VERSION = "2026.10.02.1"
+AUDIT_REVISION = "staged-source-v1"
 PIPELINE_PREFIX = "task-curation"
 WORKER_PACKAGE = "./lib/taskcompendium[pipeline]"
 
 
-class ParquetView(StrEnum):
-    AUDIT = "audit"
-    ACCEPTED = "accepted"
+@dataclass(frozen=True)
+class RewriteSelection:
+    task_ids: tuple[str, ...]
+    rubric: ReviewRubric
+    max_tokens: int = 8192
+    prompt_budget: int = 64000
 
 
 @dataclass(frozen=True)
@@ -63,20 +65,17 @@ class SourceBinding:
     name: str
     version: str
     recipe: DatasetRecipe
-    acquisition: SourceAcquisition
+    downloaded: ArtifactStep[Artifact]
+    files: SourceFiles
     review: ReviewConfig
-
-    def __post_init__(self) -> None:
-        if self.acquisition.source != self.recipe.source:
-            raise ValueError("Acquisition and recipe must describe the same source")
-        if isinstance(self.acquisition.source, SnapshotSource) and self.acquisition.sample_sha256 is None:
-            raise ValueError("Snapshot acquisitions require a pinned sample SHA256")
+    limit: int | None
+    rewrite: RewriteSelection | None = None
 
 
 @dataclass(frozen=True)
 class SourceArtifacts:
     name: str
-    acquired: ArtifactStep[Artifact]
+    downloaded: ArtifactStep[Artifact]
     audited: ArtifactStep[Artifact]
     accepted: ArtifactStep[Artifact]
 
@@ -84,13 +83,7 @@ class SourceArtifacts:
 @dataclass(frozen=True)
 class CurationWorkflow:
     sources: tuple[SourceArtifacts, ...]
-    audit: ArtifactStep[Artifact]
-    accepted: ArtifactStep[Artifact]
     canonical: ArtifactStep[Artifact]
-
-
-class RecipeModule(Protocol):
-    recipe: DatasetRecipe
 
 
 def content_name(name: str, config: object) -> str:
@@ -112,42 +105,34 @@ def recipe_identity(recipe: DatasetRecipe) -> dict[str, Any]:
             if checks is not None
             else None
         ),
-        "code_digest": code_digest(recipe),
+        "audit_revision": AUDIT_REVISION,
+        "implementation": recipe_code_identity(recipe),
     }
-
-
-def acquire_source(binding: SourceBinding, resources: ResourceConfig) -> ArtifactStep[Artifact]:
-    """Acquire bounded source shards under the configured artifact storage prefix."""
-    # Local snapshots must be uploaded by the driver before remote workers can consume them.
-    worker = (
-        acquire_source_rows
-        if isinstance(binding.acquisition.source, SnapshotSource)
-        else remote(acquire_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE])
-    )
-    return apply(
-        content_name(f"{PIPELINE_PREFIX}/{binding.name}/acquired", binding.acquisition),
-        worker,
-        version=binding.version,
-        acquisition=binding.acquisition,
-        output_path=OUT,
-    )
 
 
 def audit_source(
     binding: SourceBinding,
-    acquired: ArtifactStep[Artifact],
+    downloaded: ArtifactStep[Artifact],
     execution: AuditExecution,
     resources: ResourceConfig,
 ) -> ArtifactStep[Artifact]:
     """Normalize, check, and review the acquired shards through the Zephyr stage."""
     recipe_config = recipe_identity(binding.recipe)
-    identity = {"recipe": recipe_config, "review": binding.review, "acquired": (acquired.name, acquired.version)}
+    identity = {
+        "recipe": recipe_config,
+        "review": binding.review,
+        "downloaded": (downloaded.name, downloaded.version),
+        "files": source_files_identity(binding.files),
+        "limit": binding.limit,
+    }
 
     def build_config(ctx: StepContext) -> dict[str, Any]:
         return {
-            "source_path": ctx.artifact_path(acquired),
+            "source_path": ctx.artifact_path(downloaded),
             "output_path": ctx.output_path,
             "recipe": recipe_config if ctx.is_fingerprint else binding.recipe,
+            "files": source_files_identity(binding.files) if ctx.is_fingerprint else binding.files,
+            "limit": binding.limit,
             "review": binding.review,
             "max_workers": ctx.runtime_arg("max_workers"),
             "review_batch_size": ctx.runtime_arg("review_batch_size"),
@@ -165,6 +150,8 @@ def audit_source(
             output_path=config["output_path"],
             recipe=config["recipe"],
             review=config["review"],
+            files=config["files"],
+            limit=config["limit"],
             execution=replace(
                 execution, max_workers=config["max_workers"], review_batch_size=config["review_batch_size"]
             ),
@@ -176,7 +163,7 @@ def audit_source(
         artifact_type=Artifact,
         run=execute,
         build_config=build_config,
-        deps=(acquired,),
+        deps=(downloaded,),
         runtime_args={
             "max_workers": execution.max_workers,
             "review_batch_size": execution.review_batch_size,
@@ -204,21 +191,80 @@ def filter_source(
     )
 
 
-def concat_sources(
-    sources: Sequence[SourceArtifacts], view: ParquetView, resources: ResourceConfig
+def rewrite_source(
+    binding: SourceBinding,
+    filtered: ArtifactStep[Artifact],
+    policy: FilterPolicy,
+    execution: AuditExecution,
+    rewriter: BatchRewriter | None,
+    resources: ResourceConfig,
 ) -> ArtifactStep[Artifact]:
+    """Recheck selected instruction repairs and preserve the original audit evidence."""
+    assert binding.rewrite is not None
+    identity = {
+        "input": (filtered.name, filtered.version),
+        "selection": binding.rewrite,
+        "recipe": recipe_identity(binding.recipe),
+        "policy": policy,
+        "model": binding.review.model,
+        "model_revision": binding.review.model_revision,
+        "rewrite_revision": "instruction-edits-v1",
+    }
+
+    def config(ctx: StepContext) -> dict[str, Any]:
+        return {
+            "source_path": ctx.artifact_path(filtered),
+            "output_path": ctx.output_path,
+            "identity": identity,
+            "recipe": recipe_identity(binding.recipe) if ctx.is_fingerprint else binding.recipe,
+            "resources": ctx.runtime_arg("resources"),
+        }
+
+    def execute(values: dict[str, Any]) -> None:
+        if execution.reviewer is None or rewriter is None:
+            raise ValueError("Rewrite execution requires both a rewriter and a reviewer")
+        assert binding.rewrite is not None
+        remote(rewrite_audit_source, resources=values["resources"], pip_packages=[WORKER_PACKAGE])(
+            source_path=values["source_path"],
+            output_path=values["output_path"],
+            recipe=values["recipe"],
+            policy=policy,
+            rewrite_rubric=binding.rewrite.rubric,
+            rewriter=replace(
+                rewriter,
+                model=binding.review.model,
+                model_revision=binding.review.model_revision,
+                max_tokens=binding.rewrite.max_tokens,
+                max_prompt_characters=binding.rewrite.prompt_budget,
+            ),
+            reviewer=execution.reviewer,
+            selected_task_ids=binding.rewrite.task_ids,
+        )
+
+    return ArtifactStep(
+        name=content_name(f"{PIPELINE_PREFIX}/{binding.name}/rewritten", identity),
+        version=binding.version,
+        artifact_type=Artifact,
+        run=execute,
+        build_config=config,
+        deps=(filtered,),
+        runtime_args={"resources": resources},
+    )
+
+
+def concat_sources(sources: Sequence[SourceArtifacts], resources: ResourceConfig) -> ArtifactStep[Artifact]:
     """Merge the selected source views with explicit source dependencies."""
     inputs = tuple(source.accepted for source in sources)
     return apply(
         content_name(
-            f"{PIPELINE_PREFIX}/merged/{view.value}",
-            {"sources": [(step.name, step.version) for step in inputs], "view": view},
+            f"{PIPELINE_PREFIX}/merged-audit",
+            {"sources": [(step.name, step.version) for step in inputs], "view": "audit"},
         ),
         remote(concatenate_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
         version=PIPELINE_VERSION,
         input_paths=inputs,
         output_path=OUT,
-        view=view.value,
+        view="audit",
     )
 
 
@@ -228,17 +274,19 @@ def build_workflow(
     execution: AuditExecution,
     resources: ResourceConfig,
     policy: FilterPolicy = FilterPolicy(),
+    rewriter: BatchRewriter | None = None,
 ) -> CurationWorkflow:
-    """Build independent source branches followed by separate merged audit and accepted artifacts."""
+    """Build source branches and one canonical artifact containing all output views."""
     if not bindings or len({binding.name for binding in bindings}) != len(bindings):
         raise ValueError("Choose at least one source, with unique artifact names")
     sources = []
     for binding in bindings:
-        acquired = acquire_source(binding, resources)
-        audited = audit_source(binding, acquired, execution, resources)
+        audited = audit_source(binding, binding.downloaded, execution, resources)
         accepted = filter_source(binding, audited, policy, resources)
-        sources.append(SourceArtifacts(binding.name, acquired, audited, accepted))
-    merged = concat_sources(sources, ParquetView.AUDIT, resources)
+        if binding.rewrite is not None:
+            accepted = rewrite_source(binding, accepted, policy, execution, rewriter, resources)
+        sources.append(SourceArtifacts(binding.name, binding.downloaded, audited, accepted))
+    merged = concat_sources(sources, resources)
     canonical = apply(
         content_name(f"{PIPELINE_PREFIX}/canonical", {"merged": (merged.name, merged.version), "policy": "exact-v1"}),
         remote(canonicalize_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
@@ -246,51 +294,22 @@ def build_workflow(
         merged_path=merged,
         output_path=OUT,
     )
-    views = [
-        apply(
-            content_name(f"{PIPELINE_PREFIX}/merged/{view.value}", {"canonical": (canonical.name, canonical.version)}),
-            remote(concatenate_source_rows, resources=resources, pip_packages=[WORKER_PACKAGE]),
-            version=PIPELINE_VERSION,
-            input_paths=(canonical,),
-            output_path=OUT,
-            view=view.value,
-        )
-        for view in (ParquetView.AUDIT, ParquetView.ACCEPTED)
-    ]
-    return CurationWorkflow(tuple(sources), views[0], views[1], canonical)
+    return CurationWorkflow(tuple(sources), canonical)
 
 
 @click.command(help=__doc__)
-@click.option("--sources-dir", type=click.Path(path_type=Path), help="Directory containing pinned per-source samples.")
-@click.option("--source", "source_names", multiple=True, type=click.Choice(SOURCE_NAMES))
+@click.option("--source", "source_names", multiple=True, required=True, type=click.Choice(SOURCE_NAMES))
 @click.option("--image", help="Immutable Docker image for selected coding-source grader controls.")
-@click.option("--recipe", "recipe_modules", multiple=True, help="Module exporting a pinned DatasetRecipe.")
-@click.option(
-    "--snapshot-recipe",
-    "snapshot_recipes",
-    type=(str, click.Path(path_type=Path), str),
-    multiple=True,
-    metavar="MODULE PATH SHA256",
-    help="Module exporting recipe(snapshot), with pinned local snapshot bytes.",
-)
-@click.option(
-    "--sample-sha256",
-    "sample_digests",
-    type=(str, str),
-    multiple=True,
-    metavar="SOURCE SHA256",
-    help="Pin a snapshot source exported by --recipe using its recipe name.",
-)
 @click.option("--version", default=PIPELINE_VERSION, show_default=True)
 @click.option(
     "--limit",
     type=int,
     default=100,
     show_default=True,
-    help="Row limit for module recipes; source directories use their manifest counts.",
+    help="At most this many input records per source, across all staged files.",
 )
 @click.option("--model", default=GLM_MODEL, show_default=True)
-@click.option("--all-rows", is_flag=True, help="Read each module source to its end instead of applying --limit.")
+@click.option("--all-rows", is_flag=True, help="Process every selected source record instead of applying --limit.")
 @click.option("--model-revision", required=True)
 @click.option("--max-tokens", type=int, default=4096, show_default=True)
 @click.option("--prompt-budget", type=int, default=DEFAULT_PROMPT_CHARACTERS, show_default=True)
@@ -304,19 +323,23 @@ def build_workflow(
     metavar="SOURCE JSON",
     help="Attach a scoped Shellbox or source-manifest file inventory to this source's review rubric.",
 )
+@click.option(
+    "--rewrite-plan",
+    "rewrite_plans",
+    type=(str, click.Path(exists=True, path_type=Path)),
+    multiple=True,
+    metavar="SOURCE JSON",
+    help="Select task_ids and a separate instruction-repair rubric for a source.",
+)
 @click.option("--max-workers", type=int, default=4, show_default=True)
 @click.option("--review-batch-size", type=int, default=100, show_default=True)
 @click.option("--cpu", type=int, default=4, show_default=True)
 @click.option("--ram", default="16g", show_default=True)
 @click.option("--max-concurrent", type=int, default=8, show_default=True)
-@click.option("--run", "do_run", is_flag=True, help="Build both merged views; the default prints their plans.")
+@click.option("--run", "do_run", is_flag=True, help="Build the canonical views; the default prints the artifact plan.")
 def main(
-    sources_dir: Path | None,
     source_names: tuple[str, ...],
     image: str | None,
-    recipe_modules: tuple[str, ...],
-    snapshot_recipes: tuple[tuple[str, Path, str], ...],
-    sample_digests: tuple[tuple[str, str], ...],
     version: str,
     limit: int,
     all_rows: bool,
@@ -327,6 +350,7 @@ def main(
     base_url: str | None,
     review_cache: str | None,
     environment_inventories: tuple[tuple[str, Path], ...],
+    rewrite_plans: tuple[tuple[str, Path], ...],
     max_workers: int,
     review_batch_size: int,
     cpu: int,
@@ -334,13 +358,9 @@ def main(
     max_concurrent: int,
     do_run: bool,
 ) -> None:
-    if not recipe_modules and not snapshot_recipes and sources_dir is None:
-        raise click.UsageError("Choose --sources-dir, --recipe, or --snapshot-recipe")
-    if source_names and sources_dir is None:
-        raise click.UsageError("--source requires --sources-dir")
-    if all_rows and sources_dir is not None:
-        raise click.UsageError("--all-rows requires a module source; --sources-dir describes bounded snapshots")
-    acquisition_limit = None if all_rows else limit
+    if limit < 1:
+        raise click.UsageError("--limit must be positive")
+    row_limit = None if all_rows else limit
     review = ReviewConfig(model=model, model_revision=model_revision, prompt_budget=prompt_budget, max_tokens=max_tokens)
     reviewer = None
     if do_run:
@@ -354,42 +374,12 @@ def main(
             max_prompt_characters=prompt_budget,
             query_cache_root=review_cache,
         )
+    resources = ResourceConfig.with_cpu(cpu=cpu, ram=ram)
     bindings = []
-    digests = dict(sample_digests)
-    for module_name in recipe_modules:
-        recipe = cast(RecipeModule, import_module(module_name)).recipe
-        bindings.append(
-            SourceBinding(
-                recipe.name,
-                version,
-                recipe,
-                SourceAcquisition(recipe.source, acquisition_limit, digests.get(recipe.name)),
-                review,
-            )
-        )
-    if set(digests) - {binding.name for binding in bindings}:
-        raise click.UsageError("--sample-sha256 must name a --recipe source")
-    for module_name, snapshot, digest in snapshot_recipes:
-        recipe = cast(SnapshotRecipeModule, import_module(module_name)).recipe(snapshot)
-        bindings.append(
-            SourceBinding(
-                recipe.name, version, recipe, SourceAcquisition(recipe.source, acquisition_limit, digest), review
-            )
-        )
-    if sources_dir is not None:
-        for name in source_names or SOURCE_NAMES:
-            directory = sources_dir / name
-            manifest = json.loads((directory / "sample-manifest.json").read_text())
-            recipe = source_recipe(name, directory / "sample.jsonl", image)
-            bindings.append(
-                SourceBinding(
-                    name,
-                    version,
-                    recipe,
-                    SourceAcquisition(recipe.source, manifest["sample_rows"], manifest["snapshot_sha256"]),
-                    review,
-                )
-            )
+    for name in source_names:
+        recipe = source_recipe(name, image)
+        downloaded, files = source_download(name, resources, recipe)
+        bindings.append(SourceBinding(name, version, recipe, downloaded, files, review, row_limit))
     inventories = {
         name: TypeAdapter(EnvironmentInventory).validate_json(path.read_bytes())
         for name, path in environment_inventories
@@ -410,16 +400,23 @@ def main(
         )
         for binding in bindings
     ]
+    plans = {name: TypeAdapter(RewriteSelection).validate_json(path.read_bytes()) for name, path in rewrite_plans}
+    if set(plans) - set(source_names):
+        raise click.UsageError("--rewrite-plan must name a selected source")
+    bindings = [replace(binding, rewrite=plans.get(binding.name)) for binding in bindings]
+    rewriter = None
+    if plans and reviewer is not None:
+        rewriter = BatchRewriter(reviewer.client, model, model_revision)
     workflow = build_workflow(
         bindings,
         execution=AuditExecution(max_workers=max_workers, review_batch_size=review_batch_size, reviewer=reviewer),
-        resources=ResourceConfig.with_cpu(cpu=cpu, ram=ram),
+        resources=resources,
+        rewriter=rewriter,
     )
     if do_run:
-        run(workflow.audit, workflow.accepted, max_concurrent=max_concurrent)
+        run(workflow.canonical, max_concurrent=max_concurrent)
         return
-    click.echo(lower(workflow.audit))
-    click.echo(lower(workflow.accepted))
+    click.echo(lower(workflow.canonical))
 
 
 if __name__ == "__main__":

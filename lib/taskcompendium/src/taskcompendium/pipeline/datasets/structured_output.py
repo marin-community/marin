@@ -4,7 +4,6 @@
 """Preserve TaskTrove's explicit any-valid-instance contract and JSON Schema."""
 
 import json
-from pathlib import Path
 
 from pydantic import ValidationError
 from verifyit.spec import SchemaFormat
@@ -24,11 +23,11 @@ from taskcompendium.pipeline.models import (
     CheckStatus,
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
@@ -98,11 +97,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-structured",
         version="tasktrove-structured-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,

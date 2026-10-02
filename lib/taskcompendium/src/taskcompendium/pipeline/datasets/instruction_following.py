@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize a bounded TaskTrove IFEval snapshot without guessing missing requests."""
+"""Normalize TaskTrove IFEval without guessing missing requests."""
 
 import re
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -22,11 +21,11 @@ from taskcompendium.pipeline.models import (
     CheckStatus,
     CheckSuite,
     DatasetRecipe,
+    HFSource,
     ImportRejection,
     IntendedUse,
     RawRow,
     ReviewRubric,
-    SnapshotSource,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
@@ -117,11 +116,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe(snapshot: Path) -> DatasetRecipe:
+def recipe() -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-ifeval",
         version="tasktrove-ifeval-v1",
-        source=SnapshotSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train", str(snapshot)),
+        source=HFSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train"),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,
