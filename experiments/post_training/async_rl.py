@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, replace
+from math import lcm
 from types import MappingProxyType
 from typing import NamedTuple
 
@@ -447,8 +448,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
-    # Queue conversion requests at checkpoints for the terminal HF export.
-    trainer["hf_save_interval"] = trainer["ckpt_interval"]
+    # The final export request uses a checkpoint-aligned interval.
+    trainer["hf_save_interval"] = lcm(trainer["max_steps"], trainer["ckpt_interval"])
     check_context_budget(config)
     return config
 
@@ -538,6 +539,12 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
 @click.command(help=__doc__)
 @click.option("--preset", type=click.Choice(sorted(PRESETS)), default=SMOKE_PRESET.label, show_default=True)
 @click.option(
+    "--target-cluster",
+    type=click.Choice(("cw-us-east-02a", "cw-rno2a")),
+    default=None,
+    help="H100 cluster that runs the job; defaults to the policy's cluster.",
+)
+@click.option(
     "--set",
     "settings",
     multiple=True,
@@ -552,8 +559,9 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     help="Terminal stage; evaluation includes the RL run automatically.",
 )
 @rl_build_options
-def main(preset: str, settings: tuple[str, ...], stage: str) -> dict[str, ArtifactStep]:
-    run = build_run(SNOWBALL_POLICY, PRESETS[preset], version=None, settings=settings)
+def main(preset: str, target_cluster: str | None, settings: tuple[str, ...], stage: str) -> dict[str, ArtifactStep]:
+    policy = replace(SNOWBALL_POLICY, cluster=target_cluster) if target_cluster is not None else SNOWBALL_POLICY
+    run = build_run(policy, PRESETS[preset], version=None, settings=settings)
     return {f"{SNOWBALL_POLICY.label}-{preset}": getattr(run, stage)}
 
 
