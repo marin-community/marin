@@ -177,11 +177,13 @@ def token_validity_from_attention_mask(
     return jnp.broadcast_to(valid, (batch_size, sequence_length))
 
 
-def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
+def _rotary_cache(
+    seq_len: int, head_dim: int, rope: RotaryConfig, position_ids: jax.Array | None = None
+) -> tuple[jax.Array, jax.Array]:
     half_dim = head_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
-    positions = jnp.arange(seq_len, dtype=jnp.float32)
-    angles = positions[:, None] * inv_freq[None, :]
+    positions = jnp.arange(seq_len, dtype=jnp.float32) if position_ids is None else position_ids.astype(jnp.float32)
+    angles = positions[..., None] * inv_freq
     cos = jnp.cos(angles)
     sin = jnp.sin(angles)
     return cos, sin
@@ -195,10 +197,14 @@ def apply_rotary_embedding(
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
+    position_ids: jax.Array | None = None,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
-    cos, sin = _rotary_cache(seq_len, head_dim, rope)
-    cos = cos[None, :, None, :]
-    sin = sin[None, :, None, :]
+    """Apply RoPE at consecutive or explicit absolute positions [S] / [B, S]."""
+    cos, sin = _rotary_cache(seq_len, head_dim, rope, position_ids)
+    if cos.ndim == 2:
+        cos, sin = cos[None, ...], sin[None, ...]
+    cos = cos[:, :, None, :]
+    sin = sin[:, :, None, :]
 
     def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
         dtype = x.dtype
