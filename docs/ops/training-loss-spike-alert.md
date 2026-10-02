@@ -4,7 +4,7 @@
 
 It pages because a hero run diverging unwatched costs more than a false page does, and a silence answers a false page. Expect benign firings at mixture stage boundaries; silence the run for that window rather than widening the band for every run.
 
-Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract. A root matches `%/hero-%-coord` or `%/hero-%-coord-%`. The two rules share one `iris.task_state` query in each bridge cache interval.
+Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract. A root matches `/marin/hero-%-coord` or `/marin/hero-%-coord-%`. The two rules share one `iris.task_state` query in each bridge cache interval.
 
 ## What fires it
 
