@@ -135,3 +135,43 @@ def test_loaded_snowball_schedule_and_unknown_fields_are_not_ignored():
         normalized_grug_hf_config(configs["vllm"])
     configs["native"]["unexplained_architecture_change"] = 17
     assert "unexplained_architecture_change" in normalized_grug_hf_config(configs["native"])
+
+
+def test_tpu_spmd_reports_preserve_topology_and_reject_a_different_mesh(paired_reports):
+    for backend in ("native", "vllm"):
+        path = paired_reports / f"{backend}-result.json"
+        report = json.loads(path.read_text())
+        provenance = report["provenance"]
+        provenance["devices"] = ["TPU v6e"] * 2
+        provenance["hardware_label"] = "v6e-two-local-devices"
+        if backend == "native":
+            provenance["device_kind"] = provenance["devices"]
+            provenance["mesh"].update(data=2, expert=1)
+        else:
+            provenance["engine_args"]["enable_expert_parallel"] = False
+            provenance["effective_execution"].update(
+                model_impl_type="vllm",
+                multiprocess_dp="0",
+                new_model_design="1",
+                tpu_sharding={
+                    "data_parallelism": 2,
+                    "tensor_parallelism": 1,
+                    "expert_parallelism": 1,
+                    "sequence_parallelism": 1,
+                    "attention_data_parallelism": 1,
+                    "attention_data_expert_parallelism": 1,
+                    "decode_context_parallelism": 1,
+                    "prefill_context_parallelism": 1,
+                },
+            )
+        path.write_text(json.dumps(report))
+    result = compare_fixture(paired_reports)
+    assert result["native_over_vllm_throughput"] == 2
+    assert result["parallelism"]["policy"] == "tpu_spmd_data"
+    assert result["parallelism"]["vllm_tpu_sharding"]["data_parallelism"] == 2
+    path = paired_reports / "vllm-result.json"
+    report = json.loads(path.read_text())
+    report["provenance"]["effective_execution"]["tpu_sharding"].update(data_parallelism=1, tensor_parallelism=2)
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="SPMD"):
+        compare_fixture(paired_reports)

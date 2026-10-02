@@ -22,7 +22,8 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.hero import HeroConfig
 from levanter.models.snowball import SnowballConfig
-from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.inference.vllm_server import IsolatedCudaVllm, IsolatedTpuVllm, VllmType
 from safetensors.numpy import save_file
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
@@ -188,23 +189,7 @@ def run_vllm(
     )
     output = root / "vllm-result.json"
     launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
-    args = (
-        "-m",
-        "levanter.main.vllm_inference_benchmark",
-        "--engine-args",
-        str(engine_args),
-        "--provenance",
-        str(provenance),
-        "--workload",
-        str(root / WORKLOAD_FILENAME),
-        "--output",
-        str(output),
-        "--warmup-batches",
-        str(_WARMUP_BATCHES),
-        "--measured-batches",
-        str(_MEASURED_BATCHES),
-    )
-    command = launcher.python_command(args)
+    command = launcher.python_command(_vllm_benchmark_args(root))
     if flashinfer_jit_cache_wheel is not None:
         if "#sha256=" not in flashinfer_jit_cache_wheel:
             raise ValueError("The precompiled FlashInfer cache wheel requires an explicit SHA256 URL fragment")
@@ -233,6 +218,98 @@ def run_vllm(
     print(output.read_text(), flush=True)
 
 
+def _vllm_benchmark_args(root: Path) -> tuple[str, ...]:
+    return (
+        "-m",
+        "levanter.main.vllm_inference_benchmark",
+        "--engine-args",
+        str(root / "vllm-engine.json"),
+        "--provenance",
+        str(root / "vllm-provenance.json"),
+        "--workload",
+        str(root / WORKLOAD_FILENAME),
+        "--output",
+        str(root / "vllm-result.json"),
+        "--warmup-batches",
+        str(_WARMUP_BATCHES),
+        "--measured-batches",
+        str(_MEASURED_BATCHES),
+    )
+
+
+def run_tpu_vllm(root: Path, hardware_label: str, data_parallel_size: int, kv_cache_memory_bytes: int) -> None:
+    """Run the pinned Torchax Snowball path with single-process SPMD data parallelism."""
+    manifest = json.loads((root / MANIFEST_FILENAME).read_text())
+    if manifest["model_config"].get("sconv", False):
+        raise ValueError("Pinned TPU runtime has no Torchax grug_moe_short_conv implementation; Hero is unsupported")
+    launcher = IsolatedTpuVllm(VLLM_FORK_REQUIREMENT, TPU_INFERENCE_FORK_REQUIREMENT)
+    repo = Path(__file__).resolve().parents[2]
+    environment = {
+        **os.environ,
+        **launcher.env(),
+        "MODEL_IMPL_TYPE": "vllm",
+        "TPU_MULTIPROCESS_DP": "0",
+        "NEW_MODEL_DESIGN": "1",
+    }
+    paths = [str(repo / f"lib/{name}/src") for name in ("levanter", "rigging", "finestore")]
+    environment["PYTHONPATH"] = os.pathsep.join([*paths, environment.get("PYTHONPATH", "")])
+    dependencies = [
+        str(repo / "lib/haliax"),
+        str(repo / "lib/finestore"),
+        "jax==0.11.0",
+        "jaxlib==0.11.0",
+        "libtpu==0.0.44",
+    ]
+    command = launcher.python_command(_vllm_benchmark_args(root))
+    for dependency in dependencies:
+        command[1:1] = ["--with", dependency]
+    # Discover in a separate process that exits before the serving worker acquires libtpu.
+    discovery = launcher.python_command(
+        (
+            "-c",
+            "import json,jax; print(json.dumps(["
+            "{'id': d.id, 'kind': d.device_kind, 'platform': d.platform} for d in jax.devices()]))",
+        )
+    )
+    for dependency in dependencies:
+        discovery[1:1] = ["--with", dependency]
+    devices = json.loads(subprocess.check_output(discovery, env=environment, text=True))
+    if len(devices) != data_parallel_size or any(device["platform"] != "tpu" for device in devices):
+        raise ValueError(f"TPU data parallel size must match all visible TPU devices: {devices}")
+    manifest.update(
+        {
+            "hardware_label": hardware_label,
+            "tpu_device_discovery": devices,
+            "tpu_runtime": {
+                "vllm_requirement": launcher.vllm_ref,
+                "tpu_inference_requirement": launcher.tpu_inference_ref,
+                "dependencies": dependencies,
+                "model_impl_type": environment["MODEL_IMPL_TYPE"],
+                "multiprocess_dp": environment["TPU_MULTIPROCESS_DP"],
+                "new_model_design": environment["NEW_MODEL_DESIGN"],
+            },
+        }
+    )
+    (root / "vllm-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    engine_args = {
+        "model": str(root / "checkpoint"),
+        "dtype": manifest["dtype"],
+        "tensor_parallel_size": 1,
+        "data_parallel_size": data_parallel_size,
+        "data_parallel_size_local": data_parallel_size,
+        "enable_expert_parallel": False,
+        "max_model_len": _FIXTURE_MAX_SEQ_LEN,
+        "max_num_seqs": max(2, data_parallel_size),
+        "max_num_batched_tokens": 256,
+        "enable_prefix_caching": False,
+        "enforce_eager": True,
+        "kv_cache_memory_bytes": kv_cache_memory_bytes,
+    }
+    (root / "vllm-engine.json").write_text(json.dumps(engine_args, indent=2) + "\n")
+    subprocess.run(command, env=environment, check=True)
+    print((root / "vllm-result.json").read_text(), flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -252,6 +329,11 @@ def main() -> None:
                 "--flashinfer-jit-cache-wheel",
                 help="Exact compatible cache wheel URL with SHA256; requires precompiled modules and disables JIT",
             )
+    tpu = commands.add_parser("vllm-tpu")
+    tpu.add_argument("--fixture", type=Path, required=True)
+    tpu.add_argument("--hardware-label", required=True)
+    tpu.add_argument("--data-parallel-size", type=int, required=True)
+    tpu.add_argument("--kv-cache-memory-bytes", type=int, default=_TINY_KV_CACHE_BYTES)
     compare = commands.add_parser("compare")
     compare.add_argument("--fixture", type=Path, required=True)
     args = parser.parse_args()
@@ -261,6 +343,8 @@ def main() -> None:
         compare_fixture(args.fixture.resolve())
     elif args.command == "native":
         run_native(args.fixture.resolve(), args.hardware_label, args.expert_axis_size)
+    elif args.command == "vllm-tpu":
+        run_tpu_vllm(args.fixture.resolve(), args.hardware_label, args.data_parallel_size, args.kv_cache_memory_bytes)
     else:
         run_vllm(
             args.fixture.resolve(),

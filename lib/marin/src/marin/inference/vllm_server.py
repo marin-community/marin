@@ -334,6 +334,13 @@ class IsolatedTpuVllm:
     torch_backend: str = "cpu"
 
     def command(self) -> list[str]:
+        return self._command("vllm", ())
+
+    def python_command(self, args: tuple[str, ...]) -> list[str]:
+        """Build a Python command using the same pinned TPU runtime as serving."""
+        return self._command("python", args)
+
+    def _command(self, executable: str, args: tuple[str, ...]) -> list[str]:
         return [
             "uvx",
             "--from",
@@ -344,7 +351,8 @@ class IsolatedTpuVllm:
             self.python_version,
             "--torch-backend",
             self.torch_backend,
-            "vllm",
+            executable,
+            *args,
         ]
 
     def env(self) -> dict[str, str]:
