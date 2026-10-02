@@ -220,13 +220,12 @@ python -m levanter.main.vllm_inference_benchmark \
   --output /tmp/vllm-result.json
 ```
 
-This uses the public [LLMEngine step interface](https://docs.vllm.ai/en/v0.10.2/api/vllm/engine/llm_engine.html)
-and cumulative output token IDs. First-token observations include admission and
-scheduling. If vLLM admits requests across multiple prefills, its first-token
-and decode overlap differs from Levanter's single-prefill measurement. Compare
-end-to-end throughput with that scheduling difference recorded. The adapter
-requires validation against the deployed vLLM version, including the Marin
-GrugMoE model registration. It has not been validated on a TPU vLLM runtime.
+This consumes `AsyncLLM.generate` streams with cumulative output token IDs.
+First-token observations include admission and scheduling. Prefill/decode overlap
+can differ between runtimes; compare end-to-end throughput with the effective
+scheduling configuration recorded. The adapter requires the Marin GrugMoE model
+registration for these checkpoints. The tiny TPU validation below uses the same
+streaming interface.
 
 ### Coverage and remaining model work
 
@@ -257,7 +256,8 @@ cases, then ran both runtimes on the same BF16 checkpoint
 `b81bf066dcfc54333753343606f1b1b5ca420714a5ee66263919e8a01845b830`.
 The fixture has two layers, width 256, 16 experts, latent width 128, and
 kernel-four convolutions at all three sites. Its global-attention interval is
-four, so this two-layer fixture does not exercise a global-attention layer.
+four, and the final layer is always global; the fixture exercises both local
+and global attention.
 Two eight-token prompts each generate 16 tokens; both runtimes and every timed
 batch agree on all 32 output tokens, hash
 `cada82e418dc0e8e8ceae101483bad4dc0c9996f1225ebe6c593e7c5eadb240c`.

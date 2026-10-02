@@ -130,6 +130,7 @@ def main() -> None:
         "source_file_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "input_sha256": hashlib.sha256(inputs.astype("<f4").tobytes()).hexdigest(),
         "reference": "NumPy stable FP64 sigmoid, rounded once to BF16 for mismatch counts",
+        "reference_versions": {"numpy": np.__version__, "ml_dtypes": ml_dtypes.__version__},
         "model_math_changed": False,
         "results": {name: error_summary(inputs, output, reference) for name, output in outputs.items()},
     }
