@@ -4,6 +4,7 @@
 """Untimed Snowball shared-prefix logits with baseline and FP32-router computation."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -55,6 +56,27 @@ def prefix_logits(model, sequences: list[list[int]], prefill_length: int) -> np.
         final = np.asarray(logits.array)[np.arange(batch) * count + count - 1].astype(np.float32)
     assert final is not None
     return final
+
+
+def final_projection_states(model, sequences: list[list[int]], prefill_length: int) -> dict:
+    """Expose final states through a diagnostic identity head, preserving all block weights."""
+    transformer = model.transformer
+    if transformer.output_proj.shape[0] != transformer.output_proj.shape[1]:
+        raise ValueError("The final-state diagnostic requires the square hidden/vocabulary dimensions of the fixture")
+    head = np.asarray(transformer.output_proj).astype(np.float64)
+    identity = jax.device_put(jnp.eye(head.shape[0], dtype=jnp.bfloat16), transformer.output_proj.sharding)
+    hidden_model = eqx.tree_at(lambda m: m.transformer.output_proj, model, identity)
+    normalized_model = eqx.tree_at(lambda m: m.transformer.final_gated_norm, hidden_model, lambda x: x)
+    residual_model = eqx.tree_at(lambda m: m.transformer.final_norm, normalized_model, lambda x: x)
+    gated = prefix_logits(hidden_model, sequences, prefill_length)
+    return {
+        "boundary": "untimed_diagnostic_identity_head",
+        "head_weight_sha256": hashlib.sha256(np.ascontiguousarray(head.T, dtype=np.float32).tobytes()).hexdigest(),
+        "pre_final_norm": prefix_logits(residual_model, sequences, prefill_length).tolist(),
+        "post_final_norm": prefix_logits(normalized_model, sequences, prefill_length).tolist(),
+        "post_final_gate": gated.tolist(),
+        "projection_fp64": (gated.astype(np.float64) @ head).tolist(),
+    }
 
 
 def main():
@@ -110,7 +132,12 @@ def main():
                             "top_token_ids": top_ids.tolist(),
                             "top_logprobs": np.take_along_axis(logprobs, top_ids, axis=-1).tolist(),
                         }
+        final_states = {
+            mode: final_projection_states(model, sequences, prefill)
+            for mode, prefill in (("single_prefill", len(sequences[0])), ("incremental", inputs["prefill_length"]))
+        }
     result = {
+        "final_states": final_states,
         "checkpoint": json.loads((args.fixture / "manifest.json").read_text())["checkpoint"],
         "prefixes": inputs,
         "expert_axis_size": args.expert_axis_size,
