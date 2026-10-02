@@ -119,7 +119,7 @@ _SCATTER_MAX_ROW_GROUPS_PER_CHUNK = 512
 # not collide with these names.
 _SHARD_COL = "__zephyr_shard__"
 _SORT_KEY_COL = "__zephyr_sort_key__"
-# A cloudpickle-serialized Python object representing the item
+# A pickled Python object representing the item
 _PAYLOAD_COL = "__payload__"
 # Temporary flat columns folded into the _SORT_KEY_COL struct during
 # _items_to_dataframe; never present in written chunks.
@@ -145,16 +145,13 @@ def _task_memory_bytes() -> int:
 
 
 def _dumps(item: Any) -> bytes:
-    """Serialize one shuffled item.
-
-    The stdlib pickler is several times faster than cloudpickle for the plain
-    dicts and NamedTuples that pipelines shuffle, and both write the same
-    stream, so ``pickle.loads`` reads either. cloudpickle stays as the fallback
-    for items the stdlib pickler cannot reference by import path.
-    """
+    """Serialize one shuffled item to a stream ``pickle.loads`` can read."""
     try:
         return pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)
     except (pickle.PicklingError, AttributeError, TypeError):
+        # Items the stdlib pickler cannot reference by import path (lambdas,
+        # classes defined inside a function) still need cloudpickle; it writes
+        # the same stream format, several times slower, so it is the fallback.
         return cloudpickle.dumps(item)
 
 
