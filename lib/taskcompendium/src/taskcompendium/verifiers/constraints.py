@@ -7,6 +7,7 @@ import json
 import re
 from typing import Any
 
+import yaml
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
@@ -76,6 +77,7 @@ class IfevalVerifier(Verifier):
 
 class JsonSchemaVerifier(Verifier):
     document_schema_json: str
+    schema_format: SchemaFormat
 
     @model_validator(mode="after")
     def validate_schema(self) -> "JsonSchemaVerifier":
@@ -94,8 +96,8 @@ class JsonSchemaVerifier(Verifier):
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
         try:
-            instance = parse_candidate(unwrap_fence(text), SchemaFormat.JSON)
-        except ValueError:
+            instance = parse_candidate(unwrap_fence(text), self.schema_format)
+        except (ValueError, yaml.YAMLError):
             return GradeResult(Outcome.GRADED, 0.0)
         schema = json.loads(self.document_schema_json)
         # pyrefly: ignore[bad-instantiation, missing-argument]  # jsonschema types the concrete class as a protocol.

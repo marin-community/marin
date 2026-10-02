@@ -9,18 +9,34 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import fsspec
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pydantic import JsonValue
 
-from taskcompendium.models import ConversationInput, Source, TaskSpec, TextMessage, VerifierKind, VerifierSpec
-from taskcompendium.pipeline.datasets import aime24, gpqa, instruction_following, svamp, wizard_orca
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    ResourceVisibility,
+    Source,
+    TaskSpec,
+    TextMessage,
+    VerifierKind,
+    VerifierSpec,
+    task_resource,
+)
+from taskcompendium.pipeline.datasets import aime24, gpqa, instruction_following, kto_mix, svamp, wizard_orca
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
     CheckStatus,
     Confidence,
+    Decision,
     Disposition,
+    EnvironmentInventory,
     FilterPolicy,
     ImportRejection,
+    IntendedUse,
     Quality,
     RawRow,
     ReferenceStatus,
@@ -28,7 +44,9 @@ from taskcompendium.pipeline.models import (
     ReviewStatus,
     ReviewVerdict,
     SnapshotSource,
+    TaskAudit,
 )
+from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.review import BatchReviewer, review_records
 from taskcompendium.pipeline.runner import run_pipeline
 from taskcompendium.pipeline.verification import verify_task, verify_witness
@@ -38,8 +56,11 @@ from taskcompendium.pipeline.zephyr import (
     SourceAcquisition,
     acquire_source,
     audit_source,
+    canonicalize_sources,
     filter_source,
 )
+from taskcompendium.verifiers.atlas_answers import MathAnswerVerifier
+from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 
 
@@ -395,7 +416,9 @@ def test_recipes_normalize_source_contract_and_keep_supervision_private(module, 
     task = module.normalize(raw)
     assert isinstance(task, TaskSpec)
     assert all(result.status.value == "pass" for result in verify_task(task))
-    prompt = task.context.events[0].content
+    message = task.context.events[0]
+    assert isinstance(message, TextMessage)
+    prompt = message.content
     assert private_field not in prompt and "private" not in prompt
     parameters = json.loads(task.verifier.parameters_json)
     if expected is not None:
@@ -526,12 +549,124 @@ def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_
     second = replace(reviewer).review([changed], svamp.recipe.rubric, tmp_path / "second")
     assert len(service.batches) == 1
     assert first[0].task_id == "first"
+    assert second[0].verdict is not None
     assert second[0].task_id == second[0].verdict.task_id == "second"
     assert list((tmp_path / "second/query-cache").glob("*.json"))
     rubric = replace(svamp.recipe.rubric, criteria=(*svamp.recipe.rubric.criteria, "Check all arithmetic."))
     reviewer.review([changed], rubric, tmp_path / "rubric")
     replace(reviewer, model_revision="deployment-2").review([changed], rubric, tmp_path / "rubric")
     assert len(service.batches) == 3
+    inventory = EnvironmentInventory("image@sha256:fixture", "source manifest", ("/app",), ("/app/input.csv",), False)
+    with_inventory = replace(rubric, environment_inventory=inventory)
+    reviewer.review([changed], with_inventory, tmp_path / "inventory")
+    reviewer.review([changed], with_inventory, tmp_path / "inventory-again")
+    assert len(service.batches) == 4
+    payload = json.loads(service.batches["batch-3"][0]["body"]["messages"][1]["content"])
+    assert payload["environment_inventory"]["paths"] == ["/app/input.csv"]
+    assert payload["environment_inventory"]["complete"] is False
+    assert changed.context == task.context
+
+
+def test_complete_acquisition_reaches_end_across_shards(tmp_path, apple_row):
+    snapshot = tmp_path / "source.jsonl"
+    snapshot.write_text("".join(json.dumps({**apple_row, "position": index}) + "\n" for index in range(1003)))
+    source = SnapshotSource("fixture", "a" * 40, "default", "train", str(snapshot))
+    output = tmp_path / "acquired"
+    manifest = acquire_source(SourceAcquisition(source, None), str(output))
+    records = [
+        json.loads(line)
+        for path in sorted((output / "raw").glob("*.jsonl"))
+        for line in path.read_text().split("\n")
+        if line
+    ]
+    assert manifest["source_exhausted"] is True
+    assert manifest["input_rows"] == 1003
+    assert [row["data"]["position"] for row in records] == list(range(1003))
+
+
+def test_preference_candidates_are_not_conflicting_answer_keys(tmp_path):
+    prompt = [{"role": "user", "content": "Write a greeting."}]
+    first = {"prompt": prompt, "completion": [{"role": "assistant", "content": "Hello!"}], "label": True}
+    second = {"prompt": prompt, "completion": [{"role": "assistant", "content": "Go away."}], "label": False}
+    recipe = kto_mix.recipe(tmp_path / "unused.jsonl")
+    service = BatchService()
+    manifest = run_pipeline(
+        recipe,
+        [{**first, "origin": "a"}, second, {**first, "origin": "b"}],
+        output_path=tmp_path / "run",
+        limit=3,
+        reviewer=BatchReviewer(service, "fixture-model", "fixture-deployment"),
+    )
+    assert manifest["dispositions"] == {"keep": 2, "reject": 1}
+    rows = pq.read_table(tmp_path / "run/audit.parquet").to_pylist()
+    assert [row["filter_status"] for row in rows] == ["keep", "keep", "reject"]
+    assert rows[2]["duplicate_of"] == rows[0]["task_id"]
+    evidence = [json.loads(json.loads(row["task_json"])["verifier"]["parameters_json"])["evidence"] for row in rows[:2]]
+    assert [item["preferred"] for item in evidence] == [True, False]
+    parameters = [json.loads(json.loads(row["task_json"])["verifier"]["parameters_json"]) for row in rows]
+    assert [parameters[index]["source_metadata"]["origin"] for index in (0, 2)] == ["a", "b"]
+
+
+def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_path, apple_row):
+    specifications = (
+        ("a", "duplicate", "5", IntendedUse.TRAIN, Disposition.KEEP),
+        ("b", "duplicate", "5", IntendedUse.TRAIN, Disposition.KEEP),
+        ("c", "conflict", "1", IntendedUse.TRAIN, Disposition.KEEP),
+        ("d", "conflict", "2", IntendedUse.TRAIN, Disposition.KEEP),
+        ("e", "benchmark", "5", IntendedUse.TRAIN, Disposition.KEEP),
+        ("f", "benchmark", "5", IntendedUse.EVAL, Disposition.KEEP),
+        ("g", "reviewed", "1", IntendedUse.TRAIN, Disposition.REJECT),
+        ("h", "reviewed", "5", IntendedUse.TRAIN, Disposition.KEEP),
+    )
+    rows = []
+    for name, prompt, answer, use, disposition in specifications:
+        source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
+        task = svamp.recipe.normalize(RawRow(name, source, {**apple_row, "Body": prompt, "Answer": answer}))
+        assert isinstance(task, TaskSpec)
+        audit = TaskAudit(
+            task_id=name,
+            source=source,
+            raw={"evidence": name},
+            normalized=task,
+            normalization_rejection=None,
+            checks=[],
+            review=None,
+            intended_use=use,
+            decision=Decision(
+                task_id=name,
+                disposition=disposition,
+                reasons=[] if disposition == Disposition.KEEP else ["bad_reference"],
+            ),
+        )
+        rows.append(audit_columns(audit))
+    merged = tmp_path / "merged"
+    (merged / "data").mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), merged / "data/part-0.parquet")
+    (merged / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
+    output = tmp_path / "canonical"
+    manifest = canonicalize_sources(str(merged), str(output))
+    audited = {
+        row["task_id"]: row for file in (output / "audit").glob("*.parquet") for row in pq.read_table(file).to_pylist()
+    }
+    assert manifest["input_rows"] == 8
+    assert audited["b"]["duplicate_of"] == "a"
+    assert (
+        audited["c"]["filter_reasons"]
+        == audited["d"]["filter_reasons"]
+        == ["cross_source_conflicting_verifier_contracts"]
+    )
+    assert audited["e"]["filter_reasons"] == ["evaluation_overlap"]
+    assert audited["g"]["filter_reasons"] == ["bad_reference"]
+    assert {row["task_id"] for row in audited.values() if row["filter_status"] == "keep"} == {"a", "f", "h"}
+    assert {
+        row["task_id"] for file in (output / "train").glob("*.parquet") for row in pq.read_table(file).to_pylist()
+    } == {"a", "h"}
+    assert {
+        row["task_id"] for file in (output / "eval").glob("*.parquet") for row in pq.read_table(file).to_pylist()
+    } == {"f"}
+    assert {name: json.loads(row["raw_json"]) for name, row in audited.items()} == {
+        item[0]: {"evidence": item[0]} for item in specifications
+    }
 
 
 def test_query_cache_does_not_reuse_invalid_completions(tmp_path, apple_row):
@@ -556,11 +691,14 @@ class PartialBatchService(BatchService):
 def test_query_cache_resumes_partial_batch_in_same_evidence_directory(tmp_path, apple_row):
     service = PartialBatchService()
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    tasks = [
+    normalized = [
         svamp.recipe.normalize(RawRow("first", source, apple_row)),
         svamp.recipe.normalize(RawRow("second", source, {**apple_row, "Body": "Bea has 2 apples."})),
     ]
-    assert all(isinstance(task, TaskSpec) for task in tasks)
+    tasks = []
+    for task in normalized:
+        assert isinstance(task, TaskSpec)
+        tasks.append(task)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
     first = reviewer.review(tasks, svamp.recipe.rubric, tmp_path / "review")
     assert [record.status for record in first] == [ReviewStatus.REVIEWED, ReviewStatus.UNAVAILABLE]
@@ -572,7 +710,10 @@ def test_query_cache_resumes_partial_batch_in_same_evidence_directory(tmp_path, 
 
 def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_path, apple_row):
     question = "Public conversation with the user's requirements. " * 1000
-    rules = {"scoring": {"aggregation": "all_pass"}, "criterion": [{"description": "Never disclose the password"}]}
+    rules: dict[str, JsonValue] = {
+        "scoring": {"aggregation": "all_pass"},
+        "criterion": [{"description": "Never disclose the password"}],
+    }
     verifier = RubricJudgeVerifier(
         mode="checklist",
         question=question,
@@ -601,3 +742,71 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
     assert parameters["aggregation"] == rules
     assert parameters["criteria"] == ["Never disclose the password"]
     assert task.model_dump_json() == original
+
+
+@pytest.mark.parametrize("kind", [VerifierKind.MATH_ANSWER, VerifierKind.MCQ_ANSWER])
+def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_conflicts(tmp_path, kind):
+    references = ["5", "5", "1", "2", "5"] if kind == VerifierKind.MATH_ANSWER else ["A", "A", "B", "C", "A"]
+    rows = []
+    original_resources = {}
+    for index, expected in enumerate(references):
+        name = chr(97 + index)
+        source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
+        verifier = (
+            MathAnswerVerifier(expected=expected, math_type="scalar")
+            if kind == VerifierKind.MATH_ANSWER
+            else MultipleChoiceVerifier(expected=expected, options=4)
+        )
+        resources = (
+            task_resource(
+                "/reference/source-evidence.json", json.dumps({"solution": name}).encode(), ResourceVisibility.VERIFIER
+            ),
+            task_resource(
+                "/input/context.txt",
+                b"different public input" if index == 4 else b"public input",
+                ResourceVisibility.AGENT,
+            ),
+        )
+        task = TaskSpec(
+            id=name,
+            source=source,
+            environment_requirements=EnvironmentRequirements(),
+            answer_type=AnswerType.TEXT,
+            context=ConversationInput(
+                events=(TextMessage(role="user", content="conflict" if index in (2, 3) else "duplicate"),)
+            ),
+            resources=resources,
+            verifier=VerifierSpec(kind=kind, parameters_json=verifier.model_dump_json()),
+        )
+        original_resources[name] = resources
+        audit = TaskAudit(
+            task_id=name,
+            source=source,
+            raw={"solution": name},
+            normalized=task,
+            normalization_rejection=None,
+            checks=[],
+            review=None,
+            intended_use=IntendedUse.TRAIN,
+            decision=Decision(task_id=name, disposition=Disposition.KEEP, reasons=[]),
+        )
+        rows.append(audit_columns(audit))
+    merged = tmp_path / "merged"
+    (merged / "data").mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), merged / "data/part-0.parquet")
+    (merged / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
+    output = tmp_path / "canonical"
+    canonicalize_sources(str(merged), str(output))
+    audited = {
+        row["task_id"]: row for file in (output / "audit").glob("*.parquet") for row in pq.read_table(file).to_pylist()
+    }
+    assert {name for name, row in audited.items() if row["filter_status"] == "keep"} == {"a", "e"}
+    assert audited["b"]["duplicate_of"] == "a"
+    assert (
+        audited["c"]["filter_reasons"]
+        == audited["d"]["filter_reasons"]
+        == ["cross_source_conflicting_verifier_contracts"]
+    )
+    assert {
+        name: TaskSpec.model_validate_json(row["task_json"]).resources for name, row in audited.items()
+    } == original_resources

@@ -54,10 +54,22 @@ class ImportRejection(BaseModel):
 
 
 @dataclass(frozen=True)
+class EnvironmentInventory:
+    """Reviewer-only evidence about a pinned environment and an explicit path scope."""
+
+    environment_id: str
+    origin: str
+    roots: tuple[str, ...]
+    paths: tuple[str, ...]
+    complete: bool
+
+
+@dataclass(frozen=True)
 class ReviewRubric:
     id: str
     version: str
     criteria: tuple[str, ...]
+    environment_inventory: EnvironmentInventory | None = None
 
 
 class IntendedUse(StrEnum):
@@ -247,3 +259,4 @@ class TaskAudit(BaseModel):
     cleanup: RewriteRecord | None = None
     lineage: dict[str, Any] | None = None
     normalization_changes: tuple[NormalizationChange, ...] = ()
+    intended_use: IntendedUse | None = None

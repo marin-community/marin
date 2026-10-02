@@ -14,7 +14,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.10"
+SCHEMA_VERSION = "0.11"
 
 
 class AnswerType(StrEnum):
@@ -38,6 +38,7 @@ class VerifierKind(StrEnum):
     CALENDAR_STATE = "calendar_state"
     IFEVAL = "ifeval"
     JSON_SCHEMA = "json_schema"
+    STRUCTURED_FIELDS = "structured_fields"
     TASKTROVE_EXECUTABLE = "tasktrove_executable"
     REASONING_GYM = "reasoning_gym"
     PUZZLE_ANSWER = "puzzle_answer"
@@ -45,6 +46,8 @@ class VerifierKind(StrEnum):
     REFERENCE_ANSWERS = "reference_answers"
     RUBRIC_JUDGE = "rubric_judge"
     REPOSITORY_PATCH = "repository_patch"
+    SOURCE_CONTRACT = "source_contract"
+    PREFERENCE_EVIDENCE = "preference_evidence"
     MATH_ANSWER = "math_answer"
     ABSTENTION_ANSWERS = "abstention_answers"
     ARC_GRID = "arc_grid"

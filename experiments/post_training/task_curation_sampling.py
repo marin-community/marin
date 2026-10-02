@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Take bounded, reproducible row-group samples from pinned HF Parquet shards."""
+"""Dispatch bounded, reproducible samples across pinned source families."""
 
 import argparse
 import base64
@@ -29,9 +29,15 @@ from taskcompendium.pipeline.datasets import (
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION as TASKTROVE_REVISION
 
+from experiments.post_training.task_curation_direct_sampling import SOURCES as DIRECT_SOURCES
+from experiments.post_training.task_curation_direct_sampling import sample_source as sample_direct
 from experiments.post_training.task_curation_hf_math_sampling import SHARDS as HF_MATH_SOURCES
 from experiments.post_training.task_curation_hf_math_sampling import sample_source as sample_hf_math
+from experiments.post_training.task_curation_nemotron_sampling import COMPONENTS as NEMOTRON_SOURCES
+from experiments.post_training.task_curation_nemotron_sampling import sample_source as sample_nemotron
 from experiments.post_training.task_curation_partitions import assign_partitions
+from experiments.post_training.task_curation_preference_sampling import NAMES as PREFERENCE_SOURCES
+from experiments.post_training.task_curation_preference_sampling import sample_source as sample_preference
 from experiments.post_training.task_curation_prefix_sampling import READ_BLOCK_BYTES, sample_prefix
 from experiments.post_training.task_curation_source_bindings import MATH_SOURCES, PYTHON_SOURCES, RUBRIC_SOURCES
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
@@ -54,18 +60,33 @@ SOURCE_CONFIGS = (
     | {name: module.CONFIG for name, module in MATH_SOURCES.items()}
     | {"competitive_coding": competitive_coding.CONFIG, "swe_rebench": swe_rebench.CONFIG, "swesmith": swesmith.CONFIG}
 )
+SUPPORTED_SOURCES = tuple(
+    sorted(
+        set(SOURCE_CONFIGS)
+        | set(HF_MATH_SOURCES)
+        | set(DIRECT_SOURCES)
+        | set(PREFERENCE_SOURCES)
+        | set(NEMOTRON_SOURCES)
+        | {"nemo_actions"}
+    )
+)
 MAX_SAMPLE_BYTES = 64 * 1024 * 1024
+MAX_DIRECT_SAMPLE_BYTES = 16 * 1024 * 1024
 
 
-def sample_source(name: str, output: Path, count: int, seed: int, nemo_shard: str) -> dict:
-    """Sample a row-group pool, or an ordered prefix when that pool exceeds its byte budget.
-
-    Start with up to eight random groups and add groups until enough rows exist.
-    Retain unsupported tasks and every sampled archive file.
-    """
+def sample_source(name: str, output: Path, count: int, seed: int, nemo_shard: str | None) -> dict:
+    """Dispatch a pinned source; TaskTrove uses a bounded row-group pool or prefix."""
+    if name in DIRECT_SOURCES:
+        return sample_direct(name, output, count, seed, MAX_DIRECT_SAMPLE_BYTES)
+    if name in PREFERENCE_SOURCES:
+        return sample_preference(name, output, count, seed)
+    if name in NEMOTRON_SOURCES:
+        return sample_nemotron(name, output, count, seed)
     if name in HF_MATH_SOURCES:
         return sample_hf_math(name, output, count, seed)
     if name == "nemo_actions":
+        if nemo_shard is None:
+            raise ValueError("nemo_actions requires an explicit source shard")
         return sample_nemo(output, count, seed, nemo_shard)
     dataset = "open-thoughts/TaskTrove"
     revision = TASKTROVE_REVISION
@@ -202,22 +223,34 @@ def sample_nemo(output: Path, count: int, seed: int, source_file: str) -> dict:
     return manifest
 
 
+def sample_sources(names: list[str], output: Path, count: int, seed: int, nemo_shard: str | None) -> list[dict]:
+    """Serialize blend-wide acquisitions so subsequent Nemotron components reuse their snapshots."""
+    names = list(dict.fromkeys(names))
+    independent = [name for name in names if name not in NEMOTRON_SOURCES]
+    manifests = {}
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {name: executor.submit(sample_source, name, output, count, seed, nemo_shard) for name in independent}
+        manifests.update({name: future.result() for name, future in futures.items()})
+    grouped = sorted(
+        (name for name in names if name in NEMOTRON_SOURCES), key=lambda name: NEMOTRON_SOURCES[name]["blend"]
+    )
+    for name in grouped:
+        manifests[name] = sample_source(name, output, count, seed, nemo_shard)
+    return [manifests[name] for name in names]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--count", type=int, default=100)
     parser.add_argument("--seed", type=int, default=6101)
     parser.add_argument("--nemo-shard")
-    parser.add_argument("--source", action="append", choices=(*SOURCE_CONFIGS, *HF_MATH_SOURCES, "nemo_actions"))
+    parser.add_argument("--source", action="append", choices=SUPPORTED_SOURCES)
     args = parser.parse_args()
     names = args.source or [*CONFIGS, "nemo_actions"]
     if "nemo_actions" in names and args.nemo_shard is None:
         parser.error("--nemo-shard is required when sampling nemo_actions")
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [
-            executor.submit(sample_source, name, args.output, args.count, args.seed, args.nemo_shard) for name in names
-        ]
-        manifests = [future.result() for future in futures]
+    manifests = sample_sources(names, args.output, args.count, args.seed, args.nemo_shard)
     (args.output / "manifest.json").write_text(json.dumps(manifests, indent=2))
 
 

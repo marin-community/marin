@@ -5,6 +5,7 @@
 
 from pathlib import Path
 
+from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.datasets.calendar_tasks import normalize as normalize_calendar
 from taskcompendium.pipeline.datasets.calendar_tasks import verification_report
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
@@ -41,7 +42,9 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     if isinstance(task, ImportRejection):
         return task
     original = row.data["instruction"]
-    replacement = task.context.events[0].content
+    instruction = task.context.events[0]
+    assert isinstance(instruction, TextMessage)
+    replacement = instruction.content
     changes = (
         ()
         if original == replacement

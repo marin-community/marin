@@ -24,9 +24,10 @@ from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, lower, run
 from marin.execution.remote import remote
 from marin.inference.openai_batch import OpenAIBatchClient
+from pydantic import TypeAdapter
 from taskcompendium.pipeline.fingerprints import code_digest
-from taskcompendium.pipeline.models import DatasetRecipe, FilterPolicy, SnapshotSource
-from taskcompendium.pipeline.review import BatchReviewer
+from taskcompendium.pipeline.models import DatasetRecipe, EnvironmentInventory, FilterPolicy, SnapshotSource
+from taskcompendium.pipeline.review import DEFAULT_PROMPT_CHARACTERS, BatchReviewer
 from taskcompendium.pipeline.zephyr import (
     AuditExecution,
     ReviewConfig,
@@ -36,6 +37,7 @@ from taskcompendium.pipeline.zephyr import acquire_source as acquire_source_rows
 from taskcompendium.pipeline.zephyr import (
     audit_source as audit_source_rows,
 )
+from taskcompendium.pipeline.zephyr import canonicalize_sources as canonicalize_source_rows
 from taskcompendium.pipeline.zephyr import (
     concat_sources as concatenate_source_rows,
 )
@@ -44,7 +46,7 @@ from taskcompendium.pipeline.zephyr import (
 )
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL
-from experiments.post_training.task_curation_source_bindings import SOURCE_NAMES, source_recipe
+from experiments.post_training.task_curation_source_bindings import SOURCE_NAMES, SnapshotRecipeModule, source_recipe
 
 PIPELINE_VERSION = "2026.10.01.1"
 PIPELINE_PREFIX = "task-curation"
@@ -83,14 +85,11 @@ class CurationWorkflow:
     sources: tuple[SourceArtifacts, ...]
     audit: ArtifactStep[Artifact]
     accepted: ArtifactStep[Artifact]
+    canonical: ArtifactStep[Artifact]
 
 
 class RecipeModule(Protocol):
     recipe: DatasetRecipe
-
-
-class SnapshotRecipeModule(Protocol):
-    def recipe(self, snapshot: Path) -> DatasetRecipe: ...
 
 
 def content_name(name: str, config: object) -> str:
@@ -238,11 +237,26 @@ def build_workflow(
         audited = audit_source(binding, acquired, execution, resources)
         accepted = filter_source(binding, audited, policy, resources)
         sources.append(SourceArtifacts(binding.name, acquired, audited, accepted))
-    return CurationWorkflow(
-        tuple(sources),
-        concat_sources(sources, ParquetView.AUDIT, resources),
-        concat_sources(sources, ParquetView.ACCEPTED, resources),
+    merged = concat_sources(sources, ParquetView.AUDIT, resources)
+    canonical = apply(
+        content_name(f"{PIPELINE_PREFIX}/canonical", {"merged": (merged.name, merged.version), "policy": "exact-v1"}),
+        remote(canonicalize_source_rows, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"]),
+        version=PIPELINE_VERSION,
+        merged_path=merged,
+        output_path=OUT,
     )
+    views = [
+        apply(
+            content_name(f"{PIPELINE_PREFIX}/merged/{view.value}", {"canonical": (canonical.name, canonical.version)}),
+            remote(concatenate_source_rows, resources=resources, pip_packages=["./lib/taskcompendium[pipeline]"]),
+            version=PIPELINE_VERSION,
+            input_paths=(canonical,),
+            output_path=OUT,
+            view=view.value,
+        )
+        for view in (ParquetView.AUDIT, ParquetView.ACCEPTED)
+    ]
+    return CurationWorkflow(tuple(sources), views[0], views[1], canonical)
 
 
 @click.command(help=__doc__)
@@ -275,11 +289,20 @@ def build_workflow(
     help="Row limit for module recipes; source directories use their manifest counts.",
 )
 @click.option("--model", default=GLM_MODEL, show_default=True)
+@click.option("--all-rows", is_flag=True, help="Read each module source to its end instead of applying --limit.")
 @click.option("--model-revision", required=True)
 @click.option("--max-tokens", type=int, default=4096, show_default=True)
-@click.option("--prompt-budget", type=int, default=128000, show_default=True)
+@click.option("--prompt-budget", type=int, default=DEFAULT_PROMPT_CHARACTERS, show_default=True)
 @click.option("--base-url", help="GLM batch endpoint, required with --run.")
 @click.option("--review-cache", help="Stable FineStore query cache location, shared across catalog versions.")
+@click.option(
+    "--environment-inventory",
+    "environment_inventories",
+    type=(str, click.Path(exists=True, path_type=Path)),
+    multiple=True,
+    metavar="SOURCE JSON",
+    help="Attach a scoped Shellbox or source-manifest file inventory to this source's review rubric.",
+)
 @click.option("--max-workers", type=int, default=4, show_default=True)
 @click.option("--review-batch-size", type=int, default=100, show_default=True)
 @click.option("--cpu", type=int, default=4, show_default=True)
@@ -295,12 +318,14 @@ def main(
     sample_digests: tuple[tuple[str, str], ...],
     version: str,
     limit: int,
+    all_rows: bool,
     model: str,
     model_revision: str,
     max_tokens: int,
     prompt_budget: int,
     base_url: str | None,
     review_cache: str | None,
+    environment_inventories: tuple[tuple[str, Path], ...],
     max_workers: int,
     review_batch_size: int,
     cpu: int,
@@ -312,6 +337,9 @@ def main(
         raise click.UsageError("Choose --sources-dir, --recipe, or --snapshot-recipe")
     if source_names and sources_dir is None:
         raise click.UsageError("--source requires --sources-dir")
+    if all_rows and sources_dir is not None:
+        raise click.UsageError("--all-rows requires a module source; --sources-dir describes bounded snapshots")
+    acquisition_limit = None if all_rows else limit
     review = ReviewConfig(model=model, model_revision=model_revision, prompt_budget=prompt_budget, max_tokens=max_tokens)
     reviewer = None
     if do_run:
@@ -334,7 +362,7 @@ def main(
                 recipe.name,
                 version,
                 recipe,
-                SourceAcquisition(recipe.source, limit, digests.get(recipe.name)),
+                SourceAcquisition(recipe.source, acquisition_limit, digests.get(recipe.name)),
                 review,
             )
         )
@@ -343,7 +371,9 @@ def main(
     for module_name, snapshot, digest in snapshot_recipes:
         recipe = cast(SnapshotRecipeModule, import_module(module_name)).recipe(snapshot)
         bindings.append(
-            SourceBinding(recipe.name, version, recipe, SourceAcquisition(recipe.source, limit, digest), review)
+            SourceBinding(
+                recipe.name, version, recipe, SourceAcquisition(recipe.source, acquisition_limit, digest), review
+            )
         )
     if sources_dir is not None:
         for name in source_names or SOURCE_NAMES:
@@ -359,6 +389,26 @@ def main(
                     review,
                 )
             )
+    inventories = {
+        name: TypeAdapter(EnvironmentInventory).validate_json(path.read_bytes())
+        for name, path in environment_inventories
+    }
+    if set(inventories) - {binding.name for binding in bindings}:
+        raise click.UsageError("--environment-inventory must name a selected source")
+    bindings = [
+        (
+            replace(
+                binding,
+                recipe=replace(
+                    binding.recipe,
+                    rubric=replace(binding.recipe.rubric, environment_inventory=inventories[binding.name]),
+                ),
+            )
+            if binding.name in inventories
+            else binding
+        )
+        for binding in bindings
+    ]
     workflow = build_workflow(
         bindings,
         execution=AuditExecution(max_workers=max_workers, review_batch_size=review_batch_size, reviewer=reviewer),

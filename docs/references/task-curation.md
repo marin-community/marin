@@ -5,8 +5,9 @@ per-source acquisition, audit and filter artifacts, followed by merged audit and
 accepted views. Zephyr normalizes rows, groups duplicates and conflicting references,
 checks graders, and preserves model-review evidence. Every completed filter artifact
 assigns each input `keep` or `reject`, while retaining its reasons. Recipes support numeric, exact,
-multiple-choice, predicted-action, IFEval, JSON Schema, puzzle, Reasoning Gym,
-calendar, open QA, rubric judges, repository repair and executable submissions. Source-specific checks bind the
+multiple-choice, predicted-action, IFEval, structured documents, puzzle, Reasoning Gym,
+calendar, open QA, rubric judges, repository repair, preference evidence, preserved
+source evaluator contracts and executable submissions. Source-specific checks bind the
 grader and its controls; model quality review remains separate from grading.
 
 ## Build the artifact graph
@@ -27,7 +28,11 @@ Add `--run --base-url <reachable-GLM-batch-endpoint>` to execute the graph.
 Set `GLM_BULK_TOKEN` in the caller's environment. For module recipes, `--limit`
 counts acquired rows per source, including rows that later reject. Sources selected
 through `--sources-dir` use their saved sample-manifest counts. Acquisition fails if the source
-yields fewer than the requested count. The entrypoint uses the existing inference
+yields fewer than the requested count. `--all-rows` reads a finite module source
+to its end and records `source_exhausted=true`; it cannot be combined with
+`--sources-dir`. For a snapshot, this means all rows in that snapshot, not all
+rows in its upstream corpus. Generated sources require an explicit finite limit.
+The entrypoint uses the existing inference
 endpoint; it does not start or restart a serving job.
 
 `MARIN_PREFIX` selects the artifact storage location. It can name local storage,
@@ -42,24 +47,38 @@ flowchart LR
     A[Acquire raw shards] --> B[Audit with Zephyr]
     B --> C[Filter: audit and accepted]
     C --> D[Merge audit views]
-    C --> E[Merge accepted views]
+    D --> E[Canonical deduplication]
+    E --> F[Complete audit]
+    E --> G[Accepted, train, eval, executable]
 ```
 
 | Stage | Retained output and boundary |
 | --- | --- |
-| Acquire | `raw/part-*.jsonl` and a source manifest; copies the pinned bounded sample into artifact storage. |
+| Acquire | `raw/part-*.jsonl` and a source manifest; copies the pinned sample or finite complete source into artifact storage. |
 | Audit | `audit/part-*.parquet`, source-wide duplicate/conflict decisions, verifier observations and `evidence/<batch-id>/` model records. |
 | Filter | Final `audit/part-*.parquet` for every input and `accepted/part-*.parquet` for kept tasks, plus policy and count metadata. |
-| Merge | Separate audit and accepted artifacts, each with `data/part-*.parquet` and input-source metadata. |
+| Canonical merge | Retains every audit row, chooses exact-duplicate representatives, and records competing accepted verifier contracts and evaluation overlap. Exports accepted, train, eval and executable subdirectories. |
+| Export | Separate audit and accepted artifacts, each with `data/part-*.parquet` and input-source metadata. |
 
 Merge reshards each view into `ceil(rows / 100000)` partitions, with at least
 one partition, before writing Parquet.
 
 Deduplication groups all acquired shards within one source. Exact copies retain
 the first source row and mark later rows with `duplicate_of`; differing private
-references for the same public task reject every member. Merging preserves source
-results without deduplicating across sources. Cross-source overlap remains a
-separate follow-up.
+references for the same public task reject every member. Preference records are
+keyed by prompt and candidate evidence: different labeled responses to one prompt
+are valid separate records, not conflicting answer keys.
+
+Canonical merging groups matching task contracts across sources. It chooses an
+accepted representative deterministically, preferring evaluation records and then
+sorting by source dataset, revision, row and task ID. Competing accepted verifier
+contracts cause conservative rejection; already rejected references do not poison
+accepted ones. Matching training records are cut when evaluation membership is
+present. This is exact task overlap detection, not a semantic contamination scan.
+Every original row and reason remains in the audit, with `duplicate_of` linking
+exact copies. `intended_use` distinguishes training and evaluation regardless of
+the upstream split name. Unknown intended use is excluded from both use-specific
+views. The executable view contains accepted records with ready grader controls.
 
 Filter identity includes the policy and audited artifact identity. A policy-only
 change rebuilds filtering and merging while reusing acquisition, controls and
@@ -179,7 +198,13 @@ shell or Harbor lowering for executable tasks.
 
 ### TaskSpec and runtime binding
 
-Schema `0.10` adds `interaction_tools`, `fixture`, `resources` and `output_paths`.
+Schema `0.11` retains `interaction_tools`, `fixture`, `resources` and `output_paths`
+from `0.10`. It adds the `structured_fields`, `source_contract` and
+`preference_evidence` verifier kinds. Structured fields retain XML element-name
+or CSV column-name checks; source contracts retain a pinned evaluator and its
+private reward inputs; preference evidence retains pairwise candidates or an
+unpaired boolean label. Unbound source evaluators and preference reward models
+report infrastructure unavailable when asked to grade a new response.
 `final_tools` still describes predicted final calls; `interaction_tools` describes
 calls that an episode executes. The fixture pins a semantic interface revision
 and initial state. Resource bytes are embedded as base64 with SHA-256 hashes and
@@ -259,8 +284,9 @@ uv run --package marin-core --group test python -m \
 
 The sample reads selected Parquet row groups, with a 64 MiB decoded-data budget
 per source. Oversized dictionary-encoded shards use a bounded prefix reader
-instead. That reader supports flat, non-null, Snappy columns with dictionary or
-plain string data across multiple pages and fails on unsupported encodings.
+instead. That reader supports flat, non-null byte-array columns with dictionary
+or plain data across V1 pages, using Snappy, Zstd or uncompressed dictionaries.
+It fails explicitly on unsupported encodings.
 NeMo reads eight 1 MiB JSONL windows. These methods
 produce bounded exercises with recorded selection bias, rather than population
 quality estimates. Archived snapshots, rather than a new sample, are the replay
@@ -629,8 +655,11 @@ Exact semantic duplicates match `TaskSpec` fields except `id`, `source` and
 control resources, including the private verifier. They select the first source
 row; later duplicates are rejected with `duplicate_of` lineage. Tasks with the
 same public semantics but different private verifier data form a conflict group;
-every member is rejected. Grouping spans all acquired shards within a source;
-the current merge does not remove overlap across datasets.
+every member is rejected. Preference candidates and labels are part of the
+grouping key, so distinct evidence for one prompt is retained. Grouping spans all
+acquired shards within a source. Canonical merging also removes exact overlap
+across sources, records verifier conflicts and excludes training copies that
+match evaluation records while retaining every original audit row.
 
 The bounded local helper, `run_pipeline`, invokes the same acquisition, audit
 and filter Zephyr stages. It also writes flat ledgers for pilots and rewrite
@@ -692,13 +721,13 @@ tasks = [TaskSpec.model_validate_json(value) for value in accepted["task_json"].
 
 ## Add sources by contract
 
-The three new cohorts add thirty source modules. Each leaf owns its dataset pin,
+Each leaf owns its dataset pin,
 normalization binding and area rubric; family helpers share parsing only where the
 source contract agrees.
 
 | Cohort | Source names | Shared contract |
 | --- | --- | --- |
-| Python and structured output | `curriculum_easy`, `curriculum_medium`, `e2egit`, `e2egit_large`, `multifile`, `pymethods`, `pymethods_large`, `stack_pytest`, `unitsyn_large`, `structured_outputs` | Named/multifile Python outputs and private tests; JSON-schema output. XML/YAML imports remain unsupported. |
+| Python and structured output | `curriculum_easy`, `curriculum_medium`, `e2egit`, `e2egit_large`, `multifile`, `pymethods`, `pymethods_large`, `stack_pytest`, `unitsyn_large`, `structured_outputs` | Named/multifile Python outputs and private tests; JSON/YAML/TOML schema checks, XML element-name checks and CSV column-name checks. |
 | Semantic judges and calendar | `glaive_code`, `codereview`, `stack_overflow`, `superuser`, `unix`, `safety`, `multichallenge`, `wizard_orca`, `tezos`, `if_calendar` | Original holistic numeric or all-pass judge contracts; calendar uses the existing schedule verifier. Semantic runtime judges remain unbound. |
 | Math, coding and repositories | `math_prism`, `math_stack`, `math_gym`, `math_oracle`, `competitive_coding`, `swe_rebench`, `swesmith`, `hardmath`, `hendrycks_math`, `deepscaler` | Typed math controls, exact stdin/stdout cases, repository checkout/test contracts and direct HF training records. Source math-comparator parity and repository execution remain unverified. |
 
@@ -716,10 +745,55 @@ MARIN_PREFIX=/tmp/task-artifacts uv run python -m \
 ```
 
 TaskTrove prefix acquisition supports Snappy, Zstd and plain dictionaries across
-leading row groups. The three direct HF sources use a bounded first-row-group or
-streamed JSON prefix. These samples exercise ingestion; their ordered prefixes do
-not estimate population quality. Source manifests retain pins, positions, byte
-budgets and snapshot hashes.
+leading row groups. Direct sources use bounded Parquet ranges, streamed JSON,
+gzip, XML or validated viewer prefixes according to each source contract. These
+samples exercise ingestion; ordered prefixes do not estimate population quality.
+Source manifests retain pins, positions, byte budgets and snapshot hashes.
+
+### Direct and Nemotron Ultra sources
+
+The additional 95 recipes comprise 75 pinned Nemotron Ultra component selections
+and 20 direct-source recipes. Ultra leaves retain complete conversation and tool
+events, private source judge inputs and agent runtime requirements. Shared parsing
+does not replace their evaluators with guessed exact-answer keys. The direct
+recipes cover math, coding, science, SQL, instruction following, preference
+records and generated reasoning tasks.
+
+The checked-in `experiments/post_training/task_curation_atlas_catalog.json`
+accounts for 196 atlas listings: 148 map to converters, 45 remain explicitly
+excluded and three KTO contributor selections remain unavailable. Converter
+coverage does not establish complete ingestion or runtime readiness. The canonical
+`kto_mix` aggregate recipe is additional: its rows expose no contributor selector,
+so it does not certify the three named contributor listings. Listings and recipes
+are not one-to-one; verified aliases may share a recipe.
+
+Use the main dispatcher for all registered sampler names:
+
+```bash
+PYTHONPATH=lib/taskcompendium/src:. \
+uv run --with './lib/taskcompendium[pipeline]' --with fastparquet python -m \
+  experiments.post_training.task_curation_sampling \
+  --source hh_helpful_base --source nemotron_if \
+  --source nemotron_ultra_mopd_hs3_en \
+  --count 10 --seed 6501 --output /tmp/task-direct-samples
+```
+
+The dispatcher delegates direct acquisition to `task_curation_direct_sampling`,
+HH/KTO/direct IF and generation to `task_curation_preference_sampling`, and Ultra
+components to `task_curation_nemotron_sampling`. It serializes Ultra selections by
+blend: the first missing component acquires sibling packets and subsequent
+selections reuse verified snapshot caches. Independent sources may sample in
+parallel. The CLI default remains the original ten-source cohort; repeat
+`--source` for additional selections.
+
+`reasoning_gym_generated` acquires the exact generator commit, samples task names
+from its registry with the supplied seed and records each resolved generation
+configuration. Its acquisition-time native positive and negative controls are
+recorded evidence; they do not bind the current runtime. Direct `nemotron_if` and
+`rlvr_ifeval` preserve the canonical SkyRL function contracts and fraction-satisfied
+reward. TaskTrove similarly named constraint functions differ, so their grader
+is not substituted. HH pairs and KTO binary labels remain private preference
+evidence; a reward model for new responses remains unbound.
 
 `RubricJudgeVerifier` retains the original question, criteria, parsed aggregation,
 raw judge JSON and TOML. The review projection includes the complete public
@@ -728,6 +802,49 @@ The complete originals remain in the audit. `RepositoryPatchVerifier` retains
 repository, source ref, workspace, grader paths and source environment hash.
 Both return infrastructure outcomes until their runtime is bound; neither
 manufactures a semantic reward.
+
+### Source contracts and environment evidence
+
+Source modules own field extraction, component selection, immutable provenance,
+intended use and rubric criteria. Shared builders accept explicit conversation
+events, references or evaluator parameters. Reuse a scorer only when its actual
+rules agree: similarly named SkyRL and TaskTrove IFEval checks differ in empty
+strings, punctuation and fractional scoring.
+
+`SourceContractVerifier` preserves an identified upstream evaluator, its revision,
+private inputs and runtime requirements. The common verification pass records it
+as unbound. `PreferenceEvidenceVerifier` preserves pairwise candidates or binary
+labels privately; these labels do not define an exact answer for a new response.
+Neither contract manufactures a reward. GLM still makes a final quality decision.
+
+NeMo blend recipes share request/tool-history parsing, with separate leaf selectors
+and family criteria. Sampling positions are excluded from semantic task payloads.
+Original records and normalization edits remain in the audit. Placeholder questions
+must be resolved with the pinned upstream filler and indexed source rows; an empty
+placeholder is not an ordinary solvable task. SWE subcorpus selection uses a pinned
+instance-membership inventory and the published mixture composition.
+
+GLM already receives bounded previews of declared task resources, including their
+visibility and truncation. A source can additionally set
+`ReviewRubric.environment_inventory`, or the launcher can attach a saved inventory
+with `--environment-inventory SOURCE inventory.json`. The inventory carries a
+pinned environment identity, acquisition origin, inspected roots, file paths and
+a completeness flag. It changes that source's actual review query and cache key.
+It is private reviewer evidence and does not alter the solving actor's context.
+
+`taskcompendium.pipeline.environment_inventory.inspect_environment` collects this
+evidence through an injected Shellbox `MachineFactory` and `MachineSpec`, closing
+the machine afterward. Select roots relevant to the task rather than listing a
+whole image. An inventory proves path availability within its scope; it does not
+prove dependency compatibility, file contents or a passing solution. Source
+manifests describe declared files; observed machine listings identify their backend.
+
+Shellbox's QEMU backend can inspect or execute an image using explicitly prepared
+guest assets. ShellSim inventories describe its simulated filesystem: ShellSim
+ignores Harbor Dockerfiles and cannot certify arbitrary Python or repository tests.
+Existing executable controls use the Docker backend. Bind QEMU assets explicitly
+when a source needs that runtime; static review and unverified readiness remain
+valid outcomes when execution adds little evidence.
 
 ## Resume and change policy
 

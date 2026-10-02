@@ -1,0 +1,219 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Import original NeMo Gym requests without replacing their agent reward contracts."""
+
+import json
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from taskcompendium.models import (
+    AnswerType,
+    AssistantToolCalls,
+    ConversationEvent,
+    ConversationInput,
+    ConversationToolCall,
+    EnvironmentFixture,
+    EnvironmentRequirements,
+    FinalTools,
+    FunctionDefinition,
+    TaskSpec,
+    TextMessage,
+    ToolResult,
+    VerifierKind,
+    VerifierSpec,
+)
+from taskcompendium.pipeline.datasets.nemotron_placeholders import restore_placeholder
+from taskcompendium.pipeline.models import (
+    DatasetRecipe,
+    ImportRejection,
+    IntendedUse,
+    NormalizationChange,
+    NormalizedTask,
+    RawRow,
+    ReviewRubric,
+    SnapshotSource,
+)
+from taskcompendium.verifiers.source_contract import SourceContractVerifier
+
+DATASET = "nvidia/Nemotron-RL-Ultra-Training-Blends"
+REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
+VERIFIER_REVISION = "cdc6600b4b5ef78e322c95f61a5401448d55c15e"
+
+
+def message_text(content: Any) -> str:
+    """Decode source text blocks, rejecting media rather than dropping their context."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        raise ValueError("Message content must be text or text blocks")
+    if any(block.get("type") not in {"input_text", "output_text", "text"} for block in content):
+        raise ValueError("Unsupported nontext message content")
+    return "".join(block["text"] for block in content)
+
+
+def conversation_events(
+    items: list[dict[str, Any]],
+) -> tuple[tuple[ConversationEvent, ...], tuple[NormalizationChange, ...]]:
+    """Keep role order and tool call IDs; retain provider reasoning in private raw evidence."""
+    events: list[ConversationEvent] = []
+    changes = []
+    calls = []
+    for index, item in enumerate(items):
+        kind = item.get("type", "message")
+        if kind == "reasoning":
+            changes.append(
+                NormalizationChange(
+                    field=f"input[{index}]",
+                    reason="Provider reasoning state is private evidence, not a conversation message",
+                    original=json.dumps(item, ensure_ascii=False),
+                    replacement="Retained in private source record",
+                )
+            )
+            continue
+        if kind == "function_call":
+            arguments = item["arguments"]
+            calls.append(
+                ConversationToolCall(
+                    call_id=item["call_id"],
+                    name=item["name"],
+                    arguments=json.loads(arguments) if isinstance(arguments, str) else arguments,
+                )
+            )
+            continue
+        if calls:
+            events.append(AssistantToolCalls(calls=tuple(calls)))
+            calls = []
+        if kind == "function_call_output":
+            output = item["output"]
+            events.append(
+                ToolResult(
+                    call_id=item["call_id"],
+                    content=output if isinstance(output, str) else json.dumps(output, ensure_ascii=False),
+                )
+            )
+        elif kind == "message":
+            text = message_text(item["content"])
+            if not text.strip() and item["role"] in {"system", "assistant"}:
+                changes.append(
+                    NormalizationChange(
+                        field=f"input[{index}]",
+                        reason="Empty source message carries no text; tool calls remain separate events",
+                        original=json.dumps(item),
+                        replacement="",
+                    )
+                )
+                continue
+            events.append(TextMessage(role=item["role"], content=text))
+        else:
+            raise ValueError(f"Unsupported source event: {kind}")
+    if calls:
+        events.append(AssistantToolCalls(calls=tuple(calls)))
+    return tuple(events), tuple(changes)
+
+
+def functions(tools: list[dict[str, Any]]) -> tuple[FunctionDefinition, ...]:
+    result = []
+    for tool in tools:
+        if tool["type"] != "function":
+            raise ValueError(f"Unsupported provider tool: {tool['type']}")
+        function = tool.get("function", tool)
+        result.append(
+            FunctionDefinition(
+                name=function["name"],
+                parameters=function["parameters"],
+                description=function.get("description"),
+                strict=function.get("strict"),
+            )
+        )
+    return tuple(result)
+
+
+def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | ImportRejection:
+    """Preserve the exact request and agent contract for static curation before runtime binding."""
+    actual = row.data.get("dataset") or "agent:" + row.data["agent_ref"]["name"]
+    if actual != selector:
+        return ImportRejection(reason="component_mismatch", detail=f"Expected {selector}; got {actual}")
+    data = dict(row.data)
+    placeholder_changes = ()
+    if data.get("_hf_question_placeholder") and "placeholder_source" in data:
+        try:
+            data, placeholder_changes = restore_placeholder(data)
+        except (ValueError, KeyError, TypeError) as error:
+            return ImportRejection(reason="invalid_placeholder_source", detail=str(error))
+    if data.get("_hf_question_placeholder"):
+        return ImportRejection(
+            reason="unresolved_external_placeholder",
+            detail=json.dumps(row.data["_hf_question_placeholder"], ensure_ascii=False),
+        )
+    request = data["responses_create_params"]
+    try:
+        events, changes = conversation_events(request["input"])
+        context = ConversationInput(events=events)
+        tools = functions(request.get("tools", []))
+    except (ValueError, KeyError, TypeError, ValidationError) as error:
+        return ImportRejection(reason="unsupported_request", detail=str(error))
+    requirements = ("nemotron-agent:" + row.data["agent_ref"]["name"],)
+    contract = {
+        key: value
+        for key, value in data.items()
+        if key not in {"responses_create_params", "path", "source_byte_offset"} and not key.startswith("sample_")
+    }
+    contract["request_options"] = {key: value for key, value in request.items() if key not in {"input", "tools"}}
+    reasoning = [item for item in request["input"] if item.get("type") == "reasoning"]
+    if reasoning:
+        contract["provider_reasoning"] = reasoning
+    verifier = SourceContractVerifier(
+        evaluator="NeMo Gym " + row.data["agent_ref"]["name"],
+        source_revision=VERIFIER_REVISION,
+        contract=contract,
+        runtime_requirements=requirements,
+    )
+    state = {key: data[key] for key in ("environment", "scenario", "info", "metadata", "exp_cal_state") if key in data}
+    fixture = (
+        EnvironmentFixture(
+            interface=requirements[0],
+            revision=VERIFIER_REVISION,
+            initial_state_json=json.dumps(state, ensure_ascii=False),
+        )
+        if tools or (state and family in {"tool-use", "agentic-safety", "swe-repo"})
+        else None
+    )
+    task = TaskSpec(
+        id=row.id,
+        source=row.source,
+        context=context,
+        environment_requirements=EnvironmentRequirements(action_interfaces=requirements),
+        final_tools=FinalTools(
+            functions=tools,
+            tool_choice=request.get("tool_choice") if isinstance(request.get("tool_choice"), str) else None,
+            parallel_tool_calls=request.get("parallel_tool_calls"),
+        ),
+        interaction_tools=tools,
+        fixture=fixture,
+        answer_type=(
+            AnswerType.NATIVE_ACTION
+            if data.get("expected_action", {}).get("type") == "function_call" and tools
+            else AnswerType.TEXT
+        ),
+        verifier=VerifierSpec(kind=VerifierKind.SOURCE_CONTRACT, parameters_json=verifier.model_dump_json()),
+    )
+    return NormalizedTask(task, (*placeholder_changes, *changes))
+
+
+def recipe(
+    name: str, snapshot: Path, blend: str, selector: str, family: str, rubric: ReviewRubric, *, component: str
+) -> DatasetRecipe:
+    def normalize_row(row: RawRow) -> NormalizedTask | ImportRejection:
+        return normalize(row, selector, family)
+
+    return DatasetRecipe(
+        name=name,
+        version=name + "-v1",
+        source=SnapshotSource(DATASET, REVISION, f"{blend}/{component}", "train", str(snapshot)),
+        normalize=normalize_row,
+        rubric=rubric,
+        intended_use=IntendedUse.TRAIN,
+    )

@@ -10,6 +10,7 @@ from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from functools import partial
+from itertools import chain, islice
 from math import ceil
 from pathlib import Path
 from tempfile import SpooledTemporaryFile, TemporaryDirectory
@@ -23,9 +24,9 @@ from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import Source
+from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.filtering import task_decision
-from taskcompendium.pipeline.fingerprints import semantic_digest
+from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import (
     CheckResult,
     DatasetRecipe,
@@ -42,7 +43,7 @@ from taskcompendium.pipeline.models import (
     TaskAudit,
 )
 from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns
-from taskcompendium.pipeline.review import BASE_RUBRIC, BatchReviewer, Reviewer
+from taskcompendium.pipeline.review import BASE_RUBRIC, DEFAULT_PROMPT_CHARACTERS, BatchReviewer, Reviewer
 from taskcompendium.pipeline.sources import source_rows
 from taskcompendium.pipeline.verification import verify_task
 
@@ -55,7 +56,7 @@ OUTPUT_SHARD_ROWS = 100000
 @dataclass(frozen=True)
 class SourceAcquisition:
     source: HFSource | GeneratedSource | SnapshotSource
-    limit: int
+    limit: int | None
     sample_sha256: str | None = None
 
 
@@ -63,11 +64,11 @@ class SourceAcquisition:
 class ReviewConfig:
     model: str
     model_revision: str
-    prompt_budget: int = 128000
+    prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
     max_tokens: int = 4096
     max_attempts: int = 2
     retry_max_tokens: int = 8192
-    retry_prompt_budget: int = 128000
+    retry_prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
     base_rubric_sha256: str = hashlib.sha256(BASE_RUBRIC.encode()).hexdigest()
 
 
@@ -92,8 +93,8 @@ def _read_json(path: StoragePath) -> Any:
 
 
 def acquire_source(acquisition: SourceAcquisition, output_path: str) -> dict[str, Any]:
-    """Copy an exact bounded sample into durable, independently cached raw shards."""
-    if acquisition.limit <= 0:
+    """Copy a bounded sample or a complete finite source into durable raw shards."""
+    if acquisition.limit is not None and acquisition.limit <= 0:
         raise ValueError("A positive sample limit is required")
     source = acquisition.source
     output = StoragePath(output_path)
@@ -107,18 +108,124 @@ def acquire_source(acquisition: SourceAcquisition, output_path: str) -> dict[str
     digest = hashlib.sha256()
     count = 0
     rows = iter(source_rows(source, acquisition.limit))
-    while count < acquisition.limit:
+    while (first := next(rows, None)) is not None:
         path = output / "raw" / f"part-{count // ACQUISITION_SHARD_ROWS:05d}.jsonl"
         with path.open("wt", auto_mkdir=True) as stream:
-            for _ in range(min(ACQUISITION_SHARD_ROWS, acquisition.limit - count)):
-                data = next(rows, None)
-                if data is None:
-                    raise ValueError(f"Source yielded {count} rows; expected {acquisition.limit}")
+            for data in chain((first,), islice(rows, ACQUISITION_SHARD_ROWS - 1)):
                 record = json.dumps({"index": count, "data": data}, ensure_ascii=False, allow_nan=False) + "\n"
                 stream.write(record)
                 digest.update(record.encode())
                 count += 1
-    manifest = {"acquisition": asdict(acquisition), "input_rows": count, "raw_sample_sha256": digest.hexdigest()}
+    if acquisition.limit is not None and count != acquisition.limit:
+        raise ValueError(f"Source yielded {count} rows; expected {acquisition.limit}")
+    manifest = {
+        "acquisition": asdict(acquisition),
+        "input_rows": count,
+        "raw_sample_sha256": digest.hexdigest(),
+        "row_selection": "all_rows" if acquisition.limit is None else "prefix",
+        "source_exhausted": acquisition.limit is None,
+    }
+    _write_json(output / "manifest.json", manifest)
+    return manifest
+
+
+def _merge_record(row: dict[str, Any]) -> dict[str, Any]:
+    task = TaskSpec.model_validate_json(row["task_json"]) if row["task_json"] is not None else None
+    return {
+        "public_key": deduplication_key(task) if task is not None else row["task_id"],
+        "semantic_key": semantic_digest(task, include_reference=True) if task is not None else row["task_id"],
+        "row": row,
+    }
+
+
+def _representative_order(record: dict[str, Any]) -> str:
+    row = record["row"]
+    return json.dumps(
+        [
+            int(row["intended_use"] != "eval"),
+            row["source_dataset"],
+            row["source_revision"],
+            row["source_row"],
+            row["task_id"],
+        ]
+    )
+
+
+def _canonical_group(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Choose a deterministic accepted representative and retain every audit row."""
+    references = set()
+    representative = None
+    has_eval = False
+    with SpooledTemporaryFile(max_size=GROUP_MEMORY_BYTES, mode="w+t") as spool:
+        for record in records:
+            row = record["row"]
+            has_eval |= row["intended_use"] == "eval"
+            if row["filter_status"] == "keep":
+                if len(references) < 2:
+                    references.add(record["semantic_key"])
+                if representative is None:
+                    representative = row["task_id"]
+            spool.write(json.dumps(record) + "\n")
+        spool.seek(0)
+        for line in spool:
+            row = json.loads(line)["row"]
+            if row["filter_status"] == "keep":
+                reason = None
+                if len(references) > 1:
+                    reason = "cross_source_conflicting_verifier_contracts"
+                elif has_eval and row["intended_use"] != "eval":
+                    reason = "evaluation_overlap"
+                elif row["task_id"] != representative:
+                    reason = "cross_source_exact_duplicate"
+                    row["duplicate_of"] = representative
+                if reason is not None:
+                    row["filter_status"] = "reject"
+                    row["filter_reasons"] = [*row["filter_reasons"], reason]
+            yield row
+
+
+def _selected_view(row: dict[str, Any], view: str) -> bool:
+    if row["filter_status"] != "keep":
+        return False
+    if view == "executable":
+        return row["grader_readiness"] == "ready"
+    return view == "accepted" or row["intended_use"] == view
+
+
+def canonicalize_sources(merged_path: str, output_path: str) -> dict[str, Any]:
+    """Deduplicate a merged audit, exclude evaluation overlap, and export curated views."""
+    source, output = StoragePath(merged_path), StoragePath(output_path)
+    expected = _read_json(source / "manifest.json")["input_rows"]
+    dataset = (
+        Dataset.from_files(str(source / "data/*.parquet"))
+        .load_parquet()
+        .map(_merge_record)
+        .group_by(
+            _public_key,
+            reducer=_canonical_group,
+            sort_by=_representative_order,
+            num_output_shards=max(1, ceil(expected / OUTPUT_SHARD_ROWS)),
+        )
+        .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
+    )
+    with ZephyrContext(name="canonical-task-merge") as context:
+        context.execute(dataset)
+        for view in ("accepted", "train", "eval", "executable"):
+            context.execute(
+                Dataset.from_files(str(output / "audit/*.parquet"))
+                .load_parquet()
+                .filter(partial(_selected_view, view=view))
+                .write_parquet(str(output / view / "part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
+            )
+    manifest = {
+        **_manifest(output),
+        "merged_source": str(source),
+        "deduplication_scope": "cross-source exact public and verifier semantics",
+        "representative_policy": "evaluation first, then source dataset, revision, row and task ID",
+        "conflict_policy": "reject competing accepted verifier contracts; preserve prior rejections",
+    }
+    if manifest["input_rows"] != expected:
+        raise ValueError("Canonical merge lost source audit rows")
     _write_json(output / "manifest.json", manifest)
     return manifest
 
@@ -147,6 +254,7 @@ def _normalize(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
         checks=[],
         review=None,
         decision=None,
+        intended_use=recipe.intended_use,
     )
     public_key, semantic_key = task_id, task_id
     if isinstance(result, NormalizedTask):
@@ -167,7 +275,7 @@ def _normalize(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
         if result.id != task_id or result.source != source:
             raise ValueError("A converter must retain its supplied task identity and source provenance")
         audit = audit.model_copy(update={"normalized": result})
-        public_key = semantic_digest(result, include_reference=False)
+        public_key = deduplication_key(result)
         semantic_key = semantic_digest(result, include_reference=True)
     return {
         "index": record["index"],

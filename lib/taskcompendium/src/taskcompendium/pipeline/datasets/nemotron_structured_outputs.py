@@ -4,9 +4,12 @@
 """Nemotron schema-generation tasks, distinct from instruction-following tasks."""
 
 import base64
+import csv
+import io
 from pathlib import Path
 
 from pydantic import ValidationError
+from verifyit.spec import SchemaFormat
 
 from taskcompendium.models import (
     AnswerType,
@@ -18,7 +21,7 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.structured_output import verification_report
+from taskcompendium.pipeline.datasets.structured_output import verification_report as schema_verification_report
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
@@ -29,8 +32,11 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
     SnapshotSource,
+    VerificationReport,
 )
+from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.verifiers.constraints import JsonSchemaVerifier
+from taskcompendium.verifiers.structured_fields import NamedFieldsVerifier
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 RUBRIC = ReviewRubric(
@@ -70,17 +76,22 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     if not isinstance(converted, dict):
         return ImportRejection(reason="missing_conversion", detail="Run the structured-outputs converter binding first")
     spec = converted["grader_spec"]
-    if spec["mode"] != "json-schema" or spec.get("format", "json") != "json":
-        return ImportRejection(
-            reason="unsupported_format",
-            detail=f"Direct-chat runtime currently supports JSON schemas, not {spec['mode']}:{spec.get('format')}",
-        )
-    schema_path = "tests/" + spec["schema"]
-    schema = base64.b64decode(converted["data_files"][schema_path], validate=True).decode()
+    verifier: JsonSchemaVerifier | NamedFieldsVerifier
     try:
-        verifier = JsonSchemaVerifier(document_schema_json=schema)
+        if spec["mode"] == "json-schema":
+            schema_path = "tests/" + spec["schema"]
+            schema = base64.b64decode(converted["data_files"][schema_path], validate=True).decode()
+            verifier = JsonSchemaVerifier(document_schema_json=schema, schema_format=SchemaFormat(spec["format"]))
+            kind = VerifierKind.JSON_SCHEMA
+        elif spec["mode"] in ("xml-elements", "csv-columns"):
+            verifier = NamedFieldsVerifier(
+                mode=spec["mode"], required=tuple(spec["required"]), any_of=tuple(spec["any_of"])
+            )
+            kind = VerifierKind.STRUCTURED_FIELDS
+        else:
+            return ImportRejection(reason="unsupported_structured_mode", detail=f"Unknown mode: {spec['mode']}")
     except (ValidationError, ValueError) as error:
-        return ImportRejection(reason="invalid_schema", detail=str(error))
+        return ImportRejection(reason="invalid_structured_contract", detail=str(error))
     original = converted["instruction"]
     instruction = original.replace(
         "Write your final answer to `/app/answer.txt`.", "Return your final answer in the assistant response."
@@ -96,7 +107,7 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.JSON_SCHEMA, parameters_json=verifier.model_dump_json()),
+        verifier=VerifierSpec(kind=kind, parameters_json=verifier.model_dump_json()),
     )
     changes = (
         ()
@@ -116,12 +127,31 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
 def recipe(snapshot: Path) -> DatasetRecipe:
     return DatasetRecipe(
         name="tasktrove-structured_outputs",
-        version="tasktrove-structured_outputs-v1",
+        version="tasktrove-structured_outputs-v2",
         source=SnapshotSource("open-thoughts/TaskTrove", REVISION, CONFIG, "train", str(snapshot)),
         normalize=normalize,
         rubric=RUBRIC,
         intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(
-            id="json-schema-contract-and-controls", revision="1", parameters={}, run=verification_report
+            id="structured-format-contract-and-controls", revision="2", parameters={}, run=verification_report
         ),
     )
+
+
+def verification_report(task: TaskSpec) -> VerificationReport:
+    """Check schema contradictions or the preserved named-fields runtime contract."""
+    if task.verifier.kind == VerifierKind.JSON_SCHEMA:
+        return schema_verification_report(task)
+    verifier = NamedFieldsVerifier.model_validate_json(task.verifier.parameters_json)
+    names = (*verifier.required, *(verifier.any_of[:1]))
+    if verifier.mode == "xml-elements":
+        witness = "<control>" + "".join(f"<{name}/>" for name in names) + "</control>"
+        negative = "<control>"
+    else:
+        document = io.StringIO()
+        writer = csv.writer(document)
+        writer.writerow(names)
+        negative = document.getvalue()
+        writer.writerow("control" for _ in names)
+        witness = document.getvalue()
+    return VerificationReport(checks=verify_witness(task, witness, negative))

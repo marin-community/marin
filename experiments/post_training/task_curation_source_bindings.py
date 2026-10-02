@@ -6,7 +6,9 @@
 import hashlib
 import re
 from dataclasses import replace
+from importlib import import_module
 from pathlib import Path
+from typing import Protocol, cast
 
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets import (
@@ -57,6 +59,7 @@ from taskcompendium.pipeline.datasets import (
     web_search_mcqa,
     wizard_orca,
 )
+from taskcompendium.pipeline.datasets.nemotron_ultra_catalog import NEMOTRON_MODULES
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     ImportRejection,
@@ -72,6 +75,35 @@ from experiments.post_training.tasktrove.converters.nemotron_structured_outputs 
     convert_nemotron_structured_outputs,
 )
 from experiments.post_training.tasktrove.converters.python_unit_tests import convert as convert_python
+
+
+class SnapshotRecipeModule(Protocol):
+    def recipe(self, snapshot: Path) -> DatasetRecipe: ...
+
+
+ADDITIONAL_SOURCE_NAMES = (
+    *NEMOTRON_MODULES,
+    "aime_1983_2024",
+    "apps",
+    "asdiv",
+    "dapo_math",
+    "eurus2_code",
+    "gretel_text_to_sql",
+    "gsm8k",
+    "math500",
+    "numina_math",
+    "openscience",
+    "rlvr_math",
+    "verifiable_code",
+    "hh_harmless_base",
+    "hh_helpful_base",
+    "hh_helpful_online",
+    "hh_helpful_rejection_sampled",
+    "kto_mix",
+    "nemotron_if",
+    "rlvr_ifeval",
+    "reasoning_gym_generated",
+)
 
 RUBRIC_SOURCES = {
     "codereview": codereview,
@@ -132,6 +164,7 @@ SOURCE_NAMES = (
     *PYTHON_SOURCES,
     "structured_outputs",
     "competitive_coding",
+    *ADDITIONAL_SOURCE_NAMES,
 )
 
 
@@ -153,6 +186,8 @@ def converter_digest() -> str:
 
 def source_recipe(name: str, snapshot: Path, image: str | None) -> DatasetRecipe:
     """Bind raw samples; executable conversion happens inside audit workers."""
+    if name in ADDITIONAL_SOURCE_NAMES:
+        return cast(SnapshotRecipeModule, import_module(f"taskcompendium.pipeline.datasets.{name}")).recipe(snapshot)
     if name in SOURCE_FACTORIES:
         return SOURCE_FACTORIES[name](snapshot)
     if name == "structured_outputs":

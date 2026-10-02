@@ -5,12 +5,13 @@
 
 import hashlib
 import inspect
+import json
 from pathlib import Path
 
 import verifyit
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
-from taskcompendium.models import ResourceVisibility, TaskSpec
+from taskcompendium.models import ResourceVisibility, TaskSpec, VerifierKind
 from taskcompendium.pipeline.models import DatasetRecipe
 
 
@@ -36,9 +37,23 @@ def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
     content["resources"] = [
         resource for resource in content["resources"] if resource["visibility"] != ResourceVisibility.CONTROL
     ]
+    if include_reference and task.verifier.kind in (VerifierKind.MATH_ANSWER, VerifierKind.MCQ_ANSWER):
+        # These graders read only their parameters; derivations and provenance are audit evidence.
+        content["resources"] = [
+            resource for resource in content["resources"] if resource["visibility"] != ResourceVisibility.VERIFIER
+        ]
+    if include_reference and task.verifier.kind == VerifierKind.PREFERENCE_EVIDENCE:
+        parameters = json.loads(content["verifier"]["parameters_json"])
+        parameters.pop("source_metadata")
+        content["verifier"]["parameters_json"] = json.dumps(parameters, sort_keys=True)
     if not include_reference:
         content.pop("verifier")
         content["resources"] = [
             resource for resource in content["resources"] if resource["visibility"] == ResourceVisibility.AGENT
         ]
     return canonical_sha256(content)
+
+
+def deduplication_key(task: TaskSpec) -> str:
+    """Preference candidates define distinct records even when the prompt repeats."""
+    return semantic_digest(task, include_reference=task.verifier.kind == VerifierKind.PREFERENCE_EVIDENCE)

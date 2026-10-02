@@ -16,6 +16,7 @@ from taskcompendium.submission import AnswerFormat, SubmissionConvention
 from taskcompendium.verifier_registry import resolve_verifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
+from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 PLAIN = SubmissionConvention(id="pipeline-plain", answer_format=AnswerFormat.PLAIN)
 
@@ -35,12 +36,22 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
     These controls establish grader behavior, not correctness of the source key.
     They do not run a container or solve the task.
     """
-    if task.environment_requirements.capabilities or task.environment_requirements.action_interfaces:
-        return [CheckResult(check="runtime", status=CheckStatus.UNSUPPORTED, detail="An isolated runtime is required")]
     try:
         verifier = resolve_verifier(task.verifier)
     except ValueError as error:
         return [CheckResult(check="verifier_contract", status=CheckStatus.FAIL, detail=str(error))]
+
+    if isinstance(verifier, SourceContractVerifier):
+        return [
+            CheckResult(
+                check="source_evaluator",
+                status=CheckStatus.UNSUPPORTED,
+                detail=f"{verifier.evaluator}@{verifier.source_revision} is unbound; requires "
+                + "; ".join(verifier.runtime_requirements),
+            )
+        ]
+    if task.environment_requirements.capabilities or task.environment_requirements.action_interfaces:
+        return [CheckResult(check="runtime", status=CheckStatus.UNSUPPORTED, detail="An isolated runtime is required")]
 
     if isinstance(verifier, PredictedActionVerifier):
         return _action_checks(task, verifier)

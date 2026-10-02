@@ -8,7 +8,7 @@ from pathlib import Path
 
 from verifyit.modes.extract import collapse_whitespace
 
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import python_tasks
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, DatasetRecipe, ReviewRubric, VerificationReport
@@ -49,7 +49,9 @@ def recipe(snapshot: Path, image: str, *, timeout: float, memory_mb: int) -> Dat
         inputs = [
             resource.data().decode() for resource in task.resources if resource.path.startswith("/tests/cases/input_")
         ]
-        prompt = collapse_whitespace(task.context.events[0].content)
+        instruction = task.context.events[0]
+        assert isinstance(instruction, TextMessage)
+        prompt = collapse_whitespace(instruction.content)
         sample_only = bool(inputs) and all(collapse_whitespace(stdin) in prompt for stdin in inputs)
         coverage = CheckResult(
             check="source_case_coverage",

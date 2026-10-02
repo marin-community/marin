@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from pydantic import ValidationError
+from verifyit.spec import SchemaFormat
 
 from taskcompendium.models import (
     AnswerType,
@@ -77,7 +78,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     if data.get("schema_type") != "json" or not isinstance(data.get("schema"), dict):
         return ImportRejection(reason="unsupported_schema", detail="Expected an explicit JSON Schema object")
     try:
-        verifier = JsonSchemaVerifier(document_schema_json=json.dumps(data["schema"]))
+        verifier = JsonSchemaVerifier(document_schema_json=json.dumps(data["schema"]), schema_format=SchemaFormat.JSON)
     except (ValidationError, ValueError) as error:
         return ImportRejection(reason="invalid_schema", detail=str(error))
     return TaskSpec(

@@ -22,6 +22,7 @@ TASK_SCHEMA = pa.schema(
         ("source_dataset", pa.string()),
         ("source_revision", pa.string()),
         ("source_row", pa.string()),
+        ("intended_use", pa.string()),
         ("sample_partition", pa.string()),
         ("sample_group", pa.string()),
         ("source_sample_index", pa.int64()),
@@ -64,7 +65,7 @@ TASK_SCHEMA = pa.schema(
         ("cleanup_detail", pa.string()),
         ("cleanup_lineage_json", pa.string()),
     ],
-    metadata={b"taskcompendium.curation_schema": b"3"},
+    metadata={b"taskcompendium.curation_schema": b"4"},
 )
 
 
@@ -96,6 +97,7 @@ def audit_columns(audit: TaskAudit) -> dict[str, Any]:
         "source_dataset": audit.source.dataset,
         "source_revision": audit.source.revision,
         "source_row": audit.source.row,
+        "intended_use": audit.intended_use.value if audit.intended_use is not None else None,
         "sample_partition": data.get("sample_partition"),
         "sample_group": data.get("sample_group"),
         "source_sample_index": data.get("sample_index"),

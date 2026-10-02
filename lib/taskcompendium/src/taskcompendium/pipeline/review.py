@@ -5,8 +5,9 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -17,7 +18,9 @@ from taskcompendium.pipeline.query_cache import cached_batch_output
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
+DEFAULT_PROMPT_CHARACTERS = 512000
 RESOURCE_PREVIEW_CHARACTERS = 8192
+PRIVATE_REASONING_PREVIEW_CHARACTERS = 512
 TOTAL_RESOURCE_PREVIEW_CHARACTERS = 32768
 MAX_RESOURCE_PREVIEWS = 256
 BASE_RUBRIC = """Review the supplied task for training or evaluation quality.
@@ -60,6 +63,120 @@ Identify every material defect and give concrete evidence in at most 1000 charac
 Return the supplied task_id unchanged by
 calling review_task exactly once. Do not rewrite the task or invent a reference.
 """
+
+
+def private_evidence_summary(value: Any, evidence: str, preview_characters: int = 0) -> dict[str, Any]:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+    summary = {
+        "sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "byte_count": len(text.encode()),
+        "character_count": len(text),
+        "evidence": evidence,
+    }
+    if preview_characters:
+        summary.update(text=text[:preview_characters], truncated=len(text) > preview_characters)
+    return summary
+
+
+def duplicate_public_context(text: str, messages: list[dict[str, Any]]) -> bool:
+    """Recognize a complete source transcript with only role delimiters left over."""
+    remaining = text
+    for message in messages:
+        position = remaining.find(message["content"])
+        if position < 0:
+            return False
+        remaining = remaining[:position] + remaining[position + len(message["content"]) :]
+    return re.fullmatch(r"(?:\s|\[(?:SYSTEM|USER|ASSISTANT|DEVELOPER)\]:)*", remaining) is not None
+
+
+def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any]) -> None:
+    """Preview private traces and fixtures while keeping public instructions and judge rules whole."""
+    contract = parameters["contract"]
+    messages = [event for event in payload["context"]["events"] if event["type"] == "message"]
+    public = {(message["role"], message["content"]): index for index, message in enumerate(messages)}
+    fixture = payload["fixture"]
+    if fixture is not None:
+        state = json.loads(fixture["initial_state_json"])
+        for field, value in state.items():
+            if field in contract and contract[field] == value:
+                state[field] = private_evidence_summary(
+                    value, f"Shared evidence is represented in verifier.contract.{field}; full value retained in audit"
+                )
+        fixture["initial_state_json"] = json.dumps(state, ensure_ascii=False)
+    context = contract.get("context")
+    if isinstance(context, str) and duplicate_public_context(context, messages):
+        contract["context"] = private_evidence_summary(context, "Complete transcript occurs in public context.events")
+    metadata = contract.get("metadata")
+    if isinstance(metadata, dict):
+        system = metadata.get("system")
+        if isinstance(system, str) and ("system", system) in public:
+            metadata["system"] = private_evidence_summary(
+                system, "Complete system instruction occurs in public context.events"
+            )
+        source_messages = metadata.get("messages")
+        if isinstance(source_messages, list):
+            projected = []
+            for message in source_messages:
+                role, content = message.get("role"), message.get("content")
+                if isinstance(content, str) and (role, content) in public:
+                    projected.append(
+                        {
+                            **message,
+                            "content": private_evidence_summary(
+                                content, f"Complete text occurs in public message {public[(role, content)]}"
+                            ),
+                        }
+                    )
+                elif role == "thinking":
+                    projected.append(
+                        {
+                            **message,
+                            "content": private_evidence_summary(
+                                content,
+                                "Private historical model reasoning; full trace retained in audit",
+                                PRIVATE_REASONING_PREVIEW_CHARACTERS,
+                            ),
+                        }
+                    )
+                else:
+                    projected.append(message)
+            metadata["messages"] = projected
+    if "provider_reasoning" in contract:
+        contract["provider_reasoning"] = private_evidence_summary(
+            contract["provider_reasoning"],
+            "Private provider reasoning; full trace retained in audit",
+            RESOURCE_PREVIEW_CHARACTERS,
+        )
+    verifier_metadata = contract.get("verifier_metadata")
+    if isinstance(verifier_metadata, dict) and "unit_tests" in verifier_metadata:
+        tests = verifier_metadata["unit_tests"]
+        if isinstance(tests, dict):
+            remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
+            for field in ("inputs", "outputs"):
+                if field in tests:
+                    projected_tests = []
+                    for text in tests[field]:
+                        if not isinstance(text, str):
+                            projected_tests.append(text)
+                            continue
+                        length = min(len(text), RESOURCE_PREVIEW_CHARACTERS, remaining)
+                        if length < len(text):
+                            preview = private_evidence_summary(
+                                text, "Private test fixture preview; full test retained in audit", length
+                            )
+                            preview["truncated"] = True
+                            projected_tests.append(preview)
+                        else:
+                            projected_tests.append(text)
+                        remaining -= length
+                    tests[field] = projected_tests
+    payload["source_contract_preview_policy"] = (
+        "Public conversation, tool schemas, judge instructions, rubric and gold remain complete. "
+        "Duplicate private transcripts point to their full public copy. Historical private model reasoning "
+        "and large private test fixtures have explicit bounded previews with original counts and hashes. "
+        "Omitted private preview text alone is not a defect; do not certify unseen test contents. "
+        "Full source and verifier evidence remains in the audit."
+    )
 
 
 def review_payload(task: TaskSpec) -> dict[str, Any]:
@@ -113,6 +230,8 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
                 "sha256": hashlib.sha256(question.encode()).hexdigest(),
                 "evidence": "Complete question occurs in public conversation context",
             }
+    if task.verifier.kind == VerifierKind.SOURCE_CONTRACT:
+        project_source_contract(parameters, payload)
     payload["verifier"]["parameters_json"] = json.dumps(parameters)
     payload["resource_preview_policy"] = (
         "Resources are private reviewer evidence, with visibility identifying what the actor sees. "
@@ -146,6 +265,21 @@ def completion_body(
         )
         content = json.dumps(
             {"original": review_payload(original), "candidate": review_payload(task)}, ensure_ascii=False
+        )
+    if rubric.environment_inventory is not None:
+        instructions += (
+            "\nThe environment inventory is private reviewer evidence. Its origin and roots describe "
+            "what was inspected. A source manifest describes declared files, not a booted image. "
+            "Paths establish availability only within the stated scope; they do not establish file contents, "
+            "dependency compatibility or a passing solution. A truncated inventory cannot establish absence. "
+            "Do not claim that execution occurred from a file listing."
+        )
+        content = json.dumps(
+            {
+                "task": json.loads(content),
+                "environment_inventory": asdict(rubric.environment_inventory),
+            },
+            ensure_ascii=False,
         )
     schema = ReviewVerdict.model_json_schema()
     return {
@@ -200,11 +334,11 @@ class BatchReviewer:
     model: str
     model_revision: str
     max_tokens: int = 2048
-    max_prompt_characters: int = 32000
+    max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS
     poll_seconds: float = 5.0
     max_attempts: int = 2
     retry_max_tokens: int = 8192
-    retry_max_prompt_characters: int = 128000
+    retry_max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS
     query_cache_root: str | None = None
 
     @property

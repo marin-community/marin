@@ -19,9 +19,11 @@ class GeneratorModule(Protocol):
     def generate_rows(self, limit: int) -> Iterator[dict[str, Any]]: ...
 
 
-def source_rows(source: HFSource | GeneratedSource | SnapshotSource, limit: int) -> Iterator[dict[str, Any]]:
-    """Yield the first ``limit`` rows in the pinned source's stable order."""
+def source_rows(source: HFSource | GeneratedSource | SnapshotSource, limit: int | None) -> Iterator[dict[str, Any]]:
+    """Stream pinned rows in source order; ``None`` reads a finite source to its end."""
     if isinstance(source, GeneratedSource):
+        if limit is None:
+            raise ValueError("Generated sources require an explicit finite row limit")
         yield from islice(cast(GeneratorModule, import_module(source.module)).generate_rows(limit), limit)
         return
     if isinstance(source, SnapshotSource):

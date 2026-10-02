@@ -17,12 +17,15 @@ from taskcompendium.verifiers.constraints import IfevalVerifier, JsonSchemaVerif
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
+from taskcompendium.verifiers.preference import PreferenceEvidenceVerifier
 from taskcompendium.verifiers.reasoning import PuzzleAnswerVerifier, ReasoningGymVerifier
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
 from taskcompendium.verifiers.repository_patch import RepositoryPatchVerifier
 from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 from taskcompendium.verifiers.runtime import CalendarStateVerifier, CaptureOutputVerifier
 from taskcompendium.verifiers.schedule import ScheduleAnswerVerifier
+from taskcompendium.verifiers.source_contract import SourceContractVerifier
+from taskcompendium.verifiers.structured_fields import NamedFieldsVerifier
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
@@ -34,6 +37,7 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
         VerifierKind.CALENDAR_STATE: CalendarStateVerifier,
         VerifierKind.IFEVAL: IfevalVerifier,
         VerifierKind.JSON_SCHEMA: JsonSchemaVerifier,
+        VerifierKind.STRUCTURED_FIELDS: NamedFieldsVerifier,
         VerifierKind.TASKTROVE_EXECUTABLE: TaskTroveExecutableVerifier,
         VerifierKind.REASONING_GYM: ReasoningGymVerifier,
         VerifierKind.PUZZLE_ANSWER: PuzzleAnswerVerifier,
@@ -41,6 +45,8 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
         VerifierKind.REFERENCE_ANSWERS: ReferenceAnswersVerifier,
         VerifierKind.RUBRIC_JUDGE: RubricJudgeVerifier,
         VerifierKind.REPOSITORY_PATCH: RepositoryPatchVerifier,
+        VerifierKind.SOURCE_CONTRACT: SourceContractVerifier,
+        VerifierKind.PREFERENCE_EVIDENCE: PreferenceEvidenceVerifier,
         VerifierKind.MATH_ANSWER: MathAnswerVerifier,
         VerifierKind.ABSTENTION_ANSWERS: AbstentionAnswersVerifier,
         VerifierKind.ARC_GRID: ArcGridVerifier,
