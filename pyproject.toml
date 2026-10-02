@@ -65,9 +65,9 @@ pipeline = [
     "jax[cuda13]==0.11.0",
     "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
     "nvidia-nccl-cu13>=2.31.2; sys_platform == 'linux'",
-    "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
-    "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
-    "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
+    "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
+    "flash-attn-4[cu13]>=4.0.0b27,<4.1; sys_platform == 'linux'",
+    "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
     "jax-triton==0.3.1; sys_platform == 'linux'",
     "triton>=3.6.0,<3.7; sys_platform == 'linux'",
     # Flash Attention's Python helpers import Torch, but the Grug kernels execute
@@ -247,6 +247,13 @@ explicit = true
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+# Use CPU Torch for unpinned imports without changing other packages' indexes.
+# marin-core[gpu] explicitly selects its CUDA Torch index.
+[[tool.uv.index]]
+name = "pytorch-cpu-fallback"
+url = "https://download.pytorch.org/whl/cpu/torch/"
+format = "flat"
 
 [tool.black]
 line-length = 121
