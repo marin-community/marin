@@ -12,7 +12,14 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention
 from levanter.grug.attention._paged_gpu import gpu_paged_attention
-from levanter.grug.attention._paged_tpu import _FloatPair, _exp_nonpositive, _fixed_high, tpu_paged_decode
+from levanter.grug.attention._paged_tpu import (
+    _FloatPair,
+    _exact_bfloat16,
+    _exp_nonpositive,
+    _fixed_high,
+    _query_key_components,
+    tpu_paged_decode,
+)
 from levanter.testing.precision import round_to_bfloat16
 
 
@@ -308,3 +315,28 @@ def test_tpu_query_key_split_rounds_ties_across_bf16_exponents():
         zeros = jax.jit(_fixed_high)(jnp.zeros_like(values))
     np.testing.assert_array_equal(np.asarray(actual), expected)
     np.testing.assert_array_equal(np.asarray(zeros), 0)
+
+
+def test_tpu_exact_component_packing_preserves_every_finite_bfloat16():
+    bits = np.arange(65536, dtype=np.uint32)
+    bits = bits[(bits & 0x7F80) != 0x7F80]
+    values = (bits << 16).view(np.float32)
+    with jax.default_device(jax.devices("cpu")[0]):
+        actual = jax.jit(_exact_bfloat16)(jnp.asarray(values))
+    # Check raw BF16 storage, including signed zeros and subnormals.
+    np.testing.assert_array_equal(np.asarray(actual).view(np.uint16), bits.astype(np.uint16))
+
+
+def test_tpu_query_key_components_preserve_bfloat16_residuals():
+    units = np.concatenate((-np.arange(128, 256), np.arange(128, 257))).astype(np.float64)
+    scales = np.ldexp(np.ones(246, np.float64), np.arange(-126, 120))[:, None]
+    # The row maximum is 256 scale units: leading components round to even
+    # multiples of two, leaving residuals of zero or one signed scale unit.
+    expected_high = scales * (np.rint(units / 2) * 2)
+    expected_low = scales * units - expected_high
+    values = (scales * units).astype(np.float32)
+    with jax.default_device(jax.devices("cpu")[0]):
+        high, low = jax.jit(_query_key_components)(jnp.asarray(values))
+    np.testing.assert_array_equal(np.asarray(high, np.float64), expected_high)
+    np.testing.assert_array_equal(np.asarray(low, np.float64), expected_low)
+    np.testing.assert_array_equal(np.asarray(high, np.float64) + np.asarray(low, np.float64), values)
