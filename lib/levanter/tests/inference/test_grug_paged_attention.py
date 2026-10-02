@@ -13,6 +13,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grug.attention import ragged_paged_attention
 from levanter.grug.attention._paged_gpu import gpu_paged_attention
 from levanter.grug.attention._paged_tpu import _exp_nonpositive, tpu_paged_decode
+from levanter.testing.precision import round_to_bfloat16
 
 
 class _PagedCase(NamedTuple):
@@ -60,7 +61,7 @@ def _dense_oracle(args, window, cap, scale):
                 probabilities = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
                 probabilities /= probabilities.sum(axis=-1, keepdims=True)
                 output[token, head] = probabilities @ values[:, head]
-    return output
+    return round_to_bfloat16(output) if args.q.dtype == jnp.bfloat16 else output
 
 
 @pytest.mark.parametrize("window,cap", [(None, None), (1, None), (5, 1.5)])
