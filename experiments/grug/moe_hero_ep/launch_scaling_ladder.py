@@ -364,8 +364,8 @@ def build_ladder_run(
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,
-                # The hero is the run whose full loss curve we report, so give it a baseline point
-                # at the start of the curve.
+                # Evaluate the hero after its first update, both at the start of the curve and after each
+                # resume, so the eval-to-train handoff is exercised before the next periodic eval.
                 eval_at_first_step=size == "d6144",
             ),
             stop_after_steps=num_steps,
