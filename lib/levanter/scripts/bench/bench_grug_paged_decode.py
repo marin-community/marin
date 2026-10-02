@@ -58,6 +58,8 @@ def main():
     parser.add_argument("--window", type=int)
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     parser.add_argument("--repeats", type=int, default=20)
+    parser.add_argument("--av-precision", choices=["ieee", "bf16_3x"], default="ieee")
+    parser.add_argument("--profile-device", action="store_true")
     parser.add_argument("--kv-splits", type=int, choices=[8, 16], default=8)
     parser.add_argument("--baseline", choices=["flashinfer_xqa", "tpu_vllm_rpa", "tpu_vllm_rpa_fp32"])
     args = parser.parse_args()
@@ -86,11 +88,26 @@ def main():
             sliding_window=args.window,
             implementation=args.implementation,
             gpu_kv_splits=args.kv_splits,
+            gpu_av_precision=args.av_precision,
         )
     )
     measurements = _measure_jax(fn, inputs, args.repeats)
     actual = measurements.output
     elapsed = measurements.steady_state_time
+    device_profile = None
+    if args.profile_device:
+        profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
+
+        _, kernel_runs = profiler.measure(fn, aggregate=False, iterations=args.repeats)(*inputs)
+        if kernel_runs is None:
+            raise RuntimeError("CUPTI did not capture GPU kernels")
+        if args.repeats == 1:
+            kernel_runs = [kernel_runs]
+        device_profile = {
+            "timing_boundary": "cupti_sum_of_kernel_durations",
+            "median_time": statistics.median(sum(duration for _, duration in run) for run in kernel_runs) / 1000,
+            "kernel_runs_ms": kernel_runs,
+        }
     visible = args.context if args.window is None else min(args.context, args.window)
     kv_bytes = 2 * args.batch_size * visible * args.kv_heads * args.head_dim * dtype.itemsize
     flops = 4 * args.batch_size * visible * args.kv_heads * args.groups * args.head_dim
@@ -114,6 +131,7 @@ def main():
                 "first_run_time": measurements.first_run_time,
                 "steady_state_time": elapsed,
                 "error": None,
+                "device_profile": device_profile,
                 "git_sha": launch_provenance().base_commit,
                 "xla_flags": os.environ.get("XLA_FLAGS", ""),
                 "backend_env": {"LIBTPU_INIT_ARGS": os.environ.get("LIBTPU_INIT_ARGS", "")},
