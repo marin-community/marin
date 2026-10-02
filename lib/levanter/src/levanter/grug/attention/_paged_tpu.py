@@ -20,7 +20,8 @@ TPU_HEAD_ALIGNMENT = 128
 _QUERY_GROUP_ALIGNMENT = 8
 
 _INVERSE_LOG_2 = 1 / log(2)
-_MIN_NORMAL_LOG = -126 * log(2)
+_FLOAT32_MIN_NORMAL_EXPONENT = -126
+_MIN_NORMAL_LOG = _FLOAT32_MIN_NORMAL_EXPONENT * log(2)
 _EXP_DEGREE = 12
 _FLOAT32_EXPONENT_BIAS = 127
 _FLOAT32_MANTISSA_BITS = 23
@@ -114,7 +115,9 @@ def _fixed_high(value):
     # exactly representable in an FP32 accumulator.
     magnitude = jnp.max(jnp.abs(value), axis=1, keepdims=True)
     bits = jax.lax.bitcast_convert_type(magnitude, jnp.int32)
-    exponent = jnp.maximum(((bits >> _FLOAT32_MANTISSA_BITS) & 255) - _FLOAT32_EXPONENT_BIAS + 1 - 8, -126)
+    exponent = jnp.maximum(
+        ((bits >> _FLOAT32_MANTISSA_BITS) & 255) - _FLOAT32_EXPONENT_BIAS + 1 - 8, _FLOAT32_MIN_NORMAL_EXPONENT
+    )
     quantum = jax.lax.bitcast_convert_type((exponent + _FLOAT32_EXPONENT_BIAS) << _FLOAT32_MANTISSA_BITS, jnp.float32)
     # Both scales are normal powers of two throughout the finite BF16 range.
     # Explicit multiplication avoids Mosaic's general FP32 division lowering.
