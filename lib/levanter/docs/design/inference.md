@@ -305,8 +305,11 @@ installs an explicit compatible precompiled cache in the isolated runtime. It
 loads and hashes `fused_moe_100.so` before engine initialization and records its
 path, package versions, and successful load. JIT compilation is disabled for
 this gate: missing or incompatible precompiled modules fail instead of starting
-a long build. FlashInfer 0.6.18.post1's installer selects its CUDA 13.0 cache for
-CUDA 13.2, and the official ARM64 wheel contains this MoE library. This cache
+a long build. FlashInfer 0.6.18.post1's
+[installer](https://github.com/flashinfer-ai/flashinfer/blob/8bc3b578027791336c6ae87db5c9d76f82cef8bc/flashinfer/__main__.py#L108)
+selects its CUDA 13.0 cache for CUDA 13.2, and the
+[official ARM64 wheel](https://flashinfer.ai/whl/cu130/flashinfer-jit-cache/)
+contains this MoE library. This cache
 selection preserves the backend and autotuning configuration; accelerator
 validation is still required for a given wheel/runtime pair.
 
