@@ -38,7 +38,7 @@ from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import LogprobsMode, Sampler
 from levanter.models.lm_model import LmHeadModel
-from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
+from levanter.utils.jax_utils import estimated_free_device_memory, logsumexp_last_axis, sharded_tree_size
 
 logger = logging.getLogger(__name__)
 
@@ -842,7 +842,8 @@ def score_token_sequence_logprobs(
     logits = model(input_ids=input_ids, attn_mask=AttentionMask.causal(), pos_ids=pos_ids, key=None)
 
     logits_array = logits.astype(jnp.float32).rearrange((Pos, model.Vocab)).array
-    next_token_logprobs = jax.nn.log_softmax(logits_array[:-1], axis=-1)
+    next_logits = logits_array[:-1]
+    next_token_logprobs = next_logits - logsumexp_last_axis(next_logits)[..., None]
     target_ids = jnp.array(token_id_list[1:], dtype=jnp.int32)
     scored_logprobs = next_token_logprobs[jnp.arange(len(target_ids)), target_ids]
     token_logprobs.extend(float(logprob) for logprob in jax.device_get(scored_logprobs))
