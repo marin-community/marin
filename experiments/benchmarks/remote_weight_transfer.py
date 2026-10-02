@@ -37,7 +37,7 @@ from levanter.testing.weight_broadcast import broadcast_source
 from levanter.tokenizers import load_tokenizer
 from skyrl_train.inference_engines import remote_inference_engine
 
-SKYRL_REVISION = "c2ed0d0b795e884ac452841d48455ceba06d5f54"
+SKYRL_REVISION = "b3297eddfe67358004ee925a42c9ffca81ac8f6e"
 
 
 class ReadyServer(uvicorn.Server):
@@ -51,6 +51,13 @@ class ReadyServer(uvicorn.Server):
 
 
 async def run(args):
+    repository = Path(__file__).resolve().parents[2]
+    if (repository / ".git").exists():
+        checkout_revision = subprocess.check_output(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"], text=True
+        ).strip()
+        if checkout_revision != args.marin_revision:
+            raise ValueError(f"Expected Marin {args.marin_revision}, found {checkout_revision}")
     skyrl_root = Path(remote_inference_engine.__file__).resolve().parents[3]
     revision = subprocess.check_output(["git", "-C", str(skyrl_root), "rev-parse", "HEAD"], text=True).strip()
     if revision != SKYRL_REVISION:
@@ -87,7 +94,6 @@ async def run(args):
         )
     with tempfile.TemporaryDirectory(prefix="native-weight-gate-") as scratch:
         scratch = Path(scratch)
-        repository = Path(__file__).resolve().parents[2]
         (scratch / "tokenizer").mkdir()
         tokenizer = load_tokenizer(str(stage_gpt2_tokenizer(repository / "lib/levanter/tests", scratch / "tokenizer")))
         with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
@@ -169,7 +175,7 @@ async def run(args):
                 installed = await client.finish_weight_reload()
                 assert installed == {"model_version": 2}
                 assert all(not np.any(np.asarray(value)) for value in cache_arrays())
-                for leaf in jax.tree.leaves(eqx.filter(server.model, eqx.is_array)):
+                for leaf in jax.tree.leaves(eqx.filter(server.inference_context.model, eqx.is_array)):
                     assert leaf.devices() == {jax.devices()[0]}
                 new = await client.generate(request)
                 assert new["response_ids"] == [[0, 0]] and new["response_ids"] != old["response_ids"]
@@ -200,6 +206,7 @@ async def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--marin-revision", required=True, help="Source revision supplied by the job launcher")
     parser.add_argument("--backend", choices=["gloo", "nccl"], required=True)
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], required=True)
     parser.add_argument("--sender-device", default="0")

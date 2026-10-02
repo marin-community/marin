@@ -119,8 +119,10 @@ reload bracket and publication receipt; the repository's SkyRL pin is unchanged.
 a native HTTP server, and a separate Torch sender with a bounded synthetic Llama.
 It checks incomplete and stale publications, exact generation IDs/logprobs, cache
 reset, and one successful model-version transition. The script requires SkyRL
-commit `c2ed0d0b795e884ac452841d48455ceba06d5f54` on `PYTHONPATH` and records both
-repository revisions and runtime versions in its JSON result. It does not launch
+commit `b3297eddfe67358004ee925a42c9ffca81ac8f6e` on `PYTHONPATH` and records both
+repository revisions and runtime versions in its JSON result. Pass the native
+source revision explicitly; a local checkout verifies it against Git, while an
+Iris source bundle records the revision supplied by its launcher. It does not launch
 training or change the repository's fork pin.
 
 In a prepared CPU environment with serving and Torch dependencies:
@@ -128,7 +130,7 @@ In a prepared CPU environment with serving and Torch dependencies:
 ```bash
 PYTHONPATH=/path/to/MarinSkyRL/skyrl-train JAX_PLATFORMS=cpu \
   uv run --no-sync python -m experiments.benchmarks.remote_weight_transfer \
-  --backend gloo --dtype bfloat16 --output /tmp/weight-transfer-gloo.json
+  --marin-revision "$(git rev-parse HEAD)" --backend gloo --dtype bfloat16 --output /tmp/weight-transfer-gloo.json
 ```
 
 For the pending NCCL gate, use a node with two GPUs and a prepared JAX/Torch CUDA
@@ -140,7 +142,7 @@ receiver sees one JAX device, and that installed arrays stay on that device.
 CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_PREALLOCATE=false \
   PYTHONPATH=/path/to/MarinSkyRL/skyrl-train \
   uv run --no-sync python -m experiments.benchmarks.remote_weight_transfer \
-  --backend nccl --sender-device 0 --receiver-device 1 --dtype bfloat16 \
+  --marin-revision "$(git rev-parse HEAD)" --backend nccl --sender-device 0 --receiver-device 1 --dtype bfloat16 \
   --output /tmp/weight-transfer-nccl.json
 ```
 

@@ -197,9 +197,6 @@ def test_http_broadcast_installs_only_complete_weights_and_preserves_failed_vers
             if recipe == "hero":
                 caches = server.inference_context.engine.gen_state.cache.caches
                 assert any(np.any(np.asarray(layer.k_history.history.array)) for layer in caches)
-            if recipe == "hero":
-                caches = server.inference_context.engine.gen_state.cache.caches
-                assert any(np.any(np.asarray(layer.k_history.history.array)) for layer in caches)
             ready = client.post("/begin_weight_reload").json()
             # A delayed packet from a discarded publication cannot poison the new one.
             assert (
@@ -214,7 +211,6 @@ def test_http_broadcast_installs_only_complete_weights_and_preserves_failed_vers
             installed = client.post("/finish_weight_reload", json=ready)
             assert installed.status_code == 200, installed.text
             assert installed.json()["model_version"] == 2
-            assert all(not np.any(np.asarray(value)) for value in cache_arrays())
             assert all(not np.any(np.asarray(value)) for value in cache_arrays())
             new = generate()
             assert new["token_ids"] == [0, 0]
