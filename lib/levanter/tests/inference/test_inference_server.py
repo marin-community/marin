@@ -9,6 +9,7 @@ import math
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 
 import equinox as eqx
 import haliax as hax
@@ -1221,6 +1222,21 @@ class _ReadyHttpServer(uvicorn.Server):
         self.ready.set()
 
 
+@asynccontextmanager
+async def _live_http_server(app):
+    ready = asyncio.Event()
+    http_server = _ReadyHttpServer(app, ready)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
+        try:
+            await asyncio.wait_for(ready.wait(), 10)
+            yield f"http://127.0.0.1:{listener.getsockname()[1]}"
+        finally:
+            http_server.should_exit = True
+            await serving
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", ["completions", "chat/completions"])
 @pytest.mark.parametrize("disconnect", [False, True])
@@ -1250,15 +1266,9 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
                 if line.startswith("data: "):
                     await received.put(line[6:])
 
-    ready = asyncio.Event()
-    http_server = _ReadyHttpServer(server.app, ready)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
-        await asyncio.wait_for(ready.wait(), 10)
-        try:
-            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=30) as client:
+    try:
+        async with _live_http_server(server.app) as base_url:
+            async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
                 streaming = asyncio.create_task(read_stream(client))
                 peer = asyncio.create_task(client.post(f"/v1/{endpoint}", json=body, headers={"x-request-id": "peer"}))
                 collected = []
@@ -1324,12 +1334,10 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
                     streaming.cancel()
                     peer.cancel()
                     await asyncio.gather(streaming, peer, return_exceptions=True)
-        finally:
-            for gate in release:
-                gate.set()
-            http_server.should_exit = True
-            await serving
-            context.shutdown()
+    finally:
+        for gate in release:
+            gate.set()
+        context.shutdown()
 
 
 def test_streamed_prompt_batches_keep_choice_ids_and_logprobs(exact_token_client):
@@ -1416,15 +1424,10 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
     tokenizer = _AliasingChatTokenizer()
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, _BlockingTokenModel(entered, release), tokenizer)
-    ready = asyncio.Event()
-    http_server = _ReadyHttpServer(server.app, ready)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
-        try:
-            await asyncio.wait_for(ready.wait(), 10)
+    try:
+        async with _live_http_server(server.app) as base_url:
             engine = remote.RemoteInferenceEngine(
-                f"127.0.0.1:{listener.getsockname()[1]}",
+                base_url.removeprefix("http://"),
                 "gpt2",
                 "vllm",
                 tokenizer,
@@ -1472,11 +1475,9 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
                 await asyncio.gather(pending, return_exceptions=True)
                 if pausing is not None:
                     await asyncio.gather(pausing, return_exceptions=True)
-        finally:
-            release.set()
-            http_server.should_exit = True
-            await serving
-            server.inference_context.shutdown()
+    finally:
+        release.set()
+        server.inference_context.shutdown()
 
 
 @pytest.mark.parametrize("prompt", [[0, 1, 3, 2], [0, 1, 3, 2, 0, 1, 2, 3]])
@@ -1546,25 +1547,16 @@ async def test_remote_skyrl_teacher_scores_exact_full_context_and_masked_rows(ex
         evidence=kind,
         top_k=teacher.top_k,
     )
-    ready = asyncio.Event()
-    http_server = _ReadyHttpServer(exact_token_server.app, ready)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
+    async with _live_http_server(exact_token_server.app) as base_url:
         oracle = teacher_oracle.OpenAICompatibleTeacherOracle(
             teacher=teacher,
-            endpoint=specs.TeacherEndpointSpec(
-                url=f"http://127.0.0.1:{listener.getsockname()[1]}/v1", auth=None, max_concurrency=1
-            ),
+            endpoint=specs.TeacherEndpointSpec(url=f"{base_url}/v1", auth=None, max_concurrency=1),
             api_key=None,
         )
         try:
-            await asyncio.wait_for(ready.wait(), 10)
             evidence = await oracle.score(request)
         finally:
             await oracle.close()
-            http_server.should_exit = True
-            await serving
     assert torch.equal(evidence.valid_mask, mask)
     chosen_first = -math.log1p(3 * math.exp(-11))
     if kind is specs.TeacherEvidenceKind.CHOSEN_TOKEN:
