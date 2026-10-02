@@ -81,6 +81,20 @@ with an `abort` finish reason. Other groups in the batch continue; the cancelled
 response does not wait for them to finish. Disconnecting a client cancels its group
 and releases the request ID. No separate remote cancellation endpoint is exposed.
 
+### Teacher scoring
+
+Completion requests with `max_tokens=0` return no generated tokens. With `echo=true`
+and positive `logprobs`, they score the exact prompt sequence, including a sequence
+that fills `max_seq_len`. Scoring uses the installed model under the same lock as
+weight publication and generation; it does not allocate or reset paged decode state.
+Paused requests still return `abort` and are not scored.
+
+This supports SkyRL's external `OpenAICompatibleTeacherOracle` chosen-token and
+top-K distribution evidence. Set `return_tokens_as_token_ids=true` to retain exact
+candidate identities. The existing first-token sentinel is zero because that token
+has no preceding context. Arbitrary student-selected token scoring and rollout
+candidate capture are separate contracts and are not provided by this endpoint.
+
 ### Remote weight-sync pause
 
 `POST /pause_generation` takes `{"mode": "abort", "clear_cache": true}`. It closes

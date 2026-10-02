@@ -5,9 +5,11 @@ import asyncio
 import dataclasses
 import json
 import logging
+import math
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 
 import equinox as eqx
 import haliax as hax
@@ -1220,6 +1222,21 @@ class _ReadyHttpServer(uvicorn.Server):
         self.ready.set()
 
 
+@asynccontextmanager
+async def _live_http_server(app):
+    ready = asyncio.Event()
+    http_server = _ReadyHttpServer(app, ready)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
+        try:
+            await asyncio.wait_for(ready.wait(), 10)
+            yield f"http://127.0.0.1:{listener.getsockname()[1]}"
+        finally:
+            http_server.should_exit = True
+            await serving
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", ["completions", "chat/completions"])
 @pytest.mark.parametrize("disconnect", [False, True])
@@ -1249,15 +1266,9 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
                 if line.startswith("data: "):
                     await received.put(line[6:])
 
-    ready = asyncio.Event()
-    http_server = _ReadyHttpServer(server.app, ready)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
-        await asyncio.wait_for(ready.wait(), 10)
-        try:
-            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=30) as client:
+    try:
+        async with _live_http_server(server.app) as base_url:
+            async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
                 streaming = asyncio.create_task(read_stream(client))
                 peer = asyncio.create_task(client.post(f"/v1/{endpoint}", json=body, headers={"x-request-id": "peer"}))
                 collected = []
@@ -1323,12 +1334,10 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
                     streaming.cancel()
                     peer.cancel()
                     await asyncio.gather(streaming, peer, return_exceptions=True)
-        finally:
-            for gate in release:
-                gate.set()
-            http_server.should_exit = True
-            await serving
-            context.shutdown()
+    finally:
+        for gate in release:
+            gate.set()
+        context.shutdown()
 
 
 def test_streamed_prompt_batches_keep_choice_ids_and_logprobs(exact_token_client):
@@ -1415,15 +1424,10 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
     tokenizer = _AliasingChatTokenizer()
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, _BlockingTokenModel(entered, release), tokenizer)
-    ready = asyncio.Event()
-    http_server = _ReadyHttpServer(server.app, ready)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
-        try:
-            await asyncio.wait_for(ready.wait(), 10)
+    try:
+        async with _live_http_server(server.app) as base_url:
             engine = remote.RemoteInferenceEngine(
-                f"127.0.0.1:{listener.getsockname()[1]}",
+                base_url.removeprefix("http://"),
                 "gpt2",
                 "vllm",
                 tokenizer,
@@ -1471,8 +1475,98 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
                 await asyncio.gather(pending, return_exceptions=True)
                 if pausing is not None:
                     await asyncio.gather(pausing, return_exceptions=True)
+    finally:
+        release.set()
+        server.inference_context.shutdown()
+
+
+@pytest.mark.parametrize("prompt", [[0, 1, 3, 2], [0, 1, 3, 2, 0, 1, 2, 3]])
+def test_teacher_echo_scores_without_generating_at_context_limit(exact_token_client, prompt):
+    response = exact_token_client.post(
+        "/v1/completions",
+        json={
+            "model": "gpt2",
+            "prompt": prompt,
+            "max_tokens": 0,
+            "echo": True,
+            "logprobs": 2,
+            "return_tokens_as_token_ids": True,
+            "return_token_ids": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    choice = payload["choices"][0]
+    assert payload["usage"]["completion_tokens"] == 0
+    assert choice["token_ids"] == []
+    assert choice["logprobs"]["tokens"] == [f"token_id:{token}" for token in prompt]
+    assert len(choice["logprobs"]["top_logprobs"]) == len(prompt)
+    expected = [0.0, -math.log1p(3 * math.exp(-12)), -math.log1p(3 * math.exp(-11))]
+    expected.extend([-math.log(4)] * (len(prompt) - 3))
+    assert choice["logprobs"]["token_logprobs"] == pytest.approx(expected, abs=1e-6)
+    for position, scores in enumerate(choice["logprobs"]["top_logprobs"][1:], 1):
+        assert len(scores) == 2
+        if position < 3:
+            assert scores[f"token_id:{prompt[position]}"] == pytest.approx(expected[position], abs=1e-6)
+
+
+@pytest.mark.integration
+@pytest.mark.torch
+@pytest.mark.asyncio
+@pytest.mark.parametrize("evidence_kind", ["chosen_token", "topk_distribution"])
+async def test_remote_skyrl_teacher_scores_exact_full_context_and_masked_rows(exact_token_server, evidence_kind):
+    torch = pytest.importorskip("torch")
+    specs = pytest.importorskip("marinskyrl.distillation")
+    evidence_types = pytest.importorskip("skyrl_train.distillation")
+    teacher_oracle = pytest.importorskip("skyrl_train.inference_engines.openai_teacher_oracle")
+    kind = specs.TeacherEvidenceKind(evidence_kind)
+    fingerprint = "sha256:" + "a" * 64
+    teacher = specs.OpenAICompatibleTeacherSpec(
+        id="teacher",
+        source=specs.TeacherSource.OPENAI_COMPATIBLE,
+        placement=specs.TeacherPlacement.EXTERNAL,
+        model=specs.TeacherModelSpec(path="gpt2", revision="synthetic-v0"),
+        evidence=kind,
+        endpoints=(),
+        tokenizer_fingerprint=fingerprint,
+        max_sequence_length=8,
+        request_timeout_seconds=30,
+        top_k=2 if kind is specs.TeacherEvidenceKind.TOPK_DISTRIBUTION else None,
+    )
+    mask = torch.tensor([[True, True, False, False, False, False], [True] * 6])
+    request = evidence_types.TeacherScoreRequest(
+        trajectory_ids=("short", "full"),
+        route_ids=("test", "test"),
+        teacher_id="teacher",
+        tokenizer_fingerprint=fingerprint,
+        plan_version="test-v0",
+        prompt_token_ids=torch.tensor([[0, 1], [0, 1]]),
+        prompt_mask=torch.ones((2, 2), dtype=torch.bool),
+        response_token_ids=torch.tensor([[3, 2, 0, 0, 0, 0], [3, 2, 0, 1, 2, 3]]),
+        response_mask=mask,
+        evidence=kind,
+        top_k=teacher.top_k,
+    )
+    async with _live_http_server(exact_token_server.app) as base_url:
+        oracle = teacher_oracle.OpenAICompatibleTeacherOracle(
+            teacher=teacher,
+            endpoint=specs.TeacherEndpointSpec(url=f"{base_url}/v1", auth=None, max_concurrency=1),
+            api_key=None,
+        )
+        try:
+            evidence = await oracle.score(request)
         finally:
-            release.set()
-            http_server.should_exit = True
-            await serving
-            server.inference_context.shutdown()
+            await oracle.close()
+    assert torch.equal(evidence.valid_mask, mask)
+    chosen_first = -math.log1p(3 * math.exp(-11))
+    if kind is specs.TeacherEvidenceKind.CHOSEN_TOKEN:
+        expected = torch.full((2, 6), -math.log(4))
+        expected[:, 0] = chosen_first
+        expected[~mask] = torch.nan
+        torch.testing.assert_close(evidence.chosen_logprobs, expected, rtol=0, atol=1e-6, equal_nan=True)
+    else:
+        expected_ids = torch.tensor([[[3, 0]] + [[0, 1]] * 5] * 2)
+        assert torch.equal(evidence.topk_indices[mask], expected_ids[mask])
+        expected = torch.full((2, 6, 2), -math.log(4))
+        expected[:, 0] = torch.tensor([chosen_first, chosen_first - 11])
+        torch.testing.assert_close(evidence.topk_logprobs[mask], expected[mask], rtol=0, atol=1e-6)
