@@ -1,0 +1,37 @@
+name: "Shellbox - Unit"
+
+on:
+  pull_request:
+    paths:
+      - "lib/shellbox/**"
+      - "config/external/harbor/**"
+      - ".github/workflows/shellbox-unit.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "lib/shellbox/**"
+      - "config/external/harbor/**"
+      - ".github/workflows/shellbox-unit.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agent:
+    name: shellbox-agent-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: |
+            config/external/harbor/uv.lock
+            lib/shellbox/pyproject.toml
+      - name: Test Shellbox direct requests
+        run: |
+          uv run --project config/external/harbor --frozen --with-editable ./lib/shellbox --with pytest \
+            pytest -c lib/shellbox/pyproject.toml lib/shellbox/tests/test_bash_agent.py -q
