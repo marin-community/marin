@@ -27,6 +27,8 @@ from safetensors.numpy import save_file
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
+from experiments.benchmarks.matched_comparison import compare_fixture
+
 _INITIALIZATION_SEED = 17
 _AUXILIARY_SEED = 23
 _MANIFEST_FILENAME = "manifest.json"
@@ -235,9 +237,13 @@ def main() -> None:
             run.add_argument("--execution-mode", choices=["eager", "compiled"], default="eager")
             run.add_argument("--kv-cache-memory-bytes", type=int, default=_TINY_KV_CACHE_BYTES)
             run.add_argument("--compile-workers", type=int, default=2)
+    compare = commands.add_parser("compare")
+    compare.add_argument("--fixture", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "export":
         export_fixture(args.output.resolve(), args.recipe)
+    elif args.command == "compare":
+        compare_fixture(args.fixture.resolve())
     elif args.command == "native":
         run_native(args.fixture.resolve(), args.hardware_label, args.expert_axis_size)
     else:

@@ -20,13 +20,15 @@ def test_benchmark_excludes_compile_and_warmup_from_steady_state():
     # Independent recorded measurements: cold=60 seconds, warmup=10, then 2 and 3.
     measurements = iter(
         BatchMeasurement(elapsed=elapsed, first_token=[0.5, 1.0], tokens=[[4, 5, 6], [7, 8, 9]])
-        for elapsed in [60, 10, 2, 3]
+        for elapsed in [60, 10, 2, 3, 90]
     )
     result = measure_batches(workload, lambda _: next(measurements), warmup_batches=1, measured_batches=2)
     assert result.first_batch_including_compile.elapsed == 60
     assert result.warmup[0].elapsed == 10
     result = dataclasses.asdict(result)
     # Six generated tokens in 2 and 3 seconds; prompts must not enter the numerator.
+    assert result["validation_tokens"] == [[4, 5, 6], [7, 8, 9]]
+    assert result["validation_output_sha256"] == result["samples"][0]["output_sha256"]
     assert result["median_output_tokens_per_second"] == 2.5
     assert result["samples"][0]["mean_time_after_first_token_per_output_token"] == 0.625
 

@@ -93,6 +93,8 @@ def main():
         "evidence_kind": "checkpoint",
         "vllm_distribution_source": None if direct_url is None else json.loads(direct_url),
         "engine_args": engine_args,
+        "hf_config": engine.vllm_config.model_config.hf_config.to_dict(),
+        "effective_dtype": str(engine.vllm_config.model_config.dtype).removeprefix("torch."),
         "effective_execution": {
             "compilation_mode": str(engine.vllm_config.compilation_config.mode),
             "cudagraph_mode": str(engine.vllm_config.compilation_config.cudagraph_mode),
