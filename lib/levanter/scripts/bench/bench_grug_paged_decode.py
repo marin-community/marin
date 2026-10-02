@@ -23,6 +23,7 @@ from rigging.provenance import launch_provenance
 from levanter.grug.attention import ragged_paged_attention
 
 WARMUP_STEPS = 3
+HOST_TIMING_BOUNDARY = "host_submit_and_synchronize"
 MAX_ERROR_EXAMPLES = 8
 ERROR_ATOL = 1e-4
 ERROR_RTOL = 1e-4
@@ -251,7 +252,7 @@ def main():
         json.dumps(
             {
                 "kernel": "grug_paged_decode",
-                "timing_boundary": "host_submit_and_synchronize",
+                "timing_boundary": HOST_TIMING_BOUNDARY,
                 "implementation": args.implementation,
                 "shape": vars(args),
                 "dtype": args.dtype,
@@ -346,7 +347,7 @@ def _flashinfer_baseline(inputs, expected, args):
         "compile_time": None,
         "xla_flags": os.environ.get("XLA_FLAGS", ""),
         "backend_env": {"CUDA_HOME": os.environ.get("CUDA_HOME", "")},
-        "timing_boundary": "host_submit_and_synchronize",
+        "timing_boundary": HOST_TIMING_BOUNDARY,
         "steady_state_time": statistics.median(times),
         "first_run_including_jit_time": first_run,
         "error": {"max_abs_vs_grug": difference.max().item(), "mean_abs_vs_grug": difference.mean().item()},
@@ -406,7 +407,7 @@ def _tpu_vllm_baseline(inputs, expected, args):
         "device_type": jax.devices()[0].device_kind,
         "device_count": 1,
         "block_sizes": "fork_default",
-        "timing_boundary": "host_submit_and_synchronize",
+        "timing_boundary": HOST_TIMING_BOUNDARY,
         "compile_time": measurements.compile_time,
         "first_run_time": measurements.first_run_time,
         "steady_state_time": measurements.steady_state_time,
