@@ -43,6 +43,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
+    PagedAttentionImplementation,
     RotaryConfig,
     align_kv_heads,
     apply_rotary_embedding,
@@ -233,6 +234,7 @@ class SnowballConfig(HFCompatConfig):
     qk_mult: float = _DEFAULT_QK_MULT
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
+    inference_attention_implementation: PagedAttentionImplementation | None = None
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
@@ -537,6 +539,9 @@ class SnowballAttention(eqx.Module):
         cache = cache.update(batch_info, hax.named(cache_k, kv_axes), hax.named(cache_v, kv_axes))
         q = (q * cfg.qk_mult).reshape(x.shape[0], cfg.num_kv_heads, cfg.num_heads // cfg.num_kv_heads, head_dim)
         q = reshard(q, P(None, "model", None, None))
+        implementation = cfg.inference_attention_implementation
+        if implementation is None and cfg.attention_implementation == "reference":
+            implementation = "reference"
         out = ragged_paged_attention(
             q,
             cache.kv_pages.array,
@@ -546,7 +551,7 @@ class SnowballAttention(eqx.Module):
             batch_info.num_seqs,
             sm_scale=head_dim**-0.5,
             sliding_window=None if use_long else cfg.sliding_window,
-            implementation="reference" if cfg.attention_implementation == "reference" else None,
+            implementation=implementation,
         ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
         return self._project_output(x, out, v), cache
 
