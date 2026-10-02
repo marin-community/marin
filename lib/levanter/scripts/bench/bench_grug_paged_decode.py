@@ -66,7 +66,7 @@ def _error_metrics(actual, expected):
     }
 
 
-def _mismatch_oracle(inputs, args, comparisons):
+def _mismatch_oracle(inputs, args, comparisons, actual, reference):
     q, cache, _, table, _, _ = inputs
     indices = sorted({tuple(row["index"]) for comparison in comparisons for row in comparison["mismatch_examples"]})
     rows = []
@@ -79,14 +79,27 @@ def _mismatch_oracle(inputs, args, comparisons):
         scores = np.asarray(keys, np.float64) @ query * scale
         probabilities = np.exp(scores - scores.max())
         expected = probabilities @ np.asarray(values, np.float64) / probabilities.sum()
+        rounded = float(np.asarray(expected, dtype=q.dtype))
+        index = (batch, head, group, dim)
+        tolerance = 1e-4 + 1e-4 * abs(rounded)
         rows.append(
             {
-                "index": [batch, head, group, dim],
+                "index": list(index),
                 "float64_expected": float(expected),
-                "rounded_expected": float(np.asarray(expected, dtype=q.dtype)),
+                "rounded_expected": rounded,
+                "actual": float(actual[index]),
+                "reference": float(reference[index]),
+                "actual_outside_tolerance": abs(float(actual[index]) - rounded) > tolerance,
+                "reference_outside_tolerance": abs(float(reference[index]) - rounded) > tolerance,
             }
         )
-    return rows
+    return {
+        "coverage": f"up to {MAX_ERROR_EXAMPLES} mismatches from each pairwise comparison",
+        "checked_coordinates": len(rows),
+        "actual_failures": sum(row["actual_outside_tolerance"] for row in rows),
+        "reference_failures": sum(row["reference_outside_tolerance"] for row in rows),
+        "rows": rows,
+    }
 
 
 def main():
@@ -168,7 +181,7 @@ def main():
             )(*inputs)
             error["ieee_vs_reference"] = _error_metrics(ieee, reference)
             error["vs_ieee"] = _error_metrics(actual, ieee)
-        error["mismatch_float64_oracle"] = _mismatch_oracle(inputs, args, list(error.values()))
+        error["mismatch_float64_oracle"] = _mismatch_oracle(inputs, args, list(error.values()), actual, reference)
     device_profile = None
     if args.profile_device:
         profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
