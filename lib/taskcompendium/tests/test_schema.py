@@ -49,26 +49,31 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
             "tool_providers": {"company": {"action_interface": "workplace:v1", "seed_sha256": "b" * 64}},
         },
         verifier={"kind": "script", "parameters_json": '{"entrypoint":"private/check.py","image":"private/image"}'},
-        resources=[
-            {"path": "input.txt", "visibility": "worker", "source": {"kind": "inline_text", "content": "café\n"}},
-            {
-                "path": "input.txt",
-                "visibility": "oracle",
-                "source": {"kind": "inline_binary", "content_base64": "AP8="},
-            },
-            {
-                "path": "project",
-                "visibility": "worker",
-                "source": {"kind": "dataset_file", "path": "archives/project.tar.gz", "sha256": "c" * 64},
-                "format": "tar_gz",
-            },
-            {
-                "path": "private/check.py",
-                "visibility": "verifier",
-                "source": {"kind": "inline_text", "content": "raise SystemExit(0)\n"},
-                "executable": True,
-            },
-        ],
+        resources={
+            "all": [{"path": "readme.txt", "source": {"kind": "inline_text", "content": "Shared inputs."}}],
+            "worker": [
+                {"path": "input.txt", "source": {"kind": "inline_text", "content": "café\n"}},
+                {
+                    "path": "project",
+                    "source": {"kind": "dataset_file", "path": "archives/project.tar.gz", "sha256": "c" * 64},
+                    "format": "tar_gz",
+                },
+                {
+                    "path": "fixtures",
+                    "source": {"kind": "dataset_directory", "path": "projects/example/fixtures"},
+                    "format": "directory",
+                },
+            ],
+            "oracle": [{"path": "input.txt", "source": {"kind": "inline_binary", "content_base64": "AP8="}}],
+            "verifier": [
+                {
+                    "path": "private/check.py",
+                    "source": {"kind": "inline_text", "content": "raise SystemExit(0)\n"},
+                    "executable": True,
+                },
+                {"path": "input.txt", "source": {"kind": "inline_text", "content": "private evaluator fixture"}},
+            ],
+        },
     )
     path = tmp_path / "specification.json"
     path.write_text(json.dumps(wire))
@@ -89,8 +94,15 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
     assert persisted["tags"] == ["", "difficulty:7", "custom label", "custom label"]
     assert persisted["environment_requirements"] == wire["environment_requirements"]
     assert persisted["verifier"] == wire["verifier"]
-    assert persisted["resources"][1]["source"] == {"kind": "inline_binary", "content_base64": "AP8="}
-    assert persisted["resources"][2]["format"] == "tar_gz"
+    assert persisted["resources"]["oracle"][0]["source"] == {"kind": "inline_binary", "content_base64": "AP8="}
+    assert persisted["resources"]["worker"][1]["format"] == "tar_gz"
+    assert persisted["resources"]["worker"][2] == {
+        "path": "fixtures",
+        "source": {"kind": "dataset_directory", "path": "projects/example/fixtures"},
+        "format": "directory",
+        "executable": False,
+    }
+    assert set(persisted["resources"]) == {"all", "worker", "oracle", "verifier"}
     path.write_text(loaded.model_dump_json())
     assert read_specification(path).model_dump(mode="json") == persisted
     with pytest.raises(NotImplementedError):
@@ -112,10 +124,22 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
                 }
             )
         },
+    ]
+    + [
+        {"resources": {role: [{"path": "input.txt", "source": {"kind": "inline_text", "content": "x"}}]}}
+        for role in ("all", "worker", "oracle", "verifier")
+    ]
+    + [
         {
-            "resources": [
-                {"path": "input.txt", "visibility": "worker", "source": {"kind": "inline_text", "content": "x"}}
-            ]
+            "resources": {
+                "worker": [
+                    {
+                        "path": "project",
+                        "source": {"kind": "dataset_directory", "path": "tasks/example/project"},
+                        "format": "directory",
+                    }
+                ]
+            }
         },
         {"answer_type": AnswerType.FILE},
         {"answer_type": AnswerType.STATE},
@@ -136,28 +160,50 @@ def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path
 
 
 @pytest.mark.parametrize("path", ["../private.txt", "/private.txt", "https://example.com/private.txt", "a/../b"])
-def test_dataset_resource_references_cannot_escape_the_pinned_dataset(specification, path):
+@pytest.mark.parametrize("source_kind", ["dataset_file", "dataset_directory"])
+def test_dataset_resource_references_cannot_escape_the_pinned_dataset(specification, path, source_kind):
     wire = specification.model_dump()
-    wire["resources"] = [
-        {
-            "path": "input.txt",
-            "visibility": "worker",
-            "source": {"kind": "dataset_file", "path": path, "sha256": "a" * 64},
-        }
-    ]
+    source = {"kind": source_kind, "path": path}
+    if source_kind == "dataset_file":
+        source["sha256"] = "a" * 64
+    wire["resources"] = {
+        "worker": [
+            {
+                "path": "input",
+                "source": source,
+                "format": "directory" if source_kind == "dataset_directory" else "file",
+            }
+        ]
+    }
     with pytest.raises(ValidationError):
         TaskSpec.model_validate(wire)
 
 
 @pytest.mark.parametrize("second_path", ["data", "DATA", "data/input.txt"])
-def test_resource_destinations_cannot_overwrite_another_mount(specification, second_path):
+@pytest.mark.parametrize("role", ["worker", "oracle", "verifier"])
+def test_shared_resource_destinations_cannot_overwrite_role_mounts(specification, second_path, role):
     wire = specification.model_dump()
-    wire["resources"] = [
-        {"path": path, "visibility": "worker", "source": {"kind": "inline_text", "content": "x"}}
-        for path in ("data", second_path)
-    ]
+    wire["resources"] = {
+        "all": [{"path": "data", "source": {"kind": "inline_text", "content": "shared"}}],
+        role: [{"path": second_path, "source": {"kind": "inline_text", "content": "private"}}],
+    }
     with pytest.raises(ValidationError):
         TaskSpec.model_validate(wire)
+
+
+def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(tmp_path, specification):
+    wire = specification.model_dump(mode="json")
+    wire["resources"] = {
+        role: [{"path": "fixture.txt", "source": {"kind": "inline_text", "content": content}}]
+        for role, content in (("worker", "public"), ("oracle", "gold"), ("verifier", "hidden test"))
+    }
+    path = tmp_path / "specification.json"
+    path.write_text(json.dumps(wire))
+    resources = read_specification(path).model_dump(mode="json")["resources"]
+    assert resources["all"] == []
+    assert resources["worker"][0]["source"]["content"] == "public"
+    assert resources["oracle"][0]["source"]["content"] == "gold"
+    assert resources["verifier"][0]["source"]["content"] == "hidden test"
 
 
 @pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e309"])

@@ -40,7 +40,7 @@ flowchart LR
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
 | `schema_version` | Version of the serialized spec: `0.18`. Readers reject other versions. |
-| `resources` | Files and archives with dataset-local or inline sources and explicit worker, oracle, or verifier visibility. |
+| `resources` | Files, directories, and archives grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
 A task has one final result. Ordered steps and reward aggregation are deferred. Descriptive difficulty can be a tag such as `difficulty:7`; there is no numeric difficulty field.
@@ -92,27 +92,61 @@ The task's `docker_image` describes worker initial state. A private executable v
 
 ## Resource mounts
 
+`resources` is a `ResourceGroups` object. Each group contains an ordered list of `TaskResource` mounts.
+
+| Group | Visibility |
+| --- | --- |
+| `all` | Shared inputs visible to the worker, oracle, and verifier. |
+| `worker` | Model-visible inputs. |
+| `oracle` | Private reference material. |
+| `verifier` | Private evaluation inputs. The verifier is the task's evaluator. |
+
+Private gold and hidden tests belong in `oracle` or `verifier`. An `all` resource is model-visible. A role receives `all` followed by its own mounts in its runtime-owned workspace root. Destinations must be distinct in that combined sequence, including case-folded collisions and file/directory ancestor collisions. Separate role-specific groups can reuse a relative path without sharing their content.
+
+Oracle resources are reserved for trusted reference-solution generation. Verifier resources are used when evaluating a candidate result. These groups declare access; they do not require an oracle or evaluator process to run.
+
+The worker mount root is `environment_requirements.working_directory` when declared; otherwise the selected runtime supplies it. For example, a resource at `project` with a working directory of `/app` appears at `/app/project`. Worker mounts are established before setup commands run in that working directory. `additional_workspace_roots` declares other accessible roots and does not change the resource destination base. Oracle and verifier mounts use separate private roots supplied by their runtimes.
+
 Each `TaskResource` declares one mount with these fields:
 
 | Field | Meaning |
 | --- | --- |
-| `path` | Normalized relative destination under the selected visibility's runtime-owned workspace root. |
-| `visibility` | `worker` for model-visible inputs, `oracle` for private reference material, or `verifier` for private evaluation inputs. |
+| `path` | Normalized relative destination under each receiving role's runtime-owned workspace root. |
 | `source` | One discriminated content source from the table below. |
-| `format` | `file` installs the source bytes at `path`; `tar_gz` extracts a gzip-compressed tar archive into the directory at `path`. |
-| `executable` | Executable bit for an ordinary file. It must be false for archives. |
+| `format` | `file` installs source bytes at `path`; `tar_gz` extracts a gzip-compressed tar archive into the directory at `path`; `directory` mounts a dataset directory recursively at `path`. |
+| `executable` | Executable bit for an ordinary file. It must be false for archives and directory mounts. |
 
 | Source `kind` | Fields |
 | --- | --- |
 | `inline_text` | `content`: literal UTF-8 text. |
 | `inline_binary` | `content_base64`: canonical base64 for binary bytes. |
 | `dataset_file` | `path`: normalized relative file path in `source.dataset` at `source.revision`; `sha256`: required lowercase SHA256 digest of its bytes. |
+| `dataset_directory` | `path`: normalized relative directory path in `source.dataset` at `source.revision`. Requires `format=directory`. |
 
-Dataset references inherit provenance from the task's `Source`. They cannot name an arbitrary URI or request a network fetch. A trusted caller acquires the pinned dataset files and checks their digest before materialization.
+Dataset references inherit provenance from the task's `Source`. They cannot name an arbitrary URI or request a network fetch. A trusted dataset resolver must acquire exactly the immutable snapshot identified by `Source.dataset` and `Source.revision`, and check each `dataset_file` digest before materialization. A directory's identity is that dataset, immutable revision, and relative path; there is no separate directory hash. A directory mount includes the complete recursive subtree and preserves empty directories, so a task need not enumerate every source file. A resolver must reject moving or unresolved revisions before mounting content.
 
-Destinations must be distinct within each visibility, including case-folded collisions and file/directory ancestor collisions. Separate visibility roots can reuse a relative path. A resource has one visibility; a worker mount cannot also be a private oracle or verifier mount.
+For a task whose Source names a pinned dataset snapshot, grouped resources can contain:
 
-An archive runtime must reject traversal, absolute paths, links, special files, and collisions during extraction, enforce byte limits, and normalize member modes to `644` or `755` according to the member's executable bits. The schema represents archive extraction, but no archive extractor or resource materializer is implemented here. Direct chat rejects every nonempty resource declaration before writing a task package.
+```json
+{
+  "resources": {
+    "all": [
+      {"path": "README.txt", "source": {"kind": "inline_text", "content": "Use the supplied project."}}
+    ],
+    "worker": [
+      {"path": "project", "source": {"kind": "dataset_directory", "path": "tasks/example/project"}, "format": "directory"}
+    ],
+    "oracle": [
+      {"path": "answer.txt", "source": {"kind": "inline_text", "content": "private reference"}}
+    ],
+    "verifier": [
+      {"path": "checks", "source": {"kind": "dataset_directory", "path": "tasks/example/checks"}, "format": "directory"}
+    ]
+  }
+}
+```
+
+Archive and directory runtimes must reject traversal, absolute paths, links, special files, and collisions, enforce byte limits, and normalize file modes to `644` or `755` according to the source executable bits. The schema represents mounts and archive extraction, but no directory resolver, archive extractor, or resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
 
 ## What can we import?
 

@@ -305,27 +305,36 @@ class DatasetFile(BaseModel):
         return value
 
 
-ResourceSource = Annotated[InlineText | InlineBinary | DatasetFile, Field(discriminator="kind")]
+class DatasetDirectory(BaseModel):
+    """A recursive directory subtree from the task's pinned Source snapshot."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["dataset_directory"] = "dataset_directory"
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        validate_relative_file_path(value)
+        return value
 
 
-class ResourceVisibility(StrEnum):
-    WORKER = "worker"
-    ORACLE = "oracle"
-    VERIFIER = "verifier"
+ResourceSource = Annotated[InlineText | InlineBinary | DatasetFile | DatasetDirectory, Field(discriminator="kind")]
 
 
 class ResourceFormat(StrEnum):
     FILE = "file"
     TAR_GZ = "tar_gz"
+    DIRECTORY = "directory"
 
 
 class TaskResource(BaseModel):
-    """One mount in a role's workspace, or a tar.gz extracted into a directory."""
+    """One file, archive extraction, or directory mount in a role's workspace."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: str
-    visibility: ResourceVisibility
     source: ResourceSource
     format: ResourceFormat = ResourceFormat.FILE
     executable: bool = False
@@ -333,8 +342,27 @@ class TaskResource(BaseModel):
     @model_validator(mode="after")
     def validate_resource(self) -> "TaskResource":
         validate_relative_file_path(self.path)
-        if self.format == ResourceFormat.TAR_GZ and self.executable:
-            raise ValueError("Archive directories cannot have a file executable flag")
+        if (self.format == ResourceFormat.DIRECTORY) != isinstance(self.source, DatasetDirectory):
+            raise ValueError("Directory mounts require a dataset-directory source and directory format")
+        if self.format != ResourceFormat.FILE and self.executable:
+            raise ValueError("Directory mounts cannot have a file executable flag")
+        return self
+
+
+class ResourceGroups(BaseModel):
+    """Shared inputs and role-specific mounts, with independent private roots."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    all: tuple[TaskResource, ...] = ()
+    worker: tuple[TaskResource, ...] = ()
+    oracle: tuple[TaskResource, ...] = ()
+    verifier: tuple[TaskResource, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_destinations(self) -> "ResourceGroups":
+        for resources in (self.worker, self.oracle, self.verifier):
+            validate_relative_file_paths(resource.path for resource in self.all + resources)
         return self
 
 
@@ -400,7 +428,7 @@ class TaskSpec(BaseModel):
     verifier: VerifierSpec
     source: Source
     schema_version: str = SCHEMA_VERSION
-    resources: tuple[TaskResource, ...] = ()
+    resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -409,10 +437,6 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
-        for visibility in ResourceVisibility:
-            validate_relative_file_paths(
-                resource.path for resource in self.resources if resource.visibility == visibility
-            )
         if len({function.name for function in self.final_tools}) != len(self.final_tools):
             raise ValueError("Advertised function names must be unique")
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:
@@ -435,7 +459,8 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
         )
         if value
     ]
-    if specification.resources:
+    resources = specification.resources
+    if resources.all or resources.worker or resources.oracle or resources.verifier:
         features.append("resources")
     if specification.answer_type in {AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE}:
         features.append(specification.answer_type.value)
