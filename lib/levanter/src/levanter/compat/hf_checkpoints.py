@@ -309,6 +309,11 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
     def from_hf_config(cls, hf_config: HfConfig) -> Self:
         pass
 
+    @classmethod
+    def matches_hf_config(cls, hf_config: HfConfig) -> bool:
+        """Disambiguate model recipes that share a Hugging Face configuration class."""
+        return True
+
     @abc.abstractmethod
     def hf_checkpoint_converter(cls) -> "HFCheckpointConverter":
         """The default HFCheckpointConverter to use for this config class. We recommend that you
@@ -611,9 +616,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
         # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
         # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
-        # inside `_infer_config_class` needs those imports to have already run.
+        # needs those imports to have already run.
         LmConfig.get_known_choices()
-        config_class = HFCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
+        with _patch_hf_hub_download():
+            hf_config = AutoConfig.from_pretrained(
+                ref.model_name_or_path, revision=ref.revision, trust_remote_code=trust_remote_code
+            )
+        config_class = type(hf_config)
         tokenizer = HFCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
 
         # TODO: this is very hacky, we should add another registry or something
@@ -625,16 +634,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 # requires max_seq_len; at runtime every registered choice is a concrete config
                 # that supplies a default, so the no-arg construction is safe.
                 instance = v()  # pyrefly: ignore[missing-argument]
-                # Building a candidate converter loads that model's default reference tokenizer, and
-                # some defaults are gated (e.g. gemma -> google/gemma-2b) so they 401 on nodes without
-                # access. A candidate whose converter cannot even be built is not the target model, so
-                # skip it rather than abort resolution of an unrelated model (e.g. grug_moe).
-                try:
-                    candidate_hf_config_name = instance.hf_checkpoint_converter().HfConfigClass.__name__
-                except Exception:
-                    logger.debug("Skipping %s during HF config resolution", v.__name__, exc_info=True)
-                    continue
-                if candidate_hf_config_name == config_class.__name__:
+                # Inspect the serialized config directly. Constructing each candidate's
+                # converter would load unrelated reference tokenizers (including gated models).
+                candidate_config_class = type(instance.to_hf_config(hf_config.vocab_size))
+                if candidate_config_class is config_class and v.matches_hf_config(hf_config):
                     LevConfigClass = v
                     break
         else:

@@ -276,6 +276,10 @@ class SnowballConfig(HFCompatConfig):
         return True
 
     @classmethod
+    def matches_hf_config(cls, hf_config: HfConfig) -> bool:
+        return getattr(hf_config, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY, 1) == GRUG_MOE_ARTIFACT_SCHEMA_VERSION
+
+    @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "SnowballConfig":
         _assert_snowball_recipe(hf_config)
         rope = RotaryConfig(theta=float(_hf_attr(hf_config, ("rope_theta",), 10000.0)))

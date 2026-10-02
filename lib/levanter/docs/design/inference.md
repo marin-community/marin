@@ -90,3 +90,45 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **Configuration**: Uses `draccus` for configuration management, consistent with other Levanter components
 - **Error Handling**: Comprehensive error reporting with proper HTTP status codes
 - **Logging**: Structured logging with configurable verbosity levels
+
+## Paged short-convolution history
+
+`levanter.layers.paged_short_conv` provides the causal history needed by Hero's
+key-projection, attention-output, and MoE-output convolutions. It uses the
+attention page allocation and keeps `min(page_size, kernel_size - 1)` input rows
+per physical page. A page-local ring updates in packed token order; each token
+reads its own request's preceding positions before overwriting a ring entry.
+This supports chunked prefill, incremental decode, and kernels wider than a page.
+
+`ShortConvPageCache` implements `PageCache.copy_page` and `reset`, so a cloned
+partial page receives independent convolution history. Padding does not update
+the rings. The implementation uses a JAX scan and matches the existing
+short-convolution reference's lag-ordered arithmetic. CPU FP32/BF16 parity covers
+mixed request order, page crossings, clone divergence, and reset. The native Hero model uses this history for incremental decode; accelerator
+validation remains pending.
+
+### Native Hero schema-v2 model
+
+`HeroConfig` and `HeroLMHeadModel` load schema-v2 `grug_moe` exports through
+`HFCheckpointConverter`. The recipe preserves latent routed experts, independent
+shared experts, local/global KV-head counts, all three short-convolution sites,
+and the checkpoint's fused or unfused RoPE convention. Snowball schema-v1 and
+Hero schema-v2 configurations are resolved separately. Packed expert banks and
+per-expert export weights map to the same native model.
+
+Paged prefill and decode use `HeroLayerCache`, combining KV pages with the
+short-convolution histories described above. Supply absolute token positions and
+a `compact_grug_mesh` with context size one. Packed token buffer lengths must
+be divisible by the data and expert mesh axes. Convolution currently gathers
+packed activations for a causal scan; this is a correctness baseline and still
+needs accelerator profiling. The stored KV layout duplicates global heads to
+the maximum local/global count so all layers share one scan shape.
+
+CPU tests compare the native full forward path with the experiment using
+nonidentity convolution taps, both RoPE conventions, packed documents, and both
+checkpoint layouts. Mixed-request incremental tests compare against full forward
+across page and sliding-window boundaries. FP32 parity checks pin highest matmul
+precision, as the default GPU precision can round full-sequence and incremental
+matrix shapes differently. One H100 default-precision case exceeded the 1e-4
+comparison tolerance; default-precision parity remains a separate validation target.
+Full-checkpoint accelerator throughput and matched vLLM performance remain unmeasured.
