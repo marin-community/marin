@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import tempfile
+from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -18,9 +19,12 @@ from vllm.v1.worker.worker_base import WorkerBase
 
 def install_final_state_capture(model) -> None:
     """Install untimed eager hooks after engine startup; leave outputs and weights unchanged."""
+    if model.model.config.is_hero or len(model.model.layers) > 2 or model.model.config.hidden_dim > 512:
+        raise ValueError("Stage capture supports at most two Snowball layers of width512")
     records = []
     handles = []
-    model.prefix_diagnostic_capture = (records, handles)
+    restores = []
+    model.prefix_diagnostic_capture = (records, handles, restores)
 
     def capture_inputs(_module, _args, kwargs):
         records.append(
@@ -61,6 +65,57 @@ def install_final_state_capture(model) -> None:
             }
         )
 
+    def output_hook(site, layer_index=None):
+        def capture(_module, _args, output):
+            records.append(
+                {"site": site, "layer_index": layer_index, "values": output.detach().float().cpu().tolist()}
+            )
+
+        return capture
+
+    def input_hook(site, layer_index):
+        def capture(_module, args):
+            records.append(
+                {"site": site, "layer_index": layer_index, "values": args[0].detach().float().cpu().tolist()}
+            )
+
+        return capture
+
+    handles.append(model.model.embed_tokens.register_forward_hook(output_hook("embedding")))
+    handles.append(model.model.embed_gated_norm.register_forward_hook(output_hook("post_embed_norm_gate")))
+    for layer_index, layer in enumerate(model.model.layers):
+        handles.append(layer.input_layernorm.register_forward_pre_hook(input_hook("layer_input", layer_index)))
+        handles.append(layer.attn_gated_norm.register_forward_hook(output_hook("attention_input", layer_index)))
+        handles.append(layer.self_attn.register_forward_hook(output_hook("attention_output", layer_index)))
+        handles.append(
+            layer.post_attention_layernorm.register_forward_pre_hook(
+                input_hook("post_attention_residual", layer_index)
+            )
+        )
+        handles.append(layer.mlp_gated_norm.register_forward_hook(output_hook("mlp_input", layer_index)))
+        handles.append(layer.mlp.register_forward_hook(output_hook("routed_output", layer_index)))
+        handles.append(layer.shared_expert.register_forward_hook(output_hook("shared_output", layer_index)))
+        handles.append(layer.register_forward_hook(output_hook("layer_output", layer_index)))
+        router = layer.mlp.experts.router
+        original = router.select_experts
+
+        def capture_routing(*args, _original=original, _layer_index=layer_index, **kwargs):
+            weights, indices = _original(*args, **kwargs)
+            records.append(
+                {
+                    "site": "router",
+                    "layer_index": _layer_index,
+                    "router_logits": kwargs["router_logits"].detach().float().cpu().tolist(),
+                    "expert_ids": indices.detach().cpu().tolist(),
+                    "expert_weights": weights.detach().float().cpu().tolist(),
+                    "weight_dtype": str(weights.dtype),
+                }
+            )
+            return weights, indices
+
+        router.select_experts = capture_routing
+        restores.append(partial(setattr, router, "select_experts", original))
+
     handles.append(model.register_forward_pre_hook(capture_inputs, with_kwargs=True))
     handles.append(model.model.norm.register_forward_hook(capture_norm))
     handles.append(model.model.final_gated_norm.register_forward_hook(capture_gate))
@@ -68,9 +123,11 @@ def install_final_state_capture(model) -> None:
 
 
 def remove_final_state_capture(model) -> list[dict]:
-    records, handles = model.prefix_diagnostic_capture
+    records, handles, restores = model.prefix_diagnostic_capture
     for handle in handles:
         handle.remove()
+    for restore in restores:
+        restore()
     del model.prefix_diagnostic_capture
     return records
 
