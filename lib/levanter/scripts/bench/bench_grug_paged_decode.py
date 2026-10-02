@@ -189,7 +189,7 @@ def _parse_args():
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--av-precision", choices=["ieee", "bf16_3x"], default="ieee")
     parser.add_argument("--profile-device", action="store_true")
-    parser.add_argument("--profile-output-dir", type=Path, help="Retain TPU XPlane traces and HLO metadata here.")
+    parser.add_argument("--profile-output-dir", help="Retain TPU XPlane traces and HLO metadata here.")
     parser.add_argument("--tpu-dma-buffers", type=int, choices=[1, 2], default=1)
     parser.add_argument("--check-reference", action="store_true")
     parser.add_argument("--kv-splits", type=int, choices=[8, 16], default=8)
@@ -229,7 +229,9 @@ def _comparison_errors(inputs, actual, args):
 
 def _device_profile(fn, inputs, repeats, output_dir):
     if jax.default_backend() == "tpu":
-        device_profile = _profile_tpu(fn, inputs, repeats, output_dir / "native" if output_dir is not None else None)
+        device_profile = _profile_tpu(
+            fn, inputs, repeats, Path(output_dir) / "native" if output_dir is not None else None
+        )
     else:
         profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
 
@@ -435,7 +437,7 @@ def _tpu_vllm_baseline(inputs, expected, args):
             jax.jit(attend),
             inputs,
             args.repeats,
-            args.profile_output_dir / args.baseline if args.profile_output_dir is not None else None,
+            Path(args.profile_output_dir) / args.baseline if args.profile_output_dir is not None else None,
         )
         if args.profile_device
         else None
