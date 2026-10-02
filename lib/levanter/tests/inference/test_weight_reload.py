@@ -4,6 +4,7 @@
 from concurrent.futures import ThreadPoolExecutor
 
 import dataclasses
+from importlib.util import find_spec
 
 import equinox as eqx
 import haliax as hax
@@ -24,12 +25,12 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from levanter.testing.helpers import skip_if_no_torch
 
-try:
-    from fastapi.testclient import TestClient
-    from levanter.inference.openai import InferenceServer, InferenceServerConfig
-    from levanter.testing.weight_broadcast import broadcast_source
-except ImportError:
+if any(find_spec(dependency) is None for dependency in ("torch", "fastapi", "httpx", "openai", "uvicorn")):
     pytest.skip("Torch and serving dependencies are required", allow_module_level=True)
+
+from fastapi.testclient import TestClient
+from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.testing.weight_broadcast import broadcast_source
 
 
 @skip_if_no_torch
