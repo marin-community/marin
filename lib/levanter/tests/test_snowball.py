@@ -603,7 +603,7 @@ def test_snowball_paged_decode_matches_full_forward(sliding_window):
                 jnp.broadcast_to(jnp.asarray(seq, dtype=jnp.int32), (jax.device_count(), len(seq))),
                 (Axis("batch", jax.device_count()), Axis("position", len(seq))),
             )
-            reference.append(np.asarray(full_forward(model, ids).array[0]))
+            reference.append(np.asarray(full_forward(model, ids).array)[0])
         cache = model.initial_cache(PageTableSpec(num_pages=6, page_size=2), dtype=jnp.float32)
         decode = hax.named_jit(lambda m, ids, state, info, pos: m.decode(ids, state, info, pos))
         for phase in phases:
@@ -637,7 +637,7 @@ def test_snowball_paged_decode_matches_full_forward(sliding_window):
                 info,
                 hax.named(jnp.asarray(positions), token_axis),
             )
-            np.testing.assert_allclose(np.asarray(logits.array[:n]), np.concatenate(expected), rtol=1e-4, atol=1e-4)
+            np.testing.assert_allclose(np.asarray(logits.array)[:n], np.concatenate(expected), rtol=1e-4, atol=1e-4)
             assert np.isfinite(np.asarray(logits.array)).all()
 
 
@@ -687,7 +687,7 @@ def test_snowball_paged_decode_sharding_and_expert_skew_match_unsharded():
                 model = eqx.tree_at(lambda m: m.transformer.blocks, model, blocks)
                 cache = model.initial_cache(PageTableSpec(4, 2), dtype=jnp.float32)
                 logits, _ = eqx.filter_jit(lambda m, c: m.decode(ids, c, info, positions))(model, cache)
-                results.append(np.asarray(logits.array[:6]))
+                results.append(np.asarray(logits.array)[:6])
         for actual in results[1:]:
             np.testing.assert_allclose(results[0], actual, rtol=1e-4, atol=1e-4)
         """,
