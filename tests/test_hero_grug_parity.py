@@ -92,8 +92,8 @@ def test_hero_export_load_matches_experiment_logits(rope_fused, expert_layout, s
         assert actual_weights.keys() == canonical.keys()
         for name, value in canonical.items():
             np.testing.assert_array_equal(np.asarray(actual_weights[name]), np.asarray(value), err_msg=name)
-        tokens = jnp.broadcast_to(jnp.arange(7, dtype=jnp.int32) * 3 + 1, (2 * jax.device_count(), 7))
-        ids = hax.named(tokens, (Axis("batch", 2 * jax.device_count()), Axis("position", 7)))
+        tokens = jnp.broadcast_to(jnp.arange(7, dtype=jnp.int32) * 3 + 1, (jax.device_count(), 7))
+        ids = hax.named(tokens, (Axis("batch", jax.device_count()), Axis("position", 7)))
         segments = jnp.broadcast_to(jnp.array([0, 0, 0, 1, 1, 1, 1]), tokens.shape)
         experiment_mask = GrugAttentionMask(is_causal=True, segment_ids=(segments, segments)) if segmented else None
         native_mask = AttentionMask.causal().with_segment_ids(hax.named(segments, ids.axes)) if segmented else None
