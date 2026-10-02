@@ -90,9 +90,10 @@ def test_grug_paged_attention_explicit_head_sharding_matches_dense():
 @pytest.mark.parametrize("window", [None, 5])
 @pytest.mark.parametrize("runtime_scale", [False, True])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_grug_tpu_paged_attention_matches_dense(window, runtime_scale, dtype):
+@pytest.mark.parametrize("implementation", ["tpu", "tpu_fp32_tiles"])
+def test_grug_tpu_paged_attention_matches_dense(window, runtime_scale, dtype, implementation):
     args = _mixed_case(dtype)
-    fn = partial(ragged_paged_attention, sliding_window=window, implementation="tpu")
+    fn = partial(ragged_paged_attention, sliding_window=window, implementation=implementation)
     actual = (
         jax.jit(fn)(*args, sm_scale=jnp.array(0.17)) if runtime_scale else jax.jit(partial(fn, sm_scale=0.17))(*args)
     )
