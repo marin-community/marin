@@ -765,3 +765,54 @@ async def test_rejected_chunk_preserves_siblings_and_retries_after_other_batches
     assert requested.count("sibling") == 1
     assert not list((output_root / "partials").glob("*"))
     assert not list((output_root / "rejections").glob("*"))
+
+
+@pytest.mark.asyncio
+async def test_relay_502_defers_chunk_and_preserves_completed_siblings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(conversion, "MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(conversion, "DEFERRED_RETRY_DELAY", 0)
+    source = Source(conversion.BIO_INSTRUCTION, "", 1, 3)
+    input_path = tmp_path / "input.parquet"
+    rows = [
+        {"id": name, "text": f"{name}: Question: count symbols in <dna>ACGT</dna>. Reference: 4."}
+        for name in ("flaky", "sibling", "other")
+    ]
+    pq.write_table(pa.Table.from_pylist(rows), input_path, row_group_size=2)
+    work = [WorkBatch(WorkItem(source, str(input_path), 0, 2), 0), WorkBatch(WorkItem(source, str(input_path), 1, 1), 0)]
+    output_root = tmp_path / "output"
+    requests = []
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompt = body["messages"][1]["content"]
+        row_id = prompt.split("<source_passage>\n", 1)[1].split(":", 1)[0]
+        requests.append(row_id)
+        if row_id == "flaky" and requests.count(row_id) == 1:
+            return httpx.Response(502, json={"error": "temporary relay failure"})
+        if row_id == "other":
+            partials = list((output_root / "partials").glob("*.parquet"))
+            assert len(partials) == 1
+            assert [row["source_id"] for row in pq.read_table(partials[0]).to_pylist()] == [f"{source.name}:sibling:0"]
+        selected = next(item for item in conversion.FORMATS if f"({item.name}):" in prompt)
+        completion = {
+            "user": "Count the symbols in [[MOLECULAR_INPUT_0]].",
+            "reasoning_content": "The input has four symbols.",
+            "answer": conversion._evidence_answer(["Four symbols."], selected),
+        }
+        if selected.name == "json":
+            completion["answer"] = json.loads(completion["answer"])
+        return httpx.Response(
+            200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(completion)}}]}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        await convert_work_batches(work, "http://test", client, 2, 1, str(output_root))
+
+    records = [
+        row for path in (output_root / "outputs/main").glob("*.parquet") for row in pq.read_table(path).to_pylist()
+    ]
+    assert {row["source_id"] for row in records} == {f"{source.name}:{name}:0" for name in ("flaky", "sibling", "other")}
+    assert requests.count("flaky") == 2
+    assert requests.count("sibling") == 1
+    assert not list((output_root / "partials").glob("*"))
+    assert not list((output_root / "rejections").glob("*"))

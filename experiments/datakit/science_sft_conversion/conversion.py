@@ -136,6 +136,10 @@ class ConversionRejected(ValueError):
     """A generated chunk exhausted validation retries without a usable conversation."""
 
 
+class ConversionDeferred(RuntimeError):
+    """A transient teacher failure exhausted request retries for this chunk."""
+
+
 class ChatClient(Protocol):
     async def post(self, url: str, *, json: dict) -> httpx.Response: ...
 
@@ -144,6 +148,14 @@ class ChatClient(Protocol):
 class RejectedChunk:
     source_id: str
     error: str
+
+
+def _retryable_request_error(error: httpx.HTTPError) -> bool:
+    if isinstance(error, httpx.RequestError):
+        return True
+    return isinstance(error, httpx.HTTPStatusError) and (
+        error.response.status_code in {408, 429} or error.response.status_code >= 500
+    )
 
 
 FORMATS = (
@@ -699,13 +711,18 @@ async def _convert_evidence_chunk(
             )
             if attempt + 1 == MAX_ATTEMPTS:
                 if isinstance(error, httpx.HTTPError):
+                    if _retryable_request_error(error):
+                        raise ConversionDeferred(
+                            f"Evidence conversion deferred for {source.name}/{source_id}/{chunk_index}"
+                        ) from error
                     raise RuntimeError(
                         f"Evidence conversion failed for {source.name}/{source_id}/{chunk_index}"
                     ) from error
                 raise ConversionRejected(f"Evidence conversion failed: {error}") from error
-            body["messages"].append(
-                {"role": "user", "content": f"Selection rejected: {error}. Return a corrected JSON object."}
-            )
+            if not isinstance(error, httpx.HTTPError):
+                body["messages"].append(
+                    {"role": "user", "content": f"Selection rejected: {error}. Return a corrected JSON object."}
+                )
             await asyncio.sleep(min(2**attempt, 16) + random.random())
     raise AssertionError("Unreachable evidence retry exit")
 
@@ -774,12 +791,16 @@ async def _convert_chunk(
                                 ]
                             )
                         if attempt + 1 == MAX_ATTEMPTS:
+                            if isinstance(error, httpx.HTTPError):
+                                if _retryable_request_error(error):
+                                    raise ConversionDeferred(
+                                        f"Conversion deferred for {source.name}/{source_id}/{chunk_index}"
+                                    ) from error
+                                raise RuntimeError(
+                                    f"Conversion failed for {source.name}/{source_id}/{chunk_index}"
+                                ) from error
                             if mode == ConversionMode.TEACHER_EXERCISE:
                                 if selected == formats[-1]:
-                                    if isinstance(error, httpx.HTTPError):
-                                        raise RuntimeError(
-                                            f"Teacher exercise failed for {source.name}/{source_id}/{chunk_index}"
-                                        ) from error
                                     raise ConversionRejected(f"Teacher exercise failed: {error}") from error
                                 logger.warning(
                                     "Trying another teacher exercise format for %s/%s/%d after %s",
@@ -799,18 +820,6 @@ async def _convert_chunk(
                                 return await _convert_evidence_chunk(
                                     client, endpoint, source, source_id, chunk, chunk_index, chunk_count, initial_format
                                 )
-                            elif selected != formats[-1]:
-                                logger.warning(
-                                    "Trying another answer format for %s/%s/%d after %s",
-                                    source.name,
-                                    source_id,
-                                    chunk_index,
-                                    selected.name,
-                                )
-                            else:
-                                raise RuntimeError(
-                                    f"Conversion failed for {source.name}/{source_id}/{chunk_index}"
-                                ) from error
                             break
                         await asyncio.sleep(min(2**attempt, 16) + random.random())
     raise AssertionError("Unreachable retry exit")
@@ -827,7 +836,7 @@ async def _convert_batch(
     async def convert(row_id: str, chunk: str, index: int, count: int) -> ConvertedChunk | RejectedChunk:
         try:
             return await _convert_chunk(client, semaphore, endpoint, source, row_id, chunk, index, count)
-        except ConversionRejected as error:
+        except (ConversionRejected, ConversionDeferred) as error:
             return RejectedChunk(f"{source.name}:{row_id}:{index}", str(error))
 
     tasks = []
