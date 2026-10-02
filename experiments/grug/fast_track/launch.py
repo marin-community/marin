@@ -31,9 +31,10 @@ from levanter.tokenizers import tokenizer_content_hash
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.step_spec import StepSpec
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -42,21 +43,19 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.reference_pipeline import (
     QUALITY_MODEL_VERSION,
-    SAMPLE_PREFIX,
-    SAMPLE_SOURCES,
     TokenizerSpec,
     quality_model_path,
+    sample_sources,
+    select_sources,
 )
 from experiments.datakit.store.mixture import FlatCacheComponent, MixtureWeighting, flat_cache_mixture
+from experiments.datakit.testbed.sampler import SampleManifest
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.data_pipeline import (
-    FastTrackDataConfig,
-    FastTrackDataSource,
+    FAST_TRACK_SAMPLE_PREFIX,
     FastTrackDataStore,
-    RegistryDataSource,
-    SampleDataSource,
     build_fast_track_data,
     store_mixture_for_step,
 )
@@ -285,6 +284,7 @@ class TrainingSource(Protocol):
         ctx: StepContext,
         validation: Sequence[ArtifactStep[TokenizedCache]],
         tokenizer: str,
+        training_tokens: int,
     ) -> LmDataConfig: ...
 
 
@@ -303,6 +303,7 @@ class FlatCacheTrainingSource:
         ctx: StepContext,
         validation: Sequence[ArtifactStep[TokenizedCache]],
         tokenizer: str,
+        training_tokens: int,
     ) -> LmDataConfig:
         training_data = flat_cache_mixture(
             tokenizer=tokenizer,
@@ -327,6 +328,7 @@ class DataKitTrainingSource:
         ctx: StepContext,
         validation: Sequence[ArtifactStep[TokenizedCache]],
         tokenizer: str,
+        training_tokens: int,
     ) -> LmDataConfig:
         data = store_mixture_for_step(
             ctx=ctx,
@@ -334,6 +336,7 @@ class DataKitTrainingSource:
             weighting=self.weighting,
             min_tokens_per_component=SEQ_LEN,
             tokenizer=tokenizer,
+            training_tokens=training_tokens,
         )
         return _with_validation_components(ctx=ctx, training_data=data, validation=validation)
 
@@ -484,7 +487,9 @@ def build_h100_ladder_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = resolved_training_source.data_config(ctx=ctx, validation=validation, tokenizer=tokenizer)
+        data = resolved_training_source.data_config(
+            ctx=ctx, validation=validation, tokenizer=tokenizer, training_tokens=num_steps * batch_size * SEQ_LEN
+        )
         return GrugRunConfig(
             model=model,
             data=data,
@@ -583,7 +588,7 @@ def _data_source_from_options(
     source_mode: SourceMode,
     sources: str | None,
     sample_prefix: str,
-) -> FastTrackDataSource | None:
+) -> dict[str, StepSpec] | None:
     if source_mode is SourceMode.CACHE:
         if sources is not None:
             raise click.UsageError("--sources requires a non-cache --source-mode")
@@ -597,14 +602,16 @@ def _data_source_from_options(
         raise click.UsageError("--sources all requires --source-mode sample")
 
     if source_mode is SourceMode.SAMPLE:
-        if source_option == "all":
-            return SampleDataSource(sample_prefix=sample_prefix, source_names=None)
-        return SampleDataSource(sample_prefix=sample_prefix, source_names=source_names or tuple(SAMPLE_SOURCES))
+        sample = read_artifact(sample_prefix, SampleManifest)
+        selected = sample_sources(sample_prefix)
+        if set(selected) != set(sample.source_paths):
+            raise ValueError(f"Sample sources differ from the completion record at {sample_prefix}")
+        return selected if source_option in (None, "all") else {name: selected[name] for name in source_names}
     if source_mode is not SourceMode.REGISTRY:
         raise AssertionError(f"unexpected source mode: {source_mode}")
     if not source_names:
         raise click.UsageError("--source-mode registry requires --sources")
-    return RegistryDataSource(source_names=source_names)
+    return select_sources(list(source_names))
 
 
 def _submit_fast_track(
@@ -667,17 +674,18 @@ def _submit_fast_track(
 )
 @click.option(
     "--target-cluster",
-    default=None,
-    help="Pin the submitted job to this Iris cluster. Omit to let Iris select an H100 cluster.",
+    default="cw-us-east-02a",
+    show_default=True,
+    help="Iris cluster for the submitted job and its data.",
 )
 @click.option(
     "--source-mode",
     type=click.Choice([mode.value for mode in SourceMode]),
-    default=SourceMode.CACHE.value,
+    default=SourceMode.SAMPLE.value,
     show_default=True,
     help="Training-data source. Non-cache modes add DataKit to this experiment.",
 )
-@click.option("--sample-prefix", default=SAMPLE_PREFIX, show_default=True, help="Normalized sample root.")
+@click.option("--sample-prefix", default=FAST_TRACK_SAMPLE_PREFIX, show_default=True, help="Normalized sample root.")
 @click.option("--sources", help="Comma-separated source names. Use 'all' only with sample mode.")
 @click.option("--quality-model", default=quality_model_path, help="DataKit quality model directory.")
 @click.option(
@@ -692,13 +700,6 @@ def _submit_fast_track(
     default=MixtureWeighting.TOKEN_PROPORTIONAL.value,
     show_default=True,
     help="DataKit bucket weights for training.",
-)
-@click.option(
-    "--pool-workers",
-    type=click.IntRange(min=1),
-    default=16,
-    show_default=True,
-    help="DataKit worker count.",
 )
 @click.option(
     "--stop-after",
@@ -725,39 +726,37 @@ def main(
     quality_model: str,
     quality_model_version: str,
     weighting: str,
-    pool_workers: int,
     stop_after: str,
 ) -> ArtifactStep[ThroughputResult] | ArtifactStep[FastTrackDataStore]:
     selected_source_mode = SourceMode(source_mode)
     selected_stage = Stage(stop_after)
-    data_source = _data_source_from_options(
-        source_mode=selected_source_mode,
-        sources=sources,
-        sample_prefix=sample_prefix,
-    )
-    if data_source is None and selected_stage is Stage.DATAKIT:
+    uses_datakit = selected_source_mode is not SourceMode.CACHE
+    if not uses_datakit and selected_stage is Stage.DATAKIT:
         raise click.UsageError("--stop-after datakit requires a non-cache --source-mode")
 
     if submit:
         _submit_fast_track(
             run_id,
             target_cluster=target_cluster,
-            uses_datakit=data_source is not None,
+            uses_datakit=uses_datakit,
             stop_after=selected_stage,
         )
 
+    data_sources = _data_source_from_options(
+        source_mode=selected_source_mode,
+        sources=sources,
+        sample_prefix=sample_prefix,
+    )
     training_store = None
-    if data_source is not None:
-        data_config = FastTrackDataConfig(
+    if data_sources is not None:
+        training_store = build_fast_track_data(
             run_id=run_id,
-            source=data_source,
+            sources=data_sources,
             quality_model=quality_model,
             quality_model_version=quality_model_version,
-            pool_workers=pool_workers,
             tokenizer=TokenizerSpec(V16384_TOKENIZER, tokenizer_content_hash(V16384_TOKENIZER)),
             tokenizer_vocab=V16384_VOCAB,
         )
-        training_store = build_fast_track_data(data_config)
         if selected_stage is Stage.DATAKIT:
             return training_store
 

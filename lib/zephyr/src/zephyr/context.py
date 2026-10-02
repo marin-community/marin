@@ -11,8 +11,8 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -61,6 +61,8 @@ logger = logging.getLogger(__name__)
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
 MAX_EXECUTION_NAME_LENGTH = 64
+
+_EXECUTION_POOL: ContextVar["ZephyrContext | None"] = ContextVar("zephyr_execution_pool", default=None)
 
 
 def _generate_execution_id(name: str | None = None) -> str:
@@ -257,8 +259,10 @@ class ZephyrContext:
     _pool: _OwnedPool | None = field(init=False, default=None, repr=False)
     _coordinator: ActorHandle | None = field(init=False, default=None, repr=False)
     _state_lock: threading.Lock = field(init=False, repr=False)
+    _execution_pool: "ZephyrContext | None" = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
+        self._execution_pool = _EXECUTION_POOL.get()
         if self.client is None:
             self.client = current_client()
 
@@ -313,6 +317,26 @@ class ZephyrContext:
         """Add one value to the current logical shared-data view."""
         current = self._shared_data.get() or {}
         self._shared_data.set({**current, name: obj})
+
+    @contextmanager
+    def execution_scope(self) -> Iterator[None]:
+        """Use this pool for contexts constructed in the scope.
+
+        Start this context before entry. Nested contexts retain their task
+        resources and shared data. This pool supplies the workers, runner, and
+        retry policy. Nested contexts cannot stop the pool.
+
+        Copy the context into new threads. For remote calls, serialize this
+        context and enter the scope in the remote process.
+        """
+        with self._state_lock:
+            if self._state not in {_ContextState.OWNER, _ContextState.BORROWED}:
+                raise RuntimeError("An execution scope requires a started shared pool")
+        token = _EXECUTION_POOL.set(self)
+        try:
+            yield
+        finally:
+            _EXECUTION_POOL.reset(token)
 
     def _upload_shared_data(self, execution_id: str) -> None:
         """Write the current logical shared-data view for one execution."""
@@ -406,6 +430,8 @@ class ZephyrContext:
 
     def start(self) -> "ZephyrContext":
         """Start a shared pool and retain idle workers."""
+        if self._execution_pool is not None:
+            return self
         with self._state_lock:
             if self._state is not _ContextState.NEW:
                 raise RuntimeError(f"Cannot start ZephyrContext in state {self._state}")
@@ -466,6 +492,20 @@ class ZephyrContext:
             map_task_resources: Per-task resources for map stages.
             reduce_task_resources: Per-task resources for reduce stages.
         """
+        if self._execution_pool is not None:
+            shared_pool = self._execution_pool
+            token = shared_pool._shared_data.set(dict(self._shared_data.get() or {}))
+            try:
+                return shared_pool.execute(
+                    dataset,
+                    verbose=verbose,
+                    dry_run=dry_run,
+                    name=name,
+                    map_task_resources=map_task_resources or self.resources,
+                    reduce_task_resources=reduce_task_resources,
+                )
+            finally:
+                shared_pool._shared_data.reset(token)
         plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)

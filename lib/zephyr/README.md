@@ -51,6 +51,28 @@ Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_pa
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 - `ctx.execute(pipeline, name="rlvr-ifeval-review")` — prefixes the execution ID shown in logs and the dashboard. Names become lowercase ASCII alphanumerics and dashes, capped at 64 characters. Omitted or empty normalized names keep the timestamp/hash format.
 
+An entered context owns one shared pool. Use `pool.execution_scope()` to run
+existing pipelines that construct their own contexts on that pool:
+
+```python
+with ZephyrContext(max_workers=1, resources=worker_resources) as pool:
+    with pool.execution_scope():
+        download_source()
+        normalize_source()
+```
+
+Contexts constructed in the scope use the pool's workers, runner, and retry
+policy. Each context retains its own shared data. Its resource configuration
+supplies the default task request. Explicit map and reduce requests take
+precedence. Task requests must fit one worker. The pool schedules concurrent
+tasks according to their CPU and RAM requests. It does not partition GPUs or
+account for concurrent disk use.
+
+The scope does not own the pool. Scope exit and nested context exit leave the
+pool available. Copy the context into new threads with `copy_context().run`.
+For a remote driver, serialize the pool and enter `execution_scope()` in that
+process. Pool exit stops the workers after all pipeline calls finish.
+
 ## Real Usage
 
 **Wikipedia Processing:**

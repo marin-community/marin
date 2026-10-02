@@ -19,6 +19,9 @@ below from 9.4e16 to 4.3e19 FLOPs.
 
 ## Results
 
+These recorded runs use the existing training cache (`--source-mode cache`).
+They do not measure the default testbed sample introduced here.
+
 | size | variant | TPP | batch | active | total | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
 |------|---------|----:|------:|-------:|------:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
 | d512  | dense | 20 | 128 |  18.1M |  36.8M |    690 | 0.36B | 9.4e16 | 16.6% | 3.676 | 1.520 | 1.243 | 3.7m |
@@ -89,8 +92,8 @@ uv run fast-track --submit --run-id dense-d768 --size d768 --dense --version 202
 ```
 
 `--submit` wraps the launcher in `iris job run … -- python -m …launch … --run` and forwards
-`$WANDB_API_KEY` to the job. Iris selects an H100 cluster by default.
-Add `--target-cluster cw-us-east-02a` or `--target-cluster cw-rno2a` to select a specific cluster.
+`$WANDB_API_KEY` to the job. The default cluster is `cw-us-east-02a`.
+Use `--target-cluster` to select another cluster.
 
 Pick a size and variant; the budget defaults to **data-matching** that variant's baseline (dense at
 20 TPP, MoE at 60 TPP) at the rung's baseline batch (128 for d512/d768, 256 for d1024/d1280). Steps
@@ -128,7 +131,7 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 | `--no-eval` | skip eval (clean MFU probes) |
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
 | `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |
-| `--target-cluster` | Select a specific Iris cluster for submission. Omit to let Iris select an H100 cluster. |
+| `--target-cluster` | Select the Iris cluster for submission. The default is `cw-us-east-02a`. |
 | `--source-mode` | use the existing cache, a normalized sample, or a registry source |
 | `--weighting` | use token-proportional or uniform DataKit bucket weights |
 
@@ -156,8 +159,51 @@ uv run fast-track --submit --run-id data-uniform --size d512 --dense --source-mo
     --num-steps 20 --batch-size 8 --weighting uniform --version 2026.09.23
 ```
 
-Use `--source-mode registry --sources <name>` to start from a registered raw source. Sample mode
-starts from the existing normalized sample. The default `cache` mode uses the existing training
-cache. Use `--run` only in an Iris environment. Without `--run` or `--submit`, the command prints
-the full plan and does not start work. Set `WANDB_MODE=disabled` to run without a W&B record. The
+Fast-track defaults to sample mode and all sources in
+`s3://marin-us-east-02a/marin/datakit/sample_100b_2026_10_02`.
+This sample has a 100B-token target across the current registry.
+The default cluster is `cw-us-east-02a`, where the sample resides.
+Use `--sources` to select a subset or `--sample-prefix` to select another completed sample.
+The sample root must contain the completion record from the materialization command below.
+
+Use `--source-mode registry --sources <name>` to start from a registered raw source.
+Use `--source-mode cache` to use the existing training cache.
+Use `--run` only in an Iris environment. Without `--run` or `--submit`, the command prints
+the artifact plan and does not start work. Set `WANDB_MODE=disabled` to run without a W&B record. The
 training mixture omits each bucket that has fewer tokens than one model sequence.
+Before training, fast-track compares the usable token count with the run's token budget.
+It rejects a DataKit store that is too small.
+
+Sample mode reads an existing normalized sample. It does not create a new
+sample. Registry mode includes the source download and normalization recipes.
+It processes the selected sources without a token limit.
+
+DataKit uses one fixed CPU worker pool for all Zephyr stages, including source
+download, normalization, embedding, quality scoring, deduplication, and store
+construction. Source recipes retain their task resource requests. Centroid
+training remains a separate CPU job. Model training uses a separate 8×H100 job.
+The data pool contains one worker with 120 CPUs, 1 TiB RAM, and 1 TiB disk.
+CPU and RAM requests control concurrent task admission. Task disk requests must
+fit the worker, but Zephyr does not account for concurrent disk use.
+
+The data artifact records the terminal DataKit store identity. Changes to
+upstream source recipes, tokenizer identity, or cluster configuration change
+its fingerprint. A changed recipe at a fixed version produces a drift warning
+and retains the cached result. Use a new version to build the changed recipe.
+
+To produce a fresh testbed sample from the current registry:
+
+```bash
+uv run iris --cluster marin job run --no-wait \
+  --job-name fast-track-sample-100b-20261002 --target-cluster cw-us-east-02a \
+  --priority batch --cpu 8 --memory 32GB --disk 32GB --enable-extra-resources \
+  --extra cpu --extra datakit -- \
+  python -m experiments.datakit.materialize_zephyr_benchmark_sample \
+  --mode regenerate --data-prefix s3://marin-us-east-02a/marin \
+  --destination-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_2026_10_02 \
+  --target-total-tokens-b 100 --max-concurrent 8
+```
+
+The sample builder reuses completed normalized artifacts from the current recipes.
+It writes the root completion record only after all source steps succeed.
+Use a new destination and job name for a new sample version.

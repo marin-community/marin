@@ -18,7 +18,7 @@ from enum import StrEnum
 
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import read_artifact
+from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.cluster_config import data_config, use_data_config
@@ -27,11 +27,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import sample_sources
-from experiments.datakit.testbed.sampler import proportional_sample_fractions, sample_normalized_shards
-from experiments.datakit.zephyr_benchmark import (
-    COREWEAVE_BENCHMARK_SAMPLE_PREFIX,
-    GCP_BENCHMARK_SAMPLE_PREFIX,
-)
+from experiments.datakit.testbed.sampler import SampleManifest, proportional_sample_fractions, sample_normalized_shards
+from experiments.datakit.zephyr_benchmark import GCP_BENCHMARK_SAMPLE_PREFIX
 
 DEFAULT_MAX_CONCURRENT = 4
 MATERIALIZE_STEP_PREFIX = "datakit/benchmark_sample"
@@ -88,15 +85,15 @@ def copy_sample_steps(source_prefix: str, destination_prefix: str) -> list[StepS
 
 
 def regenerate_sample_steps(
-    source_prefix: str,
+    source_prefix: str | None,
     destination_prefix: str,
     target_total_tokens_b: float,
 ) -> list[StepSpec]:
     """Build the source download, normalization, and sampling steps for a fresh benchmark sample."""
-    source_names = set(sample_sources(source_prefix))
+    registry = all_sources()
+    source_names = set(sample_sources(source_prefix)) if source_prefix is not None else set(registry)
     if not source_names:
         raise ValueError(f"no normalized source artifacts found under {source_prefix}")
-    registry = all_sources()
     missing = sorted(source_names - set(registry))
     if missing:
         raise ValueError(f"source registry no longer defines {missing}")
@@ -130,7 +127,9 @@ def _verify_source_set(expected_names: set[str], destination_prefix: str) -> Non
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=list(SampleMode), type=SampleMode, default=SampleMode.COPY)
-    parser.add_argument("--source-prefix", default=COREWEAVE_BENCHMARK_SAMPLE_PREFIX)
+    parser.add_argument(
+        "--source-prefix", help="Existing sample. Regeneration without this option uses the full registry."
+    )
     parser.add_argument("--destination-prefix", default=GCP_BENCHMARK_SAMPLE_PREFIX)
     parser.add_argument(
         "--data-prefix",
@@ -145,10 +144,12 @@ def main() -> None:
         raise ValueError(f"max concurrent must be positive: {args.max_concurrent}")
     if args.target_total_tokens_b <= 0:
         raise ValueError(f"target total tokens must be positive: {args.target_total_tokens_b}")
-    if args.source_prefix.startswith("s3://"):
+    if args.destination_prefix.startswith("s3://") or (args.source_prefix or "").startswith("s3://"):
         configure_coreweave_s3()
 
     if args.mode is SampleMode.COPY:
+        if args.source_prefix is None:
+            raise ValueError("--source-prefix is required for copy mode")
         if args.data_prefix is not None:
             raise ValueError("--data-prefix applies only to --mode regenerate")
         if StoragePath(args.source_prefix) == StoragePath(args.destination_prefix):
@@ -166,6 +167,15 @@ def main() -> None:
 
     source_names = {step.name.removeprefix(f"{MATERIALIZE_STEP_PREFIX}/") for step in steps}
     _verify_source_set(source_names, args.destination_prefix)
+    write_artifact(
+        output_path=args.destination_prefix,
+        value=SampleManifest(
+            source_paths={
+                step.name.removeprefix(f"{MATERIALIZE_STEP_PREFIX}/"): step.deps[0].output_path for step in steps
+            },
+            target_total_tokens_b=args.target_total_tokens_b if args.mode is SampleMode.REGENERATE else None,
+        ),
+    )
     logger.info("Created %d benchmark sources at %s with %s", len(steps), args.destination_prefix, args.mode)
 
 

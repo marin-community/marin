@@ -40,6 +40,7 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
+from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
@@ -52,6 +53,13 @@ _SAMPLE_REMOTE_RESOURCES = ResourceConfig(cpu=1, ram="5g")
 logger = logging.getLogger(__name__)
 
 _COPY_PARALLELISM = 32
+
+
+class SampleManifest(BaseModel):
+    """Completed sample and the normalized source identities that produced it."""
+
+    source_paths: dict[str, str]
+    target_total_tokens_b: float | None
 
 
 def proportional_sample_fractions(

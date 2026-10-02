@@ -102,9 +102,9 @@ a shell variable. No `gcloud` / TPU auth is needed; this variant runs on H100.
 
 ## Job Submission
 
-Jobs run on **Iris**, one 8×H100 node per run. Use `fast-track` for model-only and DataKit-to-model
-runs. Add a non-cache `--source-mode` for an end-to-end data run. Run the command locally to inspect
-it, or add `--submit` to launch it as a cluster job.
+Training jobs run on **Iris**, with one 8×H100 node per run. By default, `fast-track` processes the
+completed testbed sample through DataKit before training. Use `--source-mode cache` for the existing
+training cache. Run the command locally to inspect the plan, or add `--submit` for cluster execution.
 
 ```bash
 uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
