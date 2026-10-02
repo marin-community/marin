@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parse Linux process records shared by local and Kubernetes runtimes."""
+"""Parse Linux ``/proc/PID/stat`` records."""
 
 
 def stat_fields_after_comm(raw: str) -> list[str]:
