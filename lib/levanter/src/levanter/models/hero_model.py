@@ -66,10 +66,6 @@ def _batch_spec() -> P:
     return P(_BATCH_AXES)
 
 
-def _batch_reshard(x: jax.Array) -> jax.Array:
-    return reshard(x, _batch_spec())
-
-
 def _seq_axis(mesh: jax.sharding.AbstractMesh | None) -> str | None:
     """Return the context axis only when it partitions the sequence."""
     if mesh is None or mesh.empty:
@@ -663,7 +659,7 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
         segments = None
         if attn_mask is not None and attn_mask.segment_ids is not None:
             segment_array = attn_mask.segment_ids[0].array.reshape(batch, seq_len)
-            segment_array = _batch_reshard(segment_array)
+            segment_array = reshard(segment_array, _batch_spec())
             segments = (segment_array, segment_array)
         mask = AttentionMask(is_causal=True, segment_ids=segments)
         hidden = self.transformer(tokens, mask)
