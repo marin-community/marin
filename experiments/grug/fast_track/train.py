@@ -1072,14 +1072,19 @@ def _make_probe_loss(mp: jmp.Policy):
 _captured_params = jax.jit(capture_matrices)
 
 
-def _make_fact_probe_scores(mp: jmp.Policy, model_transform: Callable[[Transformer], Transformer], positions):
-    """``scores(params, batch)``: per-token loss [B, S] and, at ``positions``, the next-token loss and top-k."""
+def _make_fact_probe_scores(
+    mp: jmp.Policy, model_transform: Callable[[Transformer], Transformer], positions: np.ndarray
+):
+    """``scores(params, batch)``: per-token loss [B, S] and, at ``positions`` ([T, 2] host array, baked into the
+    program as a constant so no process-equality check runs on it), the next-token loss and top-k."""
 
     @jax.jit
     def scores(params: Transformer, batch):
         compute_params = _cast_to_compute(mp, model_transform(params))
         loss = compute_params.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="none")
-        predictions = compute_params.position_predictions(batch.tokens, positions, mask=batch.attn_mask, k=TOP_K)
+        predictions = compute_params.position_predictions(
+            batch.tokens, jnp.asarray(positions, jnp.int32), mask=batch.attn_mask, k=TOP_K
+        )
         return loss, predictions
 
     return scores
@@ -1120,8 +1125,7 @@ def _fact_probe_hook(
         batch = jax.tree.map(
             lambda leaf: jax.device_put(leaf, rows) if isinstance(leaf, np.ndarray) else leaf, host_example
         )
-        positions = jax.device_put(probe.positions(), NamedSharding(probe_mesh, P(None, None)))
-        scores = _make_fact_probe_scores(mp, transform, positions)
+        scores = _make_fact_probe_scores(mp, transform, probe.positions())
 
     def score(kind: str, params: Transformer, count: int) -> None:
         # A local: the expert-collapsed copy is larger than the train-mesh params and must die before the next step.
