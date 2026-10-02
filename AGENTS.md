@@ -161,7 +161,9 @@ uv run --no-project infra/ci/run_tests.py
   debugging or implementation.
 - Keep user-facing and reusable product documentation in `docs/`. Record
   research progress in the task's existing issue, PR, report, or durable session
-  channel. These are distinct from incident records.
+  channel. Follow `research` for experimental research records; store public
+  high-fidelity logbooks in `marin-community/marin-logbooks`, never in this
+  repository. These are distinct from incident records.
 
 ## Deprecation
 
