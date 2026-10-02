@@ -15,6 +15,8 @@ from safetensors.numpy import save_file
 
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
+from levanter.inference.jit_scheduler import SeqDecodingParams, FinishReason
 from levanter.inference.eagle3 import propose_eagle3, reconcile_eagle3
 from levanter.inference.speculative import verify_snowball_proposals
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
@@ -241,14 +243,8 @@ def test_eagle3_learned_recurrent_proposals_match_full_torch_with_separate_cache
         )
 
 
-@pytest.mark.parametrize("proposal_case", ["learned", "accept_all", "accept_prefix", "cancelled"])
-@jax.default_matmul_precision("highest")
-def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_case):
-    hf_config, state, _ = _checkpoint()
-    config = dataclasses.replace(
-        Eagle3Config.from_hf_config(hf_config), inference_attention_implementation="reference"
-    )
-    target_config = SnowballConfig(
+def _target_config():
+    return SnowballConfig(
         vocab_size=32,
         hidden_dim=16,
         intermediate_dim=24,
@@ -265,6 +261,16 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
         attention_implementation="reference",
         inference_attention_implementation="reference",
     )
+
+
+@pytest.mark.parametrize("proposal_case", ["learned", "accept_all", "accept_prefix", "cancelled"])
+@jax.default_matmul_precision("highest")
+def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_case):
+    hf_config, state, _ = _checkpoint()
+    config = dataclasses.replace(
+        Eagle3Config.from_hf_config(hf_config), inference_attention_implementation="reference"
+    )
+    target_config = _target_config()
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         target = SnowballLMHeadModel.init(Axis("vocab", 32), target_config, key=jax.random.key(13))
         draft = Eagle3Draft.from_state_dict(config, state, target_embedding=target.transformer.token_embed)
@@ -469,3 +475,86 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
             oracle_scores[length : length + second_length],
             atol=1e-5,
         )
+
+
+@pytest.mark.parametrize("termination", ["length", "stop", "abort", "accept_all", "accept_stop", "short_prompt"])
+@jax.default_matmul_precision("highest")
+def test_resident_eagle_generation_matches_ordinary_target_and_retry(termination):
+    hf_config, weights, _ = _checkpoint()
+    draft_config = dataclasses.replace(
+        Eagle3Config.from_hf_config(hf_config), inference_attention_implementation="reference"
+    )
+    config = InferenceEngineConfig(
+        max_seq_len=16,
+        max_seqs=1,
+        max_seqs_in_prefill=1,
+        max_pages=10,
+        page_size=2,
+        max_prefill_size=16,
+        max_tokens_per_round=4,
+        max_queued_tokens=16,
+        max_rounds=1,
+        compute_dtype=jnp.float32,
+    )
+    request = Request([2, 7, 5], 17, dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(14)), 1)
+    if termination == "short_prompt":
+        request = dataclasses.replace(request, prompt_tokens=[2])
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        target = SnowballLMHeadModel.init(Axis("vocab", 32), _target_config(), key=jax.random.key(13))
+        if termination in ("accept_all", "accept_stop"):
+            # Uniform target and draft heads make every greedy proposal agree,
+            # exposing bonus-token and within-block stop boundaries.
+            target = eqx.tree_at(
+                lambda m: m.transformer.output_proj, target, jnp.zeros_like(target.transformer.output_proj)
+            )
+            weights["lm_head.weight"] = np.zeros_like(weights["lm_head.weight"])
+            weights["d2t"][0] = 0
+            weights["t2d"][0] = True
+            weights["t2d"][1] = False
+        draft = Eagle3Draft.from_state_dict(draft_config, weights, target_embedding=target.transformer.token_embed)
+        ordinary = InferenceEngine.from_model_with_config(target, None, config)
+        expected = ordinary.generate([request])
+        engine = InferenceEngine.from_model_with_config(
+            target, None, dataclasses.replace(config, num_eagle3_tokens=3), draft=draft
+        )
+        if termination in ("stop", "accept_stop"):
+            request = dataclasses.replace(
+                request,
+                decode_params=dataclasses.replace(
+                    request.decode_params,
+                    stop_tokens=hax.named(jnp.array([expected.tokens[0][2:5]]), ("stop_seq", "position")),
+                ),
+            )
+            expected = ordinary.generate([request])
+        observed = []
+
+        def capture(_request_id, results):
+            observed.append(tuple(results[0].token_list))
+
+        result = engine.generate(
+            [request],
+            output_callback=capture,
+            should_abort=(lambda _: bool(observed and len(observed[-1]) >= 3)) if termination == "abort" else None,
+        )
+        count = len(result.tokens[0])
+        assert result.tokens[0] == expected.tokens[0][:count]
+        np.testing.assert_allclose(result.logprobs[0], expected.logprobs[0][:count], atol=1e-4, rtol=1e-4)
+        assert all(list(partial) == expected.tokens[0][: len(partial)] for partial in observed)
+        if termination == "abort":
+            assert result.finish_reasons == [FinishReason.ABORT]
+            assert 0 < count < len(expected.tokens[0])
+            resumed = engine.generate(
+                [dataclasses.replace(request, prompt_tokens=request.prompt_tokens + result.tokens[0])]
+            )
+            assert result.tokens[0] + resumed.tokens[0] == expected.tokens[0]
+            np.testing.assert_allclose(
+                result.logprobs[0] + resumed.logprobs[0], expected.logprobs[0], atol=1e-4, rtol=1e-4
+            )
+        else:
+            assert result.tokens == expected.tokens
+            assert result.finish_reasons == expected.finish_reasons
+        if termination == "accept_all":
+            assert max(np.diff([len(partial) for partial in observed])) == 4
+        if termination == "accept_stop":
+            assert result.tokens == [[0, 0, 0]]
+            assert result.finish_reasons == [FinishReason.STOP]

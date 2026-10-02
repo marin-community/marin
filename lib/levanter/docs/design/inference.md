@@ -631,9 +631,9 @@ are concatenated in ascending order. Ordinary `decode` retains its existing scan
 without allocating auxiliary buffers.
 
 This is an opt-in target primitive. It does not load an EAGLE draft checkpoint,
-manage a draft cache, allocate or reclaim pages, refresh draft weights, or enable
-speculation in the serving scheduler. Full EAGLE serving and throughput parity
-remain separate work.
+manage a draft cache, allocate or reclaim pages, or refresh draft weights. The
+resident engine path below composes it with the learned draft and scheduler.
+Full EAGLE serving and throughput parity remain separate work.
 
 ### Pinned Snowball EAGLE3 draft
 
@@ -656,8 +656,20 @@ the pending target token, and the residual that predicts it. Cancelled rows
 retain their original visible prefix and return no pending token. The caller
 still owns page allocation, reclamation, and removal of finished rows.
 
-The learned proposal primitive can feed `verify_snowball_proposals`; it does not
-yet enable speculation in the serving scheduler. Online draft refresh remains unimplemented. The pinned online
-trainer publishes only trainable draft tensors. Its target synchronization also
-refreshes the draft's mapped target head; a native refresh implementation must
-preserve this distinction when staging a complete candidate.
+`InferenceEngine.from_model_with_config(..., draft=draft)` with a positive
+`num_eagle3_tokens` enables resident learned proposals. This initial path requires
+one request and one choice, `max_seqs=max_seqs_in_prefill=1`, explicit page capacity,
+`top_p=1`, and `max_logprobs=0`. Unsupported combinations fail before generation.
+The engine owns separate draft KV and a target residual seed, resets both with the
+target cache, and reuses the scheduler's page ownership. It commits verified tokens
+through the ordinary stop-sequence and length checks, queues only the final pending
+token, and checks cancellation at each host extraction boundary. Each speculative
+round is one host update; `max_rounds` still controls ordinary decode. The final
+short generation budget uses ordinary decode to keep speculative writes inside the
+context capacity. Defaults retain ordinary decoding without draft buffers.
+
+Mixed batches, cloned choices, rollout candidate capture, and online draft refresh
+remain unimplemented for this path. The pinned online trainer publishes only
+trainable draft tensors. Its target synchronization also refreshes the draft's
+mapped target head; a native refresh implementation must preserve this distinction
+when staging a complete candidate.

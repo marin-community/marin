@@ -5,6 +5,8 @@
 
 from typing import NamedTuple
 
+import equinox as eqx
+
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -15,6 +17,16 @@ from levanter.inference.page_table import PageBatchInfo
 from levanter.inference.speculative import SpeculativeTargetOutput
 from levanter.layers.kv_cache import KvPageCache
 from levanter.models.eagle3 import Eagle3Draft
+
+
+class Eagle3State(eqx.Module):
+    """Resident draft cache and target residual seed for the next proposal round."""
+
+    cache: KvPageCache
+    target_auxiliary: jax.Array
+
+    def reset(self):
+        return Eagle3State(self.cache.reset(), jnp.zeros_like(self.target_auxiliary))
 
 
 class Eagle3Proposals(NamedTuple):
