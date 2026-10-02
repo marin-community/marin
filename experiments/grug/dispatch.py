@@ -11,8 +11,8 @@ from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from iris.rpc.proto_display import priority_band_value
+from marin.training.levanter import resolve_training_env
 from marin.training.run_environment import extras_for_resources
-from marin.training.training import resolve_training_env
 
 logger = logging.getLogger(__name__)
 
