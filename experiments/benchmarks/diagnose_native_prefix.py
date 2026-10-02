@@ -106,7 +106,7 @@ def prefix_trace(model, sequences: list[list[int]], baseline_logits: np.ndarray)
     }
 
 
-def embedding_gate_interventions(model, sequences: list[list[int]]) -> dict:
+def embedding_gate_interventions(model, sequences: list[list[int]], prefill_length: int) -> dict:
     """Vary only embedding-gate unary precision; keep every other model operation fixed."""
     results = {}
     for silu_dtype, sigmoid_dtype in (
@@ -117,15 +117,17 @@ def embedding_gate_interventions(model, sequences: list[list[int]]) -> dict:
     ):
         gate = DiagnosticEmbeddingGate(model.transformer.embed_gated_norm, silu_dtype, sigmoid_dtype)
         variant = eqx.tree_at(lambda m: m.transformer.embed_gated_norm, model, gate)
-        logits = prefix_logits(variant, sequences, len(sequences[0]))
-        top_ids = np.argsort(-logits, axis=-1)[:, :PREFIX_DIAGNOSTIC_TOP_K]
-        results[f"silu_{silu_dtype}_sigmoid_{sigmoid_dtype}"] = {
-            "changed_site": "transformer.embed_gated_norm",
-            "silu_dtype": silu_dtype,
-            "sigmoid_dtype": sigmoid_dtype,
-            "logits": logits.tolist(),
-            "top_token_ids": top_ids.tolist(),
-        }
+        for mode, prefill in (("single_prefill", len(sequences[0])), ("incremental", prefill_length)):
+            logits = prefix_logits(variant, sequences, prefill)
+            top_ids = np.argsort(-logits, axis=-1)[:, :PREFIX_DIAGNOSTIC_TOP_K]
+            results[f"silu_{silu_dtype}_sigmoid_{sigmoid_dtype}_{mode}"] = {
+                "changed_site": "transformer.embed_gated_norm",
+                "silu_dtype": silu_dtype,
+                "sigmoid_dtype": sigmoid_dtype,
+                "prefill_length": prefill,
+                "logits": logits.tolist(),
+                "top_token_ids": top_ids.tolist(),
+            }
     return results
 
 
@@ -199,7 +201,7 @@ def main():
                             "top_token_ids": top_ids.tolist(),
                             "top_logprobs": np.take_along_axis(logprobs, top_ids, axis=-1).tolist(),
                         }
-        gate_interventions = embedding_gate_interventions(model, sequences)
+        gate_interventions = embedding_gate_interventions(model, sequences, inputs["prefill_length"])
         gate_weights = embedding_gate_weight_digests(model)
         stage_trace = prefix_trace(
             model, sequences, np.asarray(results["bf16_router_baseline_precision_single_prefill"]["logits"])
