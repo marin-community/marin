@@ -15,8 +15,8 @@ from levanter.models.snowball import GRUG_MOE_CANONICAL_CONFIG_FIELDS
 MANIFEST_FILENAME = "manifest.json"
 WORKLOAD_FILENAME = "workload.json"
 
-_EXECUTION_CONFIG_FIELDS = {"inference_attention_implementation"}
-_HF_METADATA_FIELDS = {"_name_or_path", "transformers_version", "torch_dtype", "dtype"}
+_EXECUTION_CONFIG_FIELDS = frozenset({"inference_attention_implementation"})
+_HF_METADATA_FIELDS = frozenset({"_name_or_path", "transformers_version", "torch_dtype", "dtype"})
 
 
 def normalized_grug_hf_config(config: dict) -> dict:
