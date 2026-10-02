@@ -10,7 +10,6 @@ import functools
 import inspect
 import math
 from importlib import import_module
-from pathlib import Path
 
 from verifyit.adapters import harness_validation as validation
 from verifyit.adapters.skyrl import grade_literal_candidate
@@ -23,6 +22,7 @@ from verifyit.spec import ExactSpec, McqSpec, NumericSpec
 _SUFFIX = "/tasks/mmmu/utils.py"
 _ORIGINAL = "65e52c4a7694c68df5fdd250be8c3998af3a835d22e669a64235197d42a83057"
 _PATCHED = "5c63ed4a1fd1bc271d4903ed0b523fc57ea5c3699874664eeb48b455c91e6154"
+_OPTION_LABELS = "ABCDEFGHI"
 
 
 @functools.lru_cache(maxsize=4)
@@ -39,15 +39,8 @@ def _source_constants(source: bytes) -> tuple[tuple[str, str], ...]:
 
 
 def _pinned_function(callback, name: str) -> bool:
-    if isinstance(callback, dict) and callback.get("tag") == "function":
-        path = Path(str(callback.get("source_dir", ""))) / "utils.py"
-        recognized = callback.get("value") == f"utils.{name}"
-    elif inspect.isfunction(callback):
-        path = Path(callback.__code__.co_filename)
-        recognized = callback.__name__ == name
-    else:
-        return False
-    if not recognized or not str(path).endswith(_SUFFIX):
+    path = validation.utils_callback_path(callback, name)
+    if path is None or not str(path).endswith(_SUFFIX):
         return False
     source = validation.pinned_source_bytes(path, {_PATCHED} if inspect.isfunction(callback) else {_ORIGINAL, _PATCHED})
     if source is None:
@@ -84,6 +77,7 @@ def mmmu_config_profile(config: dict) -> bool:
 
 
 def validate_mmmu_task(task) -> bool:
+    """Return False for unsupported tasks; raise InvalidTask for changed recognized contracts."""
     callback = getattr(getattr(task, "config", None), "process_results", None)
     if callback is None:
         return False
@@ -118,12 +112,12 @@ def validate_mmmu_task(task) -> bool:
 def _mcq_references(choices, gold) -> list[str]:
     if (
         not isinstance(choices, list)
-        or not 1 <= len(choices) <= 9
+        or not 1 <= len(choices) <= len(_OPTION_LABELS)
         or any(type(choice) is not str or not choice for choice in choices)
     ):
         raise InvalidTask("MMMU requires one to nine nonempty string options")
     references = gold if isinstance(gold, list) else [gold]
-    labels = set("ABCDEFGHI"[: len(choices)])
+    labels = set(_OPTION_LABELS[: len(choices)])
     if not references or any(type(value) is not str or value not in labels for value in references):
         raise InvalidTask("MMMU gold labels must identify available source options")
     return references
@@ -131,7 +125,7 @@ def _mcq_references(choices, gold) -> list[str]:
 
 def grade_mmmu_mcq(choices, gold, extracted: object) -> Reward:
     references = _mcq_references(choices, gold)
-    labels = set("ABCDEFGHI"[: len(choices)])
+    labels = set(_OPTION_LABELS[: len(choices)])
     if extracted is None:
         return scored(0.0, reason="missing_choice_extraction")
     if type(extracted) is not str or extracted not in labels:
@@ -196,7 +190,7 @@ def mmmu_task_metrics(task, doc, responses) -> dict | None:
             raise InvalidTask("MMMU source options must be a literal option list") from error
         # Validate gold/options before executing extraction, including the missing-answer path.
         _mcq_references(options, gold)
-        labels = list("ABCDEFGHI"[: len(options)])
+        labels = list(_OPTION_LABELS[: len(options)])
         extracted = namespace["parse_multi_choice_response"](
             responses[0], labels, dict(zip(labels, options, strict=True))
         )

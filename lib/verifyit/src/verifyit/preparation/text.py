@@ -65,11 +65,7 @@ def structure_text(candidate: str, references: Sequence[str]) -> TextInputs:
 
 
 def normalize_text(inputs: TextInputs, normalization: TextNormalization) -> PreparedText:
-    """Apply the selected policy, retaining its input snapshot and effective options.
-
-    Harness policy deliberately uses separate fixed-width NumPy arrays for the
-    candidate and references. Combining their batches changes Unicode lowering.
-    """
+    """Apply the selected policy, retaining its input snapshot and effective options."""
     if not isinstance(normalization.policy, TextPolicy) or any(
         not isinstance(flag, bool)
         for flag in (normalization.ignore_case, normalization.ignore_punctuation, normalization.ignore_numbers)
@@ -99,6 +95,7 @@ def normalize_text(inputs: TextInputs, normalization: TextNormalization) -> Prep
         import numpy as np  # noqa: PLC0415
     except ImportError as error:
         raise _preparation_error(error, Status.INFRA_ERROR, "normalize") from error
+    # Separate fixed-width arrays preserve harness Unicode lowering for each batch.
     batches = []
     for values in ((inputs.candidate,), inputs.references):
         for pattern in patterns:

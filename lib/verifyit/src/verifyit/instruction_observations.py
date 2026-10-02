@@ -13,6 +13,8 @@ from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
 from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
 
+PARAGRAPH_SEPARATOR = r"\s?\*\*\*\s?"
+
 MAPPED_IDS = {
     "keywords:frequency",
     "keywords:letter_frequency",
@@ -129,7 +131,7 @@ def prepare_instruction_observations(
     elif identifier == "punctuation:no_comma":
         schema["not"] = {"pattern": ","}
     elif identifier == "length_constraints:number_paragraphs":
-        parts = [part.strip() for part in re.split(r"\s?\*\*\*\s?", text)]
+        parts = [part.strip() for part in re.split(PARAGRAPH_SEPARATOR, text)]
         if parts and not parts[0]:
             parts = parts[1:]
         if parts and not parts[-1]:
@@ -265,14 +267,15 @@ def prepare_extended_instruction_observations(
             schema = {"type": "integer", "maximum": args["N"]}
     elif identifier in {"paragraphs:paragraphs", "paragraphs:paragraphs2", "count:counting_composition"}:
         parts = [
-            part.strip() for part in re.split(r"\n\n" if identifier.endswith("paragraphs2") else r"\s?\*\*\*\s?", text)
+            part.strip()
+            for part in re.split(r"\n\n" if identifier.endswith("paragraphs2") else PARAGRAPH_SEPARATOR, text)
         ]
         if parts and not parts[0]:
             parts = parts[1:]
         if parts and not parts[-1]:
             parts = parts[:-1]
         if identifier == "count:counting_composition":
-            parts = [part.strip() for part in re.split(r"\s?\*\*\*\s?", text)]
+            parts = [part.strip() for part in re.split(PARAGRAPH_SEPARATOR, text)]
         count = 3 if identifier == "count:counting_composition" else 2
         schema = {"type": "array", "minItems": count, "maxItems": count, "items": {"type": "string", "minLength": 1}}
         instance = parts

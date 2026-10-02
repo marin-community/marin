@@ -62,6 +62,7 @@ def babilong_config_profile(config: dict) -> bool:
 
 
 def validate_babilong_task(task) -> bool:
+    """Return False for unsupported tasks; raise InvalidTask for changed recognized contracts."""
     callback = getattr(getattr(task, "config", None), "process_results", None)
     if callback is None:
         return False

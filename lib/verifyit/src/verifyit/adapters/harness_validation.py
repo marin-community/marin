@@ -19,6 +19,17 @@ from typing import Any
 from verifyit.grade import InvalidTask
 
 
+def utils_callback_path(callback: object, name: str) -> Path | None:
+    """Return the source path for a named utils function descriptor or Python function."""
+    if isinstance(callback, dict) and callback.get("tag") == "function":
+        if callback.get("value") == f"utils.{name}":
+            return Path(str(callback.get("source_dir", ""))) / "utils.py"
+        return None
+    if inspect.isfunction(callback) and callback.__name__ == name:
+        return Path(callback.__code__.co_filename)
+    return None
+
+
 def pinned_source_bytes(path: Path, digests: Collection[str]) -> bytes | None:
     """Read one source snapshot for both digest verification and code comparison."""
     if not path.is_file():

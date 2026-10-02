@@ -114,6 +114,13 @@ class JudgeConnection:
     api_key: str = field(repr=False)
 
 
+@dataclass(frozen=True)
+class _ValidatedJudgeSpec:
+    references: tuple[str, ...]
+    criteria: tuple[str, ...]
+    checks: list[tuple[Constraint, Check]]
+
+
 def grade(
     spec: Spec,
     tests_dir: Path,
@@ -129,7 +136,7 @@ def grade(
     return grade_judge_candidate(spec, candidate, context=context, runtime=runtime)
 
 
-def _validate_spec(spec: JudgeSpec) -> tuple[tuple[str, ...], tuple[str, ...], list[tuple[Constraint, Check]]]:
+def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
     if not isinstance(spec.api, str) or spec.api not in {"chat_completions", "responses"}:
         raise InvalidTask("judge api must be chat_completions or responses")
     if spec.api == "responses" and spec.rubric != RUBRIC_LABELS:
@@ -162,7 +169,9 @@ def _validate_spec(spec: JudgeSpec) -> tuple[tuple[str, ...], tuple[str, ...], l
     if spec.exact_gate_answers or spec.exact_gate_label:
         if spec.rubric != RUBRIC_LABELS or not spec.exact_gate_answers or spec.exact_gate_label not in spec.label_scores:
             raise InvalidTask("label exact gate requires answers and a declared label")
-    return (references, criteria, resolve_checks(spec.constraints) if spec.constraints else [])
+    return _ValidatedJudgeSpec(
+        references=references, criteria=criteria, checks=resolve_checks(spec.constraints) if spec.constraints else []
+    )
 
 
 def validate_judge_spec(spec: JudgeSpec) -> None:
@@ -186,14 +195,16 @@ def grade_judge_candidate(
     A supplied connection avoids process-wide environment mutation. With runtime=None,
     deterministic gates run, but remote grading requires a supplied connection.
     """
-    references, criteria, checks = _validate_spec(spec)
+    validated = _validate_spec(spec)
     policy = empty_output_policy(spec)
     if not isinstance(candidate, str):
         raise InvalidTask("judge candidate must be text")
     if policy is EmptyOutputPolicy.ZERO and not candidate.strip():
         return scored(0.0, reason="no_output")
     context = context[:CONTEXT_LIMIT]
-    failed = [constraint.name for constraint, check in checks if not _passes(check, candidate, constraint.params)]
+    failed = [
+        constraint.name for constraint, check in validated.checks if not _passes(check, candidate, constraint.params)
+    ]
     if failed:
         return scored(0.0, gate="constraints", failed=failed)
     if spec.rubric == RUBRIC_LABELS and spec.exact_gate_answers:
@@ -212,17 +223,17 @@ def grade_judge_candidate(
                 )
     if spec.rubric == RUBRIC_REFERENCE:
         normalized = normalize(boxed_answer(candidate))
-        if spec.exact_gate and normalized and normalized in {normalize(r) for r in references}:
+        if spec.exact_gate and normalized and normalized in {normalize(r) for r in validated.references}:
             return scored(1.0, gate="exact")
     if connection is None and runtime is None:
         raise RuntimeError("remote judge grading requires an explicit endpoint selection")
     client, model = _client(spec, connection)
     with client:
         if spec.rubric == RUBRIC_REFERENCE:
-            return _judge_reference(spec, references, candidate, client, model)
+            return _judge_reference(spec, validated.references, candidate, client, model)
         if spec.rubric == RUBRIC_LABELS:
-            return _judge_labels(spec, references[0], candidate, client, model)
-        return _judge_checklist(spec, criteria, context, candidate, client, model)
+            return _judge_labels(spec, validated.references[0], candidate, client, model)
+        return _judge_checklist(spec, validated.criteria, context, candidate, client, model)
 
 
 def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:

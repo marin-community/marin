@@ -15,6 +15,8 @@ from verifyit.grade import scored
 from verifyit.modes.grade_script import parse_json_reward, parse_reward_number
 
 VERDICT = "native-verdict.json"
+NATIVE_LOGS_DIR_ENV = "VERIFYIT_NATIVE_LOGS_DIR"
+DEFAULT_NATIVE_LOGS_DIR = "/logs/verifier"
 
 
 def _native_reward(logs: Path, reward_key: str) -> tuple[float, dict[str, object]]:
@@ -30,20 +32,21 @@ def _native_reward(logs: Path, reward_key: str) -> tuple[float, dict[str, object
     return parse_reward_number(read_regular_bytes(reward_txt).decode().strip()), {}
 
 
-def run_native(script_name: str, reward_key: str = "reward") -> dict:
-    tests = Path(os.environ["VERIFYIT_TESTS_DIR"]).resolve()
-    workspace = Path(os.environ["VERIFYIT_WORKSPACE"])
-    legacy = Path(os.environ.get("VERIFYIT_NATIVE_LOGS_DIR", "/logs/verifier"))
+def run_native(
+    script_name: str, tests_dir: Path, workspace: Path, native_logs: Path, reward_key: str = "reward"
+) -> dict:
+    """Run the trusted script and read its fresh legacy reward."""
+    tests = tests_dir.resolve()
     script = (tests / script_name).resolve()
     if not script.is_relative_to(tests) or not script.is_file():
         raise ValueError("native script must be a file under the trusted tests directory")
-    legacy.mkdir(parents=True, exist_ok=True)
+    native_logs.mkdir(parents=True, exist_ok=True)
     for filename in ("reward.txt", "reward.json", "verdict.json"):
-        (legacy / filename).unlink(missing_ok=True)
+        (native_logs / filename).unlink(missing_ok=True)
     completed = subprocess.run(["bash", str(script)], cwd=workspace, capture_output=True, text=True)
     if completed.returncode != 0:
         raise RuntimeError(f"native script exited {completed.returncode}: {completed.stderr[-1000:]}")
-    reward, metrics = _native_reward(legacy, reward_key)
+    reward, metrics = _native_reward(native_logs, reward_key)
     return asdict(scored(reward, native_metrics=metrics))
 
 
@@ -53,7 +56,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reward-key", default="reward")
     args = parser.parse_args(argv)
     try:
-        verdict = run_native(args.script, args.reward_key)
+        verdict = run_native(
+            args.script,
+            tests_dir=Path(os.environ["VERIFYIT_TESTS_DIR"]),
+            workspace=Path(os.environ["VERIFYIT_WORKSPACE"]),
+            native_logs=Path(os.environ.get(NATIVE_LOGS_DIR_ENV, DEFAULT_NATIVE_LOGS_DIR)),
+            reward_key=args.reward_key,
+        )
     except (OSError, ValueError, RuntimeError, KeyError) as error:
         verdict = {"status": "infra_error", "reward": 0.0, "detail": {"error": f"{type(error).__name__}: {error}"}}
     private = Path(os.environ["VERIFYIT_LOGS_DIR"])

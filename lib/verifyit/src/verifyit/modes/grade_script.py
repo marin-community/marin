@@ -76,7 +76,8 @@ def grade_script_callable(function: Callable[..., Reward], *args: object, timeou
     """Run a trusted importable Python grader under the Script verdict contract.
 
     The callable is client-owned grading code, never candidate-provided code.
-    Existing bounded execution owns transport, deadlines and process cleanup.
+    Timeouts and runtime failures return unscored infrastructure errors; malformed
+    references return invalid-task verdicts. Descendant processes are stopped.
     """
     try:
         return _validated_reward(call_bounded(function, *args, timeout=timeout, **kwargs))

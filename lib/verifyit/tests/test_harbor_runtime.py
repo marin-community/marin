@@ -106,19 +106,16 @@ def test_auxiliary_metadata_does_not_rescue_invalid_primary(native_task, primary
     assert (reward.status, reward.reward) == (Status.INFRA_ERROR, 0.0)
 
 
-def test_nested_nonfinite_metric_is_unscored(native_task):
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param('{"reward":1,"metrics":{"samples":[1e999]}}', id="nested_nonfinite"),
+        pytest.param('{"reward":0,"reward":1}', id="duplicate_primary"),
+    ],
+)
+def test_invalid_native_reward_payload_is_unscored(native_task, payload):
     tests, workspace, _ = native_task
-    (tests / "native_reward.json").write_text('{"reward":1,"metrics":{"samples":[1e999]}}')
-    (tests / "test.sh").write_text(
-        'cp "$VERIFYIT_TESTS_DIR/native_reward.json" "$VERIFYIT_NATIVE_LOGS_DIR/reward.json"\n'
-    )
-    reward = run(tests / "verifier.toml", workspace)
-    assert (reward.status, reward.reward) == (Status.INFRA_ERROR, 0.0)
-
-
-def test_duplicate_primary_reward_is_unscored(native_task):
-    tests, workspace, _ = native_task
-    (tests / "native_reward.json").write_text('{"reward":0,"reward":1}')
+    (tests / "native_reward.json").write_text(payload)
     (tests / "test.sh").write_text(
         'cp "$VERIFYIT_TESTS_DIR/native_reward.json" "$VERIFYIT_NATIVE_LOGS_DIR/reward.json"\n'
     )

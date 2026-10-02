@@ -8,7 +8,6 @@
 import inspect
 import math
 from importlib import import_module
-from pathlib import Path
 
 from verifyit.adapters import harness_validation as validation
 from verifyit.grade import InvalidTask
@@ -22,15 +21,8 @@ _METRICS = [
 
 
 def _pinned_function(callback, name: str) -> bool:
-    if isinstance(callback, dict) and callback.get("tag") == "function":
-        path = Path(str(callback.get("source_dir", ""))) / "utils.py"
-        recognized = callback.get("value") == f"utils.{name}"
-    elif inspect.isfunction(callback):
-        path = Path(callback.__code__.co_filename)
-        recognized = callback.__name__ == name
-    else:
-        return False
-    if not recognized or not str(path).endswith(_SUFFIX):
+    path = validation.utils_callback_path(callback, name)
+    if path is None or not str(path).endswith(_SUFFIX):
         return False
     source = validation.pinned_source_bytes(path, {_HASH})
     if source is None:
@@ -67,6 +59,7 @@ def crows_config_profile(config: dict) -> bool:
 
 
 def validate_crows_task(task) -> bool:
+    """Return False for unsupported tasks; raise InvalidTask for changed recognized contracts."""
     callback = getattr(getattr(task, "config", None), "process_results", None)
     if callback is None:
         return False

@@ -10,7 +10,6 @@ from verifyit.adapters.harness_native import exact_match
 from verifyit.grade import InvalidTask, Status, finalize_preparation_failure
 from verifyit.preparation.errors import PreparationError, PreparationFailure
 from verifyit.preparation.text import (
-    PreparedText,
     TextInputs,
     TextNormalization,
     TextPolicy,
@@ -26,7 +25,6 @@ def test_structural_snapshot_preserves_raw_values_and_isolates_reference_contain
     references.clear()
     assert inputs == TextInputs(" İ ", (" İ ", "", " İ ", "long"))
     normalized = normalize_text(inputs, TextNormalization(ignore_case=True))
-    assert isinstance(normalized, PreparedText)
     assert normalized.raw is inputs
     assert normalized.candidate == " i\u0307"
     assert normalized.references == (" i\u0307 ", "", " i\u0307 ", "long")
@@ -60,20 +58,20 @@ def test_preparation_raises_at_failure_with_original_metadata_and_minimum_verdic
 
 
 @pytest.mark.parametrize(
-    "error_type,status,expected",
+    "error_type,status,expected,category",
     [
-        ("AgentTimeoutError", Status.SCORED, Status.SCORED),
-        ("SandboxBuildFailedError", Status.SCORED, Status.INFRA_ERROR),
-        ("OutputLengthExceededError", Status.SCORED, Status.INFRA_ERROR),
-        ("UnrecognizedFailure", Status.SCORED, Status.INFRA_ERROR),
-        ("AgentTimeoutError", Status.INFRA_ERROR, Status.INFRA_ERROR),
+        ("AgentTimeoutError", Status.SCORED, Status.SCORED, ErrorCategory.AGENT),
+        ("SandboxBuildFailedError", Status.SCORED, Status.INFRA_ERROR, ErrorCategory.INFRASTRUCTURE),
+        ("OutputLengthExceededError", Status.SCORED, Status.INFRA_ERROR, ErrorCategory.PASSTHROUGH),
+        ("UnrecognizedFailure", Status.SCORED, Status.INFRA_ERROR, ErrorCategory.UNKNOWN),
+        ("AgentTimeoutError", Status.INFRA_ERROR, Status.INFRA_ERROR, ErrorCategory.AGENT),
     ],
 )
-def test_failed_preparation_has_no_partial_grade_to_pass_through(error_type, status, expected):
+def test_failed_preparation_has_no_partial_grade_to_pass_through(error_type, status, expected, category):
     failure = PreparationFailure(status, error_category(error_type), error_type, "interrupted", "tool")
     verdict = finalize_preparation_failure(**asdict(failure))
     assert (verdict.status, verdict.reward) == (expected, 0)
-    assert isinstance(failure.category, ErrorCategory)
+    assert verdict.detail["category"] == category
     assert verdict.detail["error_type"] == error_type
     assert verdict.detail["source_status"] == status
 

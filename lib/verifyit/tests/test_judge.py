@@ -793,7 +793,7 @@ def test_responses_completed_envelope_cannot_hide_incomplete_reasoning(tmp_path,
     assert (result.reward, result.status) == (0, Status.INFRA_ERROR)
 
 
-def test_label_exact_gate_roundtrip_uses_declared_reward_without_provider(tmp_path, fake_judge):
+def test_label_exact_gate_roundtrip_uses_declared_reward_without_provider(fake_judge):
     spec = _label_spec(label_scores={"A": 1.0, "B": 0.0, "C": 0.5}, exact_gate_answers=("idk",), exact_gate_label="C")
     spec = parse_spec(render_spec(spec))
     result = grade_judge.grade_judge_candidate(spec, "[IDK]", gate_candidate="idk")

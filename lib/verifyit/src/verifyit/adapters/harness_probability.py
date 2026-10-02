@@ -5,7 +5,6 @@
 import inspect
 from collections.abc import Sequence
 from importlib import import_module
-from pathlib import Path
 
 from verifyit.adapters import harness_validation as validation
 from verifyit.grade import InvalidTask, Reward
@@ -13,10 +12,11 @@ from verifyit.modes.grade_mcq import LikelihoodScoring, grade_mcq_likelihoods
 
 
 def probability_mass(labels: Sequence[int], responses: Sequence[tuple[float, bool]]) -> Reward:
-    """Grade raw alternative likelihoods against a binary correctness vector.
+    """Return the probability mass assigned to alternatives labeled correct.
 
-    The MCQ primitive owns stable softmax and correct-answer probability mass.
-    The adapter validates the harness response encoding and extracts labels.
+    Labels must be binary with at least one correct alternative. Responses must be
+    finite, nonpositive log-likelihoods paired with boolean greedy flags, one per label.
+    Invalid observations raise InvalidTask.
     """
     if isinstance(labels, str | bytes) or not labels or len(labels) != len(responses):
         raise InvalidTask("probability mass requires one label per nonempty response vector")
@@ -32,21 +32,15 @@ def probability_mass(labels: Sequence[int], responses: Sequence[tuple[float, boo
 
 
 def _pinned_callable(callback: object, name: str) -> bool:
-    if isinstance(callback, dict) and callback.get("tag") == "function":
-        symbol = callback.get("value")
-        path = Path(str(callback.get("source_dir", ""))) / "utils.py"
-        recognized = symbol == f"utils.{name}"
-    elif inspect.isfunction(callback):
-        path = Path(callback.__code__.co_filename)
-        recognized = callback.__name__ == name
-    else:
+    path = validation.utils_callback_path(callback, name)
+    if path is None:
         return False
     sources = {
         "/okapi/truthfulqa_multilingual/utils.py": "53748c0c6a434a352efacb3604b3d0c15e7853344b17cd92abc2e158b664d11e",
         "/eval/lm_eval_tasks/truthfulqa/utils.py": "81170af2ddc5fc3a4c0e039cfd9846d31d86f3ffbed4b0f731004426c1924ac5",
     }
     digest = next((value for suffix, value in sources.items() if str(path).endswith(suffix)), None)
-    if not recognized or digest is None:
+    if digest is None:
         return False
     source = validation.pinned_source_bytes(path, {digest})
     if source is None:

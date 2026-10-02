@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import threading
 from pathlib import Path
 
@@ -168,7 +169,7 @@ def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, op
     write_reward(logs, result)
     assert not (logs / "reward.txt").exists()
     assert not (logs / "reward.json").exists()
-    assert '"status": "infra_error"' in (logs / "verdict.json").read_text()
+    assert json.loads((logs / "verdict.json").read_text())["status"] == Status.INFRA_ERROR
 
 
 @pytest.mark.parametrize(
