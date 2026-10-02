@@ -207,3 +207,32 @@ uv run iris --cluster marin job run --no-wait \
 The sample builder reuses completed normalized artifacts from the current recipes.
 It writes the root completion record only after all source steps succeed.
 Use a new destination and job name for a new sample version.
+
+## Shuffled-token comparison
+
+`negative_control.py` reads a completed `FastTrackDataStore` and writes a separate
+training store. It shuffles tokens other than special tokens within each document,
+using a fixed seed.
+Document order, lengths, token counts, special-token positions, and mixture weights
+stay the same. Evaluation data, model configuration, and training settings stay the same.
+
+After the baseline finishes training and evaluation, submit the comparison with
+its `FastTrackDataStore` artifact directory as `--source-store`:
+
+```bash
+uv run iris --cluster marin job run --no-wait \
+  --job-name fast-track-shuffled-d512 --target-cluster cw-us-east-02a \
+  --priority interactive --cpu 2 --memory 8GB --disk 32GB --enable-extra-resources \
+  --extra cpu --extra datakit -e WANDB_API_KEY "$WANDB_API_KEY" -- \
+  python -m experiments.grug.fast_track.negative_control \
+  --source-store '<completed-baseline-data-artifact>' \
+  --run-id shuffled-d512-dense --size d512 --dense --seed 0 --version 2026.10.02 --run
+```
+
+For the mixture-of-experts (MoE) comparison, omit `--dense` and select different job
+and run names. The two variants reuse the shuffled store when the source, shuffle
+seed, and version match. Each run uses its variant's default training budget and
+saves its final checkpoint. Compare final Paloma and uncheatable bits per byte
+(BPB) with a baseline of the same size, variant, training seed, and token budget.
+Higher BPB means worse prediction of the evaluation data.
+Use `--stop-after datakit` to build only the shuffled store.
