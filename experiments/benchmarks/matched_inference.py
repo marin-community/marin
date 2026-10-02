@@ -28,6 +28,9 @@ from transformers import PreTrainedTokenizerFast
 
 from experiments.grug.moe_hero_ep.ops.export_vllm import split_experts
 
+_INITIALIZATION_SEED = 17
+_AUXILIARY_SEED = 23
+
 
 def export_fixture(root: Path, recipe: str) -> None:
     """Write deterministic BF16 weights, tokenizer, and identical token workload."""
@@ -60,13 +63,15 @@ def export_fixture(root: Path, recipe: str) -> None:
     tokenizer.save_pretrained(checkpoint)
     config.to_hf_config(config.vocab_size).to_json_file(checkpoint / "config.json")
     with jax.set_mesh(compact_grug_mesh()):
-        model = hax.named_jit(config.build)(hax.Axis("vocab", config.vocab_size), key=jax.random.key(17))
+        model = hax.named_jit(config.build)(
+            hax.Axis("vocab", config.vocab_size), key=jax.random.key(_INITIALIZATION_SEED)
+        )
         model = jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16").cast_to_compute(model)
         state = model.to_state_dict()
         for index, (name, value) in enumerate(state.items()):
             if "sconv" in name or name.endswith(("attn_gate.weight", "router.bias")):
                 state[name] = 0.1 * jax.random.normal(
-                    jax.random.fold_in(jax.random.key(23), index), value.shape, value.dtype
+                    jax.random.fold_in(jax.random.key(_AUXILIARY_SEED), index), value.shape, value.dtype
                 )
         model = hax.named_jit(lambda m, weights: m.from_state_dict(weights))(model, state)
         tensors = {}
@@ -87,7 +92,8 @@ def export_fixture(root: Path, recipe: str) -> None:
                 "checkpoint": identity,
                 "model_config": draccus.encode(config),
                 "dtype": "bfloat16",
-                "synthetic_seed": 17,
+                "synthetic_seed": _INITIALIZATION_SEED,
+                "auxiliary_seed": _AUXILIARY_SEED,
                 "evidence_kind": "synthetic_checkpoint",
             },
             indent=2,
