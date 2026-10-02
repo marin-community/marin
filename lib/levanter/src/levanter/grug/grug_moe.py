@@ -50,7 +50,13 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
-from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    DISPATCH_OVERLAP_SAVE_NAME,
+    DispatchOverlap,
+    _moe_mlp_ep_ragged_a2a_local,
+    _ragged_a2a_local,
+    forward_barrier,
+)
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
@@ -426,6 +432,135 @@ class MoEExpertMlp(eqx.Module):
             num_expert_waves=self.num_expert_waves,
         )
 
+    # Same scope name as `__call__`, so profiles attribute both paths alike.
+    @named_call(name="MoEExpertMlp")
+    def call_with_dispatch_overlap(
+        self,
+        x: Float[Array, "T D"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+        overlap: DispatchOverlap,
+        *,
+        token_valid: Bool[Array, "T"] | None = None,
+        mesh: jax.sharding.AbstractMesh | None = None,
+    ) -> tuple[Float[Array, "T D"], MoeDispatchCounts, object]:
+        """`moe_mlp_with_dispatch_overlap` with these expert weights."""
+        if self.implementation != "ragged_all_to_all":
+            raise ValueError(
+                f"dispatch overlap needs the ragged_all_to_all implementation, got {self.implementation!r}"
+            )
+        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
+        return moe_mlp_with_dispatch_overlap(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            self.w_down,
+            overlap,
+            token_valid=token_valid,
+            activation=self.activation,
+            mesh=mesh,
+            capacity_factor=self.capacity_factor,
+        )
+
+
+def _validated_token_valid(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"] | None,
+    w_up_gate: Float[Array, "E D I2"],
+    w_down: Float[Array, "E I D"],
+) -> Bool[Array, "T"]:
+    """Check the routed MoE inputs' shapes, and default ``token_valid`` to every token."""
+    if x.ndim != 2:
+        raise ValueError(f"x must be rank-2 [T, D], got shape={x.shape}")
+    if selected_experts.ndim != 2:
+        raise ValueError(f"selected_experts must be rank-2 [T, K], got shape={selected_experts.shape}")
+    if selected_experts.shape != combine_weights.shape:
+        raise ValueError(
+            "selected_experts and combine_weights must have identical [T, K] shapes; "
+            f"got {selected_experts.shape} vs {combine_weights.shape}"
+        )
+    if selected_experts.shape[0] != x.shape[0]:
+        raise ValueError(
+            f"selected_experts/combine_weights token dim ({selected_experts.shape[0]}) must match x token "
+            f"dim ({x.shape[0]})"
+        )
+    if w_down.shape[0] != w_up_gate.shape[0]:
+        raise ValueError(
+            f"w_down expert dimension ({w_down.shape[0]}) must match w_up_gate expert dimension ({w_up_gate.shape[0]})"
+        )
+    if token_valid is None:
+        return jnp.ones((x.shape[0],), dtype=jnp.bool_)
+    if token_valid.ndim != 1 or token_valid.shape[0] != x.shape[0]:
+        raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
+    if token_valid.dtype != jnp.bool_:
+        raise ValueError(f"token_valid must have boolean dtype, got dtype={token_valid.dtype}")
+    return token_valid
+
+
+def _check_expert_parallel_layout(token_spec: P, *, num_experts: int, expert_axis_size: int) -> None:
+    """Raise unless an expert-parallel MoE can run on tokens laid out as ``token_spec``."""
+    if "expert" not in _axis_names(token_spec[0]):
+        # EP dispatch requires disjoint token shards across expert ranks to avoid duplicate dispatch.
+        raise ValueError(
+            f"expert-parallel moe_mlp needs the token dim sharded over 'expert'; got token spec {token_spec}"
+        )
+    if num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+
+
+def _expert_parallel_shard_map(
+    local_fn: Callable[..., tuple],
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
+    w_up_gate: Float[Array, "E D I2"],
+    w_down: Float[Array, "E I D"],
+    *,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
+    token_spec: P,
+    extra_args: tuple = (),
+    extra_in_specs: tuple = (),
+    extra_out_specs: tuple = (),
+) -> tuple:
+    """Run ``local_fn`` on each expert shard: token-sharded routing inputs, expert-sharded weights.
+
+    ``local_fn`` takes the six routed-MoE inputs and then ``extra_args``, and returns this shard's
+    output, its `CapacityDrops`, and outputs matching ``extra_out_specs``. Each extra argument is
+    resharded to its spec in ``extra_in_specs``, which may be a pytree prefix of it.
+    """
+    expert_spec = P("expert", None, None)
+    shard_fn = shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(token_spec, token_spec, token_spec, token_spec, expert_spec, expert_spec, *extra_in_specs),
+        out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P()), *extra_out_specs),
+        check_vma=False,
+    )
+    return shard_fn(
+        _reshard_for_shard_map(x, mesh, token_spec),
+        _reshard_for_shard_map(selected_experts, mesh, token_spec),
+        _reshard_for_shard_map(combine_weights, mesh, token_spec),
+        _reshard_for_shard_map(token_valid, mesh, token_spec),
+        _reshard_for_shard_map(w_up_gate, mesh, expert_spec),
+        _reshard_for_shard_map(w_down, mesh, expert_spec),
+        *(
+            jax.tree.map(lambda a, spec: _reshard_for_shard_map(a, mesh, spec), arg, specs)
+            for arg, specs in zip(extra_args, extra_in_specs, strict=True)
+        ),
+    )
+
+
+def _dispatch_counts(drops: CapacityDrops, padding_skipped: jax.Array) -> MoeDispatchCounts:
+    return MoeDispatchCounts(
+        sender_dropped=drops.sender_dropped,
+        receiver_dropped=drops.receiver_dropped,
+        padding_skipped=padding_skipped,
+    )
+
 
 @named_call
 def moe_mlp(
@@ -482,41 +617,11 @@ def moe_mlp(
     else:
         activation_fn = activation
 
-    if x.ndim != 2:
-        raise ValueError(f"x must be rank-2 [T, D], got shape={x.shape}")
-    if selected_experts.ndim != 2:
-        raise ValueError(f"selected_experts must be rank-2 [T, K], got shape={selected_experts.shape}")
-    if selected_experts.shape != combine_weights.shape:
-        raise ValueError(
-            "selected_experts and combine_weights must have identical [T, K] shapes; "
-            f"got {selected_experts.shape} vs {combine_weights.shape}"
-        )
-    if selected_experts.shape[0] != x.shape[0]:
-        raise ValueError(
-            f"selected_experts/combine_weights token dim ({selected_experts.shape[0]}) must match x token "
-            f"dim ({x.shape[0]})"
-        )
-    if token_valid is None:
-        token_valid = jnp.ones((x.shape[0],), dtype=jnp.bool_)
-    elif token_valid.ndim != 1 or token_valid.shape[0] != x.shape[0]:
-        raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
-    elif token_valid.dtype != jnp.bool_:
-        raise ValueError(f"token_valid must have boolean dtype, got dtype={token_valid.dtype}")
+    token_valid = _validated_token_valid(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
     # Padding is an input property, so count it once here; backends report only capacity drops.
     padding_skipped = padding_skipped_assignments(token_valid, topk=selected_experts.shape[1])
 
-    def dispatch_counts(drops: CapacityDrops) -> MoeDispatchCounts:
-        return MoeDispatchCounts(
-            sender_dropped=drops.sender_dropped,
-            receiver_dropped=drops.receiver_dropped,
-            padding_skipped=padding_skipped,
-        )
-
     num_experts = int(w_up_gate.shape[0])
-    if w_down.shape[0] != num_experts:
-        raise ValueError(
-            f"w_down expert dimension ({w_down.shape[0]}) must match w_up_gate expert dimension ({num_experts})"
-        )
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -535,8 +640,8 @@ def moe_mlp(
             expert_chunks=expert_chunks,
         )
         if report_capacity_overflow:
-            return out, dispatch_counts(
-                CapacityDrops(sender_dropped=dropped, receiver_dropped=jnp.zeros_like(dropped))
+            return out, _dispatch_counts(
+                CapacityDrops(sender_dropped=dropped, receiver_dropped=jnp.zeros_like(dropped)), padding_skipped
             )
         return out
 
@@ -546,11 +651,7 @@ def moe_mlp(
     token_sharding_axes = _axis_names(token_spec[0])
 
     if has_expert_axis and expert_axis_size > 1:
-        if "expert" not in token_sharding_axes:
-            # EP dispatch requires disjoint token shards across expert ranks to avoid duplicate dispatch.
-            raise ValueError(
-                f"expert-parallel moe_mlp needs the token dim sharded over 'expert'; got token spec {token_spec}"
-            )
+        _check_expert_parallel_layout(token_spec, num_experts=num_experts, expert_axis_size=expert_axis_size)
         if expert_chunks != 1:
             raise ValueError("expert_chunks must be 1 when expert parallelism is active")
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
@@ -559,8 +660,6 @@ def moe_mlp(
                 "requires a dispatch/combine schedule inside each expert shard plus cross-shard routing. "
                 f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
             )
-        if num_experts % expert_axis_size != 0:
-            raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
@@ -581,17 +680,7 @@ def moe_mlp(
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 
-        w_up_gate_spec = P("expert", None, None)
-        w_down_spec = P("expert", None, None)
-
-        x = _reshard_for_shard_map(x, mesh, token_spec)
-        selected_experts = _reshard_for_shard_map(selected_experts, mesh, token_spec)
-        combine_weights = _reshard_for_shard_map(combine_weights, mesh, token_spec)
-        token_valid = _reshard_for_shard_map(token_valid, mesh, token_spec)
-        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
-        w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
-
-        shard_fn = shard_map(
+        out, drops = _expert_parallel_shard_map(
             partial(
                 shard_local_fn,
                 activation_fn=activation_fn,
@@ -599,21 +688,17 @@ def moe_mlp(
                 capacity_factor=capacity_factor,
                 token_sharding_axes=token_sharding_axes,
             ),
+            x,
+            selected_experts,
+            combine_weights,
+            token_valid,
+            w_up_gate,
+            w_down,
             mesh=mesh,
-            in_specs=(
-                token_spec,
-                token_spec,
-                token_spec,
-                token_spec,
-                w_up_gate_spec,
-                w_down_spec,
-            ),
-            out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
-            check_vma=False,
+            token_spec=token_spec,
         )
-        out, drops = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
         if report_capacity_overflow:
-            return out, dispatch_counts(drops)
+            return out, _dispatch_counts(drops, padding_skipped)
         return out
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
@@ -683,8 +768,116 @@ def moe_mlp(
     )
     out, dropped = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
     if report_capacity_overflow:
-        return out, dispatch_counts(CapacityDrops(sender_dropped=dropped, receiver_dropped=jnp.zeros_like(dropped)))
+        return out, _dispatch_counts(
+            CapacityDrops(sender_dropped=dropped, receiver_dropped=jnp.zeros_like(dropped)), padding_skipped
+        )
     return out
+
+
+@named_call(name="moe_mlp")
+def _overlap_work_alone(
+    overlap: DispatchOverlap, mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None
+) -> object:
+    """Run ``overlap.fn`` per token shard, as the expert shard map would, without a dispatch."""
+    if mesh is None or mesh.empty:
+        return overlap.fn(overlap.params, overlap.x)
+    x_spec = P(_token_spec_from_x(overlap.x, mesh)[0], *([None] * (overlap.x.ndim - 1)))
+    param_specs = jax.tree.map(lambda a: P(*([None] * a.ndim)), overlap.params)
+    return shard_map(
+        overlap.fn,
+        mesh=mesh,
+        in_specs=(param_specs, x_spec),
+        out_specs=P(x_spec[0]),
+        check_vma=False,
+    )(
+        jax.tree.map(lambda a, spec: _reshard_for_shard_map(a, mesh, spec), overlap.params, param_specs),
+        _reshard_for_shard_map(overlap.x, mesh, x_spec),
+    )
+
+
+def moe_mlp_with_dispatch_overlap(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    w_up_gate: Float[Array, "E D I2"],
+    w_down: Float[Array, "E I D"],
+    overlap: DispatchOverlap,
+    *,
+    token_valid: Bool[Array, "T"] | None = None,
+    activation: MoeActivation = ActivationFunctionEnum.silu,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+) -> tuple[Float[Array, "T D"], MoeDispatchCounts, object]:
+    """`moe_mlp` on the expert-parallel ragged transport, running ``overlap`` beside the first dispatch.
+
+    ``overlap.fn(overlap.params, x_local)`` runs inside the expert shard map on this shard's tokens of
+    ``overlap.x`` (token-sharded like ``x``), with ``overlap.params`` replicated. Its result (a pytree
+    of token-major arrays) comes back token-sharded as the third output. See `DispatchOverlap`.
+    Without an expert axis there is no dispatch to overlap: the routed MoE runs as `moe_mlp` and the
+    overlap work runs on its own.
+    """
+    if mesh is None:
+        mesh = _current_mesh()
+    token_valid = _validated_token_valid(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
+    expert_axis_size = _mesh_axis_size(mesh, "expert")
+    if mesh is None or mesh.empty or expert_axis_size <= 1:
+        out, counts = cast(
+            tuple[Float[Array, "T D"], MoeDispatchCounts],
+            moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                token_valid=token_valid,
+                activation=activation,
+                implementation="ragged_all_to_all",
+                mesh=mesh,
+                capacity_factor=capacity_factor,
+                report_capacity_overflow=True,
+            ),
+        )
+        return out, counts, _overlap_work_alone(overlap, mesh)
+    activation_fn = activation.to_jax_fn() if isinstance(activation, ActivationFunctionEnum) else activation
+    padding_skipped = padding_skipped_assignments(token_valid, topk=selected_experts.shape[1])
+    num_experts = int(w_up_gate.shape[0])
+    token_spec = _token_spec_from_x(x, mesh)
+    _check_expert_parallel_layout(token_spec, num_experts=num_experts, expert_axis_size=expert_axis_size)
+    token_sharding_axes = _axis_names(token_spec[0])
+    overlap_x_spec = P(token_spec[0], *([None] * (overlap.x.ndim - 1)))
+    param_specs = jax.tree.map(lambda a: P(*([None] * a.ndim)), overlap.params)
+
+    def _local(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down, params, overlap_x):
+        return _ragged_a2a_local(
+            x,
+            selected_experts,
+            combine_weights,
+            token_valid,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
+            token_sharding_axes=token_sharding_axes,
+            overlap=DispatchOverlap(fn=overlap.fn, params=params, x=overlap_x),
+        )
+
+    out, drops, staged = _expert_parallel_shard_map(
+        _local,
+        x,
+        selected_experts,
+        combine_weights,
+        token_valid,
+        w_up_gate,
+        w_down,
+        mesh=mesh,
+        token_spec=token_spec,
+        extra_args=(overlap.params, overlap.x),
+        extra_in_specs=(param_specs, overlap_x_spec),
+        # A prefix: every leaf of the overlap result is token-major.
+        extra_out_specs=(token_spec,),
+    )
+    return out, _dispatch_counts(drops, padding_skipped), staged
 
 
 __all__ = [
@@ -700,7 +893,11 @@ __all__ = [
     "MoeImplementation",
     "PspecAxis",
     "QBRoutedMoE",
+    "DISPATCH_OVERLAP_SAVE_NAME",
+    "DispatchOverlap",
     "moe_mlp",
+    "forward_barrier",
+    "moe_mlp_with_dispatch_overlap",
     "moe_routing_stats",
     "moe_routing_stats_local",
     "reduce_moe_routing_stats",

@@ -67,6 +67,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.moe_hero_ep.model import (
     OFFLOAD_CARRY_REMAT_MODE,
+    RAGGED_MOE_IMPLEMENTATION,
     GrugModelConfig,
     RematMode,
     Transformer,
@@ -107,6 +108,7 @@ OFFLOAD_CARRY_MEM_FRACTION = "0.78"
 OFFLOAD_CARRY_SLOP_FACTOR = 105
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 XLA_HOST_MEMORY_OFFLOADING_FLAG = "--xla_gpu_enable_host_memory_offloading"
+XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
@@ -114,7 +116,6 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # The ragged transport and the carry offload run with one collective in flight. Both force it rather
 # than default it; see `_apply_hero_ep_runtime_defaults`.
 SERIAL_COLLECTIVE_OVERLAP_LIMIT = 1
-RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -224,7 +225,7 @@ def _apply_hero_ep_runtime_defaults(
     latency_hiding = not ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        f"--xla_gpu_enable_latency_hiding_scheduler={'true' if latency_hiding else 'false'}",
+        f"{XLA_LATENCY_HIDING_FLAG}={'true' if latency_hiding else 'false'}",
         # The scheduler and rematerialization size the single `jit_train_step` temp arena against
         # this percentage of their memory budget. An arena the pool's free space cannot serve forces
         # a fresh mapping against the little physical memory outside the pool: without the carry
@@ -243,6 +244,11 @@ def _apply_hero_ep_runtime_defaults(
         flag_defaults += (f"{XLA_HOST_MEMORY_OFFLOADING_FLAG}=true",)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
+    if ragged and offload_carry and not _xla_bool_flag(xla_flags, XLA_LATENCY_HIDING_FLAG):
+        # This configuration runs the MoE's dispatch overlap (`model._schedules_dispatch_overlap`),
+        # whose transport order holds only under the latency-hiding scheduler; without it two
+        # transports can be in flight together and deadlock.
+        raise ValueError(f"the carry offload with {RAGGED_MOE_IMPLEMENTATION} needs {XLA_LATENCY_HIDING_FLAG}=true")
     if ragged or offload_carry:
         # A wrong overlap limit corrupts training silently, so these configurations take the flag
         # away from the caller instead of defaulting it. With the carry offload, a reloaded
@@ -262,6 +268,19 @@ def _apply_hero_ep_runtime_defaults(
         xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
         xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+
+
+def _xla_bool_flag(xla_flags: list[str], name: str) -> bool:
+    """The value XLA reads for boolean flag ``name``: its last occurrence wins, a bare flag is true."""
+    values = [flag.partition("=")[2] for flag in xla_flags if flag.partition("=")[0] == name]
+    if not values:
+        raise ValueError(f"{name} is not set")
+    value = values[-1].lower()
+    if value in ("", "true", "1"):
+        return True
+    if value in ("false", "0"):
+        return False
+    raise ValueError(f"{name}={values[-1]} is not a boolean")
 
 
 def verify_ragged_pjrt() -> None:
