@@ -6,17 +6,25 @@ router updates. Standard 1F1B is the default. Each process initializes only its
 own stage. CPU tests compare sequential-stage hidden states, routing statistics,
 losses, and gradients against the unsplit model.
 
-The synthetic runner can restore with `--checkpoint-root` and save with
-`--checkpoint-every-steps`. Its AdamW default is a bring-up configuration;
-the validated long-context recipe explicitly selects
-BF16 MuonH and both host offloads. Production continuation and long-run training
-stability remain unvalidated.
+The runner can save and resume complete pipeline checkpoints. Its
+AdamW default is a bring-up configuration; the validated long-context recipe
+explicitly selects BF16 MuonH and both host offloads. Production continuation
+and long-run training stability remain unvalidated. The
+[GB200 launcher](GB200.md) provides the NVIDIA worker commands. The
+[H100 adapter reference](../../../docs/references/hero-pipeline-h100.md) describes
+the current-main recipe flags, fresh-data path, and bounded validation gates.
+
+Set `--checkpoint-root` to restore the latest complete `step-N` checkpoint and
+`--checkpoint-every-steps` to save at that interval and on the final step. Keep
+`--steps` at the same total update count when restarting: it sets the MuonH
+schedule as well as the stopping point. The checkpoint contains model weights,
+optimizer state, and pending QB router updates under global layer paths, so a
+run may resume with a different pipeline layer split. The checkpoint root must
+be shared by every worker. A checkpoint written by the standard Hero FSDP
+trainer has a different state tree, including optional master and EMA weights;
+loading that format into this pipeline has not been implemented or validated.
 
 ## Validated result
-
-For the current main recipe and the experimental one-rack GB200 launcher, see
-[Hero pipeline on GB200](GB200.md). The measurements below use the earlier H100
-configuration and do not validate the current GB200 runtime.
 
 The full 535,477,106,688-parameter, 48-layer model completed ten finite synthetic
 updates at sequence length 65,536 on 192 H100s in `cw-rno2a`. The recipe uses
@@ -63,6 +71,7 @@ the dependency overlays, reproduce the worker configuration with:
 ```bash
 XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async \
 XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.91 \
+JAX_PLATFORMS=cuda,cpu \
 JAX_ENABLE_PGLE=false XLA_FLAGS=--xla_gpu_enable_command_buffer= \
 CUDA_MODULE_LOADING=EAGER JAXPP_DISABLE_SCHEDULE_TASK_FUSION=1 \
 uv run --no-sync python -m iris.jax.multigpu_main --nproc 1 --devices-per-proc 8 -- \

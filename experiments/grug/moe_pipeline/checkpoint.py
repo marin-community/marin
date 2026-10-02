@@ -7,10 +7,7 @@ import json
 from dataclasses import dataclass
 
 import jax
-import jax.numpy as jnp
 import optax
-from jax.sharding import NamedSharding
-from jax.sharding import PartitionSpec as P
 from jaxtyping import PyTree
 from levanter import mpmd_checkpoint
 from levanter.checkpoint import discover_checkpoint_candidates
@@ -53,34 +50,6 @@ def _merge_stages(stages: tuple[GrugMoePipelineStage, ...]) -> Transformer:
     )
 
 
-def _unstack_pending(value: jax.Array) -> tuple[jax.Array, ...]:
-    # The small router-update matrix is replicated within each stage. Slice
-    # its single-device buffers so nonowning processes perform no JAX work.
-    spec = (*value.sharding.spec, None, None)
-    assert spec[0] is None
-    sharding = NamedSharding(value.sharding.mesh, P(spec[1]))
-    return tuple(
-        jax.make_array_from_single_device_arrays(
-            value.shape[1:], sharding, [shard.data[i] for shard in value.addressable_shards], dtype=value.dtype
-        )
-        for i in range(value.shape[0])
-    )
-
-
-def _stack_pending(values: tuple[jax.Array, ...], sharding: NamedSharding) -> jax.Array:
-    buffers = [{shard.device: shard.data for shard in value.addressable_shards} for value in values]
-    return jax.make_array_from_single_device_arrays(
-        (len(values), *values[0].shape),
-        sharding,
-        [
-            jnp.stack([buffer[device] for buffer in buffers])
-            for device in sharding.mesh.devices.flat
-            if device in buffers[0]
-        ],
-        dtype=values[0].dtype,
-    )
-
-
 def checkpoint_state(state: GrugMoeAutomaticPipelineState) -> GrugMoeCheckpointState:
     """Assemble stage-local buffers under global model and optimizer paths."""
     arrays = mpmd_checkpoint.checkpoint_arrays(state)
@@ -92,7 +61,9 @@ def checkpoint_state(state: GrugMoeAutomaticPipelineState) -> GrugMoeCheckpointS
     return GrugMoeCheckpointState(
         params=_merge_stages(arrays.trainable_params),
         opt_state=optimizer,
-        pending_qb_betas=tuple(beta for stage in arrays.pending_qb_betas for beta in _unstack_pending(stage)),
+        pending_qb_betas=tuple(
+            beta for stage in arrays.pending_qb_betas for beta in mpmd_checkpoint.unstack_checkpoint_layers(stage)
+        ),
     )
 
 
@@ -115,7 +86,9 @@ def _pipeline_state(
         for index in range(stages)
     )
     pending = tuple(
-        _stack_pending(canonical.pending_qb_betas[stage.start_layer : stage.end_layer], target.sharding)
+        mpmd_checkpoint.stack_checkpoint_layers(
+            canonical.pending_qb_betas[stage.start_layer : stage.end_layer], target.sharding
+        )
         for stage, target in zip(params, exemplar.pending_qb_betas, strict=True)
     )
     return GrugMoeAutomaticPipelineState(params, optimizer, pending)

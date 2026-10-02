@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded synthetic Hero pipeline trial with optional checkpoint save and resume."""
+"""Bounded Hero pipeline trial with optional checkpoint save and resume."""
 
 import argparse
 import dataclasses
@@ -9,6 +9,7 @@ import importlib
 import itertools
 import json
 import time
+from contextlib import closing, nullcontext
 
 import jax
 import jax.numpy as jnp
@@ -19,20 +20,36 @@ import wandb
 from finestore.cache import PersistentKvCache
 from fray.device_flops import device_flops_for_jax_device
 from iris.jax.init import initialize_jax
-from jax.sharding import NamedSharding
+from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from jaxpp import api as pp
 from jaxpp import dime2, env_vars
 from levanter.cutlass_kernel_cache import install as install_cutlass_cache
+from levanter.data.loader import DataLoader
 from levanter.data.text.examples import GrugLmExample
 from levanter.pipeline import reshape_batch_into_microbatches
+from levanter.schedule import BatchSchedule
+from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.utils.jax_utils import barrier_sync_named, multihost_allgather_sync
+from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
+    HARRIER_MIX_2026_08_18_STORE,
+)
+from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG, HERO_TENSORSTORE_CACHE_BYTES
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
+from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
-from experiments.grug.moe_hero_ep.train import _apply_hero_ep_runtime_defaults, _compute_flops, verify_ragged_pjrt
+from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
+    _apply_hero_ep_runtime_defaults,
+    _compute_flops,
+    build_train_dataset,
+    build_train_loader,
+    verify_ragged_pjrt,
+)
 from experiments.grug.moe_hero_pipeline.checkpoint import restore_checkpoint, save_checkpoint
+from experiments.grug.moe_hero_pipeline.data import raw_hero_data_config
 from experiments.grug.moe_hero_pipeline.pipeline import (
     _HOST_MEMORY_KIND,
     BATCH_AXES,
@@ -51,6 +68,11 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 
 _MULTIHOST_TIMEOUT = 600
 _MP_POLICY = "params=bfloat16,compute=bfloat16,output=bfloat16"
+_ADAMW_LEARNING_RATE = 1e-4
+_ADAMW_BETA1 = 0.9
+_ADAMW_BETA2 = 0.95
+_ADAMW_MOMENTUM_DTYPE = jnp.bfloat16
+_ADAMW_WEIGHT_DECAY = 0.1
 
 
 def _log(event: str, **fields) -> None:
@@ -167,12 +189,22 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-processes", type=int)
     parser.add_argument("--process-id", type=int)
     parser.add_argument("--local-device-id", type=int)
+    parser.add_argument("--real-data", action="store_true", help="Read the current immutable Hero Harrier mixture")
+    parser.add_argument("--data-output-root", help="Caller-owned root for resolving the real-data context")
+    parser.add_argument(
+        "--data-schedule-steps", type=int, help="Hero mixture schedule horizon, independent of trial steps"
+    )
     parser.add_argument(
         "--main-hero-recipe",
         action="store_true",
         help="Use current main Hero model, FP32 params, and compute-scaled MuonH",
     )
     parser.add_argument("--attention-implementation", choices=("gpu_fa4_cute", "gpu_fa4_cute_sm100"))
+    parser.add_argument(
+        "--moe-implementation",
+        choices=("ragged_all_to_all", "fixed_pooled_wave_all_to_all"),
+        help="Explicit transport adapter for the main recipe on different hardware",
+    )
     parser.add_argument("--diagnostic-layers", type=int, help="Use fewer full-width hero layers for fault isolation")
     parser.add_argument(
         "--schedule",
@@ -208,14 +240,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", help="Optional rank-zero W&B console capture in marin-community/marin_moe")
     parser.add_argument("--compilation-cache", default="/tmp/hero-pipeline-jax-cache")
     args = parser.parse_args()
-    if args.main_hero_recipe and args.optimizer != "muonh":
-        parser.error("main-hero-recipe requires optimizer=muonh")
     if args.diagnostic_layers is not None and (
         not (args.full_hero or args.main_hero_recipe) or args.diagnostic_layers < 1
     ):
         parser.error("diagnostic-layers requires full-hero and a positive layer count")
     if args.sequence_length is not None and args.sequence_length < 1:
         parser.error("sequence-length must be positive")
+    if args.real_data and (not args.main_hero_recipe or not args.data_output_root):
+        parser.error("real-data requires main-hero-recipe and data-output-root")
+    if args.real_data and (args.data_schedule_steps is None or args.data_schedule_steps < args.steps):
+        parser.error("real-data requires data-schedule-steps at least as large as steps")
+    if args.moe_implementation is not None and not args.main_hero_recipe:
+        parser.error("moe-implementation requires main-hero-recipe")
     if args.expert_waves < 1:
         parser.error("expert-waves must be positive")
     if args.steps < 1 or args.expert_axis_size < 1:
@@ -271,28 +307,110 @@ def _model_config(args: argparse.Namespace) -> GrugModelConfig:
         )
     if args.attention_implementation is not None:
         model_config = dataclasses.replace(model_config, attention_implementation=args.attention_implementation)
+    if args.moe_implementation is not None:
+        model_config = dataclasses.replace(
+            model_config, moe_implementation=args.moe_implementation, num_expert_waves=args.expert_waves
+        )
     if args.diagnostic_layers is not None:
         model_config = dataclasses.replace(model_config, num_layers=args.diagnostic_layers)
     if args.sequence_length is not None:
         model_config = dataclasses.replace(model_config, max_seq_len=args.sequence_length)
     if args.offload_activations:
-        model_config = dataclasses.replace(model_config, remat_mode="offload_carry")
+        model_config = dataclasses.replace(model_config, remat_mode=OFFLOAD_CARRY_REMAT_MODE)
     return model_config
+
+
+def _optimizer_and_contract(
+    args: argparse.Namespace, model_config: GrugModelConfig, batch_size: int
+) -> tuple[optax.GradientTransformation, dict[str, object]]:
+    if args.main_hero_recipe:
+        optimizer_config = dataclasses.replace(
+            MoeHeuristic().build_optimizer_config(
+                num_train_steps=args.steps,
+                batch_size=batch_size,
+                hidden_dim=model_config.hidden_dim,
+                seq_len=model_config.max_seq_len,
+            ),
+            use_syrk=all("H100" not in device.device_kind for device in jax.local_devices()),
+            gate_router_weight_decay=0.02,
+        )
+        optimizer = optimizer_config.build(args.steps)
+        optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
+    elif args.optimizer == "muonh":
+        optimizer_config = GrugMoeMuonHConfig(
+            learning_rate=13 / 3 * 1e-4, adam_lr=1e-4, warmup=0, lr_schedule="constant"
+        )
+        optimizer = optimizer_config.build(args.steps)
+        optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
+    else:
+        optimizer = optax.adamw(
+            _ADAMW_LEARNING_RATE,
+            b1=_ADAMW_BETA1,
+            b2=_ADAMW_BETA2,
+            mu_dtype=_ADAMW_MOMENTUM_DTYPE,
+            weight_decay=_ADAMW_WEIGHT_DECAY,
+        )
+        optimizer_contract = {
+            "type": "adamw",
+            "learning_rate": _ADAMW_LEARNING_RATE,
+            "b1": _ADAMW_BETA1,
+            "b2": _ADAMW_BETA2,
+            "mu_dtype": np.dtype(_ADAMW_MOMENTUM_DTYPE).name,
+            "weight_decay": _ADAMW_WEIGHT_DECAY,
+        }
+    return optimizer, optimizer_contract
+
+
+def _real_data_loader(
+    args: argparse.Namespace, model_config: GrugModelConfig, batch_size: int, flops_per_example: float, mesh: Mesh
+) -> DataLoader[GrugLmExample]:
+    set_jagged_array_read_cache_bytes(HERO_TENSORSTORE_CACHE_BYTES)
+    ctx = StepContext.for_run(
+        output_path=args.data_output_root,
+        prefix="s3://marin-us-east-02a/marin",
+        deps=(HARRIER_MIX_2026_08_18_STORE,),
+    )
+    data_config = raw_hero_data_config(
+        ctx=ctx,
+        schedule_steps=args.data_schedule_steps,
+        batch_size=batch_size,
+        max_seq_len=model_config.max_seq_len,
+        experiment_flops=flops_per_example * batch_size * args.steps,
+    )
+    batch_schedule = BatchSchedule(batch_size)
+    dataset = build_train_dataset(
+        data_config,
+        max_seq_len=model_config.max_seq_len,
+        batch_schedule=batch_schedule,
+        key=jax.random.PRNGKey(args.seed),
+    )
+    component_lengths = {name: len(component.as_sync_dataset()) for name, component in dataset.datasets.items()}
+    if any(length == 0 for length in component_lengths.values()):
+        raise ValueError(f"Raw Hero data contains an empty component: {component_lengths}")
+    _log(
+        "real_data_view",
+        schedule_steps=args.data_schedule_steps,
+        simulated_epoching=False,
+        component_lengths=component_lengths,
+    )
+    train_loader = build_train_loader(dataset, batch_schedule=batch_schedule, mesh=mesh)
+    return train_loader
 
 
 def main() -> None:
     args = _parse_args()
-    # Configure both caches before Iris initialization can select object storage.
-    jax.config.update("jax_compilation_cache_dir", args.compilation_cache)
-    install_cutlass_cache(PersistentKvCache.in_memory())
+    model_config = _model_config(args)
     if args.main_hero_recipe:
         _apply_hero_ep_runtime_defaults(
             inline_watch_enabled=False,
-            moe_implementation=HERO_MODEL_CONFIG.moe_implementation,
-            remat_mode="offload_carry" if args.offload_activations else "recompute_all",
-            processes_per_task=4,
+            moe_implementation=model_config.moe_implementation,
+            remat_mode=model_config.remat_mode,
         )
-        verify_ragged_pjrt()
+        if model_config.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
+            verify_ragged_pjrt()
+    # Configure both caches before Iris initialization can select object storage.
+    jax.config.update("jax_compilation_cache_dir", args.compilation_cache)
+    install_cutlass_cache(PersistentKvCache.in_memory())
     if args.coordinator_address:
         if args.num_processes is None or args.process_id is None or args.local_device_id is None:
             raise ValueError("External bootstrap requires num-processes, process-id, and local-device-id")
@@ -319,7 +437,6 @@ def main() -> None:
     )
     placements = automatic_stage_to_mpmd_indices(config, args.schedule)
     mesh, mpmd_mesh = make_pipeline_mesh(config, expert_axis_size=args.expert_axis_size, replica_axis_size=1)
-    model_config = _model_config(args)
     full_hero = (args.full_hero or args.main_hero_recipe) and args.diagnostic_layers is None
     batch_multiple = args.microbatches * jax.device_count() // config.mpmd_stages
     batch_size = args.batch_size if args.batch_size is not None else batch_multiple
@@ -330,39 +447,14 @@ def main() -> None:
     flops_per_example, _ = _compute_flops(model_config=model_config)
     peak_flops = device_flops_for_jax_device(jax.local_devices()[0].device_kind)
     assert peak_flops is not None
-    if args.main_hero_recipe:
-        optimizer_config = dataclasses.replace(
-            MoeHeuristic().build_optimizer_config(
-                num_train_steps=args.steps,
-                batch_size=batch_size,
-                hidden_dim=model_config.hidden_dim,
-                seq_len=model_config.max_seq_len,
-            ),
-            use_syrk=all("H100" not in device.device_kind for device in jax.local_devices()),
-            gate_router_weight_decay=0.02,
-        )
-        optimizer = optimizer_config.build(args.steps)
-        optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
-    elif args.optimizer == "muonh":
-        optimizer_config = GrugMoeMuonHConfig(
-            learning_rate=13 / 3 * 1e-4, adam_lr=1e-4, warmup=0, lr_schedule="constant"
-        )
-        optimizer = optimizer_config.build(args.steps)
-        optimizer_contract = {"type": "muonh", **dataclasses.asdict(optimizer_config)}
-    else:
-        adamw_config = {
-            "learning_rate": 1e-4,
-            "b1": 0.9,
-            "b2": 0.95,
-            "weight_decay": 0.1,
-        }
-        optimizer = optax.adamw(mu_dtype=jnp.bfloat16, **adamw_config)
-        optimizer_contract = {"type": "adamw", **adamw_config, "mu_dtype": "bfloat16"}
+    optimizer, optimizer_contract = _optimizer_and_contract(args, model_config, batch_size)
     checkpoint_contract = {
         "model": dataclasses.asdict(model_config),
         "mp_policy": mp_policy,
         "optimizer": optimizer_contract,
         "training_steps": args.steps,
+        "data": HARRIER_MIX_2026_08_18_STORE.adopt_source if args.real_data else "synthetic",
+        "data_seed": args.seed,
     }
     _log(
         "pipeline_init",
@@ -398,14 +490,28 @@ def main() -> None:
     if args.offload_opt_state:
         assert all(value.sharding.memory_kind == _HOST_MEMORY_KIND for value in jax.tree.leaves(state.opt_state))
         _log("optimizer_state_offloaded", memory_kind=_HOST_MEMORY_KIND)
-    tokens = np.random.default_rng(args.seed).integers(
-        model_config.vocab_size, size=(batch_size, model_config.max_seq_len), dtype=np.int32
-    )
-    weights = np.ones_like(tokens, dtype=np.float32)
-    weights[:, -1] = 0
+    train_loader = None
+    if args.real_data:
+        train_loader = _real_data_loader(args, model_config, batch_size, flops_per_example, mesh)
+        with closing(train_loader.iter_from_step(0)) as sample_iterator:
+            batch = next(sample_iterator)
+        del sample_iterator
+        _log(
+            "real_data_initialized",
+            store=HARRIER_MIX_2026_08_18_STORE.adopt_source,
+            data_seed=args.seed,
+            cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
+        )
+    else:
+        tokens = np.random.default_rng(args.seed).integers(
+            model_config.vocab_size, size=(batch_size, model_config.max_seq_len), dtype=np.int32
+        )
+        weights = np.ones_like(tokens, dtype=np.float32)
+        weights[:, -1] = 0
+        with jax.set_mesh(mesh):
+            sharding = NamedSharding(mesh, P(BATCH_AXES, None))
+            batch = GrugLmExample(tokens=jax.device_put(tokens, sharding), loss_weight=jax.device_put(weights, sharding))
     with jax.set_mesh(mesh):
-        sharding = NamedSharding(mesh, P(BATCH_AXES, None))
-        batch = GrugLmExample(tokens=jax.device_put(tokens, sharding), loss_weight=jax.device_put(weights, sharding))
         denominator = jnp.sum(batch.loss_weight)
         batches = reshape_batch_into_microbatches(batch, args.microbatches)
     step = make_automatic_pipeline_step(
@@ -454,32 +560,46 @@ def main() -> None:
     started = time.monotonic()
     _initialize_pipeline_communicators(mpmd_mesh, placements)
     _log("pipeline_communicators_initialized", elapsed_seconds=time.monotonic() - started)
-    last_step = args.stop_after_step or args.steps
-    for completed_steps in range(start_step + 1, last_step + 1):
-        started = time.monotonic()
-        state, metrics = compiled_step(state, batches, denominator)
-        jax.block_until_ready((state, metrics))
-        if args.synchronize_devices_after_step:
-            _synchronize_local_cuda_devices(completed_steps)
-        if args.offload_opt_state:
-            assert all(value.sharding.memory_kind == _HOST_MEMORY_KIND for value in jax.tree.leaves(state.opt_state))
-        elapsed = time.monotonic() - started
-        loss = _global_loss(metrics[TRAIN_LOSS_KEY])
-        mfu_percent = 100 * batch_size * flops_per_example / (elapsed * jax.device_count() * peak_flops)
-        _log(
-            "pipeline_step",
-            step=completed_steps,
-            loss=loss,
-            elapsed_seconds=elapsed,
-            tokens_per_second=batch_size * model_config.max_seq_len / elapsed,
-            mfu_percent=mfu_percent,
-        )
-        if args.run_id and jax.process_index() == 0:
-            wandb.log({"train/loss": loss, "step_seconds": elapsed, "throughput/mfu": mfu_percent}, step=completed_steps)
-        if args.checkpoint_root and args.checkpoint_every_steps:
-            if completed_steps % args.checkpoint_every_steps == 0 or completed_steps == last_step:
-                path = save_checkpoint(args.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract)
-                _log("pipeline_checkpoint_saved", step=completed_steps, path=path)
+    iterator_context = closing(train_loader.iter_from_step(start_step)) if train_loader is not None else nullcontext()
+    with iterator_context as data_iterator:
+        last_step = args.stop_after_step or args.steps
+        for completed_steps in range(start_step + 1, last_step + 1):
+            if data_iterator is not None:
+                batch = next(data_iterator)
+                with jax.set_mesh(mesh):
+                    denominator = jnp.sum(batch.loss_weight)
+                    batches = reshape_batch_into_microbatches(batch, args.microbatches)
+                batches, denominator = pp.spmd_to_mpmd_reshard(
+                    mpmd_mesh, (batches, denominator), compiled_step.in_shardings[0][1:3]
+                )
+            started = time.monotonic()
+            state, metrics = compiled_step(state, batches, denominator)
+            jax.block_until_ready((state, metrics))
+            if args.synchronize_devices_after_step:
+                _synchronize_local_cuda_devices(completed_steps)
+            if args.offload_opt_state:
+                assert all(value.sharding.memory_kind == _HOST_MEMORY_KIND for value in jax.tree.leaves(state.opt_state))
+            elapsed = time.monotonic() - started
+            loss = _global_loss(metrics[TRAIN_LOSS_KEY])
+            mfu_percent = 100 * batch_size * flops_per_example / (elapsed * jax.device_count() * peak_flops)
+            _log(
+                "pipeline_step",
+                step=completed_steps,
+                loss=loss,
+                elapsed_seconds=elapsed,
+                tokens_per_second=batch_size * model_config.max_seq_len / elapsed,
+                mfu_percent=mfu_percent,
+            )
+            if args.run_id and jax.process_index() == 0:
+                wandb.log(
+                    {TRAIN_LOSS_KEY: loss, "step_seconds": elapsed, "throughput/mfu": mfu_percent}, step=completed_steps
+                )
+            if args.checkpoint_root and args.checkpoint_every_steps:
+                if completed_steps % args.checkpoint_every_steps == 0 or completed_steps == last_step:
+                    path = save_checkpoint(
+                        args.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract
+                    )
+                    _log("pipeline_checkpoint_saved", step=completed_steps, path=path)
     barrier_sync_named("hero_pipeline_smoke_complete", timeout=_MULTIHOST_TIMEOUT)
     _log("pipeline_complete", steps=last_step, full_hero=full_hero)
     if args.run_id and jax.process_index() == 0:

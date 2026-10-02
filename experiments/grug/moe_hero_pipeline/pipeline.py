@@ -11,7 +11,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
-from typing import TypeGuard
 
 import equinox as eqx
 import jax
@@ -51,7 +50,13 @@ from experiments.grug.moe_hero_ep.model import (
     _unstacked_blocks,
 )
 from experiments.grug.moe_hero_ep.train import _tree_to_memory_kind
-from experiments.grug.moe_pipeline.pipeline import _partition_spec_tree
+from experiments.grug.moe_pipeline.pipeline import (
+    TRAIN_LOSS_KEY,
+    GrugMoePipelineConfig,
+    is_pipeline_array,
+    partition_spec_tree,
+    process_has_sharding,
+)
 
 try:
     import jaxpp.api as jaxpp
@@ -67,43 +72,15 @@ else:
     from jaxpp.experimental import mpmd
 
 
-TRAIN_LOSS_KEY = "train/loss"
 _QB_BETA_PER_LAYER_KEY = "qb_beta_per_layer"
 _PIPELINE_AXIS = "pipeline"
 _HOST_MEMORY_KIND = "pinned_host"
-
-type _ArrayValue = jax.Array | jax.ShapeDtypeStruct | jaxpp.MpmdArray
 
 
 class AutomaticPipelineSchedule(StrEnum):
     STANDARD_1F1B = "standard_1f1b"
     ZERO_BUBBLE = "zero_bubble"
     DUALPIPE_V = "dualpipe_v"
-
-
-@dataclass(frozen=True)
-class GrugMoePipelineConfig:
-    stages: int
-    microbatches: int
-    physical_stages: int | None = None
-
-    def __post_init__(self) -> None:
-        if self.stages < 2:
-            raise ValueError(f"pipeline parallelism requires at least 2 stages, got {self.stages}")
-        if self.microbatches <= 0:
-            raise ValueError(f"microbatches must be positive, got {self.microbatches}")
-        if self.physical_stages is not None:
-            if self.physical_stages < 2:
-                raise ValueError(f"pipeline parallelism requires at least 2 physical stages, got {self.physical_stages}")
-            if self.stages != 2 * self.physical_stages:
-                raise ValueError(
-                    "virtual pipeline parallelism requires exactly two logical stages per physical stage; "
-                    f"got {self.stages} logical and {self.physical_stages} physical stages"
-                )
-
-    @property
-    def mpmd_stages(self) -> int:
-        return self.stages if self.physical_stages is None else self.physical_stages
 
 
 def make_pipeline_mesh(
@@ -407,7 +384,7 @@ def initialize_stage_local_pipeline_state(
 
         with jax.set_mesh(stage_mesh):
             shapes, static = eqx.filter_eval_shape(initialize)
-            owns_stage = _process_has_sharding(NamedSharding(stage_mesh, P()))
+            owns_stage = process_has_sharding(NamedSharding(stage_mesh, P()))
             values = eqx.filter_jit(initialize)()[0] if owns_stage else shapes
 
         def to_mpmd(value, shape, memory_kind="device", physical_index=physical_index, owns_stage=owns_stage):
@@ -425,11 +402,6 @@ def initialize_stage_local_pipeline_state(
         betas.append(qb)
         static_stages.append(static)
     return GrugMoeAutomaticPipelineState(tuple(params), tuple(states), tuple(betas)), tuple(static_stages)
-
-
-def _process_has_sharding(sharding: NamedSharding) -> bool:
-    process_index = jax.process_index()
-    return any(device.process_index == process_index for device in sharding.mesh.devices.flat)
 
 
 def _apply_qb_betas(stage: GrugMoePipelineStage, qb_betas: jax.Array) -> GrugMoePipelineStage:
@@ -471,12 +443,6 @@ def _automatic_schedule(config: GrugMoePipelineConfig, schedule_name: AutomaticP
     if schedule_name == AutomaticPipelineSchedule.DUALPIPE_V:
         return pp.DualPipeV(num_stages=config.stages, mpmd_dim=config.mpmd_stages)
     raise ValueError(f"unknown automatic pipeline schedule: {schedule_name}")
-
-
-def _is_array(value: object) -> TypeGuard[_ArrayValue]:
-    if isinstance(value, (jax.Array, jax.ShapeDtypeStruct)):
-        return True
-    return jaxpp is not None and isinstance(value, jaxpp.MpmdArray)
 
 
 def make_automatic_pipeline_step(
@@ -570,11 +536,11 @@ def make_automatic_pipeline_step(
         )
         return next_state, {TRAIN_LOSS_KEY: loss}
 
-    state_shardings = _partition_spec_tree(sample_state)
+    state_shardings = partition_spec_tree(sample_state)
     if offload_opt_state:
 
         def host_sharding(value):
-            if not _is_array(value):
+            if not is_pipeline_array(value):
                 return None
             return NamedSharding(mpmd_mesh.lowering_mesh(), value.sharding.spec, memory_kind=_HOST_MEMORY_KIND)
 
@@ -584,7 +550,7 @@ def make_automatic_pipeline_step(
     return pp.mpmd_jit_with_loop(
         pipeline_step,
         mpmd_mesh=mpmd_mesh,
-        in_specs=(state_shardings, _partition_spec_tree(sample_batches), P()),
+        in_specs=(state_shardings, partition_spec_tree(sample_batches), P()),
         out_specs=(state_shardings, {TRAIN_LOSS_KEY: P()}),
     )
 
@@ -690,7 +656,7 @@ def prepare_automatic_mpmd_step(
 
     # Compilation may share counters across stages or prune unused hyperparameters.
     # Gather only scalar metadata so placement preserves nonzero optimizer values.
-    scalars = [value for value in jax.tree.leaves(state) if _is_array(value) and value.shape == ()]
+    scalars = [value for value in jax.tree.leaves(state) if is_pipeline_array(value) and value.shape == ()]
     scalar_report = np.zeros((len(scalars), 2), dtype=np.float64)
     for index, value in enumerate(scalars):
         local = value.to_mpmd_local_array if isinstance(value, pp.MpmdArray) else value
@@ -703,7 +669,7 @@ def prepare_automatic_mpmd_step(
     scalar_values = iter(reports[:, :, 1].sum(axis=0) / owners)
 
     def place_initial_scalar(value, target):
-        if not _is_array(value):
+        if not is_pipeline_array(value):
             return value
         if value.shape != ():
             return value
@@ -714,7 +680,7 @@ def prepare_automatic_mpmd_step(
         local_arrays = []
         for stage_index in sorted(mesh_ids):
             sharding = NamedSharding(mpmd_mesh.unstack[stage_index], target.spec, memory_kind=target.memory_kind)
-            if _process_has_sharding(sharding):
+            if process_has_sharding(sharding):
                 local_arrays.append(jax.device_put(scalar, sharding))
         return pp.MpmdArray(
             local_arrays,

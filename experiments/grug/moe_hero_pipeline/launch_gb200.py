@@ -18,6 +18,7 @@ from rigging.timing import Duration, ExponentialBackoff
 from experiments.grug.moe_hero_pipeline.runtime.apply_overlay import JAXPP_COMMIT
 
 PJRT_WHEEL = "https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260915-708c3a4ec79c/jax_cuda13_pjrt-0.11.1%2Bmarin.708c3a4ec79c-py3-none-manylinux_2_27_aarch64.whl"
+_GPUS_PER_NODE = 4
 _TASK_TIMEOUT = 7200
 _QUEUE_TIMEOUT = 43200
 _FINALIZATION_GRACE = 600
@@ -52,8 +53,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     stages, experts, microbatches, batch = (2, 4, 2, 8) if args.size == "gate" else (8, 8, 16, 128)
-    nodes = stages * experts // 4
-    command = MultiGpuHook(nproc=4, devices_per_proc=1).wrap(
+    nodes = stages * experts // _GPUS_PER_NODE
+    command = MultiGpuHook(nproc=_GPUS_PER_NODE, devices_per_proc=1).wrap(
         [
             "python",
             "-u",
@@ -85,10 +86,10 @@ def main():
             *(["--diagnostic-layers", "2"] if args.size == "gate" else []),
         ]
     )
-    replicas, coscheduling = resolve_multinode_defaults(None, "GB200x4", nodes)
+    replicas, coscheduling = resolve_multinode_defaults(None, f"GB200x{_GPUS_PER_NODE}", nodes)
     contract = dict(
         run_id=args.run_id,
-        gpu_count=nodes * 4,
+        gpu_count=nodes * _GPUS_PER_NODE,
         nodes=nodes,
         priority="BATCH",
         topology=coscheduling.group_by,
@@ -139,7 +140,7 @@ def main():
     job = iris_ctx().client.submit(
         entrypoint=Entrypoint.from_command(*command),
         name=args.run_id,
-        resources=ResourceSpec(cpu=120, memory="890g", disk="128g", device=gpu_device("GB200", 4)),
+        resources=ResourceSpec(cpu=120, memory="890g", disk="128g", device=gpu_device("GB200", _GPUS_PER_NODE)),
         environment=environment,
         replicas=replicas,
         coscheduling=coscheduling,
