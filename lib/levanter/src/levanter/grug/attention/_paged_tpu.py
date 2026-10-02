@@ -62,14 +62,16 @@ def _decode_kernel(table_ref, bounds_ref, q_ref, cache_ref, scale_ref, output_re
         # Converting first gives Mosaic unpacked FP32 rows for the K/V slice.
         loaded = page_buffer[...].astype(jnp.float32)
         key, value = loaded[:, 0], loaded[:, 1]
-        position = page * page_size + jnp.arange(page_size)
-        allowed = (position >= lower) & (position < upper)
         scores = jnp.dot(query, key.T, preferred_element_type=jnp.float32) * scale_ref[0]
-        scores = jnp.where(allowed[None, :], scores, -jnp.inf)
+        # Construct each mask in its consumer's layout. Mosaic cannot reshape
+        # a lane vector into the column vector needed for the value mask.
+        position = page * page_size + jax.lax.broadcasted_iota(jnp.int32, scores.shape, 1)
+        scores = jnp.where((position >= lower) & (position < upper), scores, -jnp.inf)
         maximum = jnp.maximum(state.maximum, jnp.max(scores, axis=1, keepdims=True))
         correction = _exp_nonpositive(state.maximum - maximum)
         weights = _exp_nonpositive(scores - maximum)
-        value = jnp.where(allowed[:, None], value, 0.0)
+        value_position = page * page_size + jax.lax.broadcasted_iota(jnp.int32, value.shape, 0)
+        value = jnp.where((value_position >= lower) & (value_position < upper), value, 0.0)
         numerator = state.numerator * correction + jnp.dot(weights, value, preferred_element_type=jnp.float32)
         denominator = state.denominator * correction + jnp.sum(weights, axis=1, keepdims=True)
         return _AttentionState(numerator, denominator, maximum)
