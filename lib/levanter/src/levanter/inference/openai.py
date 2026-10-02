@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast
 
 import haliax as hax
 import jax.numpy as jnp
@@ -48,6 +48,8 @@ from levanter.inference.utils import INVALID
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
+    ChatTokenizeRequest,
+    ChatTokenizeResponse,
     CompletionRequest,
     TokenList,
     TokensRequest,
@@ -61,7 +63,9 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_NAME = "levanter"
-RESERVED_CHAT_TEMPLATE_KWARGS = frozenset({"add_generation_prompt", "chat_template", "return_dict", "tokenize"})
+RESERVED_CHAT_TEMPLATE_KWARGS = frozenset(
+    {"add_generation_prompt", "continue_final_message", "chat_template", "return_dict", "tokenize"}
+)
 
 
 @dataclass
@@ -271,14 +275,10 @@ class InferenceContext:
 
             for r in requests:
                 if len(r.prompt_tokens) > max_tokens_per_seq:
-                    # slice down requests that are too long
-                    logger.warning(
-                        "Request %s prompt too long (%d tokens), truncating to last %d tokens",
-                        r.request_id,
-                        len(r.prompt_tokens),
-                        max_tokens_per_seq,
+                    r.future.get_loop().call_soon_threadsafe(
+                        r.future.set_exception, ValueError("Prompt exceeds the serving context limit")
                     )
-                    r.prompt_tokens = r.prompt_tokens[-max_tokens_per_seq:]
+                    continue
 
                 if r.n_generations > self.engine.config.max_seqs:
                     # fail requests that are too large
@@ -445,6 +445,8 @@ def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Itera
             delta=ChoiceDelta(role="assistant", content=choice.message.content),
             logprobs=logprobs,
         )
+        if choice.model_extra and "token_ids" in choice.model_extra:
+            content = content.model_copy(update={"token_ids": choice.model_extra["token_ids"]})
         finish = ChatCompletionChunkChoice(index=choice.index, delta=ChoiceDelta(), finish_reason=choice.finish_reason)
         for chunk_choice in (content, finish):
             chunk = ChatCompletionChunk(
@@ -454,6 +456,8 @@ def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Itera
                 model=completion.model,
                 choices=[chunk_choice],
             )
+            if completion.model_extra and "prompt_token_ids" in completion.model_extra:
+                chunk = chunk.model_copy(update={"prompt_token_ids": completion.model_extra["prompt_token_ids"]})
             yield _sse_event(chunk.model_dump_json())
     yield _sse_event("[DONE]")
 
@@ -501,6 +505,8 @@ def _completion_logprobs(
     tokenizer: MarinTokenizer,
     token_ids: List[int],
     sequence_logprobs: TokenSequenceLogprobs,
+    *,
+    return_tokens_as_token_ids: bool = False,
 ) -> CompletionLogprobData:
     tokens = _decoded_token_pieces(tokenizer, token_ids)
     if len(tokens) != len(sequence_logprobs.token_logprobs):
@@ -512,40 +518,64 @@ def _completion_logprobs(
 
     top_logprobs = [
         {
-            tokenizer.decode([token_id], skip_special_tokens=False): logprob
+            (
+                f"token_id:{token_id}"
+                if return_tokens_as_token_ids
+                else tokenizer.decode([token_id], skip_special_tokens=False)
+            ): logprob
             for token_id, logprob in token_logprobs.items()
         }
         for token_logprobs in sequence_logprobs.top_token_logprobs
     ]
     return CompletionLogprobData(
-        tokens=tokens,
+        tokens=[f"token_id:{token_id}" for token_id in token_ids] if return_tokens_as_token_ids else tokens,
         token_logprobs=sequence_logprobs.token_logprobs,
         top_logprobs=top_logprobs,
         text_offset=_token_text_offsets(tokens),
     )
 
 
+def _completion_prompt_ids(
+    prompt: str | list[str] | list[int] | list[list[int]],
+    tokenizer: MarinTokenizer,
+) -> list[list[int]]:
+    if isinstance(prompt, str):
+        return [tokenizer.encode(prompt, add_special_tokens=False)]
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt must contain at least one token")
+    if isinstance(prompt[0], int):
+        return [cast(list[int], prompt)]
+    if isinstance(prompt[0], str):
+        return [tokenizer.encode(row, add_special_tokens=False) for row in cast(list[str], prompt)]
+    return cast(list[list[int]], prompt)
+
+
+def _validate_prompt_ids(ctx: InferenceContext, tokens: list[int]) -> None:
+    if not tokens or len(tokens) >= ctx.config.service.max_seq_len:
+        raise HTTPException(status_code=400, detail="Prompt must be nonempty and leave room within the context limit")
+    if min(tokens) < 0 or max(tokens) >= ctx.model.Vocab.size:
+        raise HTTPException(status_code=400, detail="Prompt contains a token ID outside the model vocabulary")
+
+
 async def _create_completion(ctx: InferenceContext, request: CompletionRequest) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
-        if isinstance(request.prompt, str):
-            prompts = [request.prompt]
-        else:
-            prompts = request.prompt
+        if request.echo and request.logprobs == 0:
+            raise HTTPException(status_code=400, detail="Echo logprobs require a positive logprobs count")
+        prompt_token_lists = _completion_prompt_ids(request.prompt, ctx.tokenizer)
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        if request.stop_token_ids:
+            stop_tokens = [*(stop_tokens or []), *([token] for token in request.stop_token_ids)]
 
         # Create futures for all prompts
         futures = []
         choices = []
         total_prompt_tokens = 0
         total_completion_tokens = 0
-        prompt_token_lists: List[List[int]] = []
         echo_logprobs_top_k = int(request.logprobs) if request.echo and request.logprobs else None
 
-        for prompt in prompts:
-            # Tokenize prompt
-            prompt_tokens = ctx.tokenizer.encode(prompt, add_special_tokens=False)
+        for prompt_tokens in prompt_token_lists:
             scored_token_budget = len(prompt_tokens) + request.max_tokens
             if echo_logprobs_top_k is not None and scored_token_budget > ctx.config.service.max_seq_len:
                 raise HTTPException(
@@ -555,7 +585,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                         f"max_seq_len={ctx.config.service.max_seq_len}"
                     ),
                 )
-            prompt_token_lists.append(prompt_tokens)
+            _validate_prompt_ids(ctx, prompt_tokens)
             total_prompt_tokens += len(prompt_tokens)
 
         for prompt_tokens in prompt_token_lists:
@@ -581,13 +611,19 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 
         # Format responses
         choice_idx = 0
-        for prompt, result in zip(prompts, results, strict=True):
+        for prompt_index, (prompt_tokens, result) in enumerate(zip(prompt_token_lists, results, strict=True)):
+            if isinstance(request.prompt, str):
+                prompt_text = request.prompt
+            elif isinstance(request.prompt[0], str):
+                prompt_text = cast(list[str], request.prompt)[prompt_index]
+            else:
+                prompt_text = ctx.tokenizer.decode(prompt_tokens, skip_special_tokens=True)
             for generation in result:
-                choice_text = f"{prompt}{generation.text}" if request.echo else generation.text
+                choice_text = prompt_text + generation.text if request.echo else generation.text
 
                 # Format logprobs if available
                 logprobs = None
-                if request.logprobs:
+                if request.logprobs is not None:
                     if request.echo:
                         if generation.echo_token_ids is None or generation.echo_logprobs is None:
                             raise RuntimeError("Echo logprobs requested but missing from generation result.")
@@ -595,6 +631,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                             ctx.tokenizer,
                             generation.echo_token_ids,
                             generation.echo_logprobs,
+                            return_tokens_as_token_ids=request.return_tokens_as_token_ids,
                         )
                         logprobs = Logprobs(
                             tokens=echo_logprobs.tokens,
@@ -612,7 +649,11 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                         if generation.logprobs:
                             for token_id, lp in zip(generated_tokens, generation.logprobs):
                                 # Use convert_ids_to_tokens to preserve BPE format
-                                token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
+                                token_str = (
+                                    f"token_id:{token_id}"
+                                    if request.return_tokens_as_token_ids
+                                    else ctx.tokenizer.convert_ids_to_tokens(token_id)
+                                )
                                 tokens.append(token_str)
                                 token_logprobs.append(float(lp))
 
@@ -631,6 +672,13 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                         logprobs=logprobs,
                     )
                 )
+                if request.return_token_ids:
+                    choices[-1] = choices[-1].model_copy(
+                        update={
+                            "token_ids": generation.tokens,
+                            "prompt_token_ids": prompt_tokens,
+                        }
+                    )
                 total_completion_tokens += generation.completion_tokens
                 choice_idx += 1
 
@@ -659,6 +707,9 @@ def _compute_tokens(
     tokenizer: MarinTokenizer,
     tools: list[dict[str, object]] | None = None,
     chat_template_kwargs: dict[str, object] | None = None,
+    *,
+    add_generation_prompt: bool = True,
+    continue_final_message: bool = False,
 ) -> List[int]:
     """Encode a conversation with the tokenizer's chat template.
 
@@ -684,7 +735,8 @@ def _compute_tokens(
     result = tokenizer.apply_chat_template(
         dict_messages,
         tokenize=True,
-        add_generation_prompt=True,
+        add_generation_prompt=add_generation_prompt,
+        continue_final_message=continue_final_message,
         return_dict=False,
         **template_kwargs,
     )
@@ -713,14 +765,23 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
     """Create a chat completion using OpenAI API format."""
     try:
         # Convert Pydantic models to dicts for tokenizer
-        prompt_tokens = _compute_tokens(
-            request.messages,
-            ctx.tokenizer,
-            request.tools,
-            request.chat_template_kwargs,
-        )
+        if request.top_logprobs:
+            raise HTTPException(status_code=400, detail="Generated top-logprob candidates are not supported")
+        prompt_tokens = request.exact_prompt_token_ids
+        if prompt_tokens is None:
+            prompt_tokens = _compute_tokens(
+                request.messages,
+                ctx.tokenizer,
+                request.tools,
+                request.chat_template_kwargs,
+                add_generation_prompt=request.add_generation_prompt,
+                continue_final_message=request.continue_final_message,
+            )
+        _validate_prompt_ids(ctx, prompt_tokens)
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
+        if request.stop_token_ids:
+            stop_tokens = [*(stop_tokens or []), *([token] for token in request.stop_token_ids)]
 
         # Create future and submit request
         future: asyncio.Future = asyncio.Future()
@@ -754,7 +815,11 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
                     # Use convert_ids_to_tokens to preserve BPE format (e.g., Ġ for spaces)
                     # This allows the client to round-trip: convert_tokens_to_ids(token_str) == token_id
-                    token_str = ctx.tokenizer.convert_ids_to_tokens(token_id)
+                    token_str = (
+                        f"token_id:{token_id}"
+                        if request.return_tokens_as_token_ids
+                        else ctx.tokenizer.convert_ids_to_tokens(token_id)
+                    )
                     content_logprobs.append(
                         ChatCompletionTokenLogprob(
                             token=token_str,
@@ -774,6 +839,8 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                     logprobs=logprobs,
                 )
             )
+            if request.return_token_ids:
+                choices[-1] = choices[-1].model_copy(update={"token_ids": generation.tokens})
             total_completion_tokens += generation.completion_tokens
 
         response = ChatCompletion(
@@ -788,6 +855,8 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 total_tokens=len(prompt_tokens) + total_completion_tokens,
             ),
         )
+        if request.return_token_ids:
+            response = response.model_copy(update={"prompt_token_ids": prompt_tokens})
         return response
 
     except HTTPException:
@@ -871,6 +940,20 @@ class InferenceServer:
             if not request.stream:
                 return completion
             return StreamingResponse(_completion_events(completion), media_type="text/event-stream")
+
+        @app.post("/tokenize", response_model=ChatTokenizeResponse)
+        async def tokenize_chat(request: ChatTokenizeRequest) -> ChatTokenizeResponse:
+            tokens = _compute_tokens(
+                request.messages,
+                inference_context.tokenizer,
+                request.tools,
+                request.chat_template_kwargs,
+                add_generation_prompt=request.add_generation_prompt,
+                continue_final_message=request.continue_final_message,
+            )
+            return ChatTokenizeResponse(
+                tokens=tokens, count=len(tokens), max_model_len=inference_context.config.service.max_seq_len
+            )
 
         @app.post("/v1/tokens", response_model=TokensResponse)
         async def fetch_tokens(request: TokensRequest) -> TokensResponse:
