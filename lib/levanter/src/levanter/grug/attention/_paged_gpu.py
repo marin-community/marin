@@ -18,6 +18,7 @@ from jax.experimental.pallas import triton as plgpu
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 GpuPagedAvPrecision = Literal["ieee", "bf16_3x"]
+_MIN_DOT_TILE = 16
 
 
 class _AttentionState(NamedTuple):
@@ -129,13 +130,13 @@ def gpu_paged_attention(
     """
     tokens, heads, groups, dim = q.shape
     page_size = kv_pages.shape[1]
-    if page_size < 16 or page_size & (page_size - 1) or dim < 16 or dim & (dim - 1):
+    if page_size < _MIN_DOT_TILE or page_size & (page_size - 1) or dim < _MIN_DOT_TILE or dim & (dim - 1):
         raise ValueError("GPU paged attention needs power-of-two page_size and head_dim, both at least 16")
     if not interpret and jax.default_backend() != "gpu":
         raise ValueError("GPU paged attention requires a GPU")
     if av_precision not in ("ieee", "bf16_3x"):
         raise ValueError(f"Unknown AV precision: {av_precision}")
-    padded_groups = max(16, pl.next_power_of_2(groups))
+    padded_groups = max(_MIN_DOT_TILE, pl.next_power_of_2(groups))
     if kv_splits not in (8, 16):
         raise ValueError("GPU paged attention supports 8 or 16 KV splits")
     num_splits = min(kv_splits, pl.next_power_of_2(token_pages.shape[1]))

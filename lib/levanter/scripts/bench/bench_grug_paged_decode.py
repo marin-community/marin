@@ -104,7 +104,7 @@ def _error_metrics(actual, expected):
     return {
         "max_abs": float(difference.max()),
         "mean_abs": float(difference.mean()),
-        "elements_outside_atol_rtol_1e4": int(outside.sum()),
+        "elements_outside_atol_rtol_1e_4": int(outside.sum()),
         "elements": actual.size,
         "mismatch_examples": [
             {"index": index.tolist(), "actual": float(actual[tuple(index)]), "expected": float(expected[tuple(index)])}
