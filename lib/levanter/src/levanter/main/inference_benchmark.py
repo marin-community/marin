@@ -5,11 +5,11 @@
 
 import argparse
 import dataclasses
+import hashlib
 import importlib.metadata
 import json
 import logging
 import os
-import subprocess
 import time
 from pathlib import Path
 
@@ -19,12 +19,13 @@ import jax
 import jax.numpy as jnp
 import jmp
 
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference.benchmark import BatchMeasurement, TokenWorkload, measure_batches
+from levanter.inference.benchmark import BatchMeasurement, TokenWorkload, measure_batches, source_provenance
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.lm_model import LmConfig
-from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,13 @@ def measure_levanter_batch(engine: InferenceEngine, workload: TokenWorkload) -> 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-config", type=Path, required=True, help="Levanter model JSON including type")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--model-config", type=Path, help="Synthetic Levanter model JSON including type")
+    source.add_argument("--checkpoint", help="Snowball HF export: local directory, object-storage URL, or Hub repo")
+    parser.add_argument("--revision", help="Pinned Hub revision for --checkpoint")
+    parser.add_argument(
+        "--checkpoint-identity", help="Immutable export identity or digest, shared with vLLM provenance"
+    )
     parser.add_argument("--workload", type=Path, required=True, help="JSON prompts (token IDs) and output_tokens")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], required=True)
@@ -71,10 +78,40 @@ def main():
     parser.add_argument("--measured-batches", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--hardware-label", required=True, help="Provisioned accelerator and topology, e.g. v5p-8")
+    parser.add_argument("--source-revision", help="Source commit supplied by the launcher for bundles without .git")
+    parser.add_argument(
+        "--source-dirty", choices=["true", "false"], help="Launcher checkout status; omitted means unknown"
+    )
     args = parser.parse_args()
-    config = draccus.decode(LmConfig, json.loads(args.model_config.read_text()))
+    source = source_provenance(
+        args.source_revision, None if args.source_dirty is None else args.source_dirty == "true"
+    )
+    converter = None
+    checkpoint_provenance = None
+    if args.checkpoint:
+        if not args.checkpoint_identity:
+            parser.error("--checkpoint requires --checkpoint-identity for matched weight provenance")
+        reference = RepoRef(args.checkpoint, args.revision)
+        converter = HFCheckpointConverter(
+            SnowballConfig, reference_checkpoint=reference, HfConfigClass=GrugMoeHfConfig, tokenizer=reference
+        )
+        hf_config = converter.hf_config_from_hf_checkpoint(reference)
+        config = converter.config_from_hf_config(hf_config)
+        checkpoint_provenance = {
+            "source": args.checkpoint,
+            "revision": args.revision,
+            "identity": args.checkpoint_identity,
+            "hf_config": hf_config.to_dict(),
+            "tokenizer_vocab_sha256": hashlib.sha256(
+                json.dumps(converter.tokenizer.get_vocab(), sort_keys=True).encode()
+            ).hexdigest(),
+        }
+    else:
+        if args.revision or args.checkpoint_identity:
+            parser.error("--revision and --checkpoint-identity require --checkpoint")
+        config = draccus.decode(LmConfig, json.loads(args.model_config.read_text()))
     if not isinstance(config, SnowballConfig):
-        raise ValueError("This synthetic benchmark currently supports SnowballConfig only; Hero needs native decode")
+        raise ValueError("This benchmark currently supports SnowballConfig only; Hero needs native decode")
     workload = TokenWorkload(**json.loads(args.workload.read_text()))
     if any(token < 0 or token >= config.vocab_size for prompt in workload.prompts for token in prompt):
         raise ValueError("Prompt token outside the model vocabulary")
@@ -87,7 +124,12 @@ def main():
     mesh = compact_grug_mesh(model_axis_size=args.model_axis_size)
     setup_start = time.perf_counter()
     with hax.partitioning.set_mesh(mesh), hax.axis_mapping({"kv_head": "model", "heads": "model"}):
-        model = hax.named_jit(config.build)(hax.Axis("vocab", config.vocab_size), key=jax.random.PRNGKey(args.seed))
+        if converter is None:
+            model = hax.named_jit(config.build)(
+                hax.Axis("vocab", config.vocab_size), key=jax.random.PRNGKey(args.seed)
+            )
+        else:
+            model = converter.load_pretrained(config.model_type, config=config, dtype=dtype)
         model = jmp.get_policy(f"params={args.dtype},compute={args.dtype},output={args.dtype}").cast_to_compute(model)
         jax.block_until_ready(model)
         batch = len(workload.prompts)
@@ -120,8 +162,8 @@ def main():
         )
     result["provenance"] = {
         "backend": "levanter",
-        "evidence_kind": "synthetic_random_weights",
-        "checkpoint": None,
+        "evidence_kind": "synthetic_random_weights" if converter is None else "checkpoint",
+        "checkpoint": checkpoint_provenance,
         "model_config": draccus.encode(config),
         "seed": args.seed,
         "dtype": args.dtype,
@@ -131,8 +173,10 @@ def main():
         "mesh": dict(mesh.shape),
         "engine_config": {**dataclasses.asdict(engine_config), "compute_dtype": str(dtype)},
         "versions": {name: importlib.metadata.version(name) for name in ["jax", "jaxlib", "marin-levanter"]},
-        "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-        "git_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()),
+        "git_commit": source.revision,
+        "git_dirty": source.dirty,
+        "source_origin": source.origin,
+        "source_tree_hash": source.tree_hash,
         "environment": {name: os.environ.get(name) for name in ["XLA_FLAGS", "LIBTPU_INIT_ARGS", "RAGGED_DOT_IMPL"]},
     }
     result["model_and_cache_setup"] = setup_elapsed

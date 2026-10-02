@@ -108,7 +108,9 @@ RAGGED_DOT_IMPL=xla uv run --package marin-levanter python -m levanter.main.infe
 Use the hardware label for the actual provisioned slice. The driver supports a
 single host and records every visible device, mesh dimensions, engine settings,
 model configuration, seed, dtype, code revision, and selected XLA environment
-flags. `--model-axis-size` defaults to 1; the remaining local devices occupy the
+flags. Source bundles inherit Iris launch provenance through `MARIN_PROVENANCE`;
+`--source-revision` and `--source-dirty` can supply it explicitly. Without source
+metadata the revision and dirty state are null. `--model-axis-size` defaults to 1; the remaining local devices occupy the
 Grug data axis. Before changing tensor parallelism, check head divisibility:
 production Snowball has 20 query heads and 5 KV heads, so an 8-way head partition
 is invalid. The native driver requires Snowball's paged `decode` implementation.
@@ -127,6 +129,30 @@ scheduling, synchronization, and extraction; it is not a distribution of device
 kernel or per-token latencies. Incomplete generations fail instead of producing
 a throughput number. The OpenAI server currently renders streaming events from
 a finished response, so its HTTP first event cannot measure native prefill time.
+
+### Checkpoint-backed comparison
+
+Replace `--model-config` with `--checkpoint` to load the same Snowball HF export
+used by vLLM. Supply `--revision` for a Hub revision and `--checkpoint-identity`
+with the immutable export identity or weight digest from the baseline manifest.
+The existing HF converter reads the checkpoint's model config and tokenizer;
+Hero schema-v2 exports are rejected by the Snowball recipe check. The result
+records the checkpoint location, identity, requested revision, full HF config,
+and tokenizer vocabulary hash. Export identities for object-storage paths are
+operator-supplied; the driver does not rehash multi-gigabyte weight files.
+
+```bash
+python -m levanter.main.inference_benchmark \
+  --checkpoint /regional/snowball-hf-export \
+  --checkpoint-identity exported-training-step-and-weight-digest \
+  --workload workload.json --dtype bfloat16 \
+  --hardware-label H100-8 --output /tmp/levanter-checkpoint.json
+```
+
+Keep checkpoints in the accelerator's region. Model loading remains outside the
+measured generation samples. Compare checkpoint-backed results only when the
+weight/config identities, token workload hash, dtype, accelerator count,
+topology, and parallelism match.
 
 ### vLLM baseline
 
@@ -162,11 +188,11 @@ GrugMoE model registration. It has not been validated on a TPU vLLM runtime.
 No accelerator measurements are checked in with this harness. Random-weight
 Snowball measurements characterize execution only. They cannot establish a
 speedup over the checkpoint-backed vLLM baseline. A matched model comparison
-also requires a Levanter checkpoint-loading driver, identical weight/config
+also requires identical weight/config
 identities, tokenizer provenance for the token workload, dtype, prompt/output
 lengths, concurrency, accelerator count, topology, and parallelism. Compare
 output hashes or token arrays and investigate differences before reporting a
-speed ratio. Full checkpoint loading and real serving latency remain separate
+speed ratio. Production checkpoint loading and real serving latency remain separate
 validation steps.
 
 | Target | Native Snowball benchmark | Native Hero benchmark | vLLM comparison |
