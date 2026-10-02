@@ -117,7 +117,8 @@ def save_hf_shards(
 ) -> list[HFShardRecord]:
     """Gather and save a fixed HF shard layout on all initialized JAX processes.
 
-    All ranks supply the same layout and load matching keys, shapes and dtypes.
+    All ranks iterate shards and tensor keys in the same order and load matching
+    keys, shapes and dtypes.
     Device staging requires space for one full tensor. tensor_names expands a
     tensor's first axis into named outputs. Only process zero retains host shards or writes.
 
