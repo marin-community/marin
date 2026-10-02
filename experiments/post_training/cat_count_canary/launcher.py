@@ -384,7 +384,6 @@ def build_run(
     train_ns: tuple[int, ...] = DEFAULT_TRAIN_NS,
     seed: int = SEED,
     job_timeout_seconds: int = JOB_TIMEOUT_SECONDS,
-    runtime_commit: str | None = None,
     version: str | None = None,
     cluster: str = CLUSTER,
     checkpoint: bool = False,
@@ -393,9 +392,6 @@ def build_run(
 ) -> ArtifactStep[SkyRLRun]:
     if job_timeout_seconds <= 0:
         raise ValueError("job timeout must be positive")
-    runtime = SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON)
-    if runtime_commit is not None:
-        runtime = replace(runtime, commit=runtime_commit)
     config = training_config(
         preset=preset,
         lane=lane,
@@ -436,7 +432,7 @@ def build_run(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=runtime,
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=model_step,
                 relative_path="" if model == DEFAULT_MODEL else None,
@@ -487,7 +483,6 @@ def build_run(
 @click.option("--train-n", "train_ns", multiple=True, type=int)
 @click.option("--seed", type=int, default=SEED)
 @click.option("--job-timeout-seconds", type=int, default=JOB_TIMEOUT_SECONDS, show_default=True)
-@click.option("--runtime-commit", help="Run the launcher and trainer at this MarinSkyRL commit.")
 @click.option("--checkpoint", is_flag=True, help="Save resumable training checkpoints.")
 @click.option("--export", is_flag=True, help="Export the final Hugging Face model.")
 @click.option("--set", "settings", multiple=True, metavar="KEY=VALUE")
@@ -504,7 +499,6 @@ def main(
     train_ns: tuple[int, ...],
     seed: int,
     job_timeout_seconds: int,
-    runtime_commit: str | None,
     checkpoint: bool,
     export: bool,
     settings: tuple[str, ...],
@@ -521,7 +515,6 @@ def main(
         train_ns=train_ns or DEFAULT_TRAIN_NS,
         seed=seed,
         job_timeout_seconds=job_timeout_seconds,
-        runtime_commit=runtime_commit,
         checkpoint=checkpoint,
         export=export,
         settings=settings,
