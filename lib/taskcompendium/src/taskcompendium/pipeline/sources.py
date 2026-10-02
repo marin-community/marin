@@ -9,7 +9,6 @@ import hashlib
 import io
 import json
 import os
-import posixpath
 import shutil
 import subprocess
 import sys
@@ -78,13 +77,12 @@ def staged_files(path: str, spec: SourceFiles) -> tuple[str, ...]:
     """List selected files by pinned relative path, rejecting missing declarations."""
     root = StoragePath(path)
     _, root_path = url_to_fs(path)
+    filesystem_root = StoragePath(root_path)
     files = set()
     for pattern in spec.patterns:
         for file in (root / pattern).glob():
             _, file_path = url_to_fs(str(file))
-            relative = posixpath.relpath(file_path, root_path)
-            if relative.startswith("../") or relative == "..":
-                raise ValueError(f"Staged match escaped root: {file}")
+            relative = StoragePath(file_path).relative_to(filesystem_root)
             if not any(part.startswith(".") for part in relative.split("/")):
                 files.add(relative)
     if not files:

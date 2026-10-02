@@ -12,7 +12,8 @@ import numpy as np
 import reasoning_gym
 from reasoning_gym.factory import DATASETS
 
-GENERATOR_REVISION = "49b07130b3fcd12f2d064bba7c43869543a0e7e7"
+from taskcompendium.pipeline.datasets.reasoning_gym_generated import REVISION
+
 ROWS_PER_TASK = 1000
 GENERATION_SEED = 42
 
@@ -48,7 +49,7 @@ def generated_rows():
                     "config": dataclasses.asdict(dataset.config),
                 },
                 "recorded_pinned_generator_controls": {
-                    "generator_revision": GENERATOR_REVISION,
+                    "generator_revision": REVISION,
                     "positive": {"candidate": answer, "reward": float(scorer(answer, entry))},
                     "negative": {"candidate": "definitely wrong", "reward": float(scorer("definitely wrong", entry))},
                     "execution": "Pinned reasoning-gym native scorer",

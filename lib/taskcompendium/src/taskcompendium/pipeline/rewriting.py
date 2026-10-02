@@ -4,7 +4,6 @@
 """Propose instruction-only repairs; each candidate must pass curation again."""
 
 import json
-import shutil
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
@@ -41,6 +40,7 @@ from taskcompendium.pipeline.parquet import TASK_SCHEMA, audit_columns, write_ta
 from taskcompendium.pipeline.records import read_jsonl
 from taskcompendium.pipeline.review import CHAT_ENDPOINT, Reviewer
 from taskcompendium.pipeline.verification import verify_task
+from taskcompendium.pipeline.zephyr import persist_evidence
 
 TOOL_NAME = "propose_rewrite"
 REWRITE_INSTRUCTIONS = """Propose a minimal repair to the supplied task instruction.
@@ -332,7 +332,7 @@ def rewrite_audit_source(
     with TemporaryDirectory(prefix="task-curation-rewrite-") as directory, ExitStack() as evidence_stack:
         work = Path(directory)
         evidence = output / "evidence" / f"attempt-{uuid4().hex}"
-        evidence_stack.callback(_copy_rewrite_evidence, work, evidence)
+        evidence_stack.callback(persist_evidence, work, evidence)
         proposals = rewriter.rewrite(list(originals.values()), rewrite_rubric, work)
         candidates_by_id = {
             task.id: task for task in (TaskSpec.model_validate(row) for row in read_jsonl(work / "candidates.jsonl"))
@@ -436,13 +436,3 @@ def rewrite_audit_source(
         with (output / "manifest.json").open("wt", auto_mkdir=True) as stream:
             json.dump(manifest, stream, indent=2)
         return manifest
-
-
-def _copy_rewrite_evidence(local: Path, destination: StoragePath) -> None:
-    for file in local.rglob("*"):
-        if file.is_file():
-            with (
-                file.open("rb") as source,
-                (destination / file.relative_to(local).as_posix()).open("wb", auto_mkdir=True) as target,
-            ):
-                shutil.copyfileobj(source, target)

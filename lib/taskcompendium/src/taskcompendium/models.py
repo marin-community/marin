@@ -287,7 +287,7 @@ class ResourceVisibility(StrEnum):
 
 
 class TaskResource(BaseModel):
-    """A bounded inline fixture with an absolute runtime path and content digest."""
+    """An inline fixture with an absolute runtime path and content digest."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     path: str

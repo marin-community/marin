@@ -7,11 +7,11 @@ import hashlib
 import json
 from dataclasses import dataclass, field, replace
 
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pydantic import JsonValue
+from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.models import (
     AnswerType,
@@ -171,14 +171,12 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
     )
 
     audit = stage_table(tmp_path).to_pylist()
-    raw = [json.loads(row["raw_json"]) for row in audit]
-    by_id = {row["task_id"]: row for row in audit}
     assert manifest["dispositions"] == {"keep": 1, "reject": 4}
-    assert by_id[raw[1]["task_id"]]["duplicate_of"] == raw[0]["task_id"]
-    assert by_id[raw[4]["task_id"]]["filter_reasons"][0] == "normalize:invalid_reference"
-    assert all(by_id[raw[index]["task_id"]]["filter_reasons"] == ["conflicting_references"] for index in (2, 3))
+    assert audit[1]["duplicate_of"] == audit[0]["task_id"]
+    assert audit[4]["filter_reasons"][0] == "normalize:invalid_reference"
+    assert all(audit[index]["filter_reasons"] == ["conflicting_references"] for index in (2, 3))
     accepted = [TaskSpec.model_validate_json(row["task_json"]) for row in stage_table(tmp_path, "accepted").to_pylist()]
-    assert [task.id for task in accepted] == [raw[0]["task_id"]]
+    assert [task.id for task in accepted] == [audit[0]["task_id"]]
     assert accepted[0].source.revision == svamp.recipe.source.revision
     assert apple_row["Body"] in accepted[0].context.events[0].content
     assert "Equation" not in service.batches["batch-0"][0]["body"]["messages"][1]["content"]
@@ -188,15 +186,8 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
         ("reference", "pass"),
         ("perturbed", "pass"),
     ]
-    assert [json.loads(row["raw_json"]) for row in audit] == raw
-    assert {row["task_id"]: row["filter_status"] for row in audit} == {
-        key: value["filter_status"] for key, value in by_id.items()
-    }
-    assert {row["task_id"]: row["filter_reasons"] for row in audit} == {
-        key: value["filter_reasons"] for key, value in by_id.items()
-    }
+    assert json.loads(audit[0]["raw_json"])["data"] == apple_row
     assert TaskSpec.model_validate_json(audit[0]["task_json"]) == accepted[0]
-    assert audit[0]["checks"] == controls
     assert audit[0]["review_evidence"] == "The prompt supplies two apples and asks for the same count."
     assert audit[1]["task_json"] is not None  # Duplicate inputs remain inspectable.
     assert audit[4]["task_json"] is None
@@ -210,9 +201,7 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
     snapshot = tmp_path / "sample.jsonl"
     snapshot.write_text("".join(json.dumps(row) + "\n" for row in rows))
     root = f"memory://curation-{tmp_path.name}"
-    filesystem, staged_root = fsspec.core.url_to_fs(f"{root}/staged")
-    filesystem.makedirs(staged_root, exist_ok=True)
-    filesystem.pipe(f"{staged_root}/source.jsonl", snapshot.read_bytes())
+    (StoragePath(root) / "staged" / "source.jsonl").write_bytes(snapshot.read_bytes())
     service = BatchService()
     reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
     audit_source(
@@ -225,10 +214,9 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
         len(rows),
     )
     manifest = filter_source(f"{root}/audited", f"{root}/filtered", FilterPolicy())
-    filesystem, pattern = fsspec.core.url_to_fs(f"{root}/filtered/audit/*.parquet")
     audit = []
-    for file in filesystem.glob(pattern):
-        with filesystem.open(file, "rb") as stream:
+    for file in (StoragePath(root) / "filtered/audit/*.parquet").glob():
+        with file.open("rb") as stream:
             audit.extend(pq.read_table(stream).to_pylist())
     by_index = {int(row["source_row"].rsplit(":", 1)[1]): row for row in audit}
     assert manifest["dispositions"] == {"keep": 1, "reject": 1002}

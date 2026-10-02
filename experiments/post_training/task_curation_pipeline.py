@@ -56,8 +56,8 @@ WORKER_PACKAGE = "./lib/taskcompendium[pipeline]"
 class RewriteSelection:
     task_ids: tuple[str, ...]
     rubric: ReviewRubric
-    max_tokens: int = 8192
-    prompt_budget: int = 64000
+    max_tokens: int = BatchRewriter.max_tokens
+    prompt_budget: int = BatchRewriter.max_prompt_characters
 
 
 @dataclass(frozen=True)
@@ -84,6 +84,28 @@ class SourceArtifacts:
 class CurationWorkflow:
     sources: tuple[SourceArtifacts, ...]
     canonical: ArtifactStep[Artifact]
+
+
+@dataclass(frozen=True)
+class AuditStageConfig:
+    source_path: str
+    output_path: str
+    recipe_identity: dict[str, Any]
+    files_identity: dict[str, Any]
+    review: ReviewConfig
+    limit: int | None
+    max_workers: int
+    review_batch_size: int
+    resources: ResourceConfig
+
+
+@dataclass(frozen=True)
+class RewriteStageConfig:
+    source_path: str
+    output_path: str
+    identity: dict[str, Any]
+    recipe_identity: dict[str, Any]
+    resources: ResourceConfig
 
 
 def content_name(name: str, config: object) -> str:
@@ -126,35 +148,33 @@ def audit_source(
         "limit": binding.limit,
     }
 
-    def build_config(ctx: StepContext) -> dict[str, Any]:
-        return {
-            "source_path": ctx.artifact_path(downloaded),
-            "output_path": ctx.output_path,
-            "recipe": recipe_config if ctx.is_fingerprint else binding.recipe,
-            "files": source_files_identity(binding.files) if ctx.is_fingerprint else binding.files,
-            "limit": binding.limit,
-            "review": binding.review,
-            "max_workers": ctx.runtime_arg("max_workers"),
-            "review_batch_size": ctx.runtime_arg("review_batch_size"),
-            "resources": ctx.runtime_arg("resources"),
-        }
+    def build_config(ctx: StepContext) -> AuditStageConfig:
+        return AuditStageConfig(
+            source_path=ctx.artifact_path(downloaded),
+            output_path=ctx.output_path,
+            recipe_identity=recipe_config,
+            files_identity=source_files_identity(binding.files),
+            limit=binding.limit,
+            review=binding.review,
+            max_workers=ctx.runtime_arg("max_workers"),
+            review_batch_size=ctx.runtime_arg("review_batch_size"),
+            resources=ctx.runtime_arg("resources"),
+        )
 
-    def execute(config: dict[str, Any]) -> None:
+    def execute(config: AuditStageConfig) -> None:
         # Artifact sidecars persist build_config values; clients and credentials stay outside it.
         remote(
             audit_source_rows,
-            resources=config["resources"],
+            resources=config.resources,
             pip_packages=[WORKER_PACKAGE],
         )(
-            source_path=config["source_path"],
-            output_path=config["output_path"],
-            recipe=config["recipe"],
-            review=config["review"],
-            files=config["files"],
-            limit=config["limit"],
-            execution=replace(
-                execution, max_workers=config["max_workers"], review_batch_size=config["review_batch_size"]
-            ),
+            source_path=config.source_path,
+            output_path=config.output_path,
+            recipe=binding.recipe,
+            review=config.review,
+            files=binding.files,
+            limit=config.limit,
+            execution=replace(execution, max_workers=config.max_workers, review_batch_size=config.review_batch_size),
         )
 
     return ArtifactStep(
@@ -211,23 +231,23 @@ def rewrite_source(
         "rewrite_revision": "instruction-edits-v1",
     }
 
-    def config(ctx: StepContext) -> dict[str, Any]:
-        return {
-            "source_path": ctx.artifact_path(filtered),
-            "output_path": ctx.output_path,
-            "identity": identity,
-            "recipe": recipe_identity(binding.recipe) if ctx.is_fingerprint else binding.recipe,
-            "resources": ctx.runtime_arg("resources"),
-        }
+    def config(ctx: StepContext) -> RewriteStageConfig:
+        return RewriteStageConfig(
+            source_path=ctx.artifact_path(filtered),
+            output_path=ctx.output_path,
+            identity=identity,
+            recipe_identity=recipe_identity(binding.recipe),
+            resources=ctx.runtime_arg("resources"),
+        )
 
-    def execute(values: dict[str, Any]) -> None:
+    def execute(values: RewriteStageConfig) -> None:
         if execution.reviewer is None or rewriter is None:
             raise ValueError("Rewrite execution requires both a rewriter and a reviewer")
         assert binding.rewrite is not None
-        remote(rewrite_audit_source, resources=values["resources"], pip_packages=[WORKER_PACKAGE])(
-            source_path=values["source_path"],
-            output_path=values["output_path"],
-            recipe=values["recipe"],
+        remote(rewrite_audit_source, resources=values.resources, pip_packages=[WORKER_PACKAGE])(
+            source_path=values.source_path,
+            output_path=values.output_path,
+            recipe=binding.recipe,
             policy=policy,
             rewrite_rubric=binding.rewrite.rubric,
             rewriter=replace(

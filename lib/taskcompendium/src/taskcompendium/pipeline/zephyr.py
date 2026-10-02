@@ -277,7 +277,8 @@ def _deduplicate(_: str, records: Iterator[dict[str, Any]]) -> Iterator[dict[str
             yield audit
 
 
-def _persist_evidence(local_path: Path, remote_path: StoragePath) -> None:
+def persist_evidence(local_path: Path, remote_path: StoragePath) -> None:
+    """Copy an attempt's local files to their matching durable paths."""
     for file in local_path.rglob("*"):
         if file.is_file():
             with (
@@ -335,7 +336,7 @@ def _audit_batch(
                 yield audit_columns(audit)
         finally:
             # Each attempt retains its transport evidence, including failed attempts.
-            _persist_evidence(local, evidence)
+            persist_evidence(local, evidence)
 
 
 def _manifest(path: StoragePath) -> dict[str, Any]:
