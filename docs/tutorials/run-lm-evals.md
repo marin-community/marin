@@ -183,11 +183,11 @@ Run [GraphWalks](https://huggingface.co/datasets/openai/graphwalks) on the two G
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model grug-67b-a2b-datakit-sft-262k-2026-09-21 \
+  --model grug-67b-a2b-datakit-sft-262k-2026-09-21-graphwalks \
   --evals graphwalks --no-wait
 
 uv run python -m experiments.evaluation.cli launch \
-  --model qwen3.6-35b-a3b \
+  --model qwen3.6-35b-a3b-graphwalks \
   --evals graphwalks --no-wait
 ```
 
@@ -201,9 +201,10 @@ Each request reserves twice `max(4096, tokenized gold answer length + 4096)` out
 sample archive records the requested budget and the server's finish reason so length-limited
 responses can be separated from completed answers.
 
-The Grug catalog entry omits the `grug` reasoning parser because the pinned Marin GPU vLLM wheel
-lacks [the parser](https://github.com/marin-community/vllm/pull/79). A one-item GraphWalks run with
-this setting scored a sample. The Qwen catalog entry requests 320 GB of host memory after its
+The GraphWalks-specific Qwen entry explicitly enables thinking for both token counting and generation.
+The GraphWalks-specific Grug catalog entry omits the `grug` reasoning parser because the pinned Marin GPU vLLM wheel
+lacks [the parser](https://github.com/marin-community/vllm/pull/79). The shared Grug entry retains its parser.
+A one-item GraphWalks run with the parser-free setting scored a sample. The Qwen catalog entry requests 320 GB of host memory after its
 default allocation ran out during model loading; a one-item run with 320 GB scored a sample.
 
 The `qwen3-32b` / `tb2-lite` path follows the H100x2 acceptance run recorded in
@@ -258,6 +259,7 @@ when RunAI reports a transient read failure.
 | `agentic` | Harbor | Terminal-Bench 2, SWE-bench, GAIA, BFCL, Aider, MedAgentBench, and FinanceAgent in Daytona. |
 
 GraphWalks is also available as the standalone `graphwalks` evaluation key.
+It is exploratory and is not part of a verified evaluation policy cohort.
 
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in

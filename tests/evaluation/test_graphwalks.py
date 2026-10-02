@@ -47,7 +47,8 @@ def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeyp
         def encode(self, text, *, add_special_tokens):
             return list(text)
 
-        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, enable_thinking):
+            assert enable_thinking is True
             tokens = list(messages[0]["content"])
             if mapped_tokens:
                 return {"input_ids": tokens, "attention_mask": [1] * len(tokens)}
@@ -94,12 +95,14 @@ def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeyp
         if not session.ready:
             raise requests.ConnectionError("serving endpoint preempted")
         assert kwargs["json"]["max_tokens"] == 8232
+        assert kwargs["json"]["temperature"] == 0
+        assert kwargs["json"]["chat_template_kwargs"] == {"enable_thinking": True}
         return Response()
 
     monkeypatch.setattr(requests, "post", post)
 
     root = str(tmp_path / "run")
-    outcome = GraphWalksExecutor(max_model_len=9000)(session, root, {})
+    outcome = GraphWalksExecutor(max_model_len=9000, chat_template_kwargs={"enable_thinking": True})(session, root, {})
 
     assert outcome.coverage["graphwalks"].n_benchmark == 2
     assert outcome.coverage["graphwalks"].n_attempted == 1

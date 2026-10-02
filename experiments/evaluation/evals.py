@@ -205,6 +205,7 @@ class GraphWalksDefinition:
     """The pinned GraphWalks dataset and its native set-F1 grader."""
 
     name: str = "graphwalks"
+    temperature: float = 0
 
     def record_ref_for(self) -> EvalRef:
         return EvalRef(
@@ -218,16 +219,16 @@ class GraphWalksDefinition:
         if max_model_len is None:
             raise ValueError("GraphWalks requires an explicit model serving context length")
         max_output_tokens = model.generation.max_gen_toks
-        if max_output_tokens is None:
-            return GraphWalksExecutor(
-                max_model_len=max_model_len, tokenizer_revision=model.effective_tokenizer_revision, limit=limit
-            )
-        return GraphWalksExecutor(
+        executor = GraphWalksExecutor(
             max_model_len=max_model_len,
-            max_output_tokens=max_output_tokens,
+            temperature=self.temperature,
+            chat_template_kwargs=model.generation.chat_template_kwargs,
             tokenizer_revision=model.effective_tokenizer_revision,
             limit=limit,
         )
+        if max_output_tokens is None:
+            return executor
+        return replace(executor, max_output_tokens=max_output_tokens)
 
     @property
     def runtime_descriptor(self) -> str:

@@ -13,7 +13,7 @@ import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, TypedDict, cast
 
 import requests
@@ -75,7 +75,7 @@ class _TokenCounter(Protocol):
     def encode(self, text: str, *, add_special_tokens: bool) -> list[int]: ...
 
     def apply_chat_template(
-        self, messages: list[dict[str, str]], *, tokenize: bool, add_generation_prompt: bool
+        self, messages: list[dict[str, str]], *, tokenize: bool, add_generation_prompt: bool, **kwargs: bool | None
     ) -> list[int] | Mapping[str, list[int]]: ...
 
 
@@ -161,23 +161,33 @@ def _benchmark(n_benchmark: int, n_attempted: int) -> BenchmarkMetadataRef:
     )
 
 
-def _chat_token_count(tokenizer: _TokenCounter, prompt: str) -> int:
+def _chat_token_count(tokenizer: _TokenCounter, prompt: str, chat_template_kwargs: Mapping[str, bool | None]) -> int:
     tokens = tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}], tokenize=True, add_generation_prompt=True
+        [{"role": "user", "content": prompt}],
+        tokenize=True,
+        add_generation_prompt=True,
+        **chat_template_kwargs,
     )
     if isinstance(tokens, Mapping):
         return len(tokens["input_ids"])
     return len(tokens)
 
 
-def _request(example: _Example, session: RemoteInferenceSession) -> _Result:
+def _request(
+    example: _Example,
+    session: RemoteInferenceSession,
+    temperature: float,
+    chat_template_kwargs: Mapping[str, bool | None],
+) -> _Result:
     endpoint = session.model.endpoint
-    body = {
+    body: dict[str, object] = {
         "model": endpoint.model,
         "messages": [{"role": "user", "content": example.prompt}],
         "max_tokens": example.output_tokens,
-        "temperature": 0,
+        "temperature": temperature,
     }
+    if chat_template_kwargs:
+        body["chat_template_kwargs"] = dict(chat_template_kwargs)
     headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else None
     for attempt in range(_MAX_REQUEST_ATTEMPTS):
         try:
@@ -257,6 +267,8 @@ class GraphWalksExecutor:
     """Run context-eligible GraphWalks examples and publish their graded samples."""
 
     max_model_len: int
+    temperature: float = 0
+    chat_template_kwargs: Mapping[str, bool | None] = field(default_factory=dict)
     max_output_tokens: int = 131072
     tokenizer_revision: str | None = None
     limit: int | None = None
@@ -319,11 +331,11 @@ class GraphWalksExecutor:
             # gap makes boundary changes from completing the prompt irrelevant to that decision.
             if row["prompt_chars"] > prompt_budget * _PREFIX_CHARS_PER_TOKEN:
                 prefix = prompt[: prompt_budget * _PREFIX_CHARS_PER_TOKEN]
-                prefix_tokens = _chat_token_count(tokenizer, prefix)
+                prefix_tokens = _chat_token_count(tokenizer, prefix, self.chat_template_kwargs)
                 if prefix_tokens > prompt_budget + _PREFIX_TOKEN_MARGIN:
                     skipped[row["problem_type"]] += 1
                     continue
-            prompt_tokens = _chat_token_count(tokenizer, prompt)
+            prompt_tokens = _chat_token_count(tokenizer, prompt, self.chat_template_kwargs)
             if prompt_tokens > prompt_budget:
                 skipped[row["problem_type"]] += 1
                 continue
@@ -380,6 +392,8 @@ class GraphWalksExecutor:
                         "not_inspected_after_limit": selection.not_inspected_after_limit,
                         "max_model_len": self.max_model_len,
                         "max_output_tokens": self.max_output_tokens,
+                        "temperature": self.temperature,
+                        "chat_template_kwargs": dict(self.chat_template_kwargs),
                         "output_budget_policy": "2 * max(4096, tokenized_gold_list_length + 4096)",
                     },
                     sort_keys=True,
@@ -387,7 +401,10 @@ class GraphWalksExecutor:
                 content_type="application/json",
             )
             with ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_REQUESTS) as pool:
-                futures = {pool.submit(_request, example, session): example for example in selection.examples}
+                futures = {
+                    pool.submit(_request, example, session, self.temperature, self.chat_template_kwargs): example
+                    for example in selection.examples
+                }
                 for future in as_completed(futures):
                     result = future.result()
                     if result.error is not None:
