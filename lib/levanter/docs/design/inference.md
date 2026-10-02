@@ -102,7 +102,7 @@ when different vocabulary IDs decode to the same text.
 The paired SkyRL remote client maps these completions to `student_topk_indices`
 and `behavior_topk_logprobs`; its retry coordinator concatenates partial evidence.
 This does not enable remote FTPO recipes or change their existing local-vLLM
-requirement. Chat candidate capture remains unsupported.
+requirement. Chat requests use `logprobs=true` and `top_logprobs=K` within the same capture capacity. Buffered and streamed chat responses include aligned candidate rows; exact token-ID labels preserve distinct IDs even when they decode to the same text. SkyRL chat retries require the paired client to retain prompt IDs independently of expert-router capture.
 
 ### Teacher scoring
 

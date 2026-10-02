@@ -38,7 +38,7 @@ from openai.types.chat.chat_completion_chunk import Choice as ChatCompletionChun
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.chat.chat_completion_chunk import ChoiceLogprobs as ChunkChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
-from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob
+from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
 from openai.types.completion_choice import CompletionChoice, Logprobs
 from levanter.inference.engine import (
     DecodeResult,
@@ -997,9 +997,12 @@ def _chat_token_logprobs(
     tokens: list[int],
     logprobs: list[float],
     return_tokens_as_token_ids: bool,
+    top_token_ids: list[list[int]],
+    top_logprobs: list[list[float]],
+    top_k: int,
 ) -> list[ChatCompletionTokenLogprob]:
     content = []
-    for token_id, logprob in zip(tokens, logprobs, strict=True):
+    for index, (token_id, logprob) in enumerate(zip(tokens, logprobs, strict=True)):
         token = (
             f"{TOKEN_ID_PREFIX}{token_id}" if return_tokens_as_token_ids else tokenizer.convert_ids_to_tokens(token_id)
         )
@@ -1008,7 +1011,24 @@ def _chat_token_logprobs(
                 token=token,
                 logprob=float(logprob),
                 bytes=list(token.encode("utf-8")),
-                top_logprobs=[],
+                top_logprobs=(
+                    [
+                        TopLogprob(
+                            token=(
+                                f"{TOKEN_ID_PREFIX}{candidate}"
+                                if return_tokens_as_token_ids
+                                else tokenizer.convert_ids_to_tokens(candidate)
+                            ),
+                            logprob=max(score, -9999.0),
+                            bytes=list(tokenizer.convert_ids_to_tokens(candidate).encode("utf-8")),
+                        )
+                        for candidate, score in zip(
+                            top_token_ids[index][:top_k], top_logprobs[index][:top_k], strict=True
+                        )
+                    ]
+                    if top_k
+                    else []
+                ),
             )
         )
     return content
@@ -1023,8 +1043,13 @@ async def _create_chat_completion(
     """Create a chat completion using OpenAI API format."""
     try:
         # Convert Pydantic models to dicts for tokenizer
-        if request.top_logprobs:
-            raise HTTPException(status_code=400, detail="Generated top-logprob candidates are not supported")
+        if request.top_logprobs and not request.logprobs:
+            raise HTTPException(status_code=400, detail="top_logprobs requires logprobs=true")
+        if (request.top_logprobs or 0) > ctx.config.service.max_logprobs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Requested top_logprobs exceeds configured capture capacity {ctx.config.service.max_logprobs}",
+            )
         prompt_tokens = request.exact_prompt_token_ids
         if prompt_tokens is None:
             prompt_tokens = _compute_tokens(
@@ -1074,6 +1099,9 @@ async def _create_chat_completion(
                         generation.tokens,
                         generation.logprobs,
                         request.return_tokens_as_token_ids,
+                        generation.top_token_ids,
+                        generation.top_logprobs,
+                        request.top_logprobs or 0,
                     )
                 )
 
@@ -1161,6 +1189,9 @@ def _delta_events(
                     delta.tokens,
                     delta.logprobs,
                     request.return_tokens_as_token_ids,
+                    delta.top_token_ids,
+                    delta.top_logprobs,
+                    request.top_logprobs or 0,
                 )
             )
         content = ChatCompletionChunkChoice(

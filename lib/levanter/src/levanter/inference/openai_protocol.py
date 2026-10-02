@@ -34,7 +34,7 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: float | None = None
     logit_bias: dict[str, int] | None = None
     logprobs: bool = Field(default=False, description="Whether to include logprobs in the response")
-    top_logprobs: int | None = None
+    top_logprobs: int | None = Field(default=None, ge=0)
     max_tokens: int = Field(default=1024, validation_alias=AliasChoices("max_completion_tokens", "max_tokens"), gt=0)
     return_token_ids: bool = False
     return_tokens_as_token_ids: bool = False

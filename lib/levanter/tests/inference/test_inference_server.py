@@ -1430,6 +1430,41 @@ def test_rollout_capture_reports_requested_distribution_and_rejects_missing_evid
     assert choice["logprobs"]["token_logprobs"] == pytest.approx(expected[:1], abs=1e-6)
 
 
+def test_chat_candidate_scores_match_streaming_and_reporting_mode(rollout_token_client):
+    client, mode = rollout_token_client
+    request = {
+        "model": "gpt2",
+        "messages": [{"role": "user", "content": "A"}],
+        "max_completion_tokens": 2,
+        "temperature": 0.5,
+        "top_p": 0.6,
+        "n": 2,
+        "logprobs": True,
+        "top_logprobs": 2,
+        "return_tokens_as_token_ids": True,
+        "return_token_ids": True,
+    }
+    assert client.post("/v1/chat/completions", json={**request, "top_logprobs": 3}).status_code == 400
+    response = client.post("/v1/chat/completions", json=request)
+    assert response.status_code == 200, response.text
+    full = response.json()
+    streamed = client.post("/v1/chat/completions", json={**request, "stream": True})
+    assert streamed.status_code == 200, streamed.text
+    chunks = _sse_chunks(streamed.text)
+    expected = [1 - math.log(math.e + 3), -math.log(math.e + 3)] if mode == "raw_logprobs" else [0.0, -9999.0]
+    for choice in full["choices"]:
+        parts = [chunk["choices"][0] for chunk in chunks if chunk["choices"][0]["index"] == choice["index"]]
+        rows = choice["logprobs"]["content"]
+        assert [row for part in parts if part["logprobs"] for row in part["logprobs"]["content"]] == rows
+        assert [token for part in parts for token in part.get("token_ids", [])] == choice["token_ids"]
+        assert parts[-1]["finish_reason"] == choice["finish_reason"] == "length"
+        for token_id, row in zip(choice["token_ids"], rows, strict=True):
+            assert [item["token"] for item in row["top_logprobs"]] == [f"token_id:{token_id}", "token_id:0"]
+            assert [item["logprob"] for item in row["top_logprobs"]] == pytest.approx(expected, abs=1e-6)
+            assert row["logprob"] == pytest.approx(expected[0], abs=1e-6)
+        assert rows[0]["top_logprobs"][0]["bytes"] == list(b" X")
+
+
 class _UnicodeTokenModel(_TokenSensitiveCompletionModel):
     def decode(self, input_ids, cache, batch_info, pos_ids):
         return hax.nn.one_hot((pos_ids + 1) % 4, self.Vocab, dtype=jnp.float32), cache
@@ -1479,7 +1514,8 @@ def test_streamed_unicode_keeps_byte_token_ids_without_replacement_text():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
+@pytest.mark.parametrize("api", ["completion", "chat"])
+async def test_remote_skyrl_pause_retries_exact_tokens_after_resume(api):
     """Run with the paired SkyRL checkout on PYTHONPATH and its client dependencies installed."""
     remote = pytest.importorskip("skyrl_train.inference_engines.remote_inference_engine")
     skyrl_client = pytest.importorskip("skyrl_train.inference_engines.inference_engine_client")
@@ -1522,7 +1558,40 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
                 "prompt_token_ids": [[0, 1]],
                 "sampling_params": {"temperature": 0, "max_tokens": 3, "logprobs": 2},
             }
-            pending = asyncio.create_task(client.generate(request))
+
+            async def generate(target):
+                if api == "completion":
+                    return await target.generate(request)
+                response = await target.chat_completion(
+                    {
+                        "json": {
+                            "model": "gpt2",
+                            "messages": [{"role": "user", "content": "A"}],
+                            "temperature": 0,
+                            "max_completion_tokens": 3,
+                            "return_token_ids": True,
+                            "logprobs": True,
+                            "top_logprobs": 2,
+                            "return_tokens_as_token_ids": True,
+                        },
+                        "headers": {},
+                    }
+                )
+                choice = response["choices"][0]
+                rows = choice["logprobs"]["content"]
+                assert response["usage"]["prompt_tokens"] == 2
+                assert response["usage"]["completion_tokens"] == len(choice["token_ids"])
+                return {
+                    "response_ids": [choice["token_ids"]],
+                    "response_logprobs": [[row["logprob"] for row in rows]],
+                    "student_topk_indices": [
+                        [[int(item["token"].split(":")[1]) for item in row["top_logprobs"]] for row in rows]
+                    ],
+                    "behavior_topk_logprobs": [[[item["logprob"] for item in row["top_logprobs"]] for row in rows]],
+                    "stop_reasons": [choice["finish_reason"]],
+                }
+
+            pending = asyncio.create_task(generate(client))
             pausing = None
             try:
                 assert await asyncio.to_thread(entered.wait, 30)
@@ -1531,14 +1600,14 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
                 release.set()
                 await pausing
                 # The real client must park retries until resume; direct callers receive abort.
-                paused = await engine.generate(request)
+                paused = await generate(engine)
                 assert paused["stop_reasons"] == ["abort"]
                 assert paused["response_ids"] == paused["response_logprobs"] == [[]]
                 assert paused["student_topk_indices"] == paused["behavior_topk_logprobs"] == [[]]
                 assert not pending.done()
                 await client.resume_generation()
                 resumed = await asyncio.wait_for(pending, 30)
-                full = await engine.generate(request)
+                full = await generate(engine)
                 assert resumed["response_ids"] == full["response_ids"] == [[3, 1, 3]]
                 assert resumed["response_logprobs"] == full["response_logprobs"]
                 assert resumed["student_topk_indices"] == full["student_topk_indices"] == [[[3, 0], [1, 0], [3, 0]]]
