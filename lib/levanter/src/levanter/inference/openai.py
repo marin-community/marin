@@ -1116,7 +1116,6 @@ class _GenerationStreamingResponse(StreamingResponse):
 
 async def _http_generation[RequestT: (
     CompletionRequest,
-    PauseGenerationRequest,
     ChatCompletionRequest,
 ), ResponseT: (Completion, ChatCompletion)](
     ctx: InferenceContext,
