@@ -28,6 +28,7 @@ from levanter.callbacks.profiler import ProfilerConfig, XprofUploadConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import LmDataConfig
 from levanter.distributed import DistributedConfig
+from levanter.grug.attention import PORTABLE_ATTENTION_IMPLEMENTATIONS
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -44,7 +45,8 @@ from experiments.grug.moe_hero_ep.train import (
 
 logger = logging.getLogger("grug_synthetic_benchmark")
 
-# Snowball (67B-A2B, June recipe) shape; matches levanter.models.snowball.SnowballConfig defaults.
+# Snowball (67B-A2B, June recipe) shape, as in levanter.models.snowball.SnowballConfig, at the benchmark's
+# 4096-token sequence length rather than the model's 65536-token maximum.
 FULL = GrugModelConfig(
     vocab_size=128256,
     hidden_dim=2560,
@@ -92,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--mp", help="jmp policy override, e.g. 'p=f32,c=float16' (default: preset).")
     parser.add_argument("--expert-axis", type=int, default=1, help="Expert-parallel mesh axis size (1 = FSDP only).")
-    parser.add_argument("--attention", choices=["reference", "xla_flash"], default="reference")
+    parser.add_argument("--attention", choices=PORTABLE_ATTENTION_IMPLEMENTATIONS, default="reference")
     parser.add_argument("--moe-impl", default="ring", help="Expert-parallel MoE backend (default: ring).")
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")

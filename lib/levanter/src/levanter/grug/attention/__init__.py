@@ -4,6 +4,7 @@
 from levanter.grug.attention._core import (
     AttentionMask as AttentionMask,
     GrugAttentionImplementation as GrugAttentionImplementation,
+    PORTABLE_ATTENTION_IMPLEMENTATIONS as PORTABLE_ATTENTION_IMPLEMENTATIONS,
     RotaryConfig as RotaryConfig,
     align_kv_heads as align_kv_heads,
     apply_rotary_embedding as apply_rotary_embedding,

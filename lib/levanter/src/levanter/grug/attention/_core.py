@@ -37,6 +37,9 @@ GrugAttentionImplementation = Literal[
     "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
 ]
 
+# Implementations with no CUDA or TPU kernel dependency; the choices that run on AMD GPUs and CPUs.
+PORTABLE_ATTENTION_IMPLEMENTATIONS: tuple[GrugAttentionImplementation, ...] = ("reference", "xla_flash")
+
 
 @dataclass(frozen=True)
 class RotaryConfig:
@@ -547,6 +550,7 @@ def attention(
 __all__ = [
     "AttentionMask",
     "GrugAttentionImplementation",
+    "PORTABLE_ATTENTION_IMPLEMENTATIONS",
     "RotaryConfig",
     "align_kv_heads",
     "apply_rotary_embedding",

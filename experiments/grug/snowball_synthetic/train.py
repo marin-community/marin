@@ -43,6 +43,7 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import NamedLmDataset
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.grug.attention import PORTABLE_ATTENTION_IMPLEMENTATIONS
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -126,7 +127,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--moe-impl", help="MoE backend override, e.g. scatter (default: ring).")
     parser.add_argument(
         "--attention",
-        choices=["reference", "xla_flash"],
+        choices=PORTABLE_ATTENTION_IMPLEMENTATIONS,
         default="reference",
         help="Attention implementation; both run on any backend.",
     )
