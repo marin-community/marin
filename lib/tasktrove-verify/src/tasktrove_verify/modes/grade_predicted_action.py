@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 
 from tasktrove_verify.grade import InvalidTask, Reward, read_output, scored
+from tasktrove_verify.json_comparison import json_values_equal
 from tasktrove_verify.spec import FunctionCall, PredictedActionSpec, spec_from_table
 
 
@@ -42,22 +43,6 @@ def validate_predicted_action(spec: PredictedActionSpec) -> None:
         _validate_json(call.arguments)
 
 
-def _arguments_match(expected: object, actual: object, tolerance: float | None) -> bool:
-    if type(actual) is not type(expected):
-        return False
-    if isinstance(expected, dict) and isinstance(actual, dict):
-        return expected.keys() == actual.keys() and all(
-            _arguments_match(value, actual[key], tolerance) for key, value in expected.items()
-        )
-    if isinstance(expected, list) and isinstance(actual, list):
-        return len(expected) == len(actual) and all(
-            _arguments_match(left, right, tolerance) for left, right in zip(expected, actual, strict=True)
-        )
-    if isinstance(expected, float) and isinstance(actual, float) and tolerance is not None:
-        return math.isfinite(actual) and abs(expected - actual) <= tolerance
-    return expected == actual
-
-
 def grade_predicted_action_candidate(spec: PredictedActionSpec, actual: tuple[FunctionCall, ...]) -> Reward:
     """Match all calls one to one, preserving JSON types and duplicate multiplicity."""
     validate_predicted_action(spec)
@@ -67,7 +52,7 @@ def grade_predicted_action_candidate(spec: PredictedActionSpec, actual: tuple[Fu
         [
             index
             for index, right in enumerate(actual)
-            if left.name == right.name and _arguments_match(left.arguments, right.arguments, spec.numeric_tolerance)
+            if left.name == right.name and json_values_equal(left.arguments, right.arguments, spec.numeric_tolerance)
         ]
         for left in spec.expected_calls
     ]

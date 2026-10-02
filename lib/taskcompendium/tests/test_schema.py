@@ -23,7 +23,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierSpec,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention, chat_request
+from taskcompendium.submission import GradingAttempt, PlainText, chat_request
 
 
 @pytest.fixture
@@ -103,7 +103,7 @@ def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path
     path = tmp_path / "specification.json"
     path.write_text(record.model_dump_json())
     task = read_specification(path)
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
     assert compatible_lowerings(task, (convention,), (HarborEnvironmentConfig(),)) == ()
     with pytest.raises(NotImplementedError):
         chat_request(task, convention)
@@ -173,7 +173,7 @@ def test_reader_keeps_literal_provider_state_but_direct_chat_cannot_export_it(tm
     with pytest.raises(NotImplementedError):
         lower_to_harbor(
             task,
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            PlainText(id="plain"),
             HarborEnvironmentConfig(),
             tmp_path / "export",
         )
@@ -206,7 +206,7 @@ def test_private_verifier_config_rejects_nested_nonfinite_json_numbers(tmp_path,
         read_specification(path)
 
 
-def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, specification):
+async def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, specification):
     wire = specification.model_dump(mode="json")
     wire["verifier"]["environment_requirements"] = {"docker_image": "private/grader@sha256:" + "a" * 64}
     path = tmp_path / "specification.json"
@@ -215,28 +215,28 @@ def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, spe
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     # This correct answer must not earn credit without the required private runtime.
     with pytest.raises(NotImplementedError):
-        grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
+        await grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation, object()))
 
 
-@pytest.mark.parametrize("kind", ["llm_judge", "structured_exact"])
-def test_schema_only_verifiers_cannot_export_or_grade(tmp_path, specification, kind):
+@pytest.mark.parametrize("kind", ["llm_judge", "private_script"])
+async def test_schema_only_verifiers_cannot_export_or_grade(tmp_path, specification, kind):
     specification = specification.model_copy(update={"verifier": VerifierSpec(kind=kind, parameters_json="{}")})
     path = tmp_path / "specification.json"
     path.write_text(specification.model_dump_json())
     task = read_specification(path)
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
     assert compatible_lowerings(task, (convention,), (HarborEnvironmentConfig(),)) == ()
     with pytest.raises(NotImplementedError):
         lower_to_harbor(task, convention, HarborEnvironmentConfig(), tmp_path / "export")
     assert not (tmp_path / "export").exists()
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     with pytest.raises(NotImplementedError):
-        grade_answer(task, convention, conversation)
+        await grade_answer(task, convention, GradingAttempt(conversation, object()))
 
 
-@pytest.mark.parametrize("kind", ["llm_judge", "structured_exact"])
+@pytest.mark.parametrize("kind", ["llm_judge", "private_script"])
 async def test_launch_rejects_schema_only_verifier_before_starting_a_trial(tmp_path, specification, kind):
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     unsupported = specification.model_copy(update={"verifier": VerifierSpec(kind=kind, parameters_json="{}")})
     (task / "specification.json").write_text(unsupported.model_dump_json())
@@ -267,7 +267,7 @@ def test_resource_groups_reject_portable_path_aliases_before_mounts_can_overwrit
 
 
 @pytest.mark.parametrize("candidate,reward", [("done", 1.0), ("incorrect", 0.0)])
-def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace(specification, candidate, reward):
+async def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace(specification, candidate, reward):
     wire = specification.model_dump(mode="json")
     wire["environment_requirements"] = {"capabilities": ["shell", "filesystem"], "working_directory": "/app"}
     wire["resources"] = {
@@ -275,7 +275,7 @@ def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace
     }
     task = TaskSpec.model_validate(wire)
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
-    result = grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
+    result = await grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation, object()))
     assert (result.status, result.reward) == ("graded", reward)
 
 
@@ -299,7 +299,7 @@ def test_reader_preserves_private_schema_contracts_before_unsupported_export_is_
     with pytest.raises(NotImplementedError):
         lower_to_harbor(
             restored,
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            PlainText(id="plain"),
             HarborEnvironmentConfig(),
             tmp_path / "export",
         )

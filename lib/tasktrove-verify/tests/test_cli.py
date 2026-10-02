@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from tasktrove_verify import grade as grade_module
 from tasktrove_verify.grade import Status, main, scored
-from tasktrove_verify.spec import FunctionCall, Mode, PredictedActionSpec, render_spec
+from tasktrove_verify.spec import FunctionCall, Mode, PredictedActionSpec, StructuredExactSpec, render_spec
 
 
 def _verdict(logs: Path) -> dict:
@@ -77,6 +77,27 @@ def test_predicted_action_file_grading_preserves_nested_json_from_toml(tmp_path,
         expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
         output=str(tmp_path / "answer.json"),
     )
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(spec))
+    (tmp_path / "answer.json").write_text(candidate)
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
+
+
+@pytest.mark.parametrize(
+    "expected,candidate,reward",
+    [
+        ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1,1.0]}', 1.0),
+        ({"values": [None, True, 1, 1.0]}, '{"values":[null,1,1,1.0]}', 0.0),
+        ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1.0,1]}', 0.0),
+        (None, "null", 1.0),
+        (None, "not json", 0.0),
+    ],
+)
+def test_structured_exact_file_grading_preserves_json_types_from_toml(tmp_path, expected, candidate, reward):
+    spec = StructuredExactSpec(expected=expected, output=str(tmp_path / "answer.json"))
     config = tmp_path / "verifier.toml"
     config.write_text(render_spec(spec))
     (tmp_path / "answer.json").write_text(candidate)

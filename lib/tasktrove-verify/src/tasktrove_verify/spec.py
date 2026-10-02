@@ -3,7 +3,7 @@
 
 """The verifier contract: ``tests/verifier.toml`` is one flat table, ``mode`` plus that mode's fields.
 
-Predicted-action call arguments use JSON strings in TOML to preserve JSON null and nested values.
+Structured references and predicted-action arguments use JSON strings in TOML to preserve JSON null and nested values.
 
 Every mode is a frozen dataclass here. ``parse_spec`` builds one from TOML text and rejects unknown
 or missing fields; ``render_spec`` writes it back. Paths in a spec (``schema``, ``cases``,
@@ -19,11 +19,14 @@ from typing import Any
 
 import tomlkit
 
+from tasktrove_verify.json_comparison import JsonValue
+
 DEFAULT_OUTPUT = "/app/answer.txt"
 DEFAULT_WORKSPACE = "/app"
 
 
 class Mode(StrEnum):
+    STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     MCQ = "mcq"
     MATH = "math"
@@ -75,6 +78,12 @@ class FunctionCall:
 class PredictedActionSpec:
     expected_calls: tuple[FunctionCall, ...]
     numeric_tolerance: float | None = None
+    output: str = DEFAULT_OUTPUT
+
+
+@dataclass(frozen=True)
+class StructuredExactSpec:
+    expected: JsonValue
     output: str = DEFAULT_OUTPUT
 
 
@@ -251,7 +260,8 @@ class ScriptSpec:
 
 
 Spec = (
-    PredictedActionSpec
+    StructuredExactSpec
+    | PredictedActionSpec
     | McqSpec
     | MathSpec
     | NumericSpec
@@ -270,6 +280,7 @@ Spec = (
 )
 
 SPEC_TYPES: dict[Mode, type] = {
+    Mode.STRUCTURED_EXACT: StructuredExactSpec,
     Mode.PREDICTED_ACTION: PredictedActionSpec,
     Mode.MCQ: McqSpec,
     Mode.MATH: MathSpec,
@@ -356,6 +367,8 @@ def parse_spec(text: str) -> Spec:
         for call in table.get("expected_calls", []):
             if isinstance(call, dict) and isinstance(call.get("arguments"), str):
                 call["arguments"] = json.loads(call["arguments"])
+    if table.get("mode") == Mode.STRUCTURED_EXACT and "expected" in table:
+        table["expected"] = json.loads(table["expected"])
     return spec_from_table(table)
 
 
@@ -364,7 +377,7 @@ def spec_to_table(spec: Spec) -> dict[str, Any]:
     table: dict[str, Any] = {"mode": mode_of(spec).value}
     for f in fields(spec):
         value = getattr(spec, f.name)
-        if value is None:
+        if value is None and f.default is None:
             continue
         if isinstance(value, tuple):
             value = [dataclasses.asdict(v) if dataclasses.is_dataclass(v) else v for v in value]
@@ -380,4 +393,6 @@ def render_spec(spec: Spec) -> str:
         table["expected_calls"] = [
             {"name": call.name, "arguments": json.dumps(call.arguments, allow_nan=False)} for call in spec.expected_calls
         ]
+    if isinstance(spec, StructuredExactSpec):
+        table["expected"] = json.dumps(spec.expected, allow_nan=False)
     return tomlkit.dumps(table)

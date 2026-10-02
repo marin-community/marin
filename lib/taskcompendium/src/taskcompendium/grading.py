@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
+from pydantic import JsonValue
 from tasktrove_verify.candidate import (
     CandidateSpec,
     candidate_spec,
@@ -15,23 +16,39 @@ from tasktrove_verify.candidate import (
 )
 from tasktrove_verify.grade import InvalidTask
 from tasktrove_verify.modes.grade_predicted_action import grade_predicted_action_candidate
-from tasktrove_verify.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec, Spec, mode_of, spec_to_table
+from tasktrove_verify.modes.grade_structured_exact import grade_structured_exact_candidate
+from tasktrove_verify.spec import (
+    ExactSpec,
+    McqSpec,
+    NumericSpec,
+    PredictedActionSpec,
+    Spec,
+    StructuredExactSpec,
+    mode_of,
+    spec_to_table,
+)
 from tasktrove_verify.spec import FunctionCall as CandidateCall
 
 from taskcompendium.models import (
     AssistantToolCalls,
-    ConversationTrace,
     EnvironmentRequirements,
     TaskSpec,
-    TextMessage,
     VerifierSpec,
 )
-from taskcompendium.submission import AnswerFormat, FinalAction, Submission, extract_answer
+from taskcompendium.submission import (
+    ActionSubmission,
+    GradingAttempt,
+    StateSubmission,
+    Submission,
+    SubmissionConvention,
+    SubmissionFailure,
+    TextSubmission,
+)
 
 
 class Outcome(StrEnum):
     GRADED = "graded"
-    EXTRACTION_ERROR = "extraction_error"
+    SUBMISSION_FAILURE = "submission_failure"
     INFRA_ERROR = "infra_error"
 
 
@@ -65,35 +82,46 @@ def supports_verifier(specification: VerifierSpec) -> bool:
     return True
 
 
-def grade_answer(specification: TaskSpec, convention: Submission, conversation: ConversationTrace) -> GradeResult:
-    """Translate terminal evidence into the shared grader's candidate representation."""
-    verifier = resolve_verifier(specification.verifier)
-    final = conversation.events[-1]
-    if isinstance(convention, FinalAction):
-        try:
-            convention.validate_final_message(final)
-        except ValueError as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeResult:
+    if isinstance(verifier, StructuredExactSpec):
+        if not isinstance(submission, StateSubmission):
+            raise TypeError("Structured exact verifier requires a state submission")
+        return GradeResult(Outcome.GRADED, grade_structured_exact_candidate(verifier, submission.value).reward)
     if isinstance(verifier, PredictedActionSpec):
-        if convention.answer_format != AnswerFormat.FINAL_ACTION:
-            return GradeResult(Outcome.INFRA_ERROR, None, "Incompatible final-action convention")
-        if not isinstance(final, (TextMessage, AssistantToolCalls)):
-            return GradeResult(Outcome.INFRA_ERROR, None, "Missing final assistant message")
+        if not isinstance(submission, ActionSubmission):
+            raise TypeError("Predicted-action verifier requires an action submission")
+        final = submission.message
         calls = (
             tuple(CandidateCall(call.name, call.arguments) for call in final.calls)
             if isinstance(final, AssistantToolCalls)
             else ()
         )
         return GradeResult(Outcome.GRADED, grade_predicted_action_candidate(verifier, calls).reward)
-    try:
-        candidate = extract_answer(final, convention)
-    except (ValueError, TypeError) as error:
-        return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+    if isinstance(verifier, ExactSpec) and isinstance(submission, StateSubmission) and isinstance(submission.value, str):
+        return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, submission.value).reward)
+    if not isinstance(submission, TextSubmission):
+        raise TypeError("Text candidate verifier requires a text submission")
     if isinstance(verifier, McqSpec):
-        letter = candidate.strip()
+        letter = submission.value.strip()
         if len(letter) != 1 or not "A" <= letter.upper() <= "Z":
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, "MCQA response requires one option letter")
-    return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, candidate).reward)
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "MCQA response requires one option letter")
+    return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, submission.value).reward)
+
+
+async def grade_answer(
+    specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt
+) -> GradeResult:
+    """Acquire one submission and score it through the shared candidate contract."""
+    verifier = resolve_verifier(specification.verifier)
+    try:
+        submission = await convention.extract(attempt)
+    except SubmissionFailure as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+    return _grade_submission(verifier, submission)
+
+
+def structured_exact(expected: JsonValue) -> VerifierSpec:
+    return verifier_descriptor(StructuredExactSpec(expected=expected))
 
 
 def verifier_descriptor(spec: Spec) -> VerifierSpec:

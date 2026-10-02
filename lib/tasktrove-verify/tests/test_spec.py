@@ -14,6 +14,7 @@ from tasktrove_verify.spec import (
     NumericSpec,
     PredictedActionSpec,
     StdioSpec,
+    StructuredExactSpec,
     parse_spec,
     render_spec,
 )
@@ -22,6 +23,8 @@ from tasktrove_verify.spec import (
 def test_round_trip_every_field_kind():
     specs = [
         McqSpec(expected="C", options=5),
+        StructuredExactSpec(expected={"values": [None, True, 1, 1.0, {"text": "value"}]}),
+        StructuredExactSpec(expected=None),
         PredictedActionSpec(
             expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
             numeric_tolerance=0.01,

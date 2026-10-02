@@ -65,11 +65,11 @@ A numeric task uses `answer_type=number` and can use the same submission convent
 
 A task whose result is a function call uses `answer_type=native_action`. Its `final_tools` field declares the available functions. `FinalAction` defines whether a call is required and the maximum call count. The final-action submission convention captures the assistant's calls, and `predicted_action` compares their function names and decoded argument objects with the private expected calls. Direct chat stops after recording the response; it does not execute the calls.
 
-With the `answer_call` convention, the chat agent adds `submit_answer(answer: string)` alongside the task’s final tools and records the assistant's final response. It never invokes the function. The convention extracts the call's `answer` argument and passes it to the task's ordinary verifier. A non-call response or a call to another function receives `extraction_error` with no reward. The same final-action decoder handles native-action tasks; their verifier compares the recorded call's function name and argument dictionary with the private expected call.
+With the `answer_call` convention, the chat agent adds `submit_answer(answer: string)` alongside the task’s final tools and records the assistant's final response. It never invokes the function. The convention extracts the call's `answer` argument and passes it to the task's ordinary verifier. A non-call response or a call to another function receives `submission_failure` with reward `0.0`. The same final-action decoder handles native-action tasks; their verifier compares the recorded call's function name and argument dictionary with the private expected call.
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Exporting and running these results requires environment configurations and submission conventions that are not implemented here. The schema names `structured_exact` for a future JSON-value scorer; this package does not implement that scorer or state acquisition.
+`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Exporting and running these results requires environment configurations and submission conventions that are not implemented here. The shared `structured_exact` verifier compares acquired JSON values with exact scalar types and ordered arrays. This package does not acquire state results.
 
 Public expectations belong in `context`: for example, the columns a CSV must contain or the behavior a repaired project must provide. The private verifier checks those expectations. A submission convention chooses how the result is delivered and extracted. `answer_type` identifies its semantic kind. TaskSpec has no extra intrinsic encoding or answer-format field.
 
@@ -175,9 +175,9 @@ Each spec selects a private verifier and stores its configuration in `VerifierSp
 
 Schema loading accepts descriptors without a grader implementation. Shared verifier validation, export, and launch validate executable configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, paths referencing `TaskSpec.resources`, or rubrics in `parameters_json`. These graders have no implementation in this package. Direct chat rejects nonempty verifier environment requirements before export or launch, including for its implemented pure graders.
 
-Standard verifier contracts and pure candidate scoring live in `tasktrove-verify`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. TaskCompendium extracts submission evidence and translates shared rewards into Harbor outcomes; it has no verifier registry or separate standard verifier schema.
+Standard verifier contracts and pure candidate scoring live in `tasktrove-verify`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. Submission conventions acquire evidence; TaskCompendium scores it and translates shared rewards into Harbor outcomes; it has no verifier registry or separate standard verifier schema.
 
-The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` is a schema descriptor without an implementation in this package. The expected answer and grading settings stay out of the model-visible instruction.
+The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` compares acquired JSON values without scalar coercion; it requires a state submission and has no direct-chat lowering. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 
@@ -185,7 +185,7 @@ A lowering is one runnable presentation of a spec for a target framework. It com
 
 `convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no worker or verifier environment capabilities, images, workspace initialization, tool providers, or resources; a task requiring `shell` has no candidate in the current implementation. File, workspace-state, arbitrary-state, and unimplemented-verifier tasks also have no direct-chat candidate. Export and launch raise `NotImplementedError` for these requirements before producing artifacts or requesting a model response. Chat request construction also rejects unsupported environment and resource requirements. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
-Submission conventions preserve the task’s advertised functions. Plain-text and JSON submissions keep those functions; the `answer_call` convention adds `submit_answer` and requires one call with an answer string. An existing function named `submit_answer` conflicts with that convention and is rejected. `FinalAction(require_call=True)` requests a call, and `FinalAction(max_calls=1)` disables parallel calls. Before scoring, the grading boundary rejects missing required calls or calls exceeding `max_calls` as `extraction_error` with no reward. Direct chat captures the final assistant turn without executing advertised functions.
+Submission conventions preserve the task’s advertised functions. Plain-text and JSON submissions keep those functions; the `answer_call` convention adds `submit_answer` and requires one call with an answer string. An existing function named `submit_answer` conflicts with that convention and is rejected. `FinalAction(require_call=True)` requests a call, and `FinalAction(max_calls=1)` disables parallel calls. Before scoring, the grading boundary rejects missing required calls or calls exceeding `max_calls` as `submission_failure` with reward `0.0`. Direct chat captures the final assistant turn without executing advertised functions.
 
 An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="shellsim"` to `select_lowerings`; it keeps only ShellSim candidates and raises if none are compatible. A `shell` capability requests an operation, while ShellSim names a concrete execution choice. The current implementation offers only direct chat, so a ShellSim request fails rather than falling back to chat. The selected environment configuration is recorded in the exported Harbor package.
 
@@ -201,7 +201,7 @@ from taskcompendium.lowering import (
 )
 from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import AnswerCall, JsonAnswer, PlainText
 
 spec = TaskSpec(
     id="arithmetic-7-plus-5",
@@ -212,9 +212,9 @@ spec = TaskSpec(
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
 )
 conventions = (
-    SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-    SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
-    SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL),
+    PlainText(id="plain"),
+    JsonAnswer(id="json"),
+    AnswerCall(id="answer-call"),
 )
 candidates = compatible_lowerings(spec, conventions, (HarborEnvironmentConfig(),))
 chosen = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=1234)[0]
@@ -253,9 +253,9 @@ result = asyncio.run(
 
 Each direct-chat Harbor trial runs one `ChatAgent` using the exported submission convention. The lowering prepares the conversation and tool configuration; the agent makes one request, validates the chat protocol, and writes a typed `ConversationTrace` to `submission.json`. This trace contains the complete model-visible conversation, including submission instructions and the final assistant message. Function-call arguments are decoded objects in both source context and grading evidence. The raw provider response is retained separately in `chat-response.json` for diagnostics.
 
-The direct-chat environment exposes no filesystem or shell tools. Harbor's custom verifier reads the typed trace and calls the synchronous `grade_answer` submission adapter. TaskCompendium extracts text or numeric candidates according to the convention and passes final function calls directly to shared scoring. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
+The direct-chat environment exposes no filesystem or shell tools. Harbor's custom verifier reads the typed trace and awaits `grade_answer` with a typed `GradingAttempt`. The convention extracts one typed submission asynchronously; TaskCompendium passes its text, numeric or final-action evidence to shared scoring. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
 
-A valid but wrong answer receives reward `0.0`. A text, numeric, or final-action answer that violates its submission convention receives `extraction_error` with no reward. A native-action submission that satisfies its convention but differs from the expected function calls receives reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
+A valid but wrong answer receives reward `0.0`. A text, numeric, or final-action answer that violates its submission convention receives `submission_failure` with reward `0.0`. A native-action submission that satisfies its convention but differs from the expected function calls receives reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
 
 The package tests use a test-only `ReplayAgent` in `tests/harbor_replay.py` to write fixed assistant messages and exercise Harbor grading without a model request. They also replay responses at the HTTP boundary through the production launcher. Replay is absent from the installed package and public launcher.
 

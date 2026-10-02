@@ -22,6 +22,7 @@ process exit after a verdict has been written.
 
 | mode | contract |
 |---|---|
+| `structured_exact` | exact JSON values with distinct scalar types and ordered arrays |
 | `predicted_action` | unordered function calls with exact JSON types and optional float tolerance |
 | `mcq` | expected option letter |
 | `math` | expression equality through math-verify |
@@ -52,13 +53,15 @@ must also be nonnegative. The effective tolerance,
 owns dispatch, output handling, verdict writing, and the CLI. Executable graders live in
 `modes/grade_*.py`; shared parsers and process runners remain separate.
 
-`candidate_spec(mode, parameters)` validates the shared exact, numeric, MCQ and predicted-action
+`candidate_spec(mode, parameters)` validates the shared exact, numeric, MCQ, structured-JSON and predicted-action
 contracts for callers that already extracted a submission. `grade_text_candidate` scores extracted
-text; `grade_predicted_action_candidate` scores decoded function calls. These APIs perform no
+text; `grade_predicted_action_candidate` scores decoded function calls, and
+`grade_structured_exact_candidate` scores acquired JSON values. These APIs perform no
 filesystem or harness operations. Predicted-action matching preserves duplicate calls and requires
 all calls to match one to one. Argument objects stay decoded in JSON descriptors; `render_spec`
-encodes each argument object as a JSON string in TOML so nested JSON null values survive
-`parse_spec`.
+encodes each argument object and each structured reference as a JSON string in TOML so nested
+JSON null values survive `parse_spec`. Structured references must contain finite JSON values;
+invalid references omit reward files instead of receiving a zero.
 
 ## Install and use
 

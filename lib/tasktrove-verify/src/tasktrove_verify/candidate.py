@@ -13,14 +13,23 @@ from tasktrove_verify.modes.grade_exact import grade_exact_candidate
 from tasktrove_verify.modes.grade_math import grade_numeric_candidate
 from tasktrove_verify.modes.grade_mcq import grade_mcq_candidate
 from tasktrove_verify.modes.grade_predicted_action import validate_predicted_action
-from tasktrove_verify.spec import ExactSpec, McqSpec, Mode, NumericSpec, PredictedActionSpec, spec_from_table
+from tasktrove_verify.modes.grade_structured_exact import validate_structured_exact
+from tasktrove_verify.spec import (
+    ExactSpec,
+    McqSpec,
+    Mode,
+    NumericSpec,
+    PredictedActionSpec,
+    StructuredExactSpec,
+    spec_from_table,
+)
 
 TextSpec = ExactSpec | NumericSpec | McqSpec
-CandidateSpec = TextSpec | PredictedActionSpec
+CandidateSpec = TextSpec | PredictedActionSpec | StructuredExactSpec
 
 
 def supports_candidate_mode(mode: str) -> bool:
-    return mode in (Mode.EXACT, Mode.NUMERIC, Mode.MCQ, Mode.PREDICTED_ACTION)
+    return mode in (Mode.EXACT, Mode.NUMERIC, Mode.MCQ, Mode.PREDICTED_ACTION, Mode.STRUCTURED_EXACT)
 
 
 def candidate_spec(mode: str, parameters: dict[str, Any]) -> CandidateSpec:
@@ -39,6 +48,9 @@ def candidate_spec(mode: str, parameters: dict[str, Any]) -> CandidateSpec:
         return spec
     if isinstance(spec, McqSpec):
         grade_mcq_candidate(spec, spec.expected)
+        return spec
+    if isinstance(spec, StructuredExactSpec):
+        validate_structured_exact(spec)
         return spec
     assert isinstance(spec, PredictedActionSpec)
     validate_predicted_action(spec)

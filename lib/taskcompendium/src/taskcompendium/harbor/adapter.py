@@ -36,6 +36,7 @@ from taskcompendium.lowering import (
     read_submission_convention,
 )
 from taskcompendium.models import ConversationTrace
+from taskcompendium.submission import GradingAttempt
 
 SUBMISSION_FILE = "submission.json"
 CHAT_RESPONSE_FILE = "chat-response.json"
@@ -184,13 +185,13 @@ class SemanticVerifier(BaseVerifier):
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             conversation_path = self.trial_paths.agent_dir / SUBMISSION_FILE
             conversation = ConversationTrace.model_validate_json(conversation_path.read_text())
-            result = grade_answer(specification, convention, conversation)
+            result = await grade_answer(specification, convention, GradingAttempt(conversation, self.environment))
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
             raise RuntimeError(result.error) from error
         self._write_result(result)
-        if result.status != Outcome.GRADED or result.reward is None:
+        if result.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE) or result.reward is None:
             raise RuntimeError(result.error or result.status.value)
         return VerifierResult(rewards={"reward": result.reward})
 

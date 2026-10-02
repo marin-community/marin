@@ -8,7 +8,7 @@ import json
 import pytest
 from tasktrove_verify.candidate import candidate_spec, grade_text_candidate
 from tasktrove_verify.modes.grade_predicted_action import grade_predicted_action_candidate
-from tasktrove_verify.spec import ExactSpec, FunctionCall, Mode, PredictedActionSpec, spec_to_table
+from tasktrove_verify.spec import ExactSpec, FunctionCall, Mode, PredictedActionSpec, StructuredExactSpec, spec_to_table
 
 
 @pytest.mark.parametrize(
@@ -22,7 +22,7 @@ from tasktrove_verify.spec import ExactSpec, FunctionCall, Mode, PredictedAction
 )
 def test_private_candidate_configuration_roundtrip_grades_content(mode, parameters, correct, wrong):
     spec = candidate_spec(mode, json.loads(json.dumps(parameters)))
-    assert not isinstance(spec, PredictedActionSpec)
+    assert not isinstance(spec, (PredictedActionSpec, StructuredExactSpec))
     assert grade_text_candidate(spec, correct).reward == 1.0
     assert grade_text_candidate(spec, wrong).reward == 0.0
 

@@ -37,9 +37,26 @@ from taskcompendium.models import (
     TextMessage,
     VerifierSpec,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import (
+    AnswerCall,
+    AnswerFormat,
+    GradingAttempt,
+    JsonAnswer,
+    PlainText,
+    SubmissionConvention,
+)
 
 from .harbor_replay import run_replay_trial
+
+
+def _answer_convention(answer_format: AnswerFormat) -> SubmissionConvention:
+    if answer_format == AnswerFormat.PLAIN:
+        return PlainText(id="plain")
+    if answer_format == AnswerFormat.JSON:
+        return JsonAnswer(id="json")
+    if answer_format == AnswerFormat.ANSWER_CALL:
+        return AnswerCall(id="answer_call")
+    raise ValueError(f"Unsupported test answer format: {answer_format}")
 
 
 def _answer_action(answer: str) -> dict:
@@ -115,14 +132,14 @@ def specification() -> TaskSpec:
         (AnswerFormat.PLAIN, r"\boxed{12}", 0.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"12"}', 1.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"13"}', 0.0, "graded"),
-        (AnswerFormat.JSON, '{"answer":"12"', None, "extraction_error"),
+        (AnswerFormat.JSON, '{"answer":"12"', 0.0, "submission_failure"),
     ],
 )
 async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     tmp_path, specification, answer_format, response, reward, status
 ):
     environment_config = HarborEnvironmentConfig()
-    convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
+    convention = _answer_convention(answer_format)
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     assert Task.is_valid_dir(task, disable_verification=True)
     assert "12" not in (task / "instruction.md").read_text()
@@ -146,7 +163,7 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         environment_config,
         tmp_path / "task",
     )
@@ -160,16 +177,21 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     "response,reward",
     [("12.05", 1.0), ("12.2", 0.0)],
 )
-def test_numeric_answer_uses_explicit_tolerance(specification, response, reward):
+async def test_numeric_answer_uses_explicit_tolerance(specification, response, reward):
     specification = specification.model_copy(
         update={"verifier": numeric_answer(12.0, tolerance_abs=0.1, tolerance_rel=0.0)}
     )
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
 
-    result = grade_answer(
+    result = await grade_answer(
         specification,
         convention,
-        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
+        GradingAttempt(
+            conversation=ConversationTrace(
+                events=(*specification.context.events, TextMessage(role="assistant", content=response))
+            ),
+            workspace=object(),
+        ),
     )
 
     assert (result.status, result.reward) == ("graded", reward)
@@ -179,7 +201,7 @@ async def test_direct_chat_rejects_invalid_private_metadata_before_launch(tmp_pa
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         environment_config,
         tmp_path / "task",
     )
@@ -195,7 +217,7 @@ async def test_text_convention_rejects_tool_call_submission(tmp_path, specificat
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         environment_config,
         tmp_path / "task",
     )
@@ -203,8 +225,8 @@ async def test_text_convention_rejects_tool_call_submission(tmp_path, specificat
     message = _answer_action("12")
     result = await run_replay_trial(task, message, tmp_path / "trials", "run")
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
-    assert result.verifier_result is None
-    assert outcome["status"] == "extraction_error"
+    assert result.verifier_result.rewards == {"reward": 0.0}
+    assert outcome["status"] == "submission_failure"
     trace = ConversationTrace.model_validate_json((tmp_path / "trials/run/agent/submission.json").read_text())
     assert trace.events[-1].calls[0].arguments == {"answer": "12"}
 
@@ -215,7 +237,7 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         environment_config,
         tmp_path / "task",
     )
@@ -227,8 +249,8 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
         "run",
     )
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
-    assert result.verifier_result is None
-    assert outcome["status"] == "extraction_error"
+    assert result.verifier_result.rewards == {"reward": 0.0}
+    assert outcome["status"] == "submission_failure"
     trace = ConversationTrace.model_validate_json((tmp_path / "trials/run/agent/submission.json").read_text())
     assert trace.events[-1].calls[0].arguments == {"answer": "12"}
 
@@ -244,7 +266,7 @@ async def test_answer_call_grades_semantic_answers_through_harbor(
     tmp_path, specification, answer_type, verifier, response
 ):
     specification = specification.model_copy(update={"answer_type": answer_type, "verifier": verifier})
-    convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
+    convention = AnswerCall(id="answer-call")
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
@@ -258,7 +280,7 @@ async def test_answer_call_grades_semantic_answers_through_harbor(
 
 
 async def test_answer_call_does_not_dispatch_and_requires_its_submission_function(tmp_path, specification, monkeypatch):
-    convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
+    convention = AnswerCall(id="answer-call")
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     requests = []
@@ -288,25 +310,16 @@ async def test_answer_call_does_not_dispatch_and_requires_its_submission_functio
     invalid["tool_calls"][0]["function"]["name"] = "lookup"
     invalid_result = await run_replay_trial(task, invalid, tmp_path / "trials", "invalid")
     outcome = json.loads((tmp_path / "trials/invalid/verifier/taskcompendium-result.json").read_text())
-    assert invalid_result.verifier_result is None
-    assert outcome["status"] == "extraction_error"
+    assert invalid_result.verifier_result.rewards == {"reward": 0.0}
+    assert outcome["status"] == "submission_failure"
 
 
-@pytest.mark.parametrize(
-    "answer_format",
-    [
-        AnswerFormat.PLAIN,
-        AnswerFormat.JSON,
-        AnswerFormat.ANSWER_CALL,
-    ],
-)
-async def test_answer_submission_preserves_advertised_tools_and_policy(
-    tmp_path, specification, chat_endpoint, answer_format
-):
+@pytest.mark.parametrize("answer_format", [AnswerFormat.PLAIN, AnswerFormat.JSON, AnswerFormat.ANSWER_CALL])
+async def test_answer_submission_preserves_advertised_tools(tmp_path, specification, chat_endpoint, answer_format):
     specification = specification.model_copy(
         update={"final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),)}
     )
-    convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
+    convention = _answer_convention(answer_format)
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     response = (
         _answer_action("12")
@@ -318,7 +331,11 @@ async def test_answer_submission_preserves_advertised_tools_and_policy(
     result = await run_trial(
         task,
         HarborEnvironmentConfig(),
-        ChatLaunch(model="model", api_base=chat_endpoint.url),
+        ChatLaunch(
+            model="model",
+            api_base=chat_endpoint.url,
+            parallel_tool_calls=False if answer_format == AnswerFormat.ANSWER_CALL else True,
+        ),
         tmp_path / "trials",
         "run",
     )
@@ -330,17 +347,17 @@ async def test_answer_submission_preserves_advertised_tools_and_policy(
     assert [tool["function"]["name"] for tool in request["tools"]] == (
         ["lookup", "submit_answer"] if answer_format == AnswerFormat.ANSWER_CALL else ["lookup"]
     )
-    assert "tool_choice" not in request
-    assert "parallel_tool_calls" not in request
+    assert request.get("tool_choice") == ("required" if answer_format == AnswerFormat.ANSWER_CALL else None)
+    assert request["parallel_tool_calls"] is (answer_format != AnswerFormat.ANSWER_CALL)
 
 
 def test_lowering_rejects_answer_call_name_collision(tmp_path, specification):
     specification = specification.model_copy(
         update={"final_tools": (FunctionDefinition(name="submit_answer", parameters={"type": "object"}),)}
     )
-    convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
+    convention = _answer_convention(AnswerFormat.ANSWER_CALL)
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
-    with pytest.raises(ValueError, match="cannot carry"):
+    with pytest.raises(ValueError, match="incompatible"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     assert not (tmp_path / "task").exists()
 
@@ -353,7 +370,7 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
     with pytest.raises(NotImplementedError, match="cannot satisfy"):
         lower_to_harbor(
             specification,
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            PlainText(id="plain"),
             HarborEnvironmentConfig(),
             tmp_path / "task",
         )
@@ -378,7 +395,7 @@ def test_lowering_rejects_invalid_verifier_before_writing(tmp_path, specificatio
     with pytest.raises(ValueError, match=message):
         lower_to_harbor(
             specification,
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            PlainText(id="plain"),
             HarborEnvironmentConfig(),
             tmp_path / "task",
         )
@@ -388,21 +405,22 @@ def test_lowering_rejects_invalid_verifier_before_writing(tmp_path, specificatio
 def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, specification):
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         HarborEnvironmentConfig(),
         tmp_path / "task",
     )
     script = (
-        "import json, sys; from pathlib import Path; "
+        "import asyncio, json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
+        "from taskcompendium.submission import GradingAttempt; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "specification = read_specification(root / 'specification.json'); "
-        "result = grade_answer(specification, "
+        "result = asyncio.run(grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
-        "ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='12')))); "
+        "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
+        "TextMessage(role='assistant', content='12'))), object()))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 
@@ -414,7 +432,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
 def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         HarborEnvironmentConfig(),
         tmp_path / "task",
     )
@@ -430,18 +448,18 @@ def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
 
 def test_file_result_cannot_use_text_submission_convention(tmp_path, specification):
     specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
 
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
-    with pytest.raises(NotImplementedError, match="file"):
+    with pytest.raises(NotImplementedError):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     assert not (tmp_path / "task").exists()
 
 
 def test_selection_policies_use_compatible_conventions(specification):
     conventions = (
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-        SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
+        PlainText(id="plain"),
+        JsonAnswer(id="json"),
     )
     candidates = compatible_lowerings(specification, conventions, (HarborEnvironmentConfig(),))
 
@@ -449,7 +467,10 @@ def test_selection_policies_use_compatible_conventions(specification):
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
     repeated = [select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) for _ in range(10)]
     assert all(selection == repeated[0] for selection in repeated)
-    assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
+    sampled_ids = {
+        select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0].convention.id for key in range(16)
+    }
+    assert sampled_ids == {candidate.convention.id for candidate in candidates}
     assert select_lowerings(candidates, SelectionPolicy.FIRST, required_environment=DIRECT_CHAT_ENVIRONMENT) == (
         candidates[0],
     )
@@ -465,7 +486,7 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         environment_config,
         tmp_path / "task",
     )
@@ -494,7 +515,7 @@ async def test_chat_trial_preserves_conversation_roles(tmp_path, specification, 
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         environment_config,
         tmp_path / "task",
     )
@@ -523,7 +544,7 @@ async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specificati
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         environment_config,
         tmp_path / "task",
     )

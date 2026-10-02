@@ -22,7 +22,7 @@ from taskcompendium.models import (
     TextMessage,
     ToolResult,
 )
-from taskcompendium.submission import FinalAction, Submission
+from taskcompendium.submission import FinalAction, SubmissionConvention
 from taskcompendium.verifiers.predicted_action import predicted_action_verifier
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
@@ -143,7 +143,7 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
     return tuple(events)
 
 
-def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Submission]:
+def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, SubmissionConvention]:
     """Verify row identity and retain the expected action only in private TaskSpec data."""
     if canonical_sha256(row) != expected_sha256:
         raise ValueError("source row does not match its pinned canonical hash")

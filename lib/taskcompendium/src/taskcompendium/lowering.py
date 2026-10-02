@@ -10,18 +10,16 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
+from tasktrove_verify.spec import StructuredExactSpec
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
-from taskcompendium.grading import supports_verifier, validate_verifier
-from taskcompendium.models import SCHEMA_VERSION, TaskSpec
+from taskcompendium.grading import resolve_verifier, supports_verifier, validate_verifier
+from taskcompendium.models import SCHEMA_VERSION, TaskSpec, VerifierSpec
 from taskcompendium.submission import (
-    AnswerFormat,
-    FinalAction,
-    Submission,
     SubmissionConvention,
     render_instruction,
-    submission_compatible,
+    submission_compatibility,
 )
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
@@ -49,7 +47,7 @@ class HarborEnvironmentConfig(BaseModel):
 class LoweringCandidate:
     """A compatible submission convention and Harbor environment configuration."""
 
-    convention: Submission
+    convention: SubmissionConvention
     environment_config: HarborEnvironmentConfig
 
 
@@ -61,18 +59,22 @@ class SelectionPolicy(StrEnum):
     SAMPLE = "sample"
 
 
+def direct_chat_verifier_supported(specification: VerifierSpec) -> bool:
+    return supports_verifier(specification) and not isinstance(resolve_verifier(specification), StructuredExactSpec)
+
+
 def compatible_lowerings(
     specification: TaskSpec,
-    convention_library: Sequence[Submission],
+    convention_library: Sequence[SubmissionConvention],
     environment_configs: Sequence[HarborEnvironmentConfig],
 ) -> tuple[LoweringCandidate, ...]:
     """Enumerate conventions and environments that preserve this task's contract."""
-    if unsupported_direct_chat_features(specification) or not supports_verifier(specification.verifier):
+    if unsupported_direct_chat_features(specification) or not direct_chat_verifier_supported(specification.verifier):
         return ()
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
-        if submission_compatible(specification, convention)
+        if submission_compatibility(specification, convention).compatible
         for environment_config in environment_configs
     )
 
@@ -114,6 +116,8 @@ def validate_environment_config(specification: TaskSpec, environment_config: Har
     unsupported = unsupported_direct_chat_features(specification)
     if unsupported:
         raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
+    if not direct_chat_verifier_supported(specification.verifier):
+        raise NotImplementedError(f"Direct chat cannot submit to verifier: {specification.verifier.kind!r}")
 
 
 def read_specification(path: Path) -> TaskSpec:
@@ -127,16 +131,13 @@ def read_environment_config(path: Path) -> HarborEnvironmentConfig:
     return HarborEnvironmentConfig.model_validate_json(path.read_text())
 
 
-def read_submission_convention(path: Path) -> Submission:
-    data = json.loads(path.read_text())
-    if data["answer_format"] == AnswerFormat.FINAL_ACTION:
-        return FinalAction.model_validate(data)
-    return SubmissionConvention.model_validate(data)
+def read_submission_convention(path: Path) -> SubmissionConvention:
+    return TypeAdapter(SubmissionConvention).validate_json(path.read_text())
 
 
 def lower_to_harbor(
     specification: TaskSpec,
-    convention: Submission,
+    convention: SubmissionConvention,
     environment_config: HarborEnvironmentConfig,
     destination: Path,
 ) -> Path:
