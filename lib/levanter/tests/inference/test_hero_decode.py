@@ -16,6 +16,7 @@ from levanter.models.hero_model import HeroLMHeadModel
 
 @pytest.mark.parametrize("sliding_window", [2, 16])
 @pytest.mark.parametrize("rope_fused", [False, True])
+@jax.default_matmul_precision("highest")
 def test_hero_paged_decode_matches_full_forward(sliding_window, rope_fused):
     """Mixed chunked prefill/decode preserves per-request positions and Hero attention and convolution history."""
     cfg = HeroConfig(

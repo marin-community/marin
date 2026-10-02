@@ -251,8 +251,12 @@ the maximum local/global count so all layers share one scan shape.
 CPU tests compare the native full forward path with the experiment using
 nonidentity convolution taps, both RoPE conventions, packed documents, and both
 checkpoint layouts. Mixed-request incremental tests compare against full forward
-across page and sliding-window boundaries. Full-checkpoint accelerator throughput
-and matched vLLM performance remain unmeasured.
+across page and sliding-window boundaries. FP32 parity checks pin highest matmul
+precision, as the default GPU precision can round full-sequence and incremental
+matrix shapes differently. One H100 default-precision case exceeded the 1e-4
+comparison tolerance; default-precision parity remains a separate validation target.
+Full-checkpoint accelerator throughput and matched vLLM performance remain unmeasured.
+
 For checkpoint-scale comparisons, set `--model-axis-size` and
 `--expert-axis-size` to match the vLLM tensor and expert parallel configuration.
 The remaining local devices partition the data axis; the result records the
