@@ -20,7 +20,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import List, Optional, Union, cast
 
+import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
@@ -119,6 +121,7 @@ class InferenceResponse:
     prompt_tokens: int
     completion_tokens: int
     finish_reason: FinishReason
+    model_version: int
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
@@ -167,6 +170,7 @@ class InferenceContext:
 
     def __init__(self, model: LmHeadModel, tokenizer, engine: InferenceEngine, config: InferenceServerConfig):
         self.model = model
+        self.model_version = 0
         self.tokenizer = tokenizer
         self.engine = engine
         self.config = config
@@ -175,6 +179,7 @@ class InferenceContext:
         self.shutdown_event = threading.Event()
         self.model_lock = threading.Lock()
         self.admission_lock = threading.Lock()
+        self.lifecycle_lock = threading.RLock()
         self.pause_event = threading.Event()
         self.admission_epoch = 0
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
@@ -205,44 +210,61 @@ class InferenceContext:
 
     def pause_generation(self) -> None:
         """Abort unfinished requests and clear serving state before returning."""
-        with self.admission_lock:
-            self.pause_event.set()
-            self.admission_epoch += 1
-        # The active batch observes pause_event between device decode rounds.
-        with self.model_lock, self.config.trainer.use_device_mesh():
-            self.engine.reset()
+        with self.lifecycle_lock:
+            with self.admission_lock:
+                self.pause_event.set()
+                self.admission_epoch += 1
+            # The active batch observes pause_event between device decode rounds.
+            with self.model_lock, self.config.trainer.use_device_mesh():
+                self.engine.reset()
 
     def resume_generation(self) -> None:
         """Allow new requests after a completed pause or weight replacement."""
-        with self.admission_lock:
+        with self.lifecycle_lock, self.admission_lock:
             self.pause_event.clear()
 
-    def reload(self, weight_callback: WeightSource):
-        """Reload the inference model using the given weight callback.
+    def reload(self, weight_callback: WeightSource, *, expected_version: int) -> int:
+        """Stage same-architecture weights, then atomically install a new serving version.
 
-        If new weights are found, new requests are paused, existing requests are
-        allowed to complete, and the new weights are loaded.
+        The callback must return new weights without donating or mutating the current model.
+        Staging failures preserve the current model, version, and admission state.
+        An already paused context remains paused after installation.
         """
-        logger.info("New weights available, waiting for model lock...")
-        lock_start_time = time.time()
-        with self.model_lock:
-            lock_wait_time = time.time() - lock_start_time
-            logger.info(f"Acquired model lock after {lock_wait_time}, reloading weights...")
+        with self.admission_lock:
+            if expected_version != self.model_version:
+                raise ValueError(f"Expected model version {expected_version}, serving {self.model_version}")
+            current_model = self.model
+        with (
+            self.config.trainer.use_device_mesh(),
+            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+        ):
+            candidate = weight_callback(current_model)
+            current_arrays = eqx.filter(current_model, eqx.is_array)
+            candidate_arrays = eqx.filter(candidate, eqx.is_array)
+            if jax.tree.structure(current_arrays) != jax.tree.structure(candidate_arrays):
+                raise ValueError("Replacement weights must preserve model architecture")
+            for old, new in zip(jax.tree.leaves(current_arrays), jax.tree.leaves(candidate_arrays), strict=True):
+                if (old.shape, old.dtype, old.sharding) != (new.shape, new.dtype, new.sharding):
+                    raise ValueError("Replacement weights must preserve shape, dtype, and sharding")
+            jax.block_until_ready(candidate)
 
-            start = time.time()
-            with (
-                hax.partitioning.set_mesh(self.config.trainer.device_mesh),
-                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-            ):
-                self.model = weight_callback(self.model)
-                self.engine = InferenceEngine.from_model_with_config(
-                    model=self.model,
-                    tokenizer=self.tokenizer,
-                    config=self.config.service,
-                    axis_resources=self.config.trainer.compute_axis_mapping,
-                )
-                elapsed = time.time() - start
-            logger.info(f"Model reloaded in {elapsed:.2f}s")
+        with self.lifecycle_lock:
+            with self.admission_lock:
+                if expected_version != self.model_version:
+                    raise ValueError(f"Expected model version {expected_version}, serving {self.model_version}")
+            was_paused = self.pause_event.is_set()
+            self.pause_generation()
+            try:
+                with self.model_lock, self.admission_lock:
+                    jax.block_until_ready(self.engine.gen_state)
+                    self.model = candidate
+                    self.engine.model = candidate
+                    self.model_version += 1
+                    installed_version = self.model_version
+            finally:
+                if not was_paused:
+                    self.resume_generation()
+        return installed_version
 
     def submit_request(
         self,
@@ -292,6 +314,7 @@ class InferenceContext:
                 prompt_tokens=len(request.prompt_tokens),
                 completion_tokens=0,
                 finish_reason=FinishReason.ABORT,
+                model_version=self.model_version,
                 logprobs=[],
             )
             for _ in range(request.n_generations)
@@ -450,6 +473,7 @@ class InferenceContext:
                                 prompt_tokens=len(req.prompt_tokens),
                                 completion_tokens=len(generated_tokens),
                                 finish_reason=result.finish_reasons[output_idx],
+                                model_version=self.model_version,
                                 request_id=req.request_id,
                                 echo_token_ids=echo_token_ids,
                                 echo_logprobs=echo_logprobs,
@@ -506,6 +530,8 @@ def _chat_completion_events(completion: ChatCompletion) -> collections.abc.Itera
                 model=completion.model,
                 choices=[chunk_choice],
             )
+            if completion.model_extra and "model_version" in completion.model_extra:
+                chunk = chunk.model_copy(update={"model_version": completion.model_extra["model_version"]})
             if completion.model_extra and "prompt_token_ids" in completion.model_extra:
                 chunk = chunk.model_copy(update={"prompt_token_ids": completion.model_extra["prompt_token_ids"]})
             yield _sse_event(chunk.model_dump_json())
@@ -725,6 +751,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                         logprobs=logprobs,
                     )
                 )
+                choices[-1] = choices[-1].model_copy(update={"model_version": generation.model_version})
                 if generation.finish_reason == FinishReason.ABORT:
                     choices[-1] = choices[-1].model_copy(update={"finish_reason": "abort"})
                 if request.return_token_ids:
@@ -910,6 +937,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 total_tokens=len(prompt_tokens) + total_completion_tokens,
             ),
         )
+        response = response.model_copy(update={"model_version": results[0].model_version})
         if request.return_token_ids:
             response = response.model_copy(update={"prompt_token_ids": prompt_tokens})
         return response
@@ -1028,13 +1056,13 @@ class InferenceServer:
         """Unload the inference model to free up resources."""
         self.inference_context.unload()
 
-    def reload(self, weight_callback: WeightSource):
-        """Reload the model weights using the provided callback.
+    @property
+    def model_version(self) -> int:
+        return self.inference_context.model_version
 
-        Args:
-            weight_callback: Function that takes the current model and returns new model
-        """
-        self.inference_context.reload(weight_callback)
+    def reload(self, weight_callback: WeightSource, *, expected_version: int) -> int:
+        """Install staged weights and return the new version after clearing serving state."""
+        return self.inference_context.reload(weight_callback, expected_version=expected_version)
 
     def address(self):
         """Get the full address the server is running on."""
