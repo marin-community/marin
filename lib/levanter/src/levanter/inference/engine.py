@@ -20,6 +20,9 @@ import numpy as np
 from haliax import NamedArray
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
+from jax.sharding import NamedSharding, PartitionSpec
+
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
@@ -352,6 +355,7 @@ def _clone_sequence(
         return state.cache
 
     cache = jax.lax.cond((src_len % page_size != 0) & (src_len > 0), _copy, _identity, None)
+    cache = cache.copy_sequence(parent_local_id, child_local_id)
 
     new_state = dataclasses.replace(state, decode_state=decode_state, cache=cache)
     return new_state, child_local_id
@@ -386,6 +390,19 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     return sample_indices
 
 
+def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
+    """Gather only sampling rows, replicated for vocabulary-wide sampling."""
+    logits = logits.rearrange(("position", ...))
+    sharding = named_sharding_of(logits.array)
+    out_sharding = None
+    if sharding is not None and not sharding.mesh.empty:
+        # The sampler sorts across the vocabulary for nucleus sampling. Gather after
+        # selecting rows so prefill does not replicate every token's vocabulary logits.
+        out_sharding = NamedSharding(sharding.mesh, PartitionSpec())
+    values = logits.array.at[indices.array].get(out_sharding=out_sharding)
+    return hax.named(values, (*indices.axes, *logits.axes[1:]))
+
+
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -413,7 +430,7 @@ def _prefill_kernel(
     #     lens=decode_state.seq_lens.array,
     # )
     logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-    logits_at_samples = logits["position", sample_indices]
+    logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(
@@ -487,42 +504,42 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     num_new = work.new_num_seqs.astype(jnp.int32)
     max_slots = work.new_slot_ids.array.shape[0]
 
-    def body(i: int, state: GenState) -> GenState:
-        slot_val = work.new_slot_ids.array[i]
+    def primary(i: int, state: GenState) -> GenState:
+        slot = work.new_slot_ids.array[i]
 
-        def process(gs: GenState) -> GenState:
-            parent_val = work.clone_targets.array[i]
-            seq_params = _seq_params_from_work(work, i)
+        def assign(gs: GenState) -> GenState:
+            decode_state, _ = gs.decode_state.reserve_slot(slot)
+            decode_state = decode_state.assign_seq(
+                local_slot_id=slot,
+                tokens=work.prompt_tokens["seq", i],
+                seq_len=work.prompt_lengths.array[i].astype(jnp.int32),
+                kv_pages=None,
+                page_indices=None,
+                seq_params=_seq_params_from_work(work, i),
+            )
+            return dataclasses.replace(gs, decode_state=decode_state)
 
-            def do_clone(gs_clone: GenState) -> GenState:
-                new_state, _ = gs_clone.clone_sequence(
-                    parent_val,
-                    child_local_id=slot_val,
-                    seq_params=seq_params,
-                )
-                return new_state
+        is_primary = (i < num_new) & is_valid(slot) & ~is_valid(work.clone_targets.array[i])
+        return jax.lax.cond(is_primary, assign, lambda gs: gs, state)
 
-            def do_primary(gs_primary: GenState) -> GenState:
-                decode_state = gs_primary.decode_state
-                decode_state, assigned = decode_state.reserve_slot(slot_val)
-                # Get the prompt length for this sequence
-                prompt_len = work.prompt_lengths.array[i].astype(jnp.int32)
-                decode_state = decode_state.assign_seq(
-                    local_slot_id=slot_val,
-                    tokens=work.prompt_tokens["seq", i],
-                    seq_len=prompt_len,
-                    kv_pages=None,  # Will be allocated later in allocate_for_seq
-                    page_indices=None,  # Will be set during page allocation
-                    seq_params=seq_params,
-                )
-                return dataclasses.replace(gs_primary, decode_state=decode_state)
+    def clone(i: int, state: GenState) -> GenState:
+        slot = work.new_slot_ids.array[i]
+        parent = work.clone_targets.array[i]
 
-            return jax.lax.cond(is_valid(parent_val), do_clone, do_primary, gs)
+        def assign(gs: GenState) -> GenState:
+            cloned, _ = gs.clone_sequence(parent, child_local_id=slot, seq_params=_seq_params_from_work(work, i))
+            return cloned
 
-        should_process = (i < num_new) & is_valid(slot_val)
-        return jax.lax.cond(should_process, process, lambda gs: gs, state)
+        is_clone = (i < num_new) & is_valid(slot) & is_valid(parent)
+        return jax.lax.cond(is_clone, assign, lambda gs: gs, state)
 
-    return jax.lax.fori_loop(0, max_slots, body, gen_state)
+    gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
+    # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
+    decode_state, _ = gen_state.decode_state.allocate_for_seq(
+        token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
+    )
+    gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
+    return jax.lax.fori_loop(0, max_slots, clone, gen_state)
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
@@ -595,7 +612,7 @@ def _handle_clones(
     tgt_ids = selected_safe
     src_pos = source_indices["seq", selected_safe]
     src_ids = slot_ids["position", src_pos]
-    logits_this_time = logits["position", src_pos]
+    logits_this_time = _gather_logits(logits, src_pos)
     pos_ids_this_time = pos_ids["position", src_pos]
 
     # Sample clones from the same boundary logits as their sources
@@ -631,6 +648,7 @@ def _handle_clones(
             return cache
 
         cache = jax.lax.cond((src_len % size != 0) & (src_len > 0), _copy, _identity, None)
+        cache = cache.copy_sequence(src_slot_id, dst_slot_id)
         return decode_state, cache
 
     decode_state, cache = jax.lax.fori_loop(0, num_new, copy_pages_for_updated_seq, (decode_state, cache))
@@ -693,7 +711,7 @@ def _run_generation_loop(
 
         # Decode logits and sample new tokens
         logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = logits["position", sample_indices]
+        logits_at_samples = _gather_logits(logits, sample_indices)
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]
@@ -969,12 +987,6 @@ class InferenceEngine:
                 break
 
             if len(self.free_slots) < request.n_generations:
-                if max_seqs_in_prefill < request.n_generations:
-                    raise RuntimeError(
-                        f"Request {request.request_id} asked for {request.n_generations} generations, "
-                        f"but max_seqs_in_prefill={max_seqs_in_prefill} is too small to accommodate. "
-                        "Increase max_seqs_in_prefill or reduce n_generations."
-                    )
                 break
 
             requested_slot = self.free_slots.pop()
@@ -1086,6 +1098,28 @@ class InferenceEngine:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
         """
+        if not requests:
+            return GenerationResult(tokens=[], logprobs=[], total_generated=0)
+        if len({r.request_id for r in requests}) != len(requests):
+            raise ValueError("Request IDs must be unique within a generation batch.")
+        assert self.config.max_prefill_size is not None
+        for request in requests:
+            if not request.prompt_tokens or len(request.prompt_tokens) > self.config.max_prefill_size:
+                raise ValueError("Each prompt must be nonempty and fit within max_prefill_size.")
+            if len(request.prompt_tokens) >= self.config.max_seq_len:
+                raise ValueError("Each prompt must leave room for generation within max_seq_len.")
+
+        requests = [
+            dataclasses.replace(
+                request,
+                decode_params=dataclasses.replace(
+                    request.decode_params,
+                    max_num_tokens=jnp.minimum(request.decode_params.max_num_tokens, self.config.max_seq_len),
+                ),
+            )
+            for request in requests
+        ]
+
         # validate we don't have any sequences with n_generations exceeding max_seqs
         max_needed = max(int(r.n_generations) for r in requests)
         if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
@@ -1149,11 +1183,15 @@ class InferenceEngine:
                         return False
             return True
 
-        stagnant_iters = 0
+        pending = [request for request in requests if request.request_id not in self.sequences]
         decode_iteration = 0
-        for _ in range(self.config.max_seq_len // self.config.max_rounds):
-            if _all_done():
-                break
+        while not _all_done():
+            if pending and self.free_slots:
+                prefill_outputs = self._prefill_batch(pending)
+                self._extract_outputs(prefill_outputs)
+                pending = [request for request in pending if request.request_id not in self.sequences]
+                if prefill_outputs is not None:
+                    continue
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
@@ -1193,14 +1231,8 @@ class InferenceEngine:
 
             decode_iteration += 1
 
-            # Safety: if nothing new was produced, avoid infinite loop
-            if new_tokens == 0 and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0:
-                stagnant_iters += 1
-            else:
-                stagnant_iters = 0
-            if stagnant_iters >= 2:
-                logger.warning("No progress in decoding for 2 consecutive iterations; breaking to avoid hang.")
-                break
+            if new_tokens == 0:
+                raise RuntimeError("Inference made no progress with unfinished requests.")
 
         # Assemble outputs in the order of the requests for this call
         outputs_list: list[list[int]] = []
@@ -1334,8 +1366,10 @@ class InferenceEngine:
             dr = self.results.setdefault(rid, {}).setdefault(cid, DecodeResult(id=rid, choice=cid, token_list=[]))
             dr.done = True
 
-            # Finished slots stay finished until they are released, so this runs on every drain: only
-            # detokenize the sequence when the debug log that consumes it is actually enabled.
+            del self.local_map[local_slot]
+            self.free_slots.append(local_slot)
+
+            # Detokenization is only needed for diagnostic logging.
             if logger.isEnabledFor(logging.DEBUG):
                 try:
                     full_text = self.tokenizer.decode(dr.token_list, skip_special_tokens=False)
@@ -1346,6 +1380,12 @@ class InferenceEngine:
                     )
 
         num_finished = int(fins.sum())
+        if num_finished:
+            decode_state = eqx.filter_jit(DecodeState.free_pages_for_finished)(
+                self.gen_state.decode_state, jnp.asarray(fins)
+            )
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            self.free_slots.sort()
         logger.debug(f"extract: appended={appended} (drained={n}) unmapped={unmapped} finished_count={num_finished}")
 
         return appended
