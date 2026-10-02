@@ -12,6 +12,8 @@ from functools import partial
 from pathlib import Path
 from typing import cast
 
+import torch
+
 from vllm import AsyncEngineArgs, SamplingParams
 from vllm.v1.engine.async_llm import AsyncLLM
 from vllm.v1.worker.worker_base import WorkerBase
@@ -21,7 +23,17 @@ def install_final_state_capture(model) -> None:
     """Install untimed eager hooks after engine startup; leave outputs and weights unchanged."""
     if model.model.config.is_hero or len(model.model.layers) > 2 or model.model.config.hidden_dim > 512:
         raise ValueError("Stage capture supports at most two Snowball layers of width512")
-    records = []
+    gate = model.model.embed_gated_norm
+    weights = {"norm": model.model.embed_norm.weight, "down": gate.down_proj.weight, "up": gate.up_proj.weight}
+    records: list[dict] = [
+        {
+            "site": "embedding_gate_weights",
+            "sha256": {
+                name: hashlib.sha256(weight.detach().float().cpu().contiguous().numpy().tobytes()).hexdigest()
+                for name, weight in weights.items()
+            },
+        }
+    ]
     handles = []
     restores = []
     model.prefix_diagnostic_capture = (records, handles, restores)
@@ -81,6 +93,22 @@ def install_final_state_capture(model) -> None:
 
         return capture
 
+    def capture_gate_projection(site, _module, _args, output):
+        projected, _ = output
+        records.append({"site": site, "layer_index": None, "values": projected.detach().float().cpu().tolist()})
+        if site == "embedding_gate_up":
+            records.append(
+                {
+                    "site": "embedding_gate_sigmoid_recomputed",
+                    "layer_index": None,
+                    "values": torch.sigmoid(projected).detach().float().cpu().tolist(),
+                }
+            )
+
+    handles.append(model.model.embed_norm.register_forward_hook(output_hook("embedding_norm")))
+    handles.append(gate.down_proj.register_forward_hook(partial(capture_gate_projection, "embedding_gate_down")))
+    handles.append(gate.up_proj.register_forward_pre_hook(input_hook("embedding_gate_silu", None)))
+    handles.append(gate.up_proj.register_forward_hook(partial(capture_gate_projection, "embedding_gate_up")))
     handles.append(model.model.embed_tokens.register_forward_hook(output_hook("embedding")))
     handles.append(model.model.embed_gated_norm.register_forward_hook(output_hook("post_embed_norm_gate")))
     for layer_index, layer in enumerate(model.model.layers):

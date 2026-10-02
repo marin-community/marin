@@ -480,6 +480,15 @@ precision, recording all four combinations for each input mode. These diagnostic
 interventions do not change the model's training or serving defaults.
 These passes are numerical diagnostics and do not produce throughput claims.
 
+A separate 2x2 intervention promotes SiLU and sigmoid independently to FP32
+inside the embedding gate only, then casts back to the projection dtype. All
+other gates and model operations remain unchanged. The report includes output
+logits and digests of the embedding norm and gate weights in a common FP32
+layout. Both runtime captures retain the norm, gate projections, and SiLU
+output; vLLM records a separate sigmoid recomputation from the captured input.
+Current June and Hero training gates apply both unary functions in the projection
+dtype. The promoted variants are diagnostic and do not change that contract.
+
 The native trace returns embedding, attention, routed and shared expert outputs,
 residuals, router choices and combine weights, final normalization, and actual
 logits together from the same paged layer scan. It retains the serving decoder's
