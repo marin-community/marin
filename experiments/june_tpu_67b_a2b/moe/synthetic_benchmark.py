@@ -127,6 +127,10 @@ def main() -> None:
     if args.layers is not None:
         model = dataclasses.replace(model, num_layers=args.layers)
     batch_size = jax.device_count() if args.batch_size is None else args.batch_size
+    if batch_size == 1:
+        # jnp.roll in the next-token loss slices the (1, seq_len) token grid to (1, 1), and under an explicit mesh JAX
+        # drops the sharding of that slice, then rejects concatenating it with the (1, seq_len - 1) remainder.
+        raise ValueError("a global batch of 1 fails in the loss under explicit mesh axes; pass --batch-size 2 or more")
     run_id = args.run_id or f"june-{args.size}-{time.strftime('%Y%m%d-%H%M%S')}"
 
     trainer = TrainerConfig(
@@ -139,6 +143,7 @@ def main() -> None:
         num_train_steps=args.steps,
         tracker=JsonLoggerConfig(),
         checkpointer=CheckpointerConfig(base_path=str(args.log_dir / run_id / "checkpoints")),
+        load_checkpoint=False,  # never resume a reused --run-id; every benchmark starts from step 0
         distributed=DistributedConfig(initialize_jax_distributed=False),
         profiler=ProfilerConfig(
             enabled=args.profile_steps > 0,
