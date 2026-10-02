@@ -75,30 +75,43 @@ def summarize_batch(workload: TokenWorkload, measurement: BatchMeasurement) -> B
     )
 
 
+@dataclass(frozen=True)
+class BenchmarkReport:
+    schema_version: int
+    timing_boundary: str
+    workload: TokenWorkload
+    workload_sha256: str
+    compile_only: float | None
+    first_batch_including_compile: BatchSummary
+    warmup: list[BatchSummary]
+    samples: list[BatchSummary]
+    median_output_tokens_per_second: float
+
+
 def measure_batches(
     workload: TokenWorkload,
     generate: Callable[[TokenWorkload], BatchMeasurement],
     *,
     warmup_batches: int,
     measured_batches: int,
-) -> dict:
+) -> BenchmarkReport:
     """Keep the first batch and warmup outside steady-state throughput."""
     if warmup_batches < 1 or measured_batches < 1:
         raise ValueError("Use at least one warmup and one measured batch")
     cold = summarize_batch(workload, generate(workload))
     warmup = [summarize_batch(workload, generate(workload)) for _ in range(warmup_batches)]
     samples = [summarize_batch(workload, generate(workload)) for _ in range(measured_batches)]
-    return {
-        "schema_version": 1,
-        "timing_boundary": "offline_batch_host_submission_to_host_tokens",
-        "workload": dataclasses.asdict(workload),
-        "workload_sha256": workload.sha256,
-        "compile_only": None,
-        "first_batch_including_compile": dataclasses.asdict(cold),
-        "warmup": [dataclasses.asdict(row) for row in warmup],
-        "samples": [dataclasses.asdict(row) for row in samples],
-        "median_output_tokens_per_second": statistics.median(row.output_tokens_per_second for row in samples),
-    }
+    return BenchmarkReport(
+        schema_version=1,
+        timing_boundary="offline_batch_host_submission_to_host_tokens",
+        workload=workload,
+        workload_sha256=workload.sha256,
+        compile_only=None,
+        first_batch_including_compile=cold,
+        warmup=warmup,
+        samples=samples,
+        median_output_tokens_per_second=statistics.median(row.output_tokens_per_second for row in samples),
+    )
 
 
 @dataclass(frozen=True)
