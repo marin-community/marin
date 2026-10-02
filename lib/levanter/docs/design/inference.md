@@ -156,7 +156,10 @@ topology, and parallelism match.
 
 ### vLLM baseline
 
-Run `levanter.main.vllm_inference_benchmark` in the vLLM serving environment with
+Snowball and Hero require the Marin vLLM fork that registers `GrugMoeForCausalLM`.
+Use the promoted fork wheel and CUDA/PyTorch pins from Marin serving
+(`IsolatedCudaVllm` with `VllmType.MARIN_FORK`), not an upstream vLLM install.
+Run `levanter.main.vllm_inference_benchmark` in that serving environment with
 three JSON files:
 
 - `--workload`: the identical prompt token IDs and output count used by Levanter.

@@ -73,10 +73,13 @@ def main():
         workload, generate, warmup_batches=args.warmup_batches, measured_batches=args.measured_batches
     )
     result = dataclasses.asdict(result)
+    vllm_distribution = importlib.metadata.distribution("vllm")
+    direct_url = vllm_distribution.read_text("direct_url.json")
     result["provenance"] = {
         **provenance,
         "backend": "vllm",
         "evidence_kind": "checkpoint",
+        "vllm_distribution_source": None if direct_url is None else json.loads(direct_url),
         "engine_args": engine_args,
         "versions": {name: importlib.metadata.version(name) for name in ["vllm", "torch"]},
         "devices": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())],

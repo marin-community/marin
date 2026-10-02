@@ -25,7 +25,8 @@ from levanter.inference.benchmark import BatchMeasurement, TokenWorkload, measur
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.lm_model import LmConfig
-from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig
+from levanter.models.hero import HeroConfig
+from levanter.models.snowball import SnowballConfig
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--model-config", type=Path, help="Synthetic Levanter model JSON including type")
-    source.add_argument("--checkpoint", help="Snowball HF export: local directory, object-storage URL, or Hub repo")
+    source.add_argument(
+        "--checkpoint", help="Snowball or Hero HF export: local directory, object-storage URL, or Hub repo"
+    )
     parser.add_argument("--revision", help="Pinned Hub revision for --checkpoint")
     parser.add_argument(
         "--checkpoint-identity", help="Immutable export identity or digest, shared with vLLM provenance"
@@ -72,6 +75,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], required=True)
     parser.add_argument("--model-axis-size", type=int, default=1)
+    parser.add_argument("--expert-axis-size", type=int, default=1)
     parser.add_argument("--page-size", type=int, default=128)
     parser.add_argument("--max-rounds", type=int, default=8)
     parser.add_argument("--warmup-batches", type=int, default=2)
@@ -92,9 +96,7 @@ def main():
         if not args.checkpoint_identity:
             parser.error("--checkpoint requires --checkpoint-identity for matched weight provenance")
         reference = RepoRef(args.checkpoint, args.revision)
-        converter = HFCheckpointConverter(
-            SnowballConfig, reference_checkpoint=reference, HfConfigClass=GrugMoeHfConfig, tokenizer=reference
-        )
+        converter = HFCheckpointConverter.from_hf(reference)
         hf_config = converter.hf_config_from_hf_checkpoint(reference)
         config = converter.config_from_hf_config(hf_config)
         checkpoint_provenance = {
@@ -110,8 +112,8 @@ def main():
         if args.revision or args.checkpoint_identity:
             parser.error("--revision and --checkpoint-identity require --checkpoint")
         config = draccus.decode(LmConfig, json.loads(args.model_config.read_text()))
-    if not isinstance(config, SnowballConfig):
-        raise ValueError("This benchmark currently supports SnowballConfig only; Hero needs native decode")
+    if not isinstance(config, (SnowballConfig, HeroConfig)):
+        raise ValueError("This benchmark supports SnowballConfig and HeroConfig")
     workload = TokenWorkload(**json.loads(args.workload.read_text()))
     if any(token < 0 or token >= config.vocab_size for prompt in workload.prompts for token in prompt):
         raise ValueError("Prompt token outside the model vocabulary")
@@ -121,7 +123,7 @@ def main():
     dtype = jnp.dtype(args.dtype)
     if jax.process_count() != 1:
         raise ValueError("This driver currently supports a single host; use all local devices through the model axis")
-    mesh = compact_grug_mesh(model_axis_size=args.model_axis_size)
+    mesh = compact_grug_mesh(model_axis_size=args.model_axis_size, expert_axis_size=args.expert_axis_size)
     setup_start = time.perf_counter()
     with hax.partitioning.set_mesh(mesh), hax.axis_mapping({"kv_head": "model", "heads": "model"}):
         if converter is None:
