@@ -279,6 +279,27 @@ def _reference_attention_math(
     return ctx.astype(v.dtype)
 
 
+# Largest key/query block the flash attention may use, and the smallest worth blocking over.
+XLA_FLASH_MAX_BLOCK_SIZE = 1024
+XLA_FLASH_MIN_BLOCK_SIZE = 16
+
+
+def _flash_block_size(q_len: int, k_len: int, *, requested: int | None) -> int | None:
+    """A power-of-two block that divides both lengths, or None when the reference path should run instead.
+
+    Levanter's flash attention requires its block size to divide both sequence lengths. A requested size
+    is used as given; otherwise the largest power of two dividing both lengths, capped at the default.
+    """
+    if requested is not None:
+        return requested
+    block = XLA_FLASH_MAX_BLOCK_SIZE
+    while block >= XLA_FLASH_MIN_BLOCK_SIZE and (q_len % block or k_len % block):
+        block //= 2
+    if block < XLA_FLASH_MIN_BLOCK_SIZE or q_len <= block or k_len <= block:
+        return None
+    return block
+
+
 def _levanter_mask(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     Batch: hax.Axis,
@@ -349,6 +370,9 @@ def xla_flash_attention(
 
     Runs on any backend. The output sharding follows ``q``, as for ``reference_attention``.
     """
+    block_size = _flash_block_size(q.shape[1], k.shape[1], requested=block_size)
+    if block_size is None:
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
         return _xla_flash_attention_math(q, k, v, mask, block_size=block_size)

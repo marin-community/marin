@@ -205,3 +205,17 @@ def test_xla_flash_attention_accepts_dense_boolean_mask():
     expected = reference_attention(q, k, v, dense, logits_dtype=jnp.float32)
     actual = xla_flash_attention(q, k, v, dense, block_size=16)
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("seq_len", [48, 1025])
+def test_xla_flash_attention_handles_lengths_that_do_not_divide_the_default_block(seq_len):
+    """48 blocks at 16; 1025 has no usable power-of-two block and falls back to the reference path."""
+    key = jax.random.key(5)
+    kq, kk, kv = jax.random.split(key, 3)
+    q = jax.random.normal(kq, (1, seq_len, 2, 8), jnp.float32)
+    k = jax.random.normal(kk, (1, seq_len, 1, 8), jnp.float32)
+    v = jax.random.normal(kv, (1, seq_len, 1, 8), jnp.float32)
+    mask = AttentionMask.causal(sliding_window=20)
+    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    actual = xla_flash_attention(q, k, v, mask)
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
