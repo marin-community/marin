@@ -10,9 +10,69 @@ import statistics
 from pathlib import Path
 
 from levanter.inference.benchmark import BATCH_TIMING_BOUNDARY, TokenWorkload
+from levanter.models.snowball import GRUG_MOE_CANONICAL_CONFIG_FIELDS
 
 _EXECUTION_CONFIG_FIELDS = {"inference_attention_implementation"}
 _HF_METADATA_FIELDS = {"_name_or_path", "transformers_version", "torch_dtype", "dtype"}
+
+
+def normalized_grug_hf_config(config: dict) -> dict:
+    """Resolve the promoted Grug config's aliases and recipe defaults, checking conflicts."""
+    result = {key: value for key, value in config.items() if key not in _HF_METADATA_FIELDS}
+    if result.get("model_type") != "grug_moe":
+        return result
+    aliases = {alias: name for name, alias in GRUG_MOE_CANONICAL_CONFIG_FIELDS if name != alias}
+    aliases.update(
+        {
+            "attention_head_dim": "head_dim",
+            "intermediate_size": "moe_intermediate_size",
+            "num_local_experts": "num_experts",
+        }
+    )
+    for alias, canonical in aliases.items():
+        if alias in result:
+            if result[alias] != result[canonical]:
+                raise ValueError(
+                    f"Conflicting Grug config alias {alias}: {result[alias]} != {canonical}: {result[canonical]}"
+                )
+            del result[alias]
+    # Schema-v1 is the fixed June recipe; schema-v2 exports its architecture fields.
+    # Defaults and derived fields follow vllm/transformers_utils/configs/grugmoe.py
+    # at the promoted 01911be34fac source, not arbitrary missing-field equivalence.
+    defaults = {"disable_pko": True, "disable_long_rope": True, "qk_mult_long_scale": 1.0, "use_cache": True}
+    if result["grugmoe_artifact_schema_version"] == 1:
+        defaults.update(
+            {
+                "global_every": 4,
+                "num_shared_experts": 1,
+                "rope_fused": False,
+                "sconv": False,
+                "sconv_kernel": 4,
+                "sconv_sites": ["k", "attn", "mlp"],
+                "local_kv_heads": None,
+                "global_kv_heads": None,
+                "latent_dim": None,
+            }
+        )
+    for name, value in defaults.items():
+        result.setdefault(name, value)
+    layers = result["num_hidden_layers"]
+    schedule = [
+        "full_attention" if (i + 1) % result["global_every"] == 0 or i == layers - 1 else "sliding_attention"
+        for i in range(layers)
+    ]
+    derived = {
+        "layer_types": schedule,
+        "rope": {"theta": result["rope_theta"]},
+        "rope_parameters": {"rope_type": "default", "rope_theta": result["rope_theta"]},
+    }
+    for name, value in derived.items():
+        if result.get(name) is not None and result[name] != value:
+            raise ValueError(
+                f"Grug config {name} differs from its architecture-derived value: {result[name]} != {value}"
+            )
+        result[name] = value
+    return result
 
 
 def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, dict]) -> dict:
@@ -34,7 +94,7 @@ def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, 
         for field in native_hf.keys() | vllm_hf.keys()
         if native_hf.get(field) != vllm_hf.get(field)
     }
-    if hf_differences.keys() - _HF_METADATA_FIELDS:
+    if normalized_grug_hf_config(native_hf) != normalized_grug_hf_config(vllm_hf):
         raise ValueError(f"Loaded Hugging Face model configurations differ: {hf_differences}")
     if len(reports["native"]["warmup"]) != len(reports["vllm"]["warmup"]) or len(reports["native"]["samples"]) != len(
         reports["vllm"]["samples"]
@@ -109,7 +169,7 @@ def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, 
         "device_kinds": native["device_kind"],
         "parallelism": {"native_mesh": mesh, "vllm_dp": device_count, "vllm_tp": 1, "vllm_ep": device_count},
         "execution_config_differences": differences,
-        "hf_metadata_differences": hf_differences,
+        "raw_hf_config_differences": hf_differences,
         "effective_execution": {name: report["provenance"]["effective_execution"] for name, report in reports.items()},
         "validation_output_hashes": {name: report["validation_output_sha256"] for name, report in reports.items()},
         "validation_tokens_agree": first_difference is None,

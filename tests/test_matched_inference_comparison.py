@@ -3,11 +3,12 @@
 
 import dataclasses
 import json
+from pathlib import Path
 
 import pytest
 from levanter.inference.benchmark import BatchMeasurement, TokenWorkload, measure_batches
 
-from experiments.benchmarks.matched_comparison import compare_fixture
+from experiments.benchmarks.matched_comparison import compare_fixture, normalized_grug_hf_config
 
 
 @pytest.fixture
@@ -117,3 +118,20 @@ def test_paired_report_withholds_ratio_when_a_timed_batch_differs(paired_reports
     assert result["validation_tokens_agree"]
     assert result["native_over_vllm_throughput"] is None
     assert not result["all_batch_hashes_agree_with_validation"]["native"]
+
+
+def test_loaded_snowball_aliases_and_defaults_preserve_architecture():
+    configs = json.loads((Path(__file__).parent / "data/inference/snowball_loaded_configs.json").read_text())
+    assert normalized_grug_hf_config(configs["native"]) == normalized_grug_hf_config(configs["vllm"])
+    configs["vllm"]["hidden_dim"] += 1
+    with pytest.raises(ValueError, match="Conflicting Grug config alias"):
+        normalized_grug_hf_config(configs["vllm"])
+
+
+def test_loaded_snowball_schedule_and_unknown_fields_are_not_ignored():
+    configs = json.loads((Path(__file__).parent / "data/inference/snowball_loaded_configs.json").read_text())
+    configs["vllm"]["layer_types"] = ["full_attention", "full_attention"]
+    with pytest.raises(ValueError, match="architecture-derived"):
+        normalized_grug_hf_config(configs["vllm"])
+    configs["native"]["unexplained_architecture_change"] = 17
+    assert "unexplained_architecture_change" in normalized_grug_hf_config(configs["native"])

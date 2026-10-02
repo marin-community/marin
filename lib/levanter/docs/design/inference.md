@@ -333,3 +333,22 @@ hash agreement across every batch, the first differing request and output-token
 position, and effective execution modes. It withholds the throughput ratio if
 outputs differ across backends or batches. Reports from before this validation
 capture must be rerun; timing hashes alone cannot identify a divergent token.
+
+For a divergent Snowball token, write a prefixes JSON with `sequences` containing
+both original prompts followed by their common generated tokens, and
+`prefill_length` equal to the original prompt length. The bounded diagnostics
+support up to eight equal-length sequences and 128 tokens:
+
+```bash
+uv run python -m experiments.benchmarks.diagnose_native_prefix \
+  --fixture /tmp/snowball-comparison --prefixes prefixes.json --expert-axis-size 2
+```
+
+Run `python -m levanter.main.vllm_prefix_diagnostic` in the same isolated vLLM
+environment, passing the fixture's `--engine-args`, `--provenance`, the same
+`--prefixes`, and an `--output` path. It records next-token top-20 logprobs from a
+single prefill. The native diagnostic records full-vocabulary logits from both
+a single prefill and the original prefill followed by forced one-token steps.
+It also records a diagnostic-only variant with FP32 router weights and highest
+matmul precision; this does not change the model's training or serving defaults.
+These passes are numerical diagnostics and do not produce throughput claims.
