@@ -1101,7 +1101,8 @@ def _fact_probe_hook(
         # A local: the expert-collapsed copy is larger than the train-mesh params and must die before the next step.
         model = _reshard_tree_to_mesh(_router_tie_view(params, count), probe_mesh)
         with _pgle_disabled():
-            loss, (span_loss, top_ids, top_probs) = jax.device_get(scores(model, batch))
+            # One process per GPU: gather the global values instead of fetching non-addressable shards.
+            loss, (span_loss, top_ids, top_probs) = multihost_utils.process_allgather(scores(model, batch), tiled=True)
         if jax.process_index() == 0:
             writer.add(kind, count, span_loss, top_ids, top_probs, row_mean_loss(np.asarray(loss), weights))
 
