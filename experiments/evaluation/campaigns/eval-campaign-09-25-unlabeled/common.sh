@@ -68,18 +68,24 @@ import sys
 from pathlib import Path
 
 lock = Path(sys.argv[1]).read_text()
-for name in ("harbor",):
+variables = {
+    "harbor": "HARBOR_LOCK",
+    "harbor-tau3-bench-adapter": "HARBOR_TAU3_ADAPTER_LOCK",
+}
+for name, variable in variables.items():
     block = re.search(rf'\[\[package\]\]\nname = "{re.escape(name)}"\n(.*?)(?=\n\[\[package\]\]|\Z)', lock, re.DOTALL)
     if block is None:
         raise SystemExit(f"missing Harbor runtime package in lock: {name}")
     match = re.search(r'source = \{ git = "[^"]*#([0-9a-f]{40})" \}', block.group(1))
     if match is None:
         raise SystemExit(f"missing immutable Harbor runtime commit for {name}")
-    print(f"HARBOR_LOCK={match.group(1)}")
+    print(f"{variable}={match.group(1)}")
 PY
   )
   [ "$(grep -cx "HARBOR_LOCK=$CAMPAIGN_SHA_HARBOR" <<<"$pins")" = 1 ] \
-    || die "locked Harbor runtimes differ from $CAMPAIGN_SHA_HARBOR"
+    || die "locked Harbor runtime differs from $CAMPAIGN_SHA_HARBOR"
+  [ "$(grep -cx "HARBOR_TAU3_ADAPTER_LOCK=$CAMPAIGN_SHA_HARBOR" <<<"$pins")" = 1 ] \
+    || die "locked Harbor tau3 adapter differs from $CAMPAIGN_SHA_HARBOR"
 
   local unexpected
   unexpected=$(git -C "$MARIN_DIR" status --porcelain \
