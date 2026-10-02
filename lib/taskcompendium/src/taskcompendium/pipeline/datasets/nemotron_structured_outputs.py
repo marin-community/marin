@@ -17,6 +17,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.structured_output import verification_report
 from taskcompendium.pipeline.models import (
     CheckSuite,
@@ -32,7 +33,6 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.verifiers.constraints import JsonSchemaVerifier
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 RUBRIC = ReviewRubric(
     id="structured-outputs-answerability",
     version="3",

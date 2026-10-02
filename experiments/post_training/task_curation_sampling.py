@@ -21,9 +21,9 @@ from taskcompendium.pipeline.datasets import (
     competitive_coding,
     executable_tasks,
     nemo_actions,
+    nemotron_structured_outputs,
     qa_tasks,
     reasoning_tasks,
-    structured_outputs,
     swe_rebench,
     swesmith,
 )
@@ -49,7 +49,7 @@ SOURCE_CONFIGS = (
     CONFIGS
     | NEXT_CONFIGS
     | {name: module.CONFIG for name, module in PYTHON_SOURCES.items()}
-    | {"structured_outputs": structured_outputs.CONFIG}
+    | {"structured_outputs": nemotron_structured_outputs.CONFIG}
     | {name: module.CONFIG for name, module in RUBRIC_SOURCES.items()}
     | {name: module.CONFIG for name, module in MATH_SOURCES.items()}
     | {"competitive_coding": competitive_coding.CONFIG, "swe_rebench": swe_rebench.CONFIG, "swesmith": swesmith.CONFIG}

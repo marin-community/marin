@@ -25,6 +25,10 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier
 
+PUBLIC_FIXTURE_CRITERION = (
+    "Oracle solutions and private tests must remain hidden; explicitly public setup tests are part of the contract."
+)
+
 PYTHON_FILE = re.compile(r"(?<![\w/])(?:/app/|app/)?[A-Za-z_]\w*(?:/[A-Za-z_]\w*)*\.py\b")
 PACKAGE = re.compile(r"(?:package (?:at|under)|package[^\n]{0,30} at) /app/([A-Za-z_]\w*)")
 

@@ -167,7 +167,8 @@ def _normalize(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, Any]:
         if result.id != task_id or result.source != source:
             raise ValueError("A converter must retain its supplied task identity and source provenance")
         audit = audit.model_copy(update={"normalized": result})
-        public_key, semantic_key = semantic_digest(result, False), semantic_digest(result, True)
+        public_key = semantic_digest(result, include_reference=False)
+        semantic_key = semantic_digest(result, include_reference=True)
     return {
         "index": record["index"],
         "public_key": public_key,

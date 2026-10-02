@@ -10,10 +10,10 @@ from verifyit.modes.extract import collapse_whitespace
 
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.datasets import python_tasks
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, DatasetRecipe, ReviewRubric, VerificationReport
 
 CONFIG = "laion__nemotron-gym-competitive-coding-v2"
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 RUBRIC = ReviewRubric(
     id="competitive-coding-answerability",
     version="1",

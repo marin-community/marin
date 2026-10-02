@@ -5,11 +5,12 @@
 
 from pathlib import Path
 
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
+from taskcompendium.pipeline.datasets.python_tasks import PUBLIC_FIXTURE_CRITERION
 from taskcompendium.pipeline.datasets.python_tasks import recipe as family_recipe
 from taskcompendium.pipeline.models import DatasetRecipe, ReviewRubric
 
 CONFIG = "DCAgent__exp_rpt_curriculum-medium-v2"
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 RUBRIC = ReviewRubric(
     id="curriculum_medium-answerability",
     version="3",
@@ -24,7 +25,7 @@ RUBRIC = ReviewRubric(
         "Check that the public Python API, output filenames, return values, and exceptions agree with private tests.",
         "The repair note explicitly exposes setup tests as API evidence; assess the request together with these "
         "fixtures and flag contradictions between them.",
-        "Oracle solutions and private tests must remain hidden; explicitly public setup tests are part of the contract.",
+        PUBLIC_FIXTURE_CRITERION,
         "A passing oracle shows compatibility with tests; assess whether those tests cover the public specification.",
         "Check every stated algorithmic rule, mutation requirement, and boundary against the private tests; "
         "difficulty alone is not a defect.",

@@ -6,10 +6,10 @@
 from pathlib import Path
 
 from taskcompendium.pipeline.datasets import repository_tasks
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import DatasetRecipe, ReviewRubric
 
 CONFIG = "laion__swesmith-oracle-filtered-v2"
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 RUBRIC = ReviewRubric(
     id="swesmith-answerability",
     version="1",

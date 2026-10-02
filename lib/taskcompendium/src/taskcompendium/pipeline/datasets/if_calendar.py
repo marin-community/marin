@@ -7,6 +7,7 @@ from pathlib import Path
 
 from taskcompendium.pipeline.datasets.calendar_tasks import normalize as normalize_calendar
 from taskcompendium.pipeline.datasets.calendar_tasks import verification_report
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import (
     CheckSuite,
     DatasetRecipe,
@@ -20,7 +21,6 @@ from taskcompendium.pipeline.models import (
 )
 
 CONFIG = "laion__nemotron-gym-instruction-following-calendar-v3"
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 RUBRIC = ReviewRubric(
     id="if-calendar-answerability",
     version="1",

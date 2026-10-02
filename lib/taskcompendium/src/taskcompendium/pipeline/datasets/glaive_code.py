@@ -5,11 +5,11 @@
 
 from pathlib import Path
 
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.rubric_tasks import recipe as family_recipe
 from taskcompendium.pipeline.models import DatasetRecipe, ReviewRubric
 
 CONFIG = "laion__glaive-code-assistant-sandboxes-verified-v2"
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 RUBRIC = ReviewRubric(
     id="glaive_code-answerability",
     version="1",

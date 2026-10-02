@@ -18,6 +18,14 @@ from taskcompendium.pipeline.models import (
     SnapshotSource,
 )
 
+MATH_CRITERIA = (
+    "Require a complete mathematical problem, supplied givens, notation, units, and requested result.",
+    "Check private reference consistency; difficulty alone is not a defect and a failed control does "
+    "not prove the problem is bad.",
+    "Original source grader code and data remain private. Cleanup comparator parity is unsupported; "
+    "distinguish content quality from grading readiness.",
+)
+
 SUBMISSION = "\n## Submitting the answer\n"
 TERMINAL_SUBMISSION = "\n## Submitting your answer (IMPORTANT)\n"
 DELIVERY = {

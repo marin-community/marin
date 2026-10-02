@@ -6,10 +6,10 @@
 from pathlib import Path
 
 from taskcompendium.pipeline.datasets import python_tasks
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import DatasetRecipe, ReviewRubric
 
 CONFIG = "DCAgent__exp_rpt_pymethods2test-large-v2"
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 RUBRIC = ReviewRubric(
     id="pymethods_large-answerability",
     version="2",

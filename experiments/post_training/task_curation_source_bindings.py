@@ -39,6 +39,7 @@ from taskcompendium.pipeline.datasets import (
     multichallenge,
     multifile,
     nemo_actions,
+    nemotron_structured_outputs,
     pymethods,
     pymethods_large,
     qa_abstention,
@@ -47,7 +48,6 @@ from taskcompendium.pipeline.datasets import (
     safety,
     stack_overflow,
     stack_pytest,
-    structured_outputs,
     superuser,
     swe_rebench,
     swesmith,
@@ -156,7 +156,7 @@ def source_recipe(name: str, snapshot: Path, image: str | None) -> DatasetRecipe
     if name in SOURCE_FACTORIES:
         return SOURCE_FACTORIES[name](snapshot)
     if name == "structured_outputs":
-        recipe = structured_outputs.recipe(snapshot)
+        recipe = nemotron_structured_outputs.recipe(snapshot)
         converter = convert_nemotron_structured_outputs
     elif image is None or re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-fA-F]{64}", image) is None:
         raise ValueError(f"Executable source {name} requires an immutable grader image")

@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 
 from taskcompendium.pipeline.datasets import rubric_tasks
+from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
     ImportRejection,
@@ -18,7 +19,6 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 RUBRIC = ReviewRubric(
     id="multichallenge-answerability",
     version="1",
