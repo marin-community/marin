@@ -960,19 +960,19 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, NULL, ?, ?)",
         [
-            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 80 * 60_000, 1),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 2 * 60_000, 2),
+            ("hero-run", "/marin/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 80 * 60_000, 1),
+            ("hero-run", "/marin/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 2 * 60_000, 2),
             (
                 "hero-run",
-                "/u/hero-run-coord/train",
+                "/marin/hero-run-coord/train",
                 "attempt-current",
                 "0",
                 0,
                 fixed_now_ms - 4 * 60 * 60_000,
                 1,
             ),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-current", "0", 1, fixed_now_ms - 60_000, 3),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-replica", "1", 1, fixed_now_ms - 30_000, 4),
+            ("hero-run", "/marin/hero-run-coord/train", "attempt-current", "0", 1, fixed_now_ms - 60_000, 3),
+            ("hero-run", "/marin/hero-run-coord/train", "attempt-replica", "1", 1, fixed_now_ms - 30_000, 4),
             ("other-run", "/u/other-run-coord/train", "other-attempt", "0", 1, fixed_now_ms - 20_000, 5),
         ],
     )
@@ -992,9 +992,9 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     database.executemany(
         'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?, ?, ?, ?)',
         [
-            ("cw-a", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 50, tzinfo=UTC), 4, 3, 2, 160),
-            ("cw-a", "/u/hero-run-coord-1", datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC), 1, 2, 3, 170),
-            ("cw-b", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC), 0, 0, 0, 176),
+            ("cw-a", "/marin/hero-run-coord", datetime(2026, 8, 21, 11, 50, tzinfo=UTC), 4, 3, 2, 160),
+            ("cw-a", "/marin/hero-run-coord-1", datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC), 1, 2, 3, 170),
+            ("cw-b", "/marin/hero-run-coord", datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC), 0, 0, 0, 176),
             ("cw-a", "/u/other-run-coord", datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC), 0, 0, 0, 176),
         ],
     )
@@ -1021,28 +1021,28 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         [
             (
                 "cw-a",
-                "/u/hero-run-coord/train/0",
+                "/marin/hero-run-coord/train/0",
                 0,
                 "TaskRetryScheduled",
                 datetime(2026, 8, 21, 11, 50, tzinfo=UTC),
             ),
             (
                 "cw-a",
-                "/u/hero-run-coord-1/train/1",
+                "/marin/hero-run-coord-1/train/1",
                 1,
                 "CoscheduledSiblingRequeued",
                 datetime(2026, 8, 21, 11, 59, tzinfo=UTC),
             ),
             (
                 "cw-a",
-                "/u/hero-run-coord/train/2",
+                "/marin/hero-run-coord/train/2",
                 0,
                 "TaskRunning",
                 datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC),
             ),
             (
                 "cw-b",
-                "/u/hero-run-coord/train/3",
+                "/marin/hero-run-coord/train/3",
                 0,
                 "TaskRetryScheduled",
                 datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC),
@@ -1150,13 +1150,13 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
         "INSERT INTO \"levanter.metrics\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, NULL, ?, ?)",
         [
             # An attempt that ran two hours on a CoreWeave cluster and then failed.
-            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour, 1),
-            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 4 * hour, 2),
+            ("hero-run", "cw-a", "/marin/hero-run-coord/train", "attempt-one", "0", at - 6 * hour, 1),
+            ("hero-run", "cw-a", "/marin/hero-run-coord/train", "attempt-one", "0", at - 4 * hour, 2),
             # Its successor, a fresh job on the hub, whose rows carry no origin cluster.
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - 2 * hour, 3),
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - hour, 4),
+            ("hero-run", "", "/marin/hero-run-coord-2/train", "attempt-two", "0", at - 2 * hour, 3),
+            ("hero-run", "", "/marin/hero-run-coord-2/train", "attempt-two", "0", at - hour, 4),
             # A replica of that attempt, and another run: neither is a row of this table.
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two-replica", "1", at - hour, 5),
+            ("hero-run", "", "/marin/hero-run-coord-2/train", "attempt-two-replica", "1", at - hour, 5),
             ("other-run", "cw-a", "/u/other-run-coord/train", "other-attempt", "0", at - hour, 6),
         ],
     )
@@ -1167,8 +1167,8 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     # Iris dashboard filters backends by peer id and reserves `local` for its own, which
     # is the hub finelog leaves unlabeled.
     assert database.execute(sql).fetchall() == [
-        (at - 2 * hour, "marin", "/u/hero-run-coord-2/train", 3_600.0, "local"),
-        (at - 6 * hour, "cw-a", "/u/hero-run-coord/train", 7_200.0, "cw-a"),
+        (at - 2 * hour, "marin", "/marin/hero-run-coord-2/train", 3_600.0, "local"),
+        (at - 6 * hour, "cw-a", "/marin/hero-run-coord/train", 7_200.0, "cw-a"),
     ]
 
 
