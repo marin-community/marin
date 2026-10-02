@@ -830,34 +830,14 @@ async def _create_completion(
                             top_logprobs=echo_logprobs.top_logprobs,
                         )
                     else:
-                        # Convert logprobs to API format
-                        generated_tokens = generation.tokens
-
-                        # Create token logprobs in OpenAI format
-                        tokens = []
-                        token_logprobs = []
-                        if generation.logprobs:
-                            for token_id, lp in zip(generated_tokens, generation.logprobs):
-                                # Use convert_ids_to_tokens to preserve BPE format
-                                token_str = (
-                                    f"{TOKEN_ID_PREFIX}{token_id}"
-                                    if request.return_tokens_as_token_ids
-                                    else ctx.tokenizer.convert_ids_to_tokens(token_id)
-                                )
-                                tokens.append(token_str)
-                                token_logprobs.append(float(lp))
-
-                        logprobs = Logprobs(
-                            tokens=tokens,
-                            token_logprobs=token_logprobs,
-                            text_offset=None,
-                            top_logprobs=_rollout_top_logprobs(
-                                ctx.tokenizer,
-                                generation.top_token_ids,
-                                generation.top_logprobs,
-                                request.logprobs,
-                                request.return_tokens_as_token_ids,
-                            ),
+                        logprobs = _rollout_completion_logprobs(
+                            ctx.tokenizer,
+                            generation.tokens,
+                            generation.logprobs,
+                            generation.top_token_ids,
+                            generation.top_logprobs,
+                            request.logprobs,
+                            request.return_tokens_as_token_ids,
                         )
 
                 choices.append(
@@ -1083,6 +1063,26 @@ async def _create_chat_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _rollout_completion_logprobs(
+    tokenizer: MarinTokenizer,
+    token_ids: list[int],
+    logprobs: list[float],
+    top_token_ids: list[list[int]] | None,
+    top_logprobs: list[list[float]] | None,
+    top_k: int,
+    return_tokens_as_token_ids: bool,
+) -> Logprobs:
+    return Logprobs(
+        tokens=[
+            f"{TOKEN_ID_PREFIX}{token}" if return_tokens_as_token_ids else tokenizer.convert_ids_to_tokens(token)
+            for token in token_ids
+        ],
+        token_logprobs=logprobs,
+        text_offset=None,
+        top_logprobs=_rollout_top_logprobs(tokenizer, top_token_ids, top_logprobs, top_k, return_tokens_as_token_ids),
+    )
+
+
 def _delta_events(
     delta: InferenceDelta,
     request: CompletionRequest | ChatCompletionRequest,
@@ -1137,25 +1137,14 @@ def _delta_events(
     else:
         logprobs = None
         if request.logprobs is not None:
-            token_text = [
-                (
-                    f"{TOKEN_ID_PREFIX}{token}"
-                    if request.return_tokens_as_token_ids
-                    else tokenizer.convert_ids_to_tokens(token)
-                )
-                for token in delta.tokens
-            ]
-            logprobs = Logprobs(
-                tokens=token_text,
-                token_logprobs=delta.logprobs,
-                text_offset=None,
-                top_logprobs=_rollout_top_logprobs(
-                    tokenizer,
-                    delta.top_token_ids,
-                    delta.top_logprobs,
-                    request.logprobs,
-                    request.return_tokens_as_token_ids,
-                ),
+            logprobs = _rollout_completion_logprobs(
+                tokenizer,
+                delta.tokens,
+                delta.logprobs,
+                delta.top_token_ids,
+                delta.top_logprobs,
+                request.logprobs,
+                request.return_tokens_as_token_ids,
             )
         content = CompletionChoice(index=delta.index, text=delta.text, finish_reason="length", logprobs=logprobs)
         choice_extra: dict[str, Any] = {**extra, "finish_reason": finish_reason}
