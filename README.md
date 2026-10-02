@@ -84,7 +84,7 @@ You can check out the [full script](https://github.com/marin-community/marin/blo
 
 ```python
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import tokenized
@@ -99,18 +99,19 @@ tinystories_tokenized = tokenized(
     source="roneneldan/TinyStories",
     tokenizer=marin_tokenizer,
     sample_count=1000,  # cap at 1 000 samples per shard to keep the tutorial fast
+    version="2026.06.28",
 )
 
 # 2. Train the model — depends on the tokenized dataset above.
 nano_tinystories_model = train_lm(
     name="checkpoints/marin-nano-tinystories",
-    version="v1",
+    version="2026.06.28",
     model=llama_nano,
     optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
     # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
     datasets={tinystories_tokenized: 1.0},
     batch_size=4,
-    seq_len=2048,
+    seq_len=512,
     num_train_steps=100,
     z_loss_weight=None,
     evals=None,  # no point evaluating such a tiny model
