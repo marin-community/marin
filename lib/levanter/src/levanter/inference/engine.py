@@ -804,16 +804,30 @@ class TokenSequenceLogprobs:
     top_token_logprobs: list[dict[int, float]]
 
 
+def validate_selected_token_ids(token_ids, selected_token_ids, top_k: int, vocab_size: int) -> None:
+    """Require one bounded candidate row per prompt token."""
+    if len(selected_token_ids) != len(token_ids):
+        raise ValueError("Selected prompt candidates must align with prompt tokens")
+    for row in selected_token_ids:
+        if len(row) != top_k:
+            raise ValueError("Selected prompt candidate width must equal prompt_logprobs")
+        if any(token < 0 or token >= vocab_size for token in row):
+            raise ValueError("Selected prompt candidate ID is outside the vocabulary")
+
+
 def score_token_sequence_logprobs(
     model: LmHeadModel,
     token_ids: Sequence[int],
     top_k: int,
+    selected_token_ids: Sequence[Sequence[int]] | None = None,
 ) -> TokenSequenceLogprobs:
     """Score a token sequence with a causal full forward pass."""
     if top_k < 1:
         raise ValueError("top_k must be at least 1")
 
     token_id_list = [int(token_id) for token_id in token_ids]
+    if selected_token_ids is not None:
+        validate_selected_token_ids(token_id_list, selected_token_ids, top_k, model.Vocab.size)
     if not token_id_list:
         return TokenSequenceLogprobs(token_logprobs=[], top_token_logprobs=[])
 
@@ -833,8 +847,12 @@ def score_token_sequence_logprobs(
     scored_logprobs = next_token_logprobs[jnp.arange(len(target_ids)), target_ids]
     token_logprobs.extend(float(logprob) for logprob in jax.device_get(scored_logprobs))
 
-    vocab_top_k = min(top_k, next_token_logprobs.shape[-1])
-    top_values, top_indices = jax.lax.top_k(next_token_logprobs, vocab_top_k)
+    if selected_token_ids is None:
+        vocab_top_k = min(top_k, next_token_logprobs.shape[-1])
+        top_values, top_indices = jax.lax.top_k(next_token_logprobs, vocab_top_k)
+    else:
+        top_indices = jnp.asarray(selected_token_ids[1:], dtype=jnp.int32)
+        top_values = jnp.take_along_axis(next_token_logprobs, top_indices, axis=-1)
     top_values = np.asarray(jax.device_get(top_values))
     top_indices = np.asarray(jax.device_get(top_indices))
     for values, indices in zip(top_values, top_indices, strict=True):
@@ -948,9 +966,14 @@ class InferenceEngine:
         self.sequences.clear()
         self.results = {}
 
-    def score_token_logprobs(self, token_ids: Sequence[int], top_k: int) -> TokenSequenceLogprobs:
-        """Score a token sequence under this engine's model."""
-        return score_token_sequence_logprobs(self.model, token_ids, top_k)
+    def score_token_logprobs(
+        self,
+        token_ids: Sequence[int],
+        top_k: int,
+        selected_token_ids: Sequence[Sequence[int]] | None = None,
+    ) -> TokenSequenceLogprobs:
+        """Score chosen and top-K or explicitly selected IDs under this engine's model."""
+        return score_token_sequence_logprobs(self.model, token_ids, top_k, selected_token_ids)
 
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
