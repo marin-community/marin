@@ -12,6 +12,7 @@ drop-in replacements for OpenAI models.
 import asyncio
 import collections
 import collections.abc
+from contextlib import contextmanager
 import logging
 import queue
 import threading
@@ -53,6 +54,7 @@ from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.inference.utils import INVALID
 from levanter.inference.weight_reload import WeightTransferConfig
 from levanter.inference.weight_reload_http import add_weight_reload_routes
+from levanter.inference.draft_reload import DraftReloadSession
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -100,6 +102,9 @@ class InferenceServerConfig:
 
     eagle3_checkpoint: str | None = None
     """Local initial Speculators checkpoint directory for opt-in resident EAGLE."""
+
+    eagle3_max_checkpoint_bytes: int | None = None
+    """Enable remote draft checkpoint updates with an explicit object-size bound."""
 
     weight_transfer: WeightTransferConfig | None = None
 
@@ -321,20 +326,21 @@ class InferenceContext:
                     raise ValueError(f"Expected model version {expected_version}, serving {self.model_version}")
                 if self.engine.draft is not current_draft:
                     raise ValueError("Draft changed while target weights were staged")
-            was_paused = self.pause_event.is_set()
-            self.pause_generation()
-            try:
-                with self.model_lock, self.admission_lock:
-                    jax.block_until_ready(self.engine.gen_state)
-                    self.model = candidate
-                    self.engine.model = candidate
-                    self.engine.draft = candidate_draft
-                    self.model_version += 1
-                    installed_version = self.model_version
-            finally:
-                if not was_paused:
-                    self.resume_generation()
+            with self._paused_model_update():
+                self.model = candidate
+                self.engine.model = candidate
+                self.engine.draft = candidate_draft
+                self.model_version += 1
+                installed_version = self.model_version
         return installed_version
+
+    def snapshot_draft(self) -> tuple[Eagle3Draft, int]:
+        """Return the resident draft and its target version under the admission lock."""
+        with self.admission_lock:
+            draft = self.engine.draft
+            if draft is None:
+                raise ValueError("No resident EAGLE draft is configured")
+            return draft, self.model_version
 
     def reload_draft(
         self, weight_callback: collections.abc.Callable[[Eagle3Draft], Eagle3Draft], *, expected_version: int
@@ -358,12 +364,18 @@ class InferenceContext:
             with self.admission_lock:
                 if expected_version != self.model_version or self.engine.draft is not current:
                     raise ValueError("Target or draft changed while draft weights were staged")
+            with self._paused_model_update():
+                self.engine.draft = candidate
+
+    @contextmanager
+    def _paused_model_update(self) -> collections.abc.Iterator[None]:
+        with self.lifecycle_lock:
             was_paused = self.pause_event.is_set()
             self.pause_generation()
             try:
                 with self.model_lock, self.admission_lock:
                     jax.block_until_ready(self.engine.gen_state)
-                    self.engine.draft = candidate
+                    yield
             finally:
                 if not was_paused:
                     self.resume_generation()
@@ -1474,9 +1486,20 @@ class InferenceServer:
         """Create and configure the FastAPI application."""
         app = FastAPI(title="Levanter Inference Service", version="1.0.0")
         model_name = inference_context.config.model_name
-        if inference_context.config.weight_transfer is not None:
+        draft_reload = None
+        if inference_context.config.eagle3_max_checkpoint_bytes is not None:
+            draft_reload = DraftReloadSession(
+                inference_context,
+                inference_context.config.trainer,
+                inference_context.config.eagle3_max_checkpoint_bytes,
+            )
+        if inference_context.config.weight_transfer is not None or draft_reload is not None:
             add_weight_reload_routes(
-                app, inference_context, inference_context.config.trainer, inference_context.config.weight_transfer
+                app,
+                inference_context,
+                inference_context.config.trainer,
+                inference_context.config.weight_transfer,
+                draft_session=draft_reload,
             )
 
         # Register routes with thin wrappers that call helper functions

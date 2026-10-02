@@ -6,10 +6,8 @@ import dataclasses
 import json
 import logging
 import math
-import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
 
 import equinox as eqx
 import haliax as hax
@@ -29,7 +27,7 @@ from levanter.tokenizers import HfMarinTokenizer
 
 try:
     import httpx
-    import uvicorn
+    from levanter.testing.http_server import live_http_server
     from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
@@ -1219,31 +1217,6 @@ class _DecodeGatedModel(_TokenSensitiveCompletionModel):
         return super().decode(input_ids, cache, batch_info, pos_ids)
 
 
-class _ReadyHttpServer(uvicorn.Server):
-    def __init__(self, app, ready):
-        super().__init__(uvicorn.Config(app, log_level="error", lifespan="off"))
-        self.ready = ready
-
-    async def startup(self, sockets=None):
-        await super().startup(sockets)
-        self.ready.set()
-
-
-@asynccontextmanager
-async def _live_http_server(app):
-    ready = asyncio.Event()
-    http_server = _ReadyHttpServer(app, ready)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
-        try:
-            await asyncio.wait_for(ready.wait(), 10)
-            yield f"http://127.0.0.1:{listener.getsockname()[1]}"
-        finally:
-            http_server.should_exit = True
-            await serving
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", ["completions", "chat/completions"])
 @pytest.mark.parametrize("disconnect", [False, True])
@@ -1276,7 +1249,7 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
                     await received.put(line[6:])
 
     try:
-        async with _live_http_server(server.app) as base_url:
+        async with live_http_server(server.app) as base_url:
             async with httpx.AsyncClient(base_url=base_url, timeout=30) as client:
                 streaming = asyncio.create_task(read_stream(client))
                 peer = asyncio.create_task(client.post(f"/v1/{endpoint}", json=body, headers={"x-request-id": "peer"}))
@@ -1530,7 +1503,7 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume(api):
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, _BlockingTokenModel(entered, release), tokenizer)
     try:
-        async with _live_http_server(server.app) as base_url:
+        async with live_http_server(server.app) as base_url:
             engine = remote.RemoteInferenceEngine(
                 base_url.removeprefix("http://"),
                 "gpt2",
@@ -1694,7 +1667,7 @@ async def test_remote_skyrl_teacher_scores_exact_full_context_and_masked_rows(ex
         evidence=kind,
         top_k=teacher.top_k,
     )
-    async with _live_http_server(exact_token_server.app) as base_url:
+    async with live_http_server(exact_token_server.app) as base_url:
         oracle = teacher_oracle.OpenAICompatibleTeacherOracle(
             teacher=teacher,
             endpoint=specs.TeacherEndpointSpec(url=f"{base_url}/v1", auth=None, max_concurrency=1),
@@ -1731,7 +1704,7 @@ async def test_remote_vllm_teacher_scores_student_ids_outside_teacher_topk(exact
     tokenizer = exact_token_server.inference_context.tokenizer
     selected_mask = torch.tensor([[True, False, True], [True, True, False]])
     candidates = torch.tensor([[[2, 1], [-1, -1], [3, 2]], [[0, 3], [3, 2], [-1, -1]]])
-    async with _live_http_server(exact_token_server.app) as base_url:
+    async with live_http_server(exact_token_server.app) as base_url:
         engine = remote.RemoteInferenceEngine(
             base_url.removeprefix("http://"),
             "gpt2",

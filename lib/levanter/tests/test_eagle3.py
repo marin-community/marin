@@ -679,12 +679,12 @@ def test_resident_eagle_stochastic_request_keeps_draws_when_peer_is_cancelled():
         assert 0 < len(interrupted.tokens[0]) < len(uninterrupted.tokens[0])
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(tmp_path, dtype):
+@pytest.fixture
+def resident_eagle_server(tmp_path, dtype, local_gpt2_marin_tokenizer):
     for dependency in ("fastapi", "openai", "uvicorn"):
         pytest.importorskip(dependency)
     from levanter.inference.openai import (  # noqa: PLC0415  # optional serving deps
-        InferenceContext,
+        InferenceServer,
         InferenceServerConfig,
     )
 
@@ -711,16 +711,36 @@ def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(
         compute_dtype=dtype,
         num_eagle3_tokens=3,
     )
-    request = Request([2, 7, 5], 17, dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(10)), 1)
     with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
         target = SnowballLMHeadModel.init(Axis("vocab", 32), _target_config(), key=jax.random.key(13))
         target = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, target)
-        draft = Eagle3Draft.from_state_dict(
-            Eagle3Config.from_hf_config(hf_config), weights, target_embedding=target.transformer.token_embed
+        initial = tmp_path / "initial"
+        initial.mkdir()
+        (initial / "config.json").write_text(json.dumps(hf_config))
+        save_file(weights, initial / "model.safetensors")
+        server = InferenceServer.create(
+            InferenceServerConfig(
+                trainer=trainer, service=config, eagle3_checkpoint=str(initial), eagle3_max_checkpoint_bytes=1_000_000
+            ),
+            target,
+            local_gpt2_marin_tokenizer,
         )
-        draft = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, draft)
-        engine = InferenceEngine.from_model_with_config(target, None, config, draft=draft)
-        context = InferenceContext(target, None, engine, InferenceServerConfig(trainer=trainer, service=config))
+    try:
+        yield server
+    finally:
+        server.inference_context.shutdown()
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(
+    tmp_path, resident_eagle_server, dtype
+):
+    context = resident_eagle_server.inference_context
+    engine, trainer = context.engine, context.config.trainer
+    target, draft, config = context.model, engine.draft, engine.config
+    assert draft is not None
+    request = Request([2, 7, 5], 17, dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(10)), 1)
+    with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
         old = engine.generate([request])
         caches = [np.asarray(x).copy() for x in jax.tree.leaves((engine.gen_state.cache, engine.gen_state.eagle3))]
         assert any(np.any(x) for x in caches)
@@ -804,3 +824,103 @@ def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(
         assert after_race.tokens == old.tokens
         assert after_race.tokens == race_oracle.tokens
         np.testing.assert_array_equal(after_race.logprobs, race_oracle.logprobs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_api", ["http", pytest.param("skyrl", marks=pytest.mark.integration)])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+async def test_remote_draft_bracket_preserves_weights_until_complete_install(
+    tmp_path, resident_eagle_server, dtype, client_api
+):
+    import aiohttp  # noqa: PLC0415 -- optional serving test dependencies
+    import httpx  # noqa: PLC0415
+    from levanter.testing.http_server import live_http_server  # noqa: PLC0415
+
+    server = resident_eagle_server
+    context = server.inference_context
+    draft, version = context.snapshot_draft()
+    candidate = {name: np.asarray(value) for name, value in draft.trainable_state_dict().items()}
+    candidate["norm.weight"] = -candidate["norm.weight"]
+    incomplete = dict(candidate)
+    del incomplete["fc.weight"]
+    good, bad = tmp_path / "complete.safetensors", tmp_path / "incomplete.safetensors"
+    save_file(candidate, good)
+    save_file(incomplete, bad)
+    async with live_http_server(server.app) as address, httpx.AsyncClient(base_url=address, timeout=60) as http:
+        remote = None
+        if client_api == "skyrl":
+            module = pytest.importorskip("skyrl_train.inference_engines.remote_inference_engine")
+            remote = module.RemoteInferenceEngine(address.removeprefix("http://"), "gpt2", "vllm", context.tokenizer)
+
+        async def update(path):
+            if remote is not None:
+                return await remote.update_draft_weights(path)
+            started = await http.post("/start_draft_weight_update")
+            started.raise_for_status()
+            publication = started.json()
+            staged = await http.post("/update_weights", json={**publication, "update_info": {"weights_path": path}})
+            staged.raise_for_status()
+            finished = await http.post("/finish_weight_update", json=publication)
+            finished.raise_for_status()
+            return finished.json()
+
+        async def generate():
+            response = await http.post(
+                "/v1/completions",
+                json={
+                    "model": "gpt2",
+                    "prompt": [2, 7, 5],
+                    "max_tokens": 7,
+                    "temperature": 0,
+                    "logprobs": 0,
+                    "return_token_ids": True,
+                },
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]
+
+        old = await generate()
+        caches = [
+            np.asarray(x).copy()
+            for x in jax.tree.leaves((context.engine.gen_state.cache, context.engine.gen_state.eagle3))
+        ]
+        with pytest.raises((httpx.HTTPStatusError, aiohttp.ClientResponseError)):
+            await update(bad.as_uri())
+        retained, retained_version = context.snapshot_draft()
+        assert retained is draft
+        assert retained_version == version
+        assert not context.pause_event.is_set()
+        for actual, expected in zip(
+            jax.tree.leaves((context.engine.gen_state.cache, context.engine.gen_state.eagle3)), caches, strict=True
+        ):
+            np.testing.assert_array_equal(actual, expected)
+        unchanged = await generate()
+        assert unchanged["token_ids"] == old["token_ids"]
+        np.testing.assert_array_equal(unchanged["logprobs"]["token_logprobs"], old["logprobs"]["token_logprobs"])
+
+        stale = (await http.post("/start_draft_weight_update")).json()
+        staged = await http.post("/update_weights", json={**stale, "update_info": {"weights_path": good.as_uri()}})
+        assert staged.status_code == 200
+        assert context.engine.draft is draft
+        assert (await generate())["token_ids"] == old["token_ids"]
+        assert server.reload(lambda current: current, expected_version=version) == version + 1
+        published = context.engine.draft
+        rejected = await http.post("/finish_weight_update", json=stale)
+        assert rejected.status_code == 409
+        assert context.engine.draft is published
+
+        assert (await update(good.as_uri()))["active"] is True
+        installed, new_version = context.snapshot_draft()
+        assert new_version == version + 1
+        np.testing.assert_array_equal(installed.final_norm.weight, candidate["norm.weight"])
+        np.testing.assert_array_equal(installed.lm_head, published.lm_head)
+        np.testing.assert_array_equal(installed.embedding, published.embedding)
+        for value in jax.tree.leaves((context.engine.gen_state.cache, context.engine.gen_state.eagle3)):
+            np.testing.assert_array_equal(value, np.zeros_like(value))
+        current = await generate()
+        assert current["token_ids"] == old["token_ids"]
+        np.testing.assert_allclose(
+            current["logprobs"]["token_logprobs"], old["logprobs"]["token_logprobs"], atol=1e-4, rtol=1e-4
+        )
+        assert (await http.post("/finish_weight_update", json=stale)).status_code == 409
+        assert context.engine.draft is installed
