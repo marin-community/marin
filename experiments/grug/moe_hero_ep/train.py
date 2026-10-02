@@ -636,9 +636,6 @@ def log_device_memory(step_info) -> None:
     Ported from ``experiments/grug/moe_hero_fsdp/train.py``.
     """
     stats = jax.local_devices()[0].memory_stats()
-    if stats is None:
-        # CPU devices report no memory statistics; the hook has nothing to log there.
-        return
     levanter.tracker.log(
         {
             "memory/peak_gib": stats["peak_bytes_in_use"] / 1024**3,
