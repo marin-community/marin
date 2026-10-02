@@ -11,6 +11,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from levanter.inference.jit_scheduler import FinishReason
+from levanter.layers.kv_cache import KvPageCache
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
@@ -306,6 +308,13 @@ class _DeterministicCompletionScoringModel(eqx.Module):
     def __init__(self):
         self.Vocab = hax.Axis("vocab", 4)
 
+    def initial_cache(self, spec, *, dtype):
+        return KvPageCache.init(spec, hax.Axis("kv_head", 1), hax.Axis("embed", 1), dtype=dtype)
+
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        logits = hax.nn.one_hot(3, self.Vocab, dtype=jnp.float32).broadcast_axis(input_ids.resolve_axis("position"))
+        return logits, cache
+
     def __call__(
         self,
         input_ids: hax.NamedArray,
@@ -335,7 +344,7 @@ class _FakeCompletionContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: list[int] | None,
+        stop_tokens: list[list[int]] | None,
         seed: int | None,
         future,
         n_generations: int = 1,
@@ -361,6 +370,7 @@ class _FakeCompletionContext:
                     tokens=[3],
                     prompt_tokens=len(prompt_tokens),
                     completion_tokens=1,
+                    finish_reason=FinishReason.LENGTH,
                     logprobs=[-123.0],
                     echo_token_ids=echo_token_ids,
                     echo_logprobs=score_token_sequence_logprobs(self.model, echo_token_ids, echo_logprobs_top_k),
@@ -394,6 +404,7 @@ def test_completion_echo_logprobs_are_lm_eval_aligned():
     expected_prompt_logprob = float(jax.nn.log_softmax(jnp.array([-8.0, 4.0, -8.0, -8.0]))[1])
     expected_completion_logprob = float(jax.nn.log_softmax(jnp.array([-8.0, -8.0, -8.0, 3.0]))[3])
 
+    assert choice["finish_reason"] == "length"
     assert choice["text"] == "A B X"
     assert logprobs["tokens"] == ["A", " B", " X"]
     assert logprobs["token_logprobs"] == pytest.approx([0.0, expected_prompt_logprob, expected_completion_logprob])
@@ -611,3 +622,31 @@ def test_tokens_endpoint(test_client):
         assert all(isinstance(t, int) for t in token_list["tokens"])
 
     print(f"Tokenization results: {result['results']}")
+
+
+def test_completion_stop_alternatives_and_length_report_actual_termination():
+    config = InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=8,
+            max_pages=4,
+            max_seqs=2,
+            page_size=4,
+            max_queued_tokens=4,
+            max_seqs_in_prefill=2,
+            compute_dtype=jnp.float32,
+        )
+    )
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _DeterministicCompletionScoringModel(), _OpenAITestTokenizer())
+    request = {"model": "gpt2", "prompt": "A", "temperature": 0, "max_tokens": 3}
+    try:
+        with TestClient(server.app) as client:
+            length_response = client.post("/v1/completions", json=request)
+            stop_response = client.post("/v1/completions", json={**request, "stop": ["A B", " X"]})
+        assert length_response.status_code == stop_response.status_code == 200
+        assert length_response.json()["choices"][0]["finish_reason"] == "length"
+        assert length_response.json()["usage"]["completion_tokens"] == 3
+        assert stop_response.json()["choices"][0]["finish_reason"] == "stop"
+        assert stop_response.json()["usage"]["completion_tokens"] == 1
+    finally:
+        server.inference_context.shutdown()
