@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "moe_hero_pipeline"
+  ],
+  "base_sha": "89ac0d770506f7e27ca217760ec5ca3246694e7e",
+  "head_sha": "deb800c1362f2b2f6b0ff72695f1af9e34b95591",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 2596,
+      "report_relpath": "moe_hero_pipeline/index.html",
+      "status_counts": {
+        "added": 8,
+        "changed": 1,
+        "removed": 1,
+        "unchanged": 1
+      },
+      "variant": "moe_hero_pipeline"
+    }
+  ]
+}
