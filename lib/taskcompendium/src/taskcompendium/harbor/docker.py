@@ -20,6 +20,7 @@ from harbor.environments.docker.docker import DockerEnvironment
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.path_validation import validate_relative_file_path
 
+from taskcompendium.lowering import DOCKER_DEFINITION_FILES
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, validate_workspace_path
 from taskcompendium.submission import MAX_SUBMISSION_FILE_BYTES, SubmissionFailure
 
@@ -143,7 +144,7 @@ class DockerWorkspaceEnvironment(DockerEnvironment):
                 or Path(mount["source"]).resolve() != Path(str(allowed_mounts[mount["target"]])).resolve()
             ):
                 raise ValueError("Docker workspace cannot mount private or caller-selected host paths")
-        if (self.environment_dir / "Dockerfile").exists() or (self.environment_dir / "docker-compose.yaml").exists():
+        if any((self.environment_dir / name).exists() for name in DOCKER_DEFINITION_FILES):
             raise ValueError("Pinned Docker tasks cannot override the image with a build or compose file")
         if self.extra_docker_compose_paths:
             raise ValueError("Pinned Docker tasks cannot use extra compose files")

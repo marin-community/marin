@@ -41,6 +41,9 @@ MAX_TOTAL_RESOURCE_BYTES = 64 * 1024 * 1024
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
+TASK_CONFIG_FILE = "task.toml"
+INSTRUCTION_FILE = "instruction.md"
+DOCKER_DEFINITION_FILES = ("Dockerfile", "docker-compose.yaml")
 DEFAULT_INLINE_FILE_MODE = "0644"
 
 
@@ -194,7 +197,7 @@ def validate_environment_config(
             raise NotImplementedError("Harbor Docker cannot preserve declared public-file nanosecond timestamps")
         if not int(resource.mode or DEFAULT_INLINE_FILE_MODE, 8) & 0o400:
             raise NotImplementedError("Harbor Docker public inline files require owner-read permission for upload")
-        if resource.path.split("/")[0] in {"Dockerfile", "docker-compose.yaml"}:
+        if resource.path.split("/")[0] in DOCKER_DEFINITION_FILES:
             raise ValueError("Worker resources cannot override the Docker definition")
 
 
@@ -215,14 +218,14 @@ def validate_exported_task(specification: TaskSpec, environment_config: HarborEn
         SUBMISSION_CONVENTION_FILE,
         ENVIRONMENT_CONFIG_FILE,
         "environment",
-        "instruction.md",
-        "task.toml",
+        INSTRUCTION_FILE,
+        TASK_CONFIG_FILE,
     }
     if {path.name for path in task_dir.iterdir()} != expected_root or any(
         path.is_symlink() for path in task_dir.iterdir()
     ):
         raise ValueError("Exported Docker task contains undeclared files or symlinks")
-    if tomllib.loads((task_dir / "task.toml").read_text()) != _task_config(specification, environment_config):
+    if tomllib.loads((task_dir / TASK_CONFIG_FILE).read_text()) != _task_config(specification, environment_config):
         raise ValueError("Exported Docker configuration differs from the task requirements")
     environment = task_dir / "environment"
     expected = {resource.path: resource for resource in specification.resources.all + specification.resources.worker}
@@ -270,13 +273,14 @@ def lower_to_harbor(
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()
-    (destination / "instruction.md").write_text(instruction)
+    (destination / INSTRUCTION_FILE).write_text(instruction)
     config = _task_config(specification, environment_config)
-    task_toml = 'version = "1.0"\n\n[environment]\n'
-    for key, value in config["environment"].items():
-        task_toml += f"{key} = {json.dumps(value)}\n"
-    task_toml += '\n[verifier]\nenvironment_mode = "shared"\n'
-    (destination / "task.toml").write_text(task_toml)
+    task_toml = f'version = {json.dumps(config["version"])}\n'
+    for section in ("environment", "verifier"):
+        task_toml += f"\n[{section}]\n"
+        for key, value in config[section].items():
+            task_toml += f"{key} = {json.dumps(value)}\n"
+    (destination / TASK_CONFIG_FILE).write_text(task_toml)
     if environment_config.environment == DOCKER_ENVIRONMENT:
         for resource in specification.resources.all + specification.resources.worker:
             path = destination / "environment" / resource.path
