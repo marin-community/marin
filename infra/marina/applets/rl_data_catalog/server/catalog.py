@@ -582,6 +582,12 @@ def skyrl_snapshot(
     client: httpx.Client, head: dict[str, Any], cached_rows: list[dict[str, Any]] | None = None, force: bool = False
 ) -> Snapshot:
     revision = head["sha"]
+    harbor_commit = get_json(
+        client,
+        f"https://api.github.com/repos/{HARBOR}/commits",
+        path=HARBOR_VERIFIER_PATH,
+        per_page="1",
+    )[0]
     if (
         not force
         and cached_rows
@@ -600,7 +606,17 @@ def skyrl_snapshot(
             for row in cached_rows
         )
     ):
-        rows = refresh_dataset_metadata(client, cached_rows)
+        rows = refresh_dataset_metadata(
+            client,
+            [
+                {
+                    **row,
+                    "harbor_verifier_revision": harbor_commit["sha"],
+                    "harbor_verifier_revised_at": harbor_commit["commit"]["committer"]["date"],
+                }
+                for row in cached_rows
+            ],
+        )
         return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
     raw = f"https://raw.githubusercontent.com/{SKYRL}/{revision}"
     source_text = get_text(client, f"{raw}/{SOURCE_PATH}")
@@ -628,12 +644,6 @@ def skyrl_snapshot(
         f"https://api.github.com/repos/{SKYRL}/commits",
         path=VERIFYIT_DEPENDENCY_PATH,
         sha=revision,
-        per_page="1",
-    )[0]
-    harbor_commit = get_json(
-        client,
-        f"https://api.github.com/repos/{HARBOR}/commits",
-        path=HARBOR_VERIFIER_PATH,
         per_page="1",
     )[0]
     verifier_commits = {}

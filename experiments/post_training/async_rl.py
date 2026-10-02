@@ -423,8 +423,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             # No KL term against the reference, in the loss or in the reward.
             "use_kl_loss": False,
             "use_kl_in_reward": False,
-            # No truncated importance sampling on top of the clip.
-            "use_tis": False,
+            # The policy loss uses unit correction weights.
+            "off_policy_correction": "none",
             # Symmetric PPO clip.
             "eps_clip_low": 0.2,
             "eps_clip_high": 0.2,

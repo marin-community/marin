@@ -33,6 +33,7 @@ from marin.evaluation.lm_eval_samples import (
     rebuild_lm_eval_samples,
     run_artifacts,
     sample_from_lm_eval,
+    samples_from_lm_eval,
     summarize_native_eval_samples,
 )
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
@@ -381,6 +382,46 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
     assert by_filter["strict-match"].grading.filter == "strict-match"
 
 
+def test_ungraded_extraction_filters_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = [
+        {
+            key: value
+            for key, value in _lm_eval_row(0, name, 0.0, response).items()
+            if key not in {"metrics", "exact_match"}
+        }
+        for name, response in (("strict-match", "[invalid]"), ("flexible-extract", "4"))
+    ]
+    _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).output for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
+def test_ungraded_filter_variants_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    raw = _lm_eval_row(0, "none", 0.0, "4")
+    del raw["filter"], raw["metrics"], raw["exact_match"]
+    raw["filter_variants"] = [
+        {"filter": "strict-match", "filtered_resps": ["[invalid]"], "metrics": {}},
+        {"filter": "flexible-extract", "filtered_resps": ["4"], "metrics": {}},
+    ]
+    _write_jsonl(results, [raw])
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).extracted for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
 def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
     results = tmp_path / "run" / "results"
     rows = []
@@ -390,9 +431,10 @@ def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
         row["source_id"] = 2
         row["sample_ordinal"] = 0
         rows.append(row)
-    _write_jsonl(results, rows)
+    source = _write_jsonl(results, rows)
 
     assert export_lm_eval_samples(str(results)).samples == 3
+    source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 3
 
     stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
@@ -875,6 +917,31 @@ def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
     sample = sample_from_archive_row(stored)
     assert sample.grading.metric == "f1"
     assert sample.correct
+
+
+def test_rebuild_preserves_native_evalchemy_repeat_keys(tmp_path):
+    results = str(tmp_path / "results")
+    rows = [_lm_eval_row(0, "none", score, output) for score, output in ((1.0, "4"), (0.0, "5"), (1.0, "4"))]
+    for repeat, row in enumerate(rows):
+        row["sample_repeat"] = repeat
+
+    store = EvaluationStore.open(results, writer_id="native-evalchemy-test")
+    try:
+        store.add_source_artifact(
+            "evalchemy/gsm8k/native/samples_gsm8k_native.jsonl",
+            ("\n".join(json.dumps(row) for row in rows) + "\n").encode(),
+            content_type="application/x-ndjson",
+        )
+        for row in rows:
+            for sample in samples_from_lm_eval("gsm8k", row):
+                store.add_sample(sample, trial_id=str(row["sample_repeat"]))
+        store.seal()
+    finally:
+        store.close()
+
+    assert rebuild_lm_eval_samples(results) == 3
+    archived = ReadView(results).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {(row["doc_id"], row["trial_id"]) for row in archived} == {("0", "0"), ("0", "1"), ("0", "2")}
 
 
 def test_rebuild_chat_native_samples_from_recorded_task_declaration(tmp_path):

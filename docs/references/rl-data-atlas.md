@@ -286,11 +286,16 @@ and synthesizes the opinions. Each Harbor attempt uses a distinct session name.
 Add `--resume` to the first command to reuse completed task outcomes, judge outputs, and syntheses with matching inputs,
 configuration, and native code. The publisher validates the collection and
 uploads its cited evidence into the applet schema using Marina authentication.
+Captured verifyit commits must match the selected MarinSkyRL dependency pin and the live Atlas pin.
+Harbor reviews must record a clean checkout whose verifier tree matches the live Harbor verifier;
+a newer commit that leaves this tree unchanged remains eligible. A mismatch stops publication
+before any review or quality update.
 Imported Task Trove dashboard notes and task audits remain separate historical collections; this publisher creates new collections from actual task attempts.
 
 Opening the [authenticated page](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/) checks the MarinSkyRL registry repository and Task Trove release
 repository heads and always refreshes MarinSkyRL upstream dataset metadata, including
-when the MarinSkyRL head is unchanged. The public page reads the latest saved
+when the MarinSkyRL head is unchanged. It also checks Harbor verifier changes before reusing the
+cached registry, so a Harbor-only update invalidates the affected evidence. The public page reads the latest saved
 catalog and shows its last upstream check time; it does not refresh upstream sources.
 When the MarinSkyRL repository head
 changes, the applet reloads verifier commit history; **Refresh sources** also

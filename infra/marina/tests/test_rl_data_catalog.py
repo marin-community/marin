@@ -772,6 +772,10 @@ def test_unchanged_git_head_refreshes_hf_counts_and_reports_latest_change(verifi
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/marin-community/harbor/commits":
+            return httpx.Response(
+                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
+            )
         assert request.url.host == "huggingface.co"
         return httpx.Response(
             200,
@@ -872,6 +876,10 @@ def test_refresh_reads_card_counts_for_selected_population_and_canonical_names(
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/marin-community/harbor/commits":
+            return httpx.Response(
+                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
+            )
         if request.url.path == f"/api/datasets/{dataset_id}/tree/hf2":
             return httpx.Response(200, json=[])
         if request.url.path == f"/api/datasets/{dataset_id}":
@@ -934,6 +942,10 @@ def test_gpqa_gated_viewer_preserves_audited_count_only_for_same_revision(revisi
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/marin-community/harbor/commits":
+            return httpx.Response(
+                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
+            )
         if request.url.host == "huggingface.co":
             return httpx.Response(200, json={"sha": revision, "lastModified": "2026-09-28T00:00:00Z"})
         return httpx.Response(401, json={"error": "Gated dataset"})
@@ -964,7 +976,11 @@ def test_aime_benchmark_and_audited_family_survive_refresh_without_hf_tag() -> N
         }
     ]
 
-    def upstream(_request: httpx.Request) -> httpx.Response:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/marin-community/harbor/commits":
+            return httpx.Response(
+                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
+            )
         return httpx.Response(
             200,
             json={
@@ -1009,6 +1025,10 @@ def test_github_sources_resolve_counts_and_links_without_invalid_hf_requests(
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/marin-community/harbor/commits":
+            return httpx.Response(
+                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
+            )
         if request.url.host == "api.github.com":
             return httpx.Response(200, json={"sha": "data1", "commit": {"committer": {"date": "2026-09-26T00:00:00Z"}}})
         assert request.url.host == "raw.githubusercontent.com"
@@ -1083,6 +1103,10 @@ def test_gym_duplicates_stay_merged_after_dataset_metadata_refresh() -> None:
     )
 
     def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/marin-community/harbor/commits":
+            return httpx.Response(
+                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
+            )
         assert request.url.path == "/api/datasets/org/math"
         return httpx.Response(
             200,
@@ -1278,3 +1302,70 @@ def test_unavailable_nemotron_metadata_keeps_the_canonical_population() -> None:
         dataset_id=composition.NEMOTRON, dataset_revision=None, task_count=None, metadata_error="HF metadata unavailable"
     )
     assert component_rows(parent, {"metadata_error": "HF metadata unavailable"}) == [parent]
+
+
+def test_cached_skyrl_refresh_invalidates_harbor_evidence_when_only_harbor_changes():
+    date = "2026-10-01T00:00:00Z"
+    revision = composition.NEMOTRON_COUNTS["revision"]
+    parent = source_row("MarinSkyRL", "nemotron_ultra_rlvr2", "sky1", date)
+    parent.update(
+        url=f"https://huggingface.co/datasets/{composition.NEMOTRON}",
+        family_url=f"https://huggingface.co/datasets/{composition.NEMOTRON}",
+        dataset_id=composition.NEMOTRON,
+        environment="nemotron_ultra",
+        split="train",
+        task_count=99116,
+        dataset_revision=revision,
+        dataset_revised_at=date,
+        verifier_revision="native1",
+        verifier_revised_at=date,
+        verifier_path_revised_at=date,
+    )
+    rows = component_rows(parent, {})
+    for row in rows:
+        annotate_verifier_dependency(row, "a" * 40, "shared1", date, date, "harbor1", date)
+    cached = cached_verifier_metadata(rows)
+    before = {row["id"]: row["verifier_revision"] for row in cached}
+
+    def upstream(request):
+        if request.url.host == "api.github.com":
+            assert request.url.params["path"] == "src/harbor/verifier"
+            return httpx.Response(
+                200, json=[{"sha": "harbor2", "commit": {"committer": {"date": "2026-10-02T00:00:00Z"}}}]
+            )
+        if request.url.path == f"/api/datasets/{composition.NEMOTRON}/tree/{revision}":
+            return httpx.Response(200, json=[])
+        if request.url.path == f"/datasets/{composition.NEMOTRON}/raw/{revision}/README.md":
+            return httpx.Response(200, text="| rlvr2 | 99,116 | 5.0 GB |")
+        assert request.url.path == f"/api/datasets/{composition.NEMOTRON}"
+        return httpx.Response(
+            200,
+            json={
+                "sha": revision,
+                "lastModified": date,
+                "cardData": {"dataset_info": {"splits": [{"name": "train", "num_examples": 99116}]}},
+            },
+        )
+
+    head = {"sha": "sky1", "commit": {"committer": {"date": date}}}
+    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+        snapshot = skyrl_snapshot(client, head, cached)
+    harbor_rows = [row for row in snapshot.rows if row["verifier_mode"] == "harbor"]
+    assert harbor_rows
+    for row in snapshot.rows:
+        assert row["harbor_verifier_revision"] == "harbor2"
+        reviewed = source_with_review(
+            {
+                "payload": row,
+                "quality": "good",
+                "difficulty": "measured",
+                "review_id": "review1",
+                "review_date": date,
+                "review_source_revision": revision,
+                "review_verifier_revision": before[row["id"]],
+                "verifier_issues": [],
+            }
+        )
+        assert reviewed["review_stale"] == (row["verifier_mode"] == "harbor")
+        assert bool(reviewed["difficulty"]) == (row["verifier_mode"] != "harbor")
+    assert all(row["harbor_verifier_revision"] == "harbor1" for row in cached)
