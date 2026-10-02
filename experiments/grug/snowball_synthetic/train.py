@@ -43,7 +43,7 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import NamedLmDataset
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
-from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball import SnowballConfig, num_long_attention_layers
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import StepInfo, Trainer, TrainerConfig
@@ -82,18 +82,12 @@ PRESETS = {
     "medium": Preset(dataclasses.replace(FULL, num_layers=4), 1024, "p=f32,c=bfloat16"),
     "full": Preset(FULL, 4096, "p=f32,c=bfloat16"),
 }
-# SnowballTransformer runs full-causal attention on every 4th layer and the last one; the rest are windowed.
-LONG_LAYER_STRIDE = 4
 # Steps 0 and 1 are excluded from the summary: step 0 compiles, and the trainer runs per-step hooks from step 2.
 FIRST_TIMED_STEP = 2
 
 
 def snowball_flops_per_token(cfg: SnowballConfig, vocab_size: int, seq_len: int) -> float:
-    """Forward FLOPs per token, charging full-context attention only on every ``LONG_LAYER_STRIDE``-th layer.
-
-    Snowball also runs full attention on its last layer, which this stride does not count: an undercount of about
-    0.4% at a 4096-token context for the 26-layer model, growing with context length.
-    """
+    """Forward FLOPs per token, charging full-context attention only on Snowball's long layers."""
     return lm_flops_per_token(
         hidden_dim=cfg.hidden_dim,
         intermediate_dim=cfg.intermediate_dim,
@@ -108,7 +102,7 @@ def snowball_flops_per_token(cfg: SnowballConfig, vocab_size: int, seq_len: int)
         num_shared_experts=1,
         shared_intermediate_dim=cfg.shared_expert_intermediate_dim,
         sliding_window=cfg.sliding_window,
-        global_every=LONG_LAYER_STRIDE,
+        num_full_attention_layers=num_long_attention_layers(cfg.num_layers),
     )
 
 
