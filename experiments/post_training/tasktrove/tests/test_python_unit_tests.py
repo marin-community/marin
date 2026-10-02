@@ -3,8 +3,8 @@
 
 import sys
 
-from tasktrove_verify.grade import Status, run
-from tasktrove_verify.spec import PytestSpec, parse_spec, render_spec
+from verifyit.grade import Status, run
+from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.tasktrove.convert import convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus

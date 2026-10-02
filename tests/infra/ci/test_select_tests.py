@@ -271,9 +271,34 @@ def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
     assert "taskcompendium-unit" in full_selection.suites
 
 
-def _verifier_members(verifier: str) -> str:
-    if verifier == "tasktrove-verify":
-        return '"lib/levanter", "lib/haliax", "lib/tasktrove-verify"'
+def test_verifier_change_selects_library_and_dependent_marin_tests(tmp_path: Path) -> None:
+    write(tmp_path, "lib/verifyit/src/verifyit/__init__.py")
+    write(tmp_path, "lib/verifyit/src/verifyit/grade.py", "def grade(): ...\n")
+    write(tmp_path, "lib/verifyit/tests/test_grade.py", "from verifyit.grade import grade\n")
+    write(tmp_path, "tests/test_verifier.py", "from verifyit.grade import grade\n")
+
+    matrix = select_matrix(["lib/verifyit/src/verifyit/grade.py"], tmp_path)
+
+    assert leg_paths(matrix, "verifyit") == ["lib/verifyit/tests/test_grade.py"]
+    assert leg_paths(matrix, "marin") == ["tests/test_verifier.py"]
+    verifier_leg = next(leg for leg in matrix if leg.package == "verifyit")
+    assert verifier_leg.extras == "--extra all"
+
+
+@pytest.mark.parametrize("run_all_tests", [False, True])
+def test_verifier_manifest_and_full_runs_select_entire_library(tmp_path: Path, run_all_tests: bool) -> None:
+    write(tmp_path, "lib/verifyit/tests/test_grade.py", "def test_grade(): ...\n")
+
+    selection = select_changed_tests(
+        [] if run_all_tests else ["lib/verifyit/pyproject.toml"], tmp_path, run_all_tests=run_all_tests
+    )
+
+    assert leg_paths(selection.matrix, "verifyit") == ["lib/verifyit/tests"]
+
+
+def _verifier_members(verifier_source: str) -> str:
+    if verifier_source == "workspace":
+        return '"lib/levanter", "lib/haliax", "lib/verifyit"'
     return '"lib/levanter", "lib/haliax"'
 
 
@@ -282,13 +307,13 @@ def _tpu_lock(
     jax_version: str = "0.11.1",
     shared_version: str = "1",
     leaf_version: str = "1",
-    verifier: str = "tasktrove-verify",
+    verifier_source: str = "workspace",
     tpu_marker: str = "",
     jax_source: str = 'registry = "https://pypi.org/simple"',
 ) -> str:
-    verifier_source = (
-        f'editable = "lib/{verifier}"'
-        if verifier == "tasktrove-verify"
+    source = (
+        'editable = "lib/verifyit"'
+        if verifier_source == "workspace"
         else ('git = "https://github.com/marin-community/verifyit?rev=abc123"')
     )
     marker = f', marker = "{tpu_marker}"' if tpu_marker else ""
@@ -296,16 +321,16 @@ def _tpu_lock(
     version = 1
     requires-python = ">=3.12"
     [manifest]
-    members = [{_verifier_members(verifier)}]
+    members = [{_verifier_members(verifier_source)}]
     [[package]]
     name = "marin-root"
     version = "0.1.0"
     source = {{ editable = "." }}
-    dependencies = [{{ name = "{verifier}" }}]
+    dependencies = [{{ name = "verifyit" }}]
     [[package]]
-    name = "{verifier}"
+    name = "verifyit"
     version = "0.1.0"
-    source = {{ {verifier_source} }}
+    source = {{ {source} }}
     [[package]]
     name = "marin-levanter"
     version = "0.2.0"
@@ -339,21 +364,21 @@ def _tpu_lock(
     """
 
 
-def _tpu_manifest(verifier: str = "tasktrove-verify") -> str:
+def _tpu_manifest(verifier_source: str = "workspace") -> str:
     source = (
         "{ workspace = true }"
-        if verifier == "tasktrove-verify"
+        if verifier_source == "workspace"
         else ('{ git = "https://github.com/marin-community/verifyit", rev = "abc123" }')
     )
     return f"""\
     [project]
     name = "marin-root"
     requires-python = ">=3.12"
-    dependencies = ["{verifier}"]
+    dependencies = ["verifyit"]
     [tool.uv.workspace]
-    members = [{_verifier_members(verifier)}]
+    members = [{_verifier_members(verifier_source)}]
     [tool.uv.sources]
-    {verifier} = {source}
+    verifyit = {source}
     """
 
 
@@ -372,10 +397,10 @@ def _commit_base_tpu_workspace(tmp_path: Path) -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
 
 
-def test_verifier_extraction_keeps_cpu_coverage_without_tpu(tmp_path: Path) -> None:
+def test_verifier_git_source_keeps_cpu_coverage_without_tpu(tmp_path: Path) -> None:
     base = _commit_base_tpu_workspace(tmp_path)
-    write(tmp_path, "uv.lock", _tpu_lock(verifier="verifyit"))
-    write(tmp_path, "pyproject.toml", _tpu_manifest("verifyit"))
+    write(tmp_path, "uv.lock", _tpu_lock(verifier_source="git"))
+    write(tmp_path, "pyproject.toml", _tpu_manifest(verifier_source="git"))
 
     selection = select_changed_tests(["uv.lock", "pyproject.toml"], tmp_path, base_ref=base)
 
