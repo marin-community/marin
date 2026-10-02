@@ -140,11 +140,8 @@ def cuda_toolchain_setup_script() -> str:
     """
     cuda_13_library_packages = " ".join(CUDA_13_LIBRARY_PACKAGES)
     return rf"""set -e
-for _cuda13_package in {cuda_13_library_packages}; do
-  _cuda13_version=""
-  if [ -x "$IRIS_VENV/bin/python" ]; then
-    _cuda13_version="$(
-      "$IRIS_VENV/bin/python" - "$_cuda13_package" <<'PY'
+installed_package_version() {{
+  "$IRIS_VENV/bin/python" - "$1" <<'PY'
 import importlib.metadata as md
 import sys
 
@@ -153,7 +150,11 @@ try:
 except md.PackageNotFoundError:
     pass
 PY
-    )"
+}}
+for _cuda13_package in {cuda_13_library_packages}; do
+  _cuda13_version=""
+  if [ -x "$IRIS_VENV/bin/python" ]; then
+    _cuda13_version="$(installed_package_version "$_cuda13_package")"
   fi
   if [ -n "$_cuda13_version" ]; then
     echo "restoring CUDA 13 library precedence for $_cuda13_package"
@@ -170,17 +171,7 @@ find_cuda_bin() {{
 }}
 cuda_bin="$(find_cuda_bin)"
 if [ -z "$cuda_bin" ] && [ -x "$IRIS_VENV/bin/python" ]; then
-  _toolchain_version="$(
-    "$IRIS_VENV/bin/python" - "{CUDA_TOOLCHAIN_PACKAGE}" <<'PY'
-import importlib.metadata as md
-import sys
-
-try:
-    print(md.version(sys.argv[1]))
-except md.PackageNotFoundError:
-    pass
-PY
-  )"
+  _toolchain_version="$(installed_package_version "{CUDA_TOOLCHAIN_PACKAGE}")"
   if [ -n "$_toolchain_version" ]; then
     echo 'repairing missing CUDA toolchain files'
     uv pip install --python "$IRIS_VENV/bin/python" \

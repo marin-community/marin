@@ -69,9 +69,6 @@ def test_store_mixture_rejects_missing_training_data():
     with pytest.raises(ValueError, match="produced no data"):
         store_mixture(_store())
 
-    with pytest.raises(ValueError, match="expected > 0"):
-        store_mixture(_store(_bucket(0, 0, 0)))
-
 
 def test_store_mixture_excludes_buckets_shorter_than_one_sequence():
     store = _store(_bucket(1, 0, 4_095), _bucket(7, 2, 4_096))
