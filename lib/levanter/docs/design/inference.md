@@ -685,6 +685,19 @@ overlay and advances the target model version. Both reload paths recheck the tar
 version and draft identity after staging, so a concurrent publication cannot be
 overwritten by a candidate staged against older weights.
 
-Cloned choices, rollout candidate capture, and remote online draft-update transport
-remain unimplemented for this path. The local checkpoint refresh API does not wire
-the pinned SkyRL online trainer into the native remote client.
+Set `eagle3_max_checkpoint_bytes` to enable the online trainer's remote update
+protocol with an explicit checkpoint object-size limit. The client calls
+`/start_draft_weight_update`, `/update_weights` with
+`{"update_info": {"weights_path": "<exact immutable safetensors URI>"}}`, then
+`/finish_weight_update`. Every update and finish request echoes the publication ID
+and target model version returned by start. The shared streaming checkpoint loader
+reads the trainable tensors through the URI's filesystem. Generation continues
+with the installed weights during staging; only a complete, validated candidate
+can reach the paused install. Failed transfers and stale publications leave the
+installed weights unchanged.
+
+The paired SkyRL remote-client revision supports this protocol and the existing
+status-only vLLM responses. The repository's SkyRL pin is unchanged. Local TCP
+tests exercise exact file URIs; cloud transfers and an online training run have
+not been tested. Cloned choices, rollout candidate capture, and online trainer
+capture/export remain unimplemented for resident EAGLE.
