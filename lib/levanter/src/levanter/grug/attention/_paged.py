@@ -4,7 +4,7 @@
 """Array-first attention over Levanter's interleaved paged KV cache."""
 
 from functools import partial
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -81,21 +81,28 @@ def ragged_paged_attention(
     return fn(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs)
 
 
-def _query_metadata(q, kv_lens, cu_q_lens, num_seqs):
+class _QueryMetadata(NamedTuple):
+    sequence: jax.Array
+    position: jax.Array
+    valid: jax.Array
+
+
+def _query_metadata(q, kv_lens, cu_q_lens, num_seqs) -> _QueryMetadata:
     token = jnp.arange(q.shape[0])
     active = jnp.arange(kv_lens.shape[0]) < num_seqs.reshape(())
     belongs = active[:, None] & (token >= cu_q_lens[:-1, None]) & (token < cu_q_lens[1:, None])
     seq = jnp.argmax(belongs, axis=0)
     valid = jnp.any(belongs, axis=0)
     position = kv_lens[seq] - (cu_q_lens[seq + 1] - cu_q_lens[seq]) + token - cu_q_lens[seq]
-    return seq, position, valid
+    return _QueryMetadata(seq, position, valid)
 
 
 def _reference_attention(
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap
 ):
     # Stream pages so decode memory does not scale as tokens * maximum context * head_dim.
-    seq, position, valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+    metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+    seq, position, valid = metadata.sequence, metadata.position, metadata.valid
     page_size = kv_pages.shape[1]
     initial = (
         jnp.zeros(q.shape, jnp.float32),
@@ -150,5 +157,5 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
         soft_cap=soft_cap,
     )
     output = output.reshape(q_padded.shape)[..., :original_dim]
-    _, _, valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+    valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs).valid
     return jnp.where(valid[:, None, None, None], output, 0)
