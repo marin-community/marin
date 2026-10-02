@@ -1113,7 +1113,9 @@ def _fact_probe_hook(
             if count > ema_start_step and trainer_cfg.ema_beta is not None:
                 losses[EMA] = score(info.eval_model, count)
         if jax.process_index() == 0:
-            levanter.tracker.log(record.add(count, losses, tokens, weights), step=count)
+            # Tracker steps are 0-based (``info.step = count - 1``) like every other metric; wandb drops
+            # out-of-order steps.
+            levanter.tracker.log(record.add(count, losses, tokens, weights), step=info.step)
 
     return hook
 
