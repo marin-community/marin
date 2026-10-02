@@ -242,15 +242,19 @@ def test_harmony_sft_store_preserves_assistant_masks(marin_tokenizer_fixture: Ma
     record = {
         "id": "arithmetic",
         "messages": [message.to_dict() for message in messages],
-        "chat_template_kwargs": json.dumps({"enable_thinking": True}),
+        "chat_template_kwargs": None,
     }
     pq.write_table(pa.Table.from_pylist([record], schema=CHAT_SCHEMA), source_path / "part.parquet")
+    model_template = MARIN_CHAT_TEMPLATE.replace(
+        "{%- set _reasoning_mode = none -%}", '{%- set _reasoning_mode = "/think" -%}'
+    )
 
     with set_current_client(LocalClient()):
         store = build_sft_store(
             [SftInput("arithmetic", str(source_path))],
             output_path=str(tmp_path / "store"),
             tokenizer=marin_tokenizer_fixture.path,
+            chat_template=model_template,
             max_length=256,
             seed=0,
             num_shards=1,
@@ -265,6 +269,9 @@ def test_harmony_sft_store_preserves_assistant_masks(marin_tokenizer_fixture: Ma
     assert store.sources["arithmetic"].conversations == 1
     assert store.sources["arithmetic"].assistant_tokens > 0
     assert sum(rows[0]["assistant_masks"]) == store.sources["arithmetic"].assistant_tokens
+    rendered = _decode(load_tokenizer(marin_tokenizer_fixture.path), rows[0]["input_ids"])
+    assert "Reasoning: /think" in rendered
+    assert "<|start_think|>Add two and two.<|end_think|>4" in rendered
 
     dataset = (
         sft_data_config({"arithmetic": store}, minimum_weight=0.01)
@@ -282,6 +289,7 @@ def test_harmony_sft_store_preserves_assistant_masks(marin_tokenizer_fixture: Ma
             [SftInput("arithmetic", str(source_path))],
             output_path=str(tmp_path / "store"),
             tokenizer=marin_tokenizer_fixture.path,
+            chat_template=model_template,
             max_length=256,
             seed=0,
             num_shards=1,
@@ -313,6 +321,7 @@ def test_harmony_sft_store_counts_training_pack_boundaries(marin_tokenizer_fixtu
             [SftInput("short", str(source_path))],
             output_path=str(tmp_path / "store"),
             tokenizer=marin_tokenizer_fixture.path,
+            chat_template=MARIN_CHAT_TEMPLATE,
             max_length=32768,
             seed=0,
             num_shards=1,
@@ -346,6 +355,7 @@ def test_harmony_sft_store_counts_all_overlength_source(marin_tokenizer_fixture:
             [SftInput("long", str(source_path))],
             output_path=str(tmp_path / "store"),
             tokenizer=marin_tokenizer_fixture.path,
+            chat_template=MARIN_CHAT_TEMPLATE,
             max_length=2,
             seed=0,
             num_shards=1,

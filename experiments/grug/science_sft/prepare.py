@@ -6,6 +6,7 @@
 import argparse
 import logging
 
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store
 
 from experiments.datasets.science_forward_converted import SOURCE_NAME
@@ -25,6 +26,7 @@ def prepare_store(input_path: str, output_path: str, tokenizer: str, num_shards:
         [SftInput(SOURCE_NAME, input_path)],
         output_path=output_path,
         tokenizer=tokenizer,
+        chat_template=MARIN_CHAT_TEMPLATE,
         max_length=CONTEXT,
         seed=SHUFFLE_SEED,
         num_shards=num_shards,

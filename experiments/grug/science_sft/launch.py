@@ -37,24 +37,50 @@ CONTROL_IDS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def build_run_config(store: SftTokenStore, version: str) -> GrugRunConfig:
-    """Build a one-epoch SFT run with per-step QB router updates."""
+@dataclasses.dataclass(frozen=True)
+class ScienceSftRecipe:
+    """Pinned model identity and run settings for a converted science SFT arm."""
+
+    tokenizer: str
+    model_path: str
+    output_root: str
+    identity_prefix: str
+    epochs: int
+    qk_mult: float
+    tags: tuple[str, ...]
+
+
+STEP38_RECIPE = ScienceSftRecipe(
+    tokenizer=TOKENIZER,
+    model_path=MODEL_PATH,
+    output_root=OUTPUT_ROOT,
+    identity_prefix="science-forward-converted-step38",
+    epochs=1,
+    qk_mult=1.5703274004183787,
+    tags=("science-forward", "minimax-converted", "step38", "router-bias:per-step-qb"),
+)
+
+
+def build_run_config(store: SftTokenStore, version: str, recipe: ScienceSftRecipe = STEP38_RECIPE) -> GrugRunConfig:
+    """Build a packed SFT run with an explicit pass count and per-step QB router updates."""
     if not _VERSION_RE.fullmatch(version):
         raise ValueError("Version must contain only letters, digits, '.', '_', and '-'")
-    if store.max_length != CONTEXT or store.tokenizer != TOKENIZER:
+    if recipe.epochs < 1:
+        raise ValueError("SFT run must specify at least one data epoch")
+    if store.max_length != CONTEXT or store.tokenizer != recipe.tokenizer:
         raise ValueError("SFT store context or tokenizer does not match the pinned Snowball model")
     if set(store.sources) != {SOURCE_NAME}:
         raise ValueError("SFT store does not contain exactly the audited converted science source")
     if any(count.overlength_conversations for count in store.sources.values()):
         raise ValueError("SFT store excluded overlength conversations")
-    steps = store.packed_sequences // BATCH
+    steps = recipe.epochs * store.packed_sequences // BATCH
     if steps < 1:
         raise ValueError("SFT store has no full training batch")
-    identity = f"science-forward-converted-step38-{version}"
-    output = prefix_join(OUTPUT_ROOT, identity)
+    identity = f"{recipe.identity_prefix}-{version}"
+    output = prefix_join(recipe.output_root, identity)
     data = dataclasses.replace(
         sft_data_config({"converted": store}, minimum_weight=1.0),
-        stop_strategy=StopStrategy.FIRST_STOP_STRATEGY,
+        stop_strategy=(StopStrategy.FIRST_STOP_STRATEGY if recipe.epochs == 1 else StopStrategy.RESTART_STRATEGY),
         mixture_block_size=MIXTURE_BLOCK_SIZE,
     )
     model = GrugModelConfig(
@@ -72,7 +98,7 @@ def build_run_config(store: SftTokenStore, version: str) -> GrugRunConfig:
         disable_long_rope=True,
         sliding_window=2048,
         use_array_stacked_blocks=True,
-        qk_mult=1.5703274004183787,
+        qk_mult=recipe.qk_mult,
         max_seq_len=CONTEXT,
         attention_implementation="gpu_fa4_cute",
         ce_implementation="batched_xla",
@@ -91,7 +117,7 @@ def build_run_config(store: SftTokenStore, version: str) -> GrugRunConfig:
             id=identity,
             mode="online",
             resume="allow",
-            tags=["science-forward", "minimax-converted", "step38", "router-bias:per-step-qb"],
+            tags=list(recipe.tags),
         ),
         use_explicit_mesh_axes=True,
         mesh=MeshConfig(axes={"expert": EXPERT_PARALLEL}, compute_mapping={"batch": ["data", "expert"]}),
@@ -130,8 +156,8 @@ def build_run_config(store: SftTokenStore, version: str) -> GrugRunConfig:
         ),
         trainer=GrugTrainerConfig(
             trainer=trainer,
-            initialize_from_hf=MODEL_PATH,
-            max_data_epochs=1,
+            initialize_from_hf=recipe.model_path,
+            max_data_epochs=recipe.epochs,
             special_token_lr_ids=CONTROL_IDS,
             special_token_lr_multiplier=math.sqrt(32),
             router_freeze=RouterFreeze.BIAS,

@@ -30,7 +30,6 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import load_parquet
 
 from marin.datakit.chat_render import chat_training_record
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact, write_artifact
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
 
@@ -54,6 +53,7 @@ class SftSourceCounts(BaseModel):
 class SftTokenStore(Artifact):
     cache_path: str
     tokenizer: str
+    chat_template: str
     max_length: int
     seed: int
     sources: dict[str, SftSourceCounts]
@@ -80,12 +80,13 @@ def _tokenize_conversations(
     shard: ShardInfo,
     *,
     tokenizer: str,
+    chat_template: str,
     max_length: int,
     output_path: str,
 ) -> Iterator[dict]:
     processor = ChatProcessor(
         load_tokenizer(tokenizer),
-        chat_template=MARIN_CHAT_TEMPLATE,
+        chat_template=chat_template,
         system_prompt_field=None,
         mask_user_turns=True,
     )
@@ -111,6 +112,7 @@ def build_sft_store(
     *,
     output_path: str,
     tokenizer: str,
+    chat_template: str,
     max_length: int,
     seed: int,
     num_shards: int,
@@ -124,6 +126,8 @@ def build_sft_store(
     """
     if max_length < 2 or num_shards < 1 or max_workers < 1:
         raise ValueError("max_length must be >= 2; num_shards and max_workers must be positive")
+    if not chat_template:
+        raise ValueError("chat_template must be specified for SFT tokenization")
     if not sources or len({source.name for source in sources}) != len(sources):
         raise ValueError("SFT sources must be nonempty and have distinct names")
     files = []
@@ -138,7 +142,13 @@ def build_sft_store(
         .group_by(key=partial(_shuffle_key, seed=seed), reducer=_keep_rows, num_output_shards=num_shards)
     )
     tokenized = rows.window(16).map_shard(
-        partial(_tokenize_conversations, tokenizer=tokenizer, max_length=max_length, output_path=output_path)
+        partial(
+            _tokenize_conversations,
+            tokenizer=tokenizer,
+            chat_template=chat_template,
+            max_length=max_length,
+            output_path=output_path,
+        )
     )
     cache_path = prefix_join(output_path, "train")
     ledger = build_from_datasets(
@@ -174,6 +184,7 @@ def build_sft_store(
         path=output_path,
         cache_path=cache_path,
         tokenizer=tokenizer,
+        chat_template=chat_template,
         max_length=max_length,
         seed=seed,
         sources=counts,
@@ -194,9 +205,10 @@ def sft_data_config(stores: Mapping[str, SftTokenStore], *, minimum_weight: floa
     if not stores or not 0 < minimum_weight <= 1:
         raise ValueError("SFT stores must be nonempty and minimum_weight must be in (0, 1]")
     tokenizers = {store.tokenizer for store in stores.values()}
+    chat_templates = {store.chat_template for store in stores.values()}
     lengths = {store.max_length for store in stores.values()}
-    if len(tokenizers) != 1 or len(lengths) != 1:
-        raise ValueError("SFT stores must share a tokenizer and packing context length")
+    if len(tokenizers) != 1 or len(chat_templates) != 1 or len(lengths) != 1:
+        raise ValueError("SFT stores must share a tokenizer, chat template, and packing context length")
     total = sum(store.packed_sequences for store in stores.values())
     if total == 0:
         raise ValueError("No conversations fit the SFT context length")
@@ -211,7 +223,7 @@ def sft_data_config(stores: Mapping[str, SftTokenStore], *, minimum_weight: floa
             source=UrlDatasetSourceConfig(train_urls=[], validation_urls=[]),
             cache_dir=store.cache_path,
             flat_cache=True,
-            format=ChatLmDatasetFormat(chat_template=MARIN_CHAT_TEMPLATE, mask_user_turns=True),
+            format=ChatLmDatasetFormat(chat_template=store.chat_template, mask_user_turns=True),
             pack=store.max_length,
         )
         if store.packed_sequences / total < minimum_weight:

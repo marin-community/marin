@@ -17,6 +17,7 @@ from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.schedule import BatchSchedule
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.sft import SftSourceCounts, SftTokenStore
 
 from experiments.grug.science_sft.launch import build_run_config
@@ -38,6 +39,7 @@ def test_converted_science_run_uses_one_pass_and_per_step_qb():
         path="local",
         cache_path="local/train",
         tokenizer=TOKENIZER,
+        chat_template=MARIN_CHAT_TEMPLATE,
         max_length=32_768,
         seed=0,
         sources={SOURCE_NAME: SftSourceCounts(conversations=130)},
