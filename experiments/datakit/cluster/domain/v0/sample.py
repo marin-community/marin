@@ -31,6 +31,7 @@ survive a restart).
 import logging
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from typing import Any
 
 import numpy as np
@@ -141,13 +142,10 @@ def sample_centroid_inputs(
     max_workers: int = 128,
     parallel_sources: int = 8,
 ) -> None:
-    """Stratified sample across every source via per-source Zephyr contexts.
+    """Sample each source with concurrent Zephyr pipelines.
 
-    ``parallel_sources`` ZephyrContexts run concurrently via a thread pool;
-    each spawns its own coordinator + worker pool, so total resource use is
-    ``parallel_sources * (1 coord + up to max_workers workers)``. Sources
-    are still chosen in sorted order; first-completed-first-reported on the
-    way out.
+    Within an execution scope, each pipeline uses the shared pool.
+    Outside a scope, each pipeline owns its worker pool.
     """
     if worker_resources is None:
         worker_resources = ResourceConfig(cpu=2, ram="4g")
@@ -155,16 +153,16 @@ def sample_centroid_inputs(
     items = sorted(embeddings.items())
     total = len(items)
     logger.info(
-        "Sample pipeline: %d sources, %d concurrent Zephyr contexts, %d workers each",
+        "Sample pipeline: %d sources, %d concurrent source pipelines",
         total,
         parallel_sources,
-        max_workers,
     )
 
     completed = 0
     with ThreadPoolExecutor(max_workers=parallel_sources) as pool:
         futures = {
             pool.submit(
+                copy_context().run,
                 _sample_one_source,
                 source_name=sn,
                 attr=a,
