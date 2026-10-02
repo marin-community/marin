@@ -136,6 +136,7 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
         raise ValueError(f"banned config aliases in config.json: {sorted(leaked)}")
 
 
+_LONG_LAYER_STRIDE = 4
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 _EP_CAPACITY_FACTOR = 1.0
@@ -145,6 +146,11 @@ _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT laye
 _DEFAULT_QK_MULT = 1.5703274004183786
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 _FSDP_AXES: tuple[str, ...] = ("data", "context")
+
+
+def _long_attention_schedule(num_layers: int) -> jax.Array:
+    idx = jnp.arange(num_layers)
+    return ((idx % _LONG_LAYER_STRIDE) == _LONG_LAYER_STRIDE - 1) | (idx == num_layers - 1)
 
 
 def _context_axis() -> str | None:
@@ -476,7 +482,10 @@ class SnowballAttention(eqx.Module):
         attn_out = attention(q, k, v, mask, implementation=implementation)
         if context is not None:
             attn_out = _reshard_sequence(attn_out, context)
-        aligned_v = align_kv_heads(local_v, num_q_heads=attn_out.shape[2])
+        return self._project_output(x, attn_out, local_v)
+
+    def _project_output(self, x: jax.Array, attn_out: jax.Array, v: jax.Array) -> jax.Array:
+        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = _partition_match(aligned_v, attn_out)
         # Exclusive Self-Attention: subtract the component of y parallel to v, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -539,13 +548,7 @@ class SnowballAttention(eqx.Module):
             sliding_window=None if use_long else cfg.sliding_window,
             implementation="reference" if cfg.attention_implementation == "reference" else None,
         ).reshape(x.shape[0], 1, cfg.num_heads, head_dim)
-        aligned_v = _partition_match(align_kv_heads(v, num_q_heads=cfg.num_heads), out)
-        dot = jnp.sum(out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        out = out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        gate = 2 * jax.nn.sigmoid(x @ self.attn_gate)[..., None]
-        out = (gate * out).reshape(x.shape[0], 1, cfg.num_heads * head_dim, out_sharding=_activation_spec("model"))
-        return jnp.einsum("bsh,hd->bsd", out, self.w_o, out_sharding=_activation_spec()), cache
+        return self._project_output(x, out, v), cache
 
 
 def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
@@ -754,8 +757,7 @@ class SnowballTransformer(eqx.Module):
         # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
         num_blocks = len(self.blocks)
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
-        idx = jnp.arange(num_blocks)
-        long_schedule = ((idx % 4) == 3) | (idx == num_blocks - 1)
+        long_schedule = _long_attention_schedule(num_blocks)
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
             layer, use_long = layer_and_flag
@@ -873,8 +875,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             stacked = eqx.tree_at(lambda b: b.mlp.expert_mlp, stacked, experts)
         cache_pages = jnp.stack([cache.kv_pages.array for cache in kv_cache])
         cache_axes = kv_cache[0].kv_pages.axes
-        layer_idx = jnp.arange(len(kv_cache))
-        long_schedule = ((layer_idx % 4) == 3) | (layer_idx == len(kv_cache) - 1)
+        long_schedule = _long_attention_schedule(len(kv_cache))
 
         def layer_step(x, layer_data):
             block, pages, use_long = layer_data
