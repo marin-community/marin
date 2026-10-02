@@ -29,6 +29,8 @@ from transformers import PreTrainedTokenizerFast
 
 _INITIALIZATION_SEED = 17
 _AUXILIARY_SEED = 23
+_MANIFEST_FILENAME = "manifest.json"
+_WORKLOAD_FILENAME = "workload.json"
 
 
 def export_fixture(root: Path, recipe: str) -> None:
@@ -84,7 +86,7 @@ def export_fixture(root: Path, recipe: str) -> None:
         for name, value in loaded.to_state_dict().items():
             np.testing.assert_array_equal(np.asarray(value), np.asarray(expected[name]), err_msg=name)
     identity = hashlib.sha256(weights.read_bytes()).hexdigest()
-    (root / "manifest.json").write_text(
+    (root / _MANIFEST_FILENAME).write_text(
         json.dumps(
             {
                 "checkpoint": identity,
@@ -98,7 +100,7 @@ def export_fixture(root: Path, recipe: str) -> None:
         )
         + "\n"
     )
-    (root / "workload.json").write_text(
+    (root / _WORKLOAD_FILENAME).write_text(
         json.dumps(
             {
                 "prompts": [[1, 2, 3, 4, 5, 6, 7, 8], [11, 12, 13, 14, 15, 16, 17, 18]],
@@ -113,7 +115,7 @@ def export_fixture(root: Path, recipe: str) -> None:
 
 def run_native(root: Path, hardware_label: str, expert_axis_size: int) -> None:
     """Measure exactly the fixture's checkpoint and token workload in Levanter."""
-    manifest = json.loads((root / "manifest.json").read_text())
+    manifest = json.loads((root / _MANIFEST_FILENAME).read_text())
     output = root / "native-result.json"
     subprocess.run(
         [
@@ -125,7 +127,7 @@ def run_native(root: Path, hardware_label: str, expert_axis_size: int) -> None:
             "--checkpoint-identity",
             manifest["checkpoint"],
             "--workload",
-            str(root / "workload.json"),
+            str(root / _WORKLOAD_FILENAME),
             "--output",
             str(output),
             "--dtype",
@@ -146,7 +148,7 @@ def run_native(root: Path, hardware_label: str, expert_axis_size: int) -> None:
 
 def run_vllm(root: Path, hardware_label: str, execution_mode: str, expert_axis_size: int) -> None:
     """Measure the exported checkpoint using the promoted Marin CUDA fork."""
-    manifest = json.loads((root / "manifest.json").read_text())
+    manifest = json.loads((root / _MANIFEST_FILENAME).read_text())
     manifest["hardware_label"] = hardware_label
     provenance = root / "vllm-provenance.json"
     engine_args = root / "vllm-engine.json"
@@ -180,7 +182,7 @@ def run_vllm(root: Path, hardware_label: str, execution_mode: str, expert_axis_s
         "--provenance",
         str(provenance),
         "--workload",
-        str(root / "workload.json"),
+        str(root / _WORKLOAD_FILENAME),
         "--output",
         str(output),
         "--warmup-batches",
