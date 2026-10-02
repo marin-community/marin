@@ -339,7 +339,8 @@ capture must be rerun; timing hashes alone cannot identify a divergent token.
 For a divergent Snowball token, write a prefixes JSON with `sequences` containing
 both original prompts followed by their common generated tokens, and
 `prefill_length` equal to the original prompt length. The bounded diagnostics
-support up to eight equal-length sequences and 128 tokens:
+support Snowball with at most two layers, width512, vocabulary4096, eight
+equal-length sequences, and 128 tokens:
 
 ```bash
 uv run python -m experiments.benchmarks.diagnose_native_prefix \
@@ -356,17 +357,22 @@ precision, recording all four combinations for each input mode. These diagnostic
 interventions do not change the model's training or serving defaults.
 These passes are numerical diagnostics and do not produce throughput claims.
 
-The diagnostic also records the residual before final RMSNorm, the normalized
-and gated hidden states, and a host FP64 projection using the exact BF16 head
-weights. Native capture substitutes an identity output head in separate untimed
-passes; vLLM installs read-only model hooks after startup through a named worker
-extension and removes them after the probe. The RPC carries method names and
-plain results; it does not require callable serialization or unsafe-deserialization
-settings. The vLLM capture requires eager execution and TP1,
-and records token IDs and positions to align data-parallel rows. Both sides
-record a canonical head-weight digest. These tensors distinguish differences
-already present in the hidden state from final projection rounding; the FP64
-projection is diagnostic evidence, not a new serving precision contract.
+The native trace returns embedding, attention, routed and shared expert outputs,
+residuals, router choices and combine weights, final normalization, and actual
+logits together from one paged layer scan. It retains the serving decoder's
+attention and expert implementations. Auxiliary JIT outputs can change fusion,
+so the report includes the maximum logit difference and top-token agreement
+against the ordinary decoder. This replaces separate identity-head probes.
+
+The vLLM diagnostic installs hooks after startup and records the same stages
+and actual router outputs without modifying them. It removes the hooks after
+the probe. A named worker extension saves rank-tagged captures from every local
+DP worker while preserving the concurrent request workload. The RPC uses method
+names and plain results; callable serialization is not needed. Capture requires
+eager execution and TP1. Token IDs and positions align the data-parallel rows.
+Both sides record a canonical head-weight digest and a host FP64 projection
+using the exact BF16 head weights. These are untimed diagnostic passes; the FP64
+projection does not change serving precision.
 
 ### Matched TPU fixture gate
 
