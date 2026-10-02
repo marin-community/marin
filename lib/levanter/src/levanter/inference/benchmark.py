@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from rigging.provenance import Provenance
 
+PREFIX_DIAGNOSTIC_TOP_K = 20
 BATCH_TIMING_BOUNDARY = "offline_batch_host_submission_to_host_tokens"
 
 

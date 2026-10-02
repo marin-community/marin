@@ -16,6 +16,7 @@ from levanter.grug.sharding import _current_mesh, _mesh_axis_size, unshard
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.models.snowball import (
     _BATCH_AXES,
+    _ROUTING_DENOM_EPS,
     _ROUTING_RENORM_SUM,
     GatedNorm,
     _activation_reshard,
@@ -70,7 +71,9 @@ def _moe_with_trace(mlp, hidden, token_valid):
     _, selected = jax.lax.top_k(biased, mlp.cfg.num_experts_per_token + 1)
     selected = selected[:, :-1]
     weights = jax.nn.sigmoid(jnp.take_along_axis(logits, selected, axis=-1))
-    weights = (weights * (_ROUTING_RENORM_SUM / (jnp.sum(weights, axis=-1, keepdims=True) + 1e-9))).astype(hidden.dtype)
+    weights = (weights * (_ROUTING_RENORM_SUM / (jnp.sum(weights, axis=-1, keepdims=True) + _ROUTING_DENOM_EPS))).astype(
+        hidden.dtype
+    )
     output = mlp.expert_mlp(
         flat,
         selected.astype(jnp.int32),

@@ -17,6 +17,7 @@ import jmp
 import numpy as np
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.inference.benchmark import PREFIX_DIAGNOSTIC_TOP_K
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.models.snowball import SnowballConfig
 
@@ -117,7 +118,7 @@ def embedding_gate_interventions(model, sequences: list[list[int]]) -> dict:
         gate = DiagnosticEmbeddingGate(model.transformer.embed_gated_norm, silu_dtype, sigmoid_dtype)
         variant = eqx.tree_at(lambda m: m.transformer.embed_gated_norm, model, gate)
         logits = prefix_logits(variant, sequences, len(sequences[0]))
-        top_ids = np.argsort(-logits, axis=-1)[:, :20]
+        top_ids = np.argsort(-logits, axis=-1)[:, :PREFIX_DIAGNOSTIC_TOP_K]
         results[f"silu_{silu_dtype}_sigmoid_{sigmoid_dtype}"] = {
             "changed_site": "transformer.embed_gated_norm",
             "silu_dtype": silu_dtype,
@@ -190,7 +191,7 @@ def main():
                     ):
                         logits = prefix_logits(variant, sequences, prefill)
                         logprobs = np.asarray(jax.nn.log_softmax(jnp.asarray(logits), axis=-1))
-                        top_ids = np.argsort(-logprobs, axis=-1)[:, :20]
+                        top_ids = np.argsort(-logprobs, axis=-1)[:, :PREFIX_DIAGNOSTIC_TOP_K]
                         results[f"{router_name}_{precision_name}_{mode}"] = {
                             "router_dtype": str(variant.transformer.blocks[0].mlp.router.dtype),
                             "matmul_precision": precision,

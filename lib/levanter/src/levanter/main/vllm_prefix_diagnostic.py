@@ -18,6 +18,8 @@ from vllm import AsyncEngineArgs, SamplingParams
 from vllm.v1.engine.async_llm import AsyncLLM
 from vllm.v1.worker.worker_base import WorkerBase
 
+from levanter.inference.benchmark import PREFIX_DIAGNOSTIC_TOP_K
+
 
 def install_final_state_capture(model) -> None:
     """Install untimed eager hooks after engine startup; leave outputs and weights unchanged."""
@@ -179,7 +181,9 @@ class PrefixDiagnosticWorkerExtension:
 
 async def diagnose(engine: AsyncLLM, sequences: list[list[int]]) -> list[dict]:
     async def request(index: int, tokens: list[int]) -> dict:
-        params = SamplingParams(temperature=0, max_tokens=1, ignore_eos=True, logprobs=20, detokenize=False)
+        params = SamplingParams(
+            temperature=0, max_tokens=1, ignore_eos=True, logprobs=PREFIX_DIAGNOSTIC_TOP_K, detokenize=False
+        )
         async for output in engine.generate({"prompt_token_ids": tokens}, params, f"prefix-{index}"):
             if output.finished:
                 choice = output.outputs[0]
