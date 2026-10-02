@@ -296,6 +296,9 @@ def test_chat_completion_rejects_rendering_argument_overrides(local_gpt2_tokeniz
 
 
 class _OpenAITestTokenizer:
+    def get_vocab(self):
+        return {f"token_id:{token}": token for token in self._id_to_piece}
+
     _id_to_piece = {0: "A", 1: " B", 2: " C", 3: " X"}
 
     def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
@@ -369,6 +372,8 @@ class _FakeCompletionContext:
         future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        prompt_logprobs_top_k: int | None = None,
+        prompt_logprob_token_ids: list[list[int]] | None = None,
         cancel_event: threading.Event | None = None,
         on_delta=None,
     ) -> str:
@@ -380,6 +385,8 @@ class _FakeCompletionContext:
             or seed != 1234
             or n_generations != 1
             or echo_logprobs_top_k != 1
+            or prompt_logprobs_top_k is not None
+            or prompt_logprob_token_ids is not None
         ):
             raise ValueError("The deterministic test context only supports one fixed completion request.")
         self.submitted_requests += 1
@@ -1641,3 +1648,92 @@ async def test_remote_skyrl_teacher_scores_exact_full_context_and_masked_rows(ex
         expected = torch.full((2, 6, 2), -math.log(4))
         expected[:, 0] = torch.tensor([chosen_first, chosen_first - 11])
         torch.testing.assert_close(evidence.topk_logprobs[mask], expected[mask], rtol=0, atol=1e-6)
+
+
+@pytest.mark.integration
+@pytest.mark.torch
+@pytest.mark.asyncio
+async def test_remote_vllm_teacher_scores_student_ids_outside_teacher_topk(exact_token_server):
+    torch = pytest.importorskip("torch")
+    specs = pytest.importorskip("marinskyrl.distillation")
+    evidence_types = pytest.importorskip("skyrl_train.distillation")
+    remote = pytest.importorskip("skyrl_train.inference_engines.remote_inference_engine")
+    teachers = pytest.importorskip("skyrl_train.inference_engines.vllm_teacher_oracle")
+    tokenizer = exact_token_server.inference_context.tokenizer
+    selected_mask = torch.tensor([[True, False, True], [True, True, False]])
+    candidates = torch.tensor([[[2, 1], [-1, -1], [3, 2]], [[0, 3], [3, 2], [-1, -1]]])
+    async with _live_http_server(exact_token_server.app) as base_url:
+        engine = remote.RemoteInferenceEngine(
+            base_url.removeprefix("http://"),
+            "gpt2",
+            "vllm",
+            tokenizer,
+            max_model_len=8,
+        )
+        oracle = teachers.VLLMTeacherOracle(
+            engine,
+            teacher_id="teacher",
+            teacher_revision="synthetic-v0",
+            tokenizer=tokenizer,
+            evidence_kind=specs.TeacherEvidenceKind.STUDENT_SELECTED_TOPK,
+        )
+        request = evidence_types.TeacherScoreRequest(
+            trajectory_ids=("long", "short"),
+            route_ids=("test", "test"),
+            teacher_id="teacher",
+            tokenizer_fingerprint=oracle.capabilities.tokenizer_fingerprint,
+            plan_version="test-v0",
+            prompt_token_ids=torch.tensor([[0, 1], [0, 0]]),
+            prompt_mask=torch.tensor([[True, True], [True, False]]),
+            response_token_ids=torch.tensor([[3, 2, 1], [1, 3, 0]]),
+            response_mask=torch.tensor([[True, True, True], [True, True, False]]),
+            evidence=specs.TeacherEvidenceKind.STUDENT_SELECTED_TOPK,
+            top_k=2,
+            student_topk_indices=candidates,
+            behavior_topk_logprobs=torch.full((2, 3, 2), -0.2),
+            student_selected_mask=selected_mask,
+        )
+        try:
+            evidence = await oracle.score(request)
+        finally:
+            await oracle.close()
+    assert torch.equal(evidence.student_topk_indices, candidates)
+    assert torch.equal(evidence.valid_mask, selected_mask)
+    expected = torch.full((2, 3, 2), torch.nan)
+    peak11 = -math.log1p(3 * math.exp(-11))
+    peak12 = -math.log1p(3 * math.exp(-12))
+    expected[0, 0] = peak11 - 11  # Neither selected ID is the teacher's argmax (3).
+    expected[0, 2] = -math.log(4)
+    expected[1, 0] = peak12 - 12
+    expected[1, 1] = torch.tensor([peak11, peak11 - 11])
+    torch.testing.assert_close(evidence.teacher_on_student_logprobs, expected, rtol=0, atol=1e-6, equal_nan=True)
+
+
+def test_selected_prompt_scores_keep_low_probability_ids_and_chosen_token(exact_token_client):
+    request = {
+        "model": "gpt2",
+        "prompt": [[0, 1, 3]],
+        "max_tokens": 0,
+        "prompt_logprobs": 2,
+        "prompt_logprob_token_ids": [[[0, 0], [2, 2], [0, 2]]],
+    }
+    response = exact_token_client.post("/v1/completions", json=request)
+    assert response.status_code == 200, response.text
+    scores = response.json()["choices"][0]["prompt_logprobs"]
+    assert scores[0] is None
+    assert set(scores[1]) == {"1", "2"}
+    assert scores[1]["2"]["logprob"] == pytest.approx(-12 - math.log1p(3 * math.exp(-12)), abs=1e-6)
+    assert scores[1]["1"]["logprob"] == pytest.approx(-math.log1p(3 * math.exp(-12)), abs=1e-6)
+    assert set(scores[2]) == {"0", "2", "3"}
+    assert (
+        scores[2]["0"]["logprob"]
+        == scores[2]["2"]["logprob"]
+        == pytest.approx(-11 - math.log1p(3 * math.exp(-11)), abs=1e-6)
+    )
+    assert response.json()["usage"]["completion_tokens"] == 0
+    # A missing position must not shift requested IDs onto another causal row.
+    rejected = exact_token_client.post(
+        "/v1/completions",
+        json={**request, "prompt_logprob_token_ids": [[[0, 0], [2, 2]]]},
+    )
+    assert rejected.status_code == 400

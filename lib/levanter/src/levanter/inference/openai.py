@@ -42,6 +42,7 @@ from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenL
 from openai.types.completion_choice import CompletionChoice, Logprobs
 from levanter.inference.engine import (
     DecodeResult,
+    validate_selected_token_ids,
     InferenceEngine,
     InferenceEngineConfig,
     Request,
@@ -133,6 +134,8 @@ class InferenceRequest:
     admission_epoch: int = 0
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
+    prompt_logprobs_top_k: int | None = None
+    prompt_logprob_token_ids: list[list[int]] | None = None
 
 
 @dataclass
@@ -151,6 +154,7 @@ class InferenceResponse:
     top_logprobs: list[list[float]] = field(default_factory=list)
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
+    prompt_logprobs: TokenSequenceLogprobs | None = None
 
 
 def _complete_future(future: asyncio.Future, outcome: list[InferenceResponse] | Exception) -> None:
@@ -329,6 +333,8 @@ class InferenceContext:
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        prompt_logprobs_top_k: int | None = None,
+        prompt_logprob_token_ids: list[list[int]] | None = None,
         cancel_event: threading.Event | None = None,
         on_delta: collections.abc.Callable[[InferenceDelta], None] | None = None,
     ) -> str:
@@ -348,6 +354,8 @@ class InferenceContext:
             future=future,
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
+            prompt_logprobs_top_k=prompt_logprobs_top_k,
+            prompt_logprob_token_ids=prompt_logprob_token_ids,
             cancel_event=cancel_event,
             on_delta=on_delta,
         )
@@ -552,6 +560,13 @@ class InferenceContext:
                 if not all(choice.done for choice in choices):
                     return
                 responses = []
+                prompt_scores = (
+                    self.engine.score_token_logprobs(
+                        req.prompt_tokens, req.prompt_logprobs_top_k, req.prompt_logprob_token_ids
+                    )
+                    if req.prompt_logprobs_top_k is not None
+                    else None
+                )
                 for choice in choices:
                     tokens = choice.token_list.copy()
                     echo_tokens = req.prompt_tokens + tokens if req.echo_logprobs_top_k is not None else None
@@ -574,6 +589,7 @@ class InferenceContext:
                             model_version=self.model_version,
                             echo_token_ids=echo_tokens,
                             echo_logprobs=echo_logprobs,
+                            prompt_logprobs=prompt_scores,
                         )
                     )
                 completed.add(index)
@@ -741,6 +757,19 @@ async def _create_completion(
                 detail=f"Requested logprobs exceeds configured capture capacity {ctx.config.service.max_logprobs}",
             )
         prompt_token_lists = _completion_prompt_ids(request.prompt, ctx.tokenizer)
+        if request.prompt_logprobs is not None and request.stream:
+            raise HTTPException(status_code=400, detail="Prompt scoring requires a non-streaming completion")
+        if request.prompt_logprob_token_ids is not None:
+            if request.prompt_logprobs is None or len(request.prompt_logprob_token_ids) != len(prompt_token_lists):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Selected prompt candidates require prompt_logprobs and one entry per prompt",
+                )
+            try:
+                for prompt, selected in zip(prompt_token_lists, request.prompt_logprob_token_ids, strict=True):
+                    validate_selected_token_ids(prompt, selected, request.prompt_logprobs, ctx.model.Vocab.size)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
         if request.stop_token_ids:
@@ -789,6 +818,12 @@ async def _create_completion(
                 future=future,
                 n_generations=request.n or 1,
                 echo_logprobs_top_k=echo_logprobs_top_k,
+                prompt_logprobs_top_k=request.prompt_logprobs,
+                prompt_logprob_token_ids=(
+                    request.prompt_logprob_token_ids[prompt_index]
+                    if request.prompt_logprob_token_ids is not None
+                    else None
+                ),
                 cancel_event=cancel_event,
                 on_delta=on_delta,
             )
@@ -849,6 +884,23 @@ async def _create_completion(
                     )
                 )
                 choices[-1] = choices[-1].model_copy(update={"model_version": generation.model_version})
+                if request.prompt_logprobs is not None:
+                    scores = generation.prompt_logprobs
+                    prompt_scores = (
+                        None
+                        if scores is None
+                        else [None]
+                        + [
+                            {token_id: {"logprob": score} for token_id, score in {**candidates, token: chosen}.items()}
+                            for token, chosen, candidates in zip(
+                                prompt_tokens[1:],
+                                scores.token_logprobs[1:],
+                                scores.top_token_logprobs[1:],
+                                strict=True,
+                            )
+                        ]
+                    )
+                    choices[-1] = choices[-1].model_copy(update={"prompt_logprobs": prompt_scores})
                 if generation.finish_reason == FinishReason.ABORT:
                     choices[-1] = choices[-1].model_copy(update={"finish_reason": "abort"})
                 if request.return_token_ids:
