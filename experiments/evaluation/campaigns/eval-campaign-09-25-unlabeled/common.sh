@@ -435,7 +435,7 @@ assert bixbench["agents"][0]["kwargs"]["model_info"] == {
     "max_output_tokens": 16384,
 }
 bfcl = yaml.safe_load((harbor / "bfclparity-pi.yaml").read_text())
-assert bfcl["agents"][0]["version"] == "0.87.0"
+assert bfcl["agents"][0]["kwargs"]["version"] == "0.87.0"
 openthoughts = yaml.safe_load((harbor / "ot-tblite-recovery.yaml").read_text())
 assert openthoughts["n_attempts"] == 3
 swebench = yaml.safe_load((harbor / "swebench-verified.yaml").read_text())
