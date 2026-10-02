@@ -120,8 +120,7 @@ def _split_names(name: str, num_experts: int) -> list[str]:
     return [f"{match[1]}.{i}.{match[2]}.weight" for i in range(num_experts)]
 
 
-def split_experts(name: str, value: np.ndarray) -> dict[str, np.ndarray]:
-    """Expand a routed expert bank into the per-expert Hugging Face layout."""
+def _split_experts(name: str, value: np.ndarray) -> dict[str, np.ndarray]:
     if EXPERT_BANK.fullmatch(name) is None:
         return {name: value}
     if value.ndim != 3:
@@ -211,7 +210,7 @@ def export(config: ExportConfig) -> None:
                         replicated = jax.sharding.reshard(state_dict[name], P())
                         jax.block_until_ready(replicated)
                         if jax.process_index() == 0:
-                            tensors.update(split_experts(name, np.ascontiguousarray(np.asarray(replicated))))
+                            tensors.update(_split_experts(name, np.ascontiguousarray(np.asarray(replicated))))
                         del replicated
                         multihost_utils.sync_global_devices(f"export-{group}-{name}")
 

@@ -26,8 +26,6 @@ from safetensors.numpy import save_file
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
-from experiments.grug.moe_hero_ep.ops.export_vllm import split_experts
-
 _INITIALIZATION_SEED = 17
 _AUXILIARY_SEED = 23
 
@@ -74,9 +72,8 @@ def export_fixture(root: Path, recipe: str) -> None:
                     jax.random.fold_in(jax.random.key(_AUXILIARY_SEED), index), value.shape, value.dtype
                 )
         model = hax.named_jit(lambda m, weights: m.from_state_dict(weights))(model, state)
-        tensors = {}
-        for name, value in model.to_state_dict().items():
-            tensors.update(split_experts(name, np.ascontiguousarray(np.asarray(value))))
+        # The promoted GrugMoE loader consumes [expert, output, input] banks.
+        tensors = {name: np.ascontiguousarray(np.asarray(value)) for name, value in model.to_state_dict().items()}
         weights = checkpoint / "model.safetensors"
         save_file(tensors, str(weights), metadata={"format": "pt"})
         # Verify the exact exported weights through the native checkpoint reader.
