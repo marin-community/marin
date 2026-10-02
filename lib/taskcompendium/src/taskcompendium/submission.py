@@ -7,9 +7,10 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from rigging.filesystem.path_validation import validate_relative_file_path
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.models import (
@@ -25,6 +26,7 @@ from taskcompendium.models import (
 
 ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
+MAX_SUBMISSION_FILE_BYTES = 1024 * 1024
 
 
 def answer_call_tool() -> dict[str, object]:
@@ -51,14 +53,23 @@ class AnswerFormat(StrEnum):
     JSON = "json"
     ANSWER_CALL = "answer_call"
     FINAL_ACTION = "final_action"
+    TEXT_FILE = "text_file"
+    JSON_FILE = "json_file"
+
+
+@runtime_checkable
+class WorkspaceReader(Protocol):
+    async def read_workspace_file(self, path: str, max_bytes: int) -> bytes | None:
+        """Read bounded file bytes or return None if missing; reject invalid files with SubmissionFailure."""
+        ...
 
 
 @dataclass(frozen=True)
 class GradingAttempt:
     """Trial evidence available to submission conventions and verifiers."""
 
-    conversation: ConversationTrace
-    workspace: object
+    conversation: ConversationTrace | None = None
+    workspace: WorkspaceReader | None = None
 
 
 @dataclass(frozen=True)
@@ -112,7 +123,7 @@ class PlainText(Convention):
     answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
 
     async def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        return TextSubmission(_text_answer(attempt.conversation.events[-1]))
+        return TextSubmission(_text_answer(_final_conversation_event(attempt)))
 
 
 class JsonAnswer(Convention):
@@ -120,7 +131,7 @@ class JsonAnswer(Convention):
 
     async def extract(self, attempt: GradingAttempt) -> TextSubmission:
         try:
-            value = json.loads(_text_answer(attempt.conversation.events[-1]))
+            value = json.loads(_text_answer(_final_conversation_event(attempt)))
         except json.JSONDecodeError as error:
             raise SubmissionFailure("JSON submission is malformed") from error
         if (
@@ -136,7 +147,7 @@ class AnswerCall(Convention):
     answer_format: Literal[AnswerFormat.ANSWER_CALL] = AnswerFormat.ANSWER_CALL
 
     async def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        response = attempt.conversation.events[-1]
+        response = _final_conversation_event(attempt)
         if (
             not isinstance(response, AssistantToolCalls)
             or len(response.calls) != 1
@@ -176,10 +187,70 @@ class FinalAction(Convention):
         return response
 
     async def extract(self, attempt: GradingAttempt) -> ActionSubmission:
-        return ActionSubmission(self.validate_final_message(attempt.conversation.events[-1]))
+        return ActionSubmission(self.validate_final_message(_final_conversation_event(attempt)))
 
 
-SubmissionConvention = Annotated[PlainText | JsonAnswer | AnswerCall | FinalAction, Field(discriminator="answer_format")]
+class WorkspaceFileContent(Convention, ABC):
+    """Read one bounded candidate file without transcript or private expectations."""
+
+    path: str
+    max_bytes: int = Field(default=MAX_SUBMISSION_FILE_BYTES, gt=0, le=MAX_SUBMISSION_FILE_BYTES)
+
+    @model_validator(mode="after")
+    def validate_path(self) -> Self:
+        validate_relative_file_path(self.path)
+        return self
+
+    async def _read(self, attempt: GradingAttempt) -> bytes:
+        if attempt.workspace is None:
+            raise TypeError("File submission requires a workspace reader")
+        content = await attempt.workspace.read_workspace_file(self.path, self.max_bytes)
+        if content is None:
+            raise SubmissionFailure(f"Submission file {self.path!r} is missing")
+        if len(content) > self.max_bytes:
+            raise SubmissionFailure(f"Submission file {self.path!r} exceeds its byte limit")
+        return content
+
+
+class TextFile(WorkspaceFileContent):
+    answer_format: Literal[AnswerFormat.TEXT_FILE] = AnswerFormat.TEXT_FILE
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type in (AnswerType.TEXT, AnswerType.NUMBER, AnswerType.FILE)
+
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        content = await self._read(attempt)
+        try:
+            return TextSubmission(content.decode("utf-8"))
+        except UnicodeDecodeError as error:
+            raise SubmissionFailure(f"Submission file {self.path!r} is not UTF-8") from error
+
+
+class JsonFile(WorkspaceFileContent):
+    answer_format: Literal[AnswerFormat.JSON_FILE] = AnswerFormat.JSON_FILE
+
+    def supports(self, answer_type: AnswerType) -> bool:
+        return answer_type in (AnswerType.STATE, AnswerType.FILE)
+
+    async def extract(self, attempt: GradingAttempt) -> StateSubmission:
+        content = await self._read(attempt)
+        try:
+            value = json.loads(content.decode("utf-8"))
+            json.dumps(value, allow_nan=False)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise SubmissionFailure(f"Submission file {self.path!r} is not finite JSON") from error
+        return StateSubmission(value)
+
+
+SubmissionConvention = Annotated[
+    PlainText | JsonAnswer | AnswerCall | FinalAction | TextFile | JsonFile, Field(discriminator="answer_format")
+]
+
+
+def _final_conversation_event(attempt: GradingAttempt) -> ConversationEvent:
+    if attempt.conversation is None:
+        raise SubmissionFailure("Message submission requires conversation evidence")
+    return attempt.conversation.events[-1]
 
 
 def _text_answer(response: ConversationEvent) -> str:
@@ -228,6 +299,10 @@ def submission_instruction(convention: SubmissionConvention) -> str:
         return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
         return ""
+    if isinstance(convention, TextFile):
+        return f"Write your final answer as UTF-8 text in {convention.path}."
+    if isinstance(convention, JsonFile):
+        return f"Write your final answer as JSON in {convention.path}."
     raise ValueError(f"Unsupported answer format: {convention.answer_format}")
 
 

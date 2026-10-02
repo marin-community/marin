@@ -193,7 +193,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
         "result = asyncio.run(grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='C'))), object()))); "
+        "TextMessage(role='assistant', content='C')))))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

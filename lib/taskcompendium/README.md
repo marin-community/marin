@@ -4,13 +4,13 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through the shared verifier library after extracting the submission. The complete semantic schema also represents files, workspace state, arbitrary environment state, pinned images, initial workspaces, tool providers, and private resources. Their execution requires additional runtimes; direct chat rejects their requirements before export or launch.
+The current implementation exports Harbor tasks for final text, number, and native-action results. It extracts one typed submission and grades it through the shared verifier library. The complete semantic schema also represents files, workspace state, arbitrary environment state, pinned images, initial workspaces, tool providers, and private resources. Harbor Docker executes a bounded file-result subset using the task's pinned image and declared workspace. Other features fail before export or launch.
 
 ## What does it contain?
 
 - **Task specs** describe the source problem, the required capabilities, the kind of result, and how to verify it.
 - **Submission conventions** describe how to ask for and extract a result, such as a plain answer, a JSON object, or a final function call.
-- **Harbor environment configurations** describe the capabilities and tools exposed during execution. The only configuration in the current implementation is direct chat, which records submission calls but does not execute tools.
+- **Harbor environment configurations** describe the capabilities and tools exposed during execution. Direct chat records submission calls without executing tools. Docker delegates shell and filesystem access to the caller-selected Harbor agent.
 - **Lowering tools** find compatible convention and environment configuration pairs, select a pair, and export a runnable Harbor task package.
 - **A Harbor adapter** runs the exported task against an OpenAI-compatible chat endpoint and records a grading result. Harbor acts as the harness: it orchestrates the model and environment after lowering.
 
@@ -69,7 +69,7 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Exporting and running these results requires environment configurations and submission conventions that are not implemented here. The shared `structured_exact` verifier compares acquired JSON values with exact scalar types and ordered arrays. This package does not acquire state results.
+`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Harbor Docker acquires one text or JSON file through `TextFile` or `JsonFile`. The shared `structured_exact` verifier compares a JSON file result with exact scalar types and ordered arrays. Whole workspace state and provider state require additional runtimes.
 
 Public expectations belong in `context`: for example, the columns a CSV must contain or the behavior a repaired project must provide. The private verifier checks those expectations. A submission convention chooses how the result is delivered and extracted. `answer_type` identifies its semantic kind. TaskSpec has no extra intrinsic encoding or answer-format field.
 
@@ -187,7 +187,7 @@ A lowering is one runnable presentation of a spec for a target framework. It com
 
 Submission conventions preserve the task’s advertised functions. Plain-text and JSON submissions keep those functions; the `answer_call` convention adds `submit_answer` and requires one call with an answer string. An existing function named `submit_answer` conflicts with that convention and is rejected. `FinalAction(require_call=True)` requests a call, and `FinalAction(max_calls=1)` disables parallel calls. Before scoring, the grading boundary rejects missing required calls or calls exceeding `max_calls` as `submission_failure` with reward `0.0`. Direct chat captures the final assistant turn without executing advertised functions.
 
-An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="shellsim"` to `select_lowerings`; it keeps only ShellSim candidates and raises if none are compatible. A `shell` capability requests an operation, while ShellSim names a concrete execution choice. The current implementation offers only direct chat, so a ShellSim request fails rather than falling back to chat. The selected environment configuration is recorded in the exported Harbor package.
+An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="shellsim"` to `select_lowerings`; it keeps only ShellSim candidates and raises if none are compatible. A `shell` capability requests an operation, while ShellSim names a concrete execution choice. This slice offers direct chat and Docker; a ShellSim request fails. The selected environment configuration is recorded in the exported Harbor package.
 
 ```python
 from pathlib import Path
@@ -231,20 +231,20 @@ separately.
 
 ## How does Harbor run it?
 
-`lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `environment_config.json` for the launcher and custom verifier. The package also has an empty `environment/` directory. A chat launch sends the structured conversation from the spec, then adds the convention's final answer instruction when needed. The agent has no tool to read the package files. Harbor's custom verifier can read the spec and private reference answer. The convention file tells it how to extract the submitted answer.
+`lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `environment_config.json` for the launcher and custom verifier. A direct-chat package also has an empty `environment/` directory. A chat launch sends the structured conversation from the spec, then adds the convention's final answer instruction when needed. The chat agent has no tool to read the package files. Harbor's custom verifier can read the spec and private reference answer. The convention file tells it how to extract the submitted answer.
 
-`run_trial` takes the exported directory, its environment configuration, and a chat launch. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. Provide the endpoint's base URL and, if needed, the name of an environment variable containing the API key. The agent resolves that variable in its process; the trial configuration retains only its name.
+`run_trial` takes the exported directory, its environment configuration, and a caller-selected Harbor `AgentConfig`. `chat_agent_config(task_dir, launch)` prepares the optional direct-chat agent. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. Provide the endpoint's base URL and, if needed, the name of an environment variable containing the API key. The agent resolves that variable in its process; the trial configuration retains only its name.
 
 ```python
 import asyncio
 
-from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, chat_agent_config, run_trial
 
 result = asyncio.run(
     run_trial(
         Path("/tmp/arithmetic-task"),
         chosen.environment_config,
-        ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key_env="MODEL_API_KEY"),
+        chat_agent_config(Path("/tmp/arithmetic-task"), ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key_env="MODEL_API_KEY")),
         Path("/tmp/arithmetic-trials"),
         "arithmetic-run",
     )
@@ -270,3 +270,65 @@ uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskc
 cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
+
+## Harbor Docker file results
+
+Use `HarborEnvironmentConfig(environment="docker")` with canonical worker
+requirements declaring `docker_image="repository@sha256:digest"` and an absolute
+`working_directory`. The digest-pinned Linux image must already be available to
+Docker and contain Bash. Final-file collection runs on the host without invoking worker programs. The
+bridge uses Harbor's normal Docker container lifecycle with internet disabled,
+forbids build/compose overrides, prevents automatic image pulls, and retains the
+shared image during cleanup.
+
+`TextFile(id="text-file", path="answer.txt", max_bytes=1024)` acquires one UTF-8
+file for canonical `exact` or `numeric` grading. `JsonFile` acquires one finite
+JSON value for `structured_exact`. The supported workdir is one absolute root
+child, such as `/workspace` or
+`/logstuff`; `/logs` and its descendants are reserved for Harbor. Final result
+paths must be one flat filename relative to that workdir. Nested workdirs and
+result paths fail before export. File extraction needs no conversation trace.
+It refuses symlink workdirs, symlink results, and nonregular result files before
+downloading candidate bytes. Missing, invalid, or oversized files receive `submission_failure`
+with reward `0.0`; a valid wrong result receives `graded` with reward `0.0`.
+Collection pauses this trial container, checks daemon-side path metadata, and
+streams one uncompressed regular-file archive to the host without extraction.
+Unexpected compression is an infrastructure error. Metadata is bounded to
+8 KiB; the archive is bounded to the file byte limit plus 64 KiB of
+metadata/padding. One 30-second timeout bounds collection. Cleanup unpauses the
+trial before Harbor removes its containers and volumes, including on errors or
+cancellation. This acquires one file at the collection cutoff; it does not
+provide a general workspace snapshot or shared process-state contract.
+
+Pass the caller's Harbor `AgentConfig` directly to `run_trial`; for example,
+`AgentConfig(name="terminus-2", model_name="your-model", kwargs={...})` selects
+Harbor Terminus. Endpoint credentials and agent limits stay in launch
+configuration. TaskCompendium defines no shell tool or agent-owned harness.
+
+The bridge materializes only `InlineFile` resources in `resources.all` and
+`resources.worker` under `environment/`, which Harbor uploads to the worker
+workdir. Private oracle/verifier resources and expected answers stay in the
+host-side specification. Only Harbor's agent/artifact log directories are
+mounted into the worker; verifier logs stay on the host. Dataset
+paths, setup commands, task environment variables, tool providers, final tools,
+additional capabilities, private verifier runtimes, and whole workspace-state
+results are unsupported and fail before export or launch.
+
+Workspace setup resolves the pinned image's default numeric UID/GID with `id`
+and uses root `chown`/`chmod` to assign the workdir and public inputs to that
+identity. It preserves each supported declared file mode, including read-only
+`0400` and executable `0500`, and gives public parent directories mode `0755`.
+Declared public `mtime_ns` values fail before export or launch because the
+supported image commands and Harbor upload do not guarantee exact nanosecond
+timestamp restoration. Private resource metadata remains host-side.
+Public inline modes without owner-read permission fail before export because
+the host must read these files for validation and upload. The image must provide these
+Unix commands. Caller agents retain their configuration; an agent that chooses
+a different per-command user must manage that identity's access itself.
+
+CPU tests run the actual Harbor Trial and Docker environment against a fake
+Docker CLI and a local Unix-socket Engine endpoint. `run_trial` resolves the
+standard Docker CLI context and the installed daemon's API version once, before
+creating a Trial. Remote TCP/SSH/TLS contexts are unsupported; package export
+is independent of daemon availability. Real Docker and Terminus/model execution
+require separate validation.

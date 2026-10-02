@@ -16,7 +16,7 @@ from harbor.models.task.task import Task
 from tasktrove_verify.spec import Mode
 
 from taskcompendium.grading import exact_answer, grade_answer, numeric_answer
-from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, chat_agent_config, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
     HarborEnvironmentConfig,
@@ -190,7 +190,7 @@ async def test_numeric_answer_uses_explicit_tolerance(specification, response, r
             conversation=ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content=response))
             ),
-            workspace=object(),
+            workspace=None,
         ),
     )
 
@@ -244,7 +244,7 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
     result = await run_trial(
         task,
         environment_config,
-        ChatLaunch(model="model", api_base=chat_endpoint.url),
+        chat_agent_config(task, ChatLaunch(model="model", api_base=chat_endpoint.url)),
         tmp_path / "trials",
         "run",
     )
@@ -293,7 +293,7 @@ async def test_answer_call_does_not_dispatch_and_requires_its_submission_functio
     result = await run_trial(
         task,
         environment_config,
-        ChatLaunch(model="model", api_base="https://example.invalid"),
+        chat_agent_config(task, ChatLaunch(model="model", api_base="https://example.invalid")),
         tmp_path / "trials",
         "run",
     )
@@ -331,10 +331,13 @@ async def test_answer_submission_preserves_advertised_tools(tmp_path, specificat
     result = await run_trial(
         task,
         HarborEnvironmentConfig(),
-        ChatLaunch(
-            model="model",
-            api_base=chat_endpoint.url,
-            parallel_tool_calls=False if answer_format == AnswerFormat.ANSWER_CALL else True,
+        chat_agent_config(
+            task,
+            ChatLaunch(
+                model="model",
+                api_base=chat_endpoint.url,
+                parallel_tool_calls=False if answer_format == AnswerFormat.ANSWER_CALL else True,
+            ),
         ),
         tmp_path / "trials",
         "run",
@@ -420,7 +423,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
         "result = asyncio.run(grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='12'))), object()))); "
+        "TextMessage(role='assistant', content='12')))))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 
@@ -492,7 +495,7 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     )
     launch = ChatLaunch(model="fixture-model", api_base=chat_endpoint.url, api_key_env="TASKCOMPENDIUM_TEST_API_KEY")
 
-    result = await run_trial(task, environment_config, launch, tmp_path / "trials", "run")
+    result = await run_trial(task, environment_config, chat_agent_config(task, launch), tmp_path / "trials", "run")
 
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert chat_endpoint.authorizations == [f"Bearer {secret}"]
@@ -523,7 +526,7 @@ async def test_chat_trial_preserves_conversation_roles(tmp_path, specification, 
     result = await run_trial(
         task,
         environment_config,
-        ChatLaunch(model="fixture-model", api_base=chat_endpoint.url),
+        chat_agent_config(task, ChatLaunch(model="fixture-model", api_base=chat_endpoint.url)),
         tmp_path / "trials",
         "run",
     )
@@ -550,7 +553,7 @@ async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specificati
     )
     launch = ChatLaunch(model="fixture-model", api_base=chat_endpoint.url)
 
-    result = await run_trial(task, environment_config, launch, tmp_path / "trials", "run")
+    result = await run_trial(task, environment_config, chat_agent_config(task, launch), tmp_path / "trials", "run")
 
     assert result.exception_info is not None
     assert "model unavailable" in (tmp_path / "trials/run/result.json").read_text()

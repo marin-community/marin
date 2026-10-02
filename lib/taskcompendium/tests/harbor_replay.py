@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from harbor.models.trial.result import TrialResult
 
-from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, chat_agent_config, run_trial
 from taskcompendium.lowering import ENVIRONMENT_CONFIG_FILE, read_environment_config
 
 
@@ -26,4 +26,4 @@ async def run_replay_trial(
     launch = ChatLaunch(model="fixture-model", api_base="https://example.invalid")
     body = BytesIO(json.dumps({"choices": [{"message": response}]}).encode())
     with patch("taskcompendium.harbor.adapter.urllib.request.urlopen", return_value=body):
-        return await run_trial(task_dir, environment_config, launch, trials_dir, trial_name)
+        return await run_trial(task_dir, environment_config, chat_agent_config(task_dir, launch), trials_dir, trial_name)

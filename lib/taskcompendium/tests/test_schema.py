@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from taskcompendium.grading import exact_answer, grade_answer
-from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, chat_agent_config, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import (
     AnswerType,
@@ -215,7 +215,7 @@ async def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_pat
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     # This correct answer must not earn credit without the required private runtime.
     with pytest.raises(NotImplementedError):
-        await grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation, object()))
+        await grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation))
 
 
 @pytest.mark.parametrize("kind", ["llm_judge", "private_script"])
@@ -231,7 +231,7 @@ async def test_schema_only_verifiers_cannot_export_or_grade(tmp_path, specificat
     assert not (tmp_path / "export").exists()
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done")))
     with pytest.raises(NotImplementedError):
-        await grade_answer(task, convention, GradingAttempt(conversation, object()))
+        await grade_answer(task, convention, GradingAttempt(conversation))
 
 
 @pytest.mark.parametrize("kind", ["llm_judge", "private_script"])
@@ -244,7 +244,7 @@ async def test_launch_rejects_schema_only_verifier_before_starting_a_trial(tmp_p
         await run_trial(
             task,
             HarborEnvironmentConfig(),
-            ChatLaunch(model="unused", api_base="https://example.invalid"),
+            chat_agent_config(task, ChatLaunch(model="unused", api_base="https://example.invalid")),
             tmp_path / "trials",
             "unsupported",
         )
@@ -275,7 +275,7 @@ async def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_wor
     }
     task = TaskSpec.model_validate(wire)
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
-    result = await grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation, object()))
+    result = await grade_answer(task, PlainText(id="plain"), GradingAttempt(conversation))
     assert (result.status, result.reward) == ("graded", reward)
 
 

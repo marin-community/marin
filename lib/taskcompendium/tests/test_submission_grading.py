@@ -49,7 +49,7 @@ def _task(verifier, answer_type=AnswerType.TEXT):
 def _attempt(task, content):
     return GradingAttempt(
         conversation=ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=content))),
-        workspace=object(),
+        workspace=None,
     )
 
 
