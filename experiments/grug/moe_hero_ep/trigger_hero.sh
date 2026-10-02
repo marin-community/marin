@@ -72,6 +72,7 @@ uv run python - "$mode" "$RUN_ID" "$WANDB_PROJECT" "$WANDB_FORK_FROM" "$HANDOFF_
   "$ACCEPT_MIXTURE_BOUNDARY_SHIFT" "$EVAL_SEQ_LEN" <<'PYTHON'
 import csv
 import io
+import math
 import os
 import re
 import subprocess
@@ -107,8 +108,9 @@ if parent_id == run_id:
 checkpoint_step = re.fullmatch(r"step-(\d+)", checkpoint.rstrip("/").rsplit("/", 1)[-1])
 if checkpoint_step is None:
     raise ValueError(f"HANDOFF_CHECKPOINT must end in step-<N>: {checkpoint}")
-if int(seq_len) != int(eval_seq_len) and int(baseline_step) != int(checkpoint_step[1]):
-    raise ValueError("A context switch requires a FLOPs baseline at the handoff checkpoint")
+context_switch = int(seq_len) != int(eval_seq_len)
+if context_switch and (int(baseline_step) != int(checkpoint_step[1]) or float(baseline_total) <= 0):
+    raise ValueError("A context switch requires the parent's cumulative FLOPs at the handoff checkpoint")
 # The child resumes at checkpoint step N and logs training step N first; W&B starts a fork at
 # _step + 1, so any fork point at or past N makes the child's rows fail step monotonicity.
 if int(fork["step"]) >= int(checkpoint_step[1]):
@@ -120,6 +122,21 @@ if mode == "fork-wandb":
     api = wandb.Api()
     if list(api.runs(f"{entity}/{project}", filters={"name": run_id}, per_page=1)):
         raise ValueError(f"W&B child {run_id} already exists; inspect it before using launch")
+    if context_switch:
+        # The fork row records the parent's total after N updates; the child continues from it.
+        fork_step = int(fork["step"])
+        rows = [
+            row
+            for row in api.run(f"{entity}/{project}/{parent_id}").scan_history(
+                keys=["_step", "global_step", "throughput/total_gflops"], min_step=fork_step, max_step=fork_step + 1
+            )
+            if row["_step"] == fork_step
+        ]
+        if len(rows) != 1 or int(rows[0]["global_step"]) != int(checkpoint_step[1]) - 1:
+            raise ValueError(f"Parent row _step={fork_step} must record global_step {int(checkpoint_step[1]) - 1}")
+        parent_total = rows[0]["throughput/total_gflops"] * 1e9
+        if not math.isclose(float(baseline_total), parent_total, rel_tol=1e-9):
+            raise ValueError(f"FLOPS_BASELINE_TOTAL={baseline_total} differs from the parent total {parent_total!r}")
     # W&B rejects fork_from alongside resume, and the operator's shell may export either.
     os.environ.pop("WANDB_RESUME", None)
     os.environ.pop("WANDB_RESUME_FROM", None)

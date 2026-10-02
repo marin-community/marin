@@ -349,11 +349,18 @@ class FlopsBaseline:
     completed_steps: int
     total_flops: float
 
-    def offset(self, batch_schedule: BatchSchedule, flops_per_example: float, restored_step: int) -> float:
-        if not 0 <= self.completed_steps <= restored_step:
-            raise ValueError("FLOPs baseline must precede or equal the restored checkpoint step")
+    def __post_init__(self):
+        if self.completed_steps < 0:
+            raise ValueError("FLOPs baseline step must be nonnegative")
         if not np.isfinite(self.total_flops) or self.total_flops < 0:
             raise ValueError("FLOPs baseline must be finite and nonnegative")
+        # Completed updates always cost FLOPs; a zero total restarts the cumulative series at the handoff.
+        if self.completed_steps > 0 and self.total_flops == 0:
+            raise ValueError("A FLOPs baseline after completed updates must have a positive total")
+
+    def offset(self, batch_schedule: BatchSchedule, flops_per_example: float, restored_step: int) -> float:
+        if self.completed_steps > restored_step:
+            raise ValueError("FLOPs baseline must precede or equal the restored checkpoint step")
         return self.total_flops - flops_per_example * batch_schedule.global_data_offset_by_step(self.completed_steps)
 
 
