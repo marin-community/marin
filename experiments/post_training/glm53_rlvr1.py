@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch GLM 5.3 RLVR1 from the September 21 Datakit SFT export."""
+"""Launch GLM 5.3 RLVR1 from the Datakit SFT or Antidoom FTPO export."""
 
 import hashlib
 from pathlib import Path
@@ -30,6 +30,10 @@ from marin.training.training import LevanterCheckpoint
 
 MODEL_REPO = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_EXPORT = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
+ANTIDOOM_MODEL_EXPORT = (
+    "s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-ftpo-dapo-full-window/"
+    "2026.10.01.1/exports/global_step_45/policy"
+)
 DATA_ROOT = (
     "s3://marin-us-east-02a/marin/users/benfeuer/datasets/snowball-ultra-rlvr/"
     "20260920-9e7a35d6c979/ordinary-only-v2-agentic57t-compatible/rlvr1"
@@ -40,17 +44,34 @@ SWEEP_ARMS = tuple(path.stem for path in sorted(SWEEP_CONFIG_DIR.glob("*.yaml"))
 MODEL_VERSION = "2026.09.21"
 DATA_VERSION = "2026.09.23"
 RL_NAME = user_owned_name("checkpoints/glm53-rlvr1-async")
+ANTIDOOM_RL_NAME = user_owned_name("checkpoints/antidoom-rlvr1-async")
 
 
-def build_rl_step(tokenizer_revision: str, smoke: bool, sweep_arm: str | None = None) -> ArtifactStep[SkyRLRun]:
-    model = ArtifactStep.adopt(
-        "checkpoints/grug-datakit-sft-sep21-hf", MODEL_VERSION, MODEL_EXPORT, kind=LevanterCheckpoint
-    )
+def build_rl_step(
+    tokenizer_revision: str, smoke: bool, sweep_arm: str | None = None, model_variant: str = "datakit"
+) -> ArtifactStep[SkyRLRun]:
+    if model_variant not in {"datakit", "antidoom"}:
+        raise ValueError(f"Unknown model variant: {model_variant}")
+    if model_variant == "antidoom":
+        model = ArtifactStep.adopt(
+            "checkpoints/antidoom-ftpo-dapo-step45-hf",
+            "2026.10.01.1",
+            ANTIDOOM_MODEL_EXPORT,
+            kind=LevanterCheckpoint,
+        )
+    else:
+        model = ArtifactStep.adopt(
+            "checkpoints/grug-datakit-sft-sep21-hf", MODEL_VERSION, MODEL_EXPORT, kind=LevanterCheckpoint
+        )
     data = ArtifactStep.adopt("documents/glm53-rlvr1", DATA_VERSION, DATA_ROOT, kind=Artifact)
     if smoke and sweep_arm is not None:
         raise ValueError("The smoke and sweep configurations cannot be selected together")
+    if model_variant == "antidoom" and sweep_arm is not None:
+        raise ValueError("Sweep arms use the September 21 Datakit model")
     if sweep_arm is not None:
         config_path = SWEEP_CONFIG_DIR / f"{sweep_arm}.yaml"
+    elif model_variant == "antidoom":
+        config_path = CONFIG_PATH.with_name(f"glm53_rlvr1_antidoom{'_smoke' if smoke else ''}.yaml")
     elif smoke:
         config_path = CONFIG_PATH.with_name("glm53_rlvr1_smoke.yaml")
     else:
@@ -87,7 +108,9 @@ def build_rl_step(tokenizer_revision: str, smoke: bool, sweep_arm: str | None = 
     inference_nodes, remainder = divmod(inference_gpu_count, role_plan.policy_num_gpus_per_node)
     if remainder:
         raise ValueError("The inference GPU allocation must fill complete nodes")
-    if sweep_arm is not None:
+    if model_variant == "antidoom":
+        name = user_owned_name("checkpoints/antidoom-rlvr1-async-smoke") if smoke else ANTIDOOM_RL_NAME
+    elif sweep_arm is not None:
         name = user_owned_name(f"checkpoints/glm53-rlvr1-sweep-{sweep_arm}")
     elif smoke:
         name = user_owned_name("checkpoints/glm53-rlvr1-async-smoke")
@@ -136,9 +159,10 @@ def build_rl_step(tokenizer_revision: str, smoke: bool, sweep_arm: str | None = 
 @click.option("--tokenizer-revision", required=True, help="Published SFT model commit SHA on Hugging Face.")
 @click.option("--smoke", is_flag=True, help="Run one optimizer step with the production geometry and a 64-prompt batch.")
 @click.option("--sweep-arm", type=click.Choice(SWEEP_ARMS), help="Run one frozen sweep arm.")
+@click.option("--model-variant", type=click.Choice(["datakit", "antidoom"]), default="datakit")
 @rl_build_options
-def main(tokenizer_revision: str, smoke: bool, sweep_arm: str | None) -> ArtifactStep[SkyRLRun]:
-    return build_rl_step(tokenizer_revision, smoke, sweep_arm)
+def main(tokenizer_revision: str, smoke: bool, sweep_arm: str | None, model_variant: str) -> ArtifactStep[SkyRLRun]:
+    return build_rl_step(tokenizer_revision, smoke, sweep_arm, model_variant)
 
 
 if __name__ == "__main__":
