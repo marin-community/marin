@@ -76,9 +76,9 @@ logger = logging.getLogger(__name__)
 REF_NAME = "references/reference-pipeline"
 
 # The datakit quality scorer is region-specific, so its identity enters the datakit hash as
-# a stable tag, not the path (see reference_pipeline.py). ``pooled-junkgate2`` is the tag for
-# the default quality-model bytes.
-QUALITY_MODEL_VERSION = "pooled-junkgate2"
+# a stable tag, not the path (see reference_pipeline.py). ``pooled-junkgate2-marin`` is the
+# tag for the default quality-model bytes: the retrain on marin-tokenizer ids.
+QUALITY_MODEL_VERSION = "pooled-junkgate2-marin"
 
 # A nano model: this harness measures path-liveness and delta-vs-baseline, not absolute
 # quality, so it is sized for a fast smoke on a single accelerator, not for signal. vocab_size

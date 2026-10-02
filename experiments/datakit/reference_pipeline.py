@@ -39,9 +39,8 @@ succeed.
 
 Per source::
 
-    normalize → tokenize
+    normalize → tokenize             → quality (pooled fast-transformer on the tokenize ids, given model dir)
               → embed (luxical-one)   → assign (domain v0, given centroids)
-              → quality                (pooled fast-transformer, given model dir)
               → decontam               (shared eval bloom)
               → minhash
 
@@ -79,7 +78,7 @@ Submit the sample-mode end-to-end run on iris::
         -- python -m experiments.datakit.reference_pipeline \\
             --mode sample --sample-prefix s3://.../datakit/sample_100b_8ae7a94f \\
             --sources all --pool-workers 512 \\
-            --quality-model-version pooled-junkgate2 \\
+            --quality-model-version pooled-junkgate2-marin \\
             --domain-centroids-version <run-id>
 
 Reproducibility contract
@@ -593,7 +592,7 @@ def _resolve_quality_model_version(quality_model: str, quality_model_version: st
         raise ValueError(
             f"quality_model_version is required: the quality model dir ({quality_model}) is "
             "region-specific and must not enter the cache hash. Pass a stable tag "
-            "identifying the model bytes (e.g. 'pooled-junkgate2')."
+            "identifying the model bytes (e.g. 'pooled-junkgate2-marin')."
         )
     return quality_model_version
 
@@ -857,7 +856,7 @@ def reference_datakit_steps(
         quality_model: Directory holding the pooled fast-transformer scorer
             artifacts plus the calibration json (immutable by convention).
         quality_model_version: Required. A stable tag identifying the model bytes
-            (e.g. ``'pooled-junkgate2'``) -- hashed into the quality step in place
+            (e.g. ``'pooled-junkgate2-marin'``) -- hashed into the quality step in place
             of the region-specific ``quality_model`` dir, so the same scorer
             resolves to one output path across regions.
         domain_centroids: A GCS directory holding ``centroids_<k_train>.npy``
@@ -930,14 +929,16 @@ def reference_datakit_steps(
 
         quality = StepSpec(
             name=f"datakit/quality/{name}",
-            deps=[normalize_step],
-            hash_attrs={"model_version": quality_model_hash, "v": 1},
+            deps=[normalize_step, tokenize],
+            hash_attrs={"model_version": quality_model_hash, "v": 2},
             fn=remote(
-                lambda output_path, np=normalize_step.output_path, src=name: score_normalized(
+                lambda output_path, np=normalize_step.output_path, tp=tokenize.output_path, src=name: score_normalized(
                     output_path=output_path,
                     normalized=read_artifact(np, NormalizedData),
+                    tokenized=read_artifact(tp, TokenizedAttrData),
                     source=src,
                     model_dir=quality_model,
+                    split=SPLIT,
                     max_workers=scale.pool.n_workers,
                     worker_resources=scale.pool.worker,
                 ),
@@ -1099,7 +1100,7 @@ def reference_datakit_steps(
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
 
-QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2"
+QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2_marin"
 """Pooled fast-transformer scorer directory, relative to ``MARIN_PREFIX``."""
 
 
@@ -1284,7 +1285,7 @@ def main() -> None:
     parser.add_argument(
         "--quality-model-version",
         help=(
-            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2'). Required for --target all. "
+            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2-marin'). Required for --target all. "
             "Hashed in place of the region-specific model dir for cross-region reproducibility."
         ),
     )
