@@ -21,6 +21,7 @@ import numpy as np
 from rigging.provenance import launch_provenance
 
 from levanter.grug.attention import ragged_paged_attention
+from levanter.testing.precision import round_to_bfloat16
 
 WARMUP_STEPS = 3
 HOST_TIMING_BOUNDARY = "host_submit_and_synchronize"
@@ -133,7 +134,11 @@ def _mismatch_oracle(inputs, args, comparisons, actual, reference):
         scores = np.asarray(keys, np.float64) @ query * scale
         probabilities = np.exp(scores - scores.max())
         expected = probabilities @ np.asarray(values, np.float64) / probabilities.sum()
-        rounded = float(np.asarray(expected, dtype=q.dtype))
+        rounded = (
+            float(round_to_bfloat16(np.asarray(expected)))
+            if q.dtype == jnp.bfloat16
+            else float(np.asarray(expected, dtype=q.dtype))
+        )
         index = (batch, head, group, dim)
         tolerance = ERROR_ATOL + ERROR_RTOL * abs(rounded)
         rows.append(
