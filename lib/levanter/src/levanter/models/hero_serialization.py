@@ -15,6 +15,9 @@ from levanter.models.hero_model import HeroBlock, HeroTransformer
 from levanter.sharding import partition_spec_of
 
 
+_EXPERT_BANK_PREFIX = ".mlp.experts."
+
+
 class _Parameter(NamedTuple):
     name: str
     value: jax.Array
@@ -95,11 +98,13 @@ def hero_to_state_dict(model: HeroTransformer, prefix: str | None = None) -> Sta
 
 
 def _read_parameter(state: StateDict, name: str, parameter: _Parameter, *, num_experts: int) -> jax.Array:
-    if ".mlp.experts." in name and name not in state:
+    if _EXPERT_BANK_PREFIX in name and name not in state:
         # Native state dicts contain [E, out, in] banks; the vLLM exporter writes one
         # [out, in] tensor per expert. Both layouts represent the same schema-v2 model.
-        stem, projection = name.split(".mlp.experts.")
-        value = jnp.stack([jnp.asarray(state[f"{stem}.mlp.experts.{i}.{projection}"]) for i in range(num_experts)])
+        stem, projection = name.split(_EXPERT_BANK_PREFIX)
+        value = jnp.stack(
+            [jnp.asarray(state[f"{stem}{_EXPERT_BANK_PREFIX}{i}.{projection}"]) for i in range(num_experts)]
+        )
     else:
         value = jnp.asarray(state[name])
     return _transpose(value, parameter.transpose)
