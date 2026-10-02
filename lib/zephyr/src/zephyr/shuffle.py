@@ -39,6 +39,7 @@ import gc
 import io
 import logging
 import math
+import pickle
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -143,10 +144,24 @@ def _task_memory_bytes() -> int:
     return memory_bytes
 
 
+def _dumps(item: Any) -> bytes:
+    """Serialize one shuffled item.
+
+    The stdlib pickler is several times faster than cloudpickle for the plain
+    dicts and NamedTuples that pipelines shuffle, and both write the same
+    stream, so ``pickle.loads`` reads either. cloudpickle stays as the fallback
+    for items the stdlib pickler cannot reference by import path.
+    """
+    try:
+        return pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)
+    except (pickle.PicklingError, AttributeError, TypeError):
+        return cloudpickle.dumps(item)
+
+
 def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
     """Yield Python items from a DataFrame, stripping routing columns and deserializing payloads."""
     for p in df[_PAYLOAD_COL].to_list():
-        yield cloudpickle.loads(p)
+        yield pickle.loads(p)
 
 
 def _columns_to_dataframe(
@@ -197,7 +212,7 @@ def _items_to_dataframe(
 ) -> pl.DataFrame:
     """Convert a list of Python items to a DataFrame with routing columns.
 
-    Cloudpickle-serializes items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
+    Pickles items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
     (int32 target shard index) and ``_SORT_KEY_COL``. This is the adapter
     between Python-item pipelines and the DataFrame-based
     :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
@@ -221,7 +236,7 @@ def _items_to_dataframe(
         shards.append(hash_encoded_key(kb) % num_output_shards if num_output_shards > 0 else 0)
         key_bytes.append(kb)
         sort_values.append(sort_fn(item) if sort_fn is not None else None)
-    payloads = [cloudpickle.dumps(item) for item in items]
+    payloads = [_dumps(item) for item in items]
     return _columns_to_dataframe(payloads, shards, key_bytes, sort_values)
 
 

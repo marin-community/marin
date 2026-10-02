@@ -410,6 +410,24 @@ def test_scatter_empty_input(tmp_path):
     assert list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path))) == []
 
 
+def test_scatter_items_the_stdlib_pickler_cannot_reference_round_trip():
+    """Items holding a lambda or a class defined inside a function fall back to cloudpickle."""
+
+    class _Local:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return type(other) is _Local and other.value == self.value
+
+    items = [{"v": 1, "fn": lambda x: x + 1}, _Local(7), {"v": 2}]
+    frame = _items_to_dataframe(items, key_fn=lambda _: 0, sort_fn=None, num_output_shards=1)
+    restored = list(_dataframe_to_items(frame))
+    assert restored[0]["fn"](41) == 42
+    assert restored[1] == _Local(7)
+    assert restored[2] == {"v": 2}
+
+
 def test_scatter_key_fn_must_be_serializable(tmp_path):
     """key_fn must return a msgpack-serializable value."""
 
