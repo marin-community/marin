@@ -804,7 +804,9 @@ class TokenSequenceLogprobs:
     top_token_logprobs: list[dict[int, float]]
 
 
-def validate_selected_token_ids(token_ids, selected_token_ids, top_k: int, vocab_size: int) -> None:
+def validate_selected_token_ids(
+    token_ids: Sequence[int], selected_token_ids: Sequence[Sequence[int]], top_k: int, vocab_size: int
+) -> None:
     """Require one bounded candidate row per prompt token."""
     if len(selected_token_ids) != len(token_ids):
         raise ValueError("Selected prompt candidates must align with prompt tokens")
@@ -843,7 +845,8 @@ def score_token_sequence_logprobs(
 
     logits_array = logits.astype(jnp.float32).rearrange((Pos, model.Vocab)).array
     next_logits = logits_array[:-1]
-    next_token_logprobs = next_logits - logsumexp_last_axis(next_logits)[..., None]
+    shifted_logits = next_logits - jax.lax.stop_gradient(jnp.max(next_logits, axis=-1, keepdims=True))
+    next_token_logprobs = shifted_logits - logsumexp_last_axis(shifted_logits)[..., None]
     target_ids = jnp.array(token_id_list[1:], dtype=jnp.int32)
     scored_logprobs = next_token_logprobs[jnp.arange(len(target_ids)), target_ids]
     token_logprobs.extend(float(logprob) for logprob in jax.device_get(scored_logprobs))
