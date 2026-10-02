@@ -66,6 +66,14 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.byte_targets import token_byte_table
+from experiments.grug.fast_track.fact_probe import (
+    EMA,
+    RAW,
+    TRAIN_BATCH_DUMP_FILE,
+    FactProbeRecord,
+    FactSpan,
+    write_train_batch,
+)
 from experiments.grug.fast_track.grad_capture import CaptureWriter, add_to_captured, capture_matrices, capture_steps
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
@@ -294,6 +302,13 @@ class GrugTrainerConfig:
     # SNR probe (``snr_probe.py``): at each of these steps, compare Muon's update with SNR-weighted ones on held-out
     # payoff and loss; writes ``<muon_probe_path>/snr_probe_step<N>.npz``.
     snr_probe_steps: tuple[int, ...] = ()
+    # Fact probe (``fact_probe.py``). ``train_batch_dump_steps``: write those steps' train batches to
+    # ``<fact_probe_dir>/train_batch_step<N>.npz`` and stop before training. ``fact_probe_spans``: re-score the
+    # batches holding these spans after each of ``fact_probe_steps`` and write ``<fact_probe_dir>/fact_probe.npz``.
+    train_batch_dump_steps: tuple[int, ...] = ()
+    fact_probe_spans: tuple[FactSpan, ...] = ()
+    fact_probe_steps: tuple[int, ...] = ()
+    fact_probe_dir: str | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -1033,6 +1048,81 @@ def _make_probe_loss(mp: jmp.Policy):
 
 
 _captured_params = jax.jit(capture_matrices)
+
+
+def _make_fact_probe_loss(mp: jmp.Policy, model_transform: Callable[[Transformer], Transformer]):
+    """``loss(params, batch)``: the per-token next-token loss [B, S] of ``model_transform(params)`` on ``batch``."""
+
+    @jax.jit
+    def loss(params: Transformer, batch):
+        compute_params = _cast_to_compute(mp, model_transform(params))
+        return compute_params.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="none")
+
+    return loss
+
+
+def _fact_probe_hook(
+    config: GrugRunConfig,
+    train_loader: DataLoader,
+    mesh: Mesh,
+    mp: jmp.Policy,
+    ema_start_step: int,
+    start_step: int,
+) -> Callable[..., None]:
+    """The ``fact_probe_spans`` hook: at each step count in ``fact_probe_steps``, score the spans' train batches with
+    the raw and the live EMA weights. EP runs score dropless on an expert-collapsed mesh, as the final eval does."""
+    trainer_cfg = config.trainer
+    if trainer_cfg.fact_probe_dir is None or not trainer_cfg.fact_probe_steps:
+        raise ValueError("fact_probe_spans needs fact_probe_dir and fact_probe_steps")
+    record = FactProbeRecord(trainer_cfg.fact_probe_spans, f"{trainer_cfg.fact_probe_dir.rstrip('/')}/fact_probe.npz")
+    batches = {step: next(iter(train_loader.iter_from_step(step))) for step in record.data_steps}
+    host = {step: _host_batch(batch) for step, batch in batches.items()}
+    tokens = {step: pair[0] for step, pair in host.items()}
+    weights = {step: pair[1] for step, pair in host.items()}
+    if mesh.shape["expert"] > 1:
+        probe_mesh = compact_grug_mesh(
+            expert_axis_size=1, replica_axis_size=mesh.shape["replica_dcn"], model_axis_size=mesh.shape["model"]
+        )
+        implementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
+        if config.eval is not None:
+            implementation = config.eval.dropless_eval_moe_implementation
+        transform = functools.partial(_to_dropless_local, implementation=implementation)
+    else:
+        probe_mesh, transform = mesh, lambda model: model
+    with set_mesh(probe_mesh):
+        loss_fn = _make_fact_probe_loss(mp, transform)
+        probe_batches = {step: _reshard_tree_to_mesh(batch, probe_mesh) for step, batch in batches.items()}
+    pending = {step for step in trainer_cfg.fact_probe_steps if step >= start_step}
+
+    def score(params: Transformer, count: int) -> dict[int, np.ndarray]:
+        # A local: the expert-collapsed copy is larger than the train-mesh params and must die before the next step.
+        model = _reshard_tree_to_mesh(_router_tie_view(params, count), probe_mesh)
+        with _pgle_disabled():
+            return {
+                step: np.asarray(multihost_utils.process_allgather(loss_fn(model, batch), tiled=True))
+                for step, batch in probe_batches.items()
+            }
+
+    def hook(info, force: bool = False) -> None:
+        count = info.next_step
+        if count not in pending or info.model is None:
+            return
+        pending.discard(count)
+        with set_mesh(probe_mesh):
+            losses = {RAW: score(info.model, count)}
+            if count > ema_start_step and trainer_cfg.ema_beta is not None:
+                losses[EMA] = score(info.eval_model, count)
+        if jax.process_index() == 0:
+            levanter.tracker.log(record.add(count, losses, tokens, weights), step=count)
+
+    return hook
+
+
+def _host_batch(batch) -> tuple[np.ndarray, np.ndarray]:
+    gather = functools.partial(multihost_utils.process_allgather, tiled=True)
+    return np.asarray(gather(batch.tokens)), np.asarray(gather(batch.loss_weight))
+
+
 # Probe batches start this many steps past the run's last step (disjoint from the training data).
 _MUON_PROBE_DATA_OFFSET = 1000
 
@@ -1780,6 +1870,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             max_buffered_batches=config.trainer.loader_buffer_batches,
         )
 
+        if config.trainer.train_batch_dump_steps:
+            if config.trainer.fact_probe_dir is None:
+                raise ValueError("train_batch_dump_steps needs fact_probe_dir")
+            for dump_step in config.trainer.train_batch_dump_steps:
+                tokens, weights = _host_batch(next(iter(train_loader.iter_from_step(dump_step))))
+                if jax.process_index() == 0:
+                    path = f"{config.trainer.fact_probe_dir.rstrip('/')}/{TRAIN_BATCH_DUMP_FILE.format(step=dump_step)}"
+                    write_train_batch(path, dump_step, tokens, weights)
+            logger.info("train batches dumped; stopping before training")
+            return
+
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
 
@@ -1929,6 +2030,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
+        if config.trainer.fact_probe_spans:
+            state_callbacks.add_hook(
+                _fact_probe_hook(config, train_loader, mesh, trainer.mp, ema_start_step, int(state.step)), every=1
+            )
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_hooks: list[Callable[..., None]] = []

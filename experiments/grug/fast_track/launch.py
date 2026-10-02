@@ -47,6 +47,7 @@ from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.analyze_routing import token_strings_from_tokenizer
+from experiments.grug.fast_track.fact_probe import FactSpan
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import (
     AttnResLayerBackward,
@@ -415,6 +416,9 @@ def build_h100_ladder_run(
     grad_accum_microbatches: int = 1,
     muon_probe_steps: tuple[int, ...] = (),
     snr_probe_steps: tuple[int, ...] = (),
+    train_batch_dump_steps: tuple[int, ...] = (),
+    fact_probe_spans: tuple[FactSpan, ...] = (),
+    fact_probe_steps: tuple[int, ...] = (),
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -527,6 +531,9 @@ def build_h100_ladder_run(
         grad_accum_microbatches=grad_accum_microbatches,
         muon_probe_steps=muon_probe_steps,
         snr_probe_steps=snr_probe_steps,
+        train_batch_dump_steps=train_batch_dump_steps,
+        fact_probe_spans=fact_probe_spans,
+        fact_probe_steps=fact_probe_steps,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -617,6 +624,9 @@ def build_h100_ladder_run(
                 loader_buffer_batches=loader_buffer_batches,
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
+                fact_probe_dir=(
+                    prefix_join(ctx.output_path, "fact_probe") if train_batch_dump_steps or fact_probe_spans else None
+                ),
                 grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
                 muon_probe_path=(
                     prefix_join(ctx.output_path, "muon_probe") if muon_probe_steps or snr_probe_steps else None
@@ -871,6 +881,21 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Comma-separated steps at which to run the Muon probe (muon_probe.py); results go to <output>/muon_probe/.",
 )
 @click.option(
+    "--dump-train-batches",
+    default="",
+    help="Comma-separated steps whose train batches go to <output>/fact_probe/; the run then stops before training.",
+)
+@click.option(
+    "--fact-span",
+    multiple=True,
+    help="Repeatable data_step:row:start:end token span to track (fact_probe.py); needs --fact-probe-steps.",
+)
+@click.option(
+    "--fact-probe-steps",
+    default="",
+    help="Comma-separated step counts at which to score the --fact-span batches; results in <output>/fact_probe/.",
+)
+@click.option(
     "--snr-probe-steps",
     default="",
     help="Comma-separated steps at which to run the SNR probe (snr_probe.py); results go to <output>/muon_probe/.",
@@ -972,6 +997,9 @@ def main(
     grad_accum_microbatches: int,
     muon_probe_steps: str,
     snr_probe_steps: str,
+    dump_train_batches: str,
+    fact_span: tuple[str, ...],
+    fact_probe_steps: str,
     router_tie_class: tuple[str, ...],
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
@@ -1024,6 +1052,9 @@ def main(
         grad_accum_microbatches=grad_accum_microbatches,
         muon_probe_steps=tuple(int(step) for step in muon_probe_steps.split(",") if step),
         snr_probe_steps=tuple(int(step) for step in snr_probe_steps.split(",") if step),
+        train_batch_dump_steps=tuple(int(step) for step in dump_train_batches.split(",") if step),
+        fact_probe_spans=tuple(FactSpan.parse(span) for span in fact_span),
+        fact_probe_steps=tuple(int(step) for step in fact_probe_steps.split(",") if step),
         router_tie_specs=router_tie_specs,
     )
 
