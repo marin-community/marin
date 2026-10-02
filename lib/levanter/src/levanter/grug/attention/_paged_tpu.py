@@ -13,6 +13,10 @@ from jax.experimental.pallas import tpu as pltpu
 
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
+TPU_PAGE_ALIGNMENT = 16
+TPU_HEAD_ALIGNMENT = 128
+_QUERY_GROUP_ALIGNMENT = 8
+
 _LOG_2_HIGH = 0.693145751953125
 _LOG_2_LOW = log(2) - _LOG_2_HIGH
 _INVERSE_LOG_2 = 1 / log(2)
@@ -88,9 +92,9 @@ def tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale, *, interpret=Fa
     """
     tokens, heads, groups, dim = q.shape
     page_size = kv_pages.shape[1]
-    if page_size < 16 or page_size % 16 or dim % 128:
+    if page_size < TPU_PAGE_ALIGNMENT or page_size % TPU_PAGE_ALIGNMENT or dim % TPU_HEAD_ALIGNMENT:
         raise ValueError("TPU paged decode requires page_size divisible by 16 and head_dim divisible by 128")
-    padded_groups = pl.cdiv(groups, 8) * 8
+    padded_groups = pl.cdiv(groups, _QUERY_GROUP_ALIGNMENT) * _QUERY_GROUP_ALIGNMENT
     padded = jnp.pad(q, ((0, 0), (0, 0), (0, padded_groups - groups), (0, 0))).astype(jnp.float32)
     cache = kv_pages.reshape(*kv_pages.shape[:2], heads, 2, dim)
     scale = jnp.asarray(sm_scale, jnp.float32).reshape(1)

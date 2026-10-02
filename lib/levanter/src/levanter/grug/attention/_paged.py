@@ -14,7 +14,7 @@ from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import get_mi
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention._paged_gpu import GpuPagedAvPrecision, gpu_paged_attention
-from levanter.grug.attention._paged_tpu import tpu_paged_decode
+from levanter.grug.attention._paged_tpu import TPU_HEAD_ALIGNMENT, TPU_PAGE_ALIGNMENT, tpu_paged_decode
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
 PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32_tiles", "gpu_pallas", "gpu_pallas_bf16_3x"]
@@ -221,15 +221,12 @@ def _tpu_kernel_attention(
         heads_per_group = heads
     except ValueError:
         # The upstream kernel rejects packed head counts such as 3, 5, 6, and 12.
-        # Batch aligned head groups while keeping metadata shared and KV storage BF16.
+        # Batch aligned head groups while keeping metadata shared.
         heads_per_group = gcd(heads, _TPU_KV_HEAD_GROUP)
     groups = heads // heads_per_group
     kernel = partial(
         tpu_ragged_paged_attention,
         sm_scale=kernel_scale,
-        # Unit dequantization scales cast loaded tiles to FP32 in VMEM.
-        k_scale=1.0 if kv_pages.dtype != jnp.float32 else None,
-        v_scale=1.0 if kv_pages.dtype != jnp.float32 else None,
         sliding_window=sliding_window,
         soft_cap=soft_cap,
     )
@@ -321,7 +318,12 @@ def _tpu_decode_attention(
         sliding_window=sliding_window,
         soft_cap=soft_cap,
     )
-    if soft_cap is not None or kv_pages.shape[1] < 16 or kv_pages.shape[1] % 16 or q.shape[-1] % 128:
+    if (
+        soft_cap is not None
+        or kv_pages.shape[1] < TPU_PAGE_ALIGNMENT
+        or kv_pages.shape[1] % TPU_PAGE_ALIGNMENT
+        or q.shape[-1] % TPU_HEAD_ALIGNMENT
+    ):
         return reference()
     metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
     upper = jnp.where(metadata.valid, metadata.position + 1, 0)
