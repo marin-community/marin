@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import equinox as eqx
 import haliax as hax
@@ -1092,7 +1092,9 @@ class InferenceEngine:
             ),
         )
 
-    def generate(self, requests: Sequence[Request], step_callback=None) -> GenerationResult:
+    def generate(
+        self, requests: Sequence[Request], step_callback=None, *, should_abort: Callable[[], bool] | None = None
+    ) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
         Each Request provides prompt_tokens, decode_params, and n_generations (clones).
@@ -1101,6 +1103,8 @@ class InferenceEngine:
         Args:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
+            should_abort: Host predicate checked before prefill and between decode rounds.
+                Unfinished choices return their exact partial output with an ABORT reason.
         """
         if not requests:
             return GenerationResult(tokens=[], logprobs=[], total_generated=0, finish_reasons=[])
@@ -1173,8 +1177,10 @@ class InferenceEngine:
 
         time_in = time.time()
         # Initial admission from queue and extract prompt tokens
-        decode_outputs = self._prefill_batch(requests)
-        self._extract_outputs(decode_outputs)
+        aborted = should_abort is not None and should_abort()
+        if not aborted:
+            decode_outputs = self._prefill_batch(requests)
+            self._extract_outputs(decode_outputs)
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1189,7 +1195,10 @@ class InferenceEngine:
 
         pending = [request for request in requests if request.request_id not in self.sequences]
         decode_iteration = 0
-        while not _all_done():
+        while not aborted and not _all_done():
+            if should_abort is not None and should_abort():
+                aborted = True
+                break
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending)
                 self._extract_outputs(prefill_outputs)
@@ -1199,6 +1208,9 @@ class InferenceEngine:
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
+            if should_abort is not None and should_abort():
+                aborted = True
+                break
 
             iter_start = time.time()
 
@@ -1249,6 +1261,8 @@ class InferenceEngine:
             kid_map = self.results[rid]
             for k in range(int(r.n_generations)):
                 dr = kid_map[k]
+                if aborted and not dr.done:
+                    dr.finish_reason = FinishReason.ABORT
                 finish_reasons.append(dr.finish_reason)
                 outputs_list.append(dr.token_list)
                 logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
@@ -1261,6 +1275,8 @@ class InferenceEngine:
         for rid in call_rids:
             if rid in self.results:
                 self.results.pop(rid, None)
+        if aborted:
+            self.reset()
         return GenerationResult(
             tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated, finish_reasons=finish_reasons
         )
