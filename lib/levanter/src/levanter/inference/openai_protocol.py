@@ -5,7 +5,14 @@
 
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, Field, StrictInt
+from pydantic import AliasChoices, BaseModel, Field, StrictBool, StrictInt
+
+
+class PauseGenerationRequest(BaseModel):
+    """Explicit weight-sync pause policy; native serving supports abort-and-clear."""
+
+    mode: Literal["abort", "wait", "keep"]
+    clear_cache: StrictBool
 
 
 class ChatMessage(BaseModel):
