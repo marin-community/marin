@@ -179,6 +179,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--av-precision", choices=["ieee", "bf16_3x"], default="ieee")
     parser.add_argument("--profile-device", action="store_true")
+    parser.add_argument("--tpu-dma-buffers", type=int, choices=[1, 2], default=1)
     parser.add_argument("--check-reference", action="store_true")
     parser.add_argument("--kv-splits", type=int, choices=[8, 16], default=8)
     parser.add_argument("--baseline", choices=["flashinfer_xqa", "tpu_vllm_rpa", "tpu_vllm_rpa_fp32"])
@@ -211,6 +212,7 @@ def main():
             implementation=args.implementation,
             gpu_kv_splits=args.kv_splits,
             gpu_av_precision=args.av_precision,
+            tpu_dma_buffers=args.tpu_dma_buffers,
         )
     )
     measurements = _measure_jax(fn, inputs, args.repeats)
@@ -403,6 +405,7 @@ def _tpu_vllm_baseline(inputs, expected, args):
     # The outer wrapper owns no donated inputs; repeated timings reuse immutable cache/query arrays.
     measurements = _measure_jax(attend, inputs, args.repeats)
     actual = measurements.output
+    device_profile = _profile_tpu(jax.jit(attend), inputs, args.repeats) if args.profile_device else None
     difference = jnp.abs(actual.astype(jnp.float32) - expected.astype(jnp.float32))
     return {
         "kernel": "tpu_vllm_rpa_v3",
@@ -430,6 +433,7 @@ def _tpu_vllm_baseline(inputs, expected, args):
         "xla_flags": os.environ.get("XLA_FLAGS", ""),
         "backend_env": {"LIBTPU_INIT_ARGS": os.environ.get("LIBTPU_INIT_ARGS", "")},
         "cache_update": False,
+        "device_profile": device_profile,
     }
 
 
