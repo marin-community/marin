@@ -118,16 +118,17 @@ def _decode_case(dtype):
 @pytest.mark.parametrize("window,cap", [(None, None), (1, None), (29, 1.5)])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_grug_gpu_paged_attention_interpreter_matches_dense(window, cap, dtype):
-    args = _decode_case(dtype)
-    q, pages, _, indices, _, _ = args
-    upper = jnp.array([37, 18, 0, 0], jnp.int32)
-    lower = jnp.zeros_like(upper) if window is None else jnp.maximum(0, upper - window)
-    bounds = jnp.stack((lower, upper), axis=-1)
-    table = jnp.maximum(indices[jnp.array([0, 1, 0, 0])], 0)
-    actual = jax.jit(partial(gpu_paged_attention, soft_cap=cap, interpret=True))(q, pages, table, bounds, 0.17)
-    expected = jnp.asarray(_dense_oracle(args, window, cap, 0.17), dtype).astype(jnp.float32)
-    np.testing.assert_allclose(actual.astype(jnp.float32), expected, atol=1e-5, rtol=1e-5)
-    assert np.max(np.abs(np.asarray(actual, np.float32) - np.asarray(expected))) < 1e-5
+    with jax.default_device(jax.devices("cpu")[0]):
+        args = _decode_case(dtype)
+        q, pages, _, indices, _, _ = args
+        upper = jnp.array([37, 18, 0, 0], jnp.int32)
+        lower = jnp.zeros_like(upper) if window is None else jnp.maximum(0, upper - window)
+        bounds = jnp.stack((lower, upper), axis=-1)
+        table = jnp.maximum(indices[jnp.array([0, 1, 0, 0])], 0)
+        actual = jax.jit(partial(gpu_paged_attention, soft_cap=cap, interpret=True))(q, pages, table, bounds, 0.17)
+        expected = jnp.asarray(_dense_oracle(args, window, cap, 0.17), dtype).astype(jnp.float32)
+        np.testing.assert_allclose(actual.astype(jnp.float32), expected, atol=1e-5, rtol=1e-5)
+        assert np.max(np.abs(np.asarray(actual, np.float32) - np.asarray(expected))) < 1e-5
 
 
 @pytest.mark.skipif(jax.default_backend() != "gpu", reason="GPU Pallas kernel")
@@ -151,12 +152,13 @@ def test_grug_gpu_paged_attention_decode_matches_dense(window, dtype):
 
 @pytest.mark.parametrize("kv_splits", [8, 16])
 def test_grug_gpu_split_reduction_matches_dense(kv_splits):
-    rng = np.random.default_rng(41)
-    q = jnp.asarray(rng.normal(size=(1, 2, 3, 32)), jnp.float32)
-    pages = jnp.asarray(rng.normal(size=(19, 16, 4, 32)), jnp.float32)
-    table = jnp.arange(18, -1, -1, dtype=jnp.int32)[None]
-    args = _PagedCase(q, pages, jnp.array([291]), table, jnp.array([0, 1]), jnp.array(1))
-    actual = jax.jit(partial(gpu_paged_attention, kv_splits=kv_splits, interpret=True))(
-        q, pages, table, jnp.array([[28, 291]]), 0.17
-    )
-    np.testing.assert_allclose(actual, _dense_oracle(args, 263, None, 0.17), atol=1e-5, rtol=1e-5)
+    with jax.default_device(jax.devices("cpu")[0]):
+        rng = np.random.default_rng(41)
+        q = jnp.asarray(rng.normal(size=(1, 2, 3, 32)), jnp.float32)
+        pages = jnp.asarray(rng.normal(size=(19, 16, 4, 32)), jnp.float32)
+        table = jnp.arange(18, -1, -1, dtype=jnp.int32)[None]
+        args = _PagedCase(q, pages, jnp.array([291]), table, jnp.array([0, 1]), jnp.array(1))
+        actual = jax.jit(partial(gpu_paged_attention, kv_splits=kv_splits, interpret=True))(
+            q, pages, table, jnp.array([[28, 291]]), 0.17
+        )
+        np.testing.assert_allclose(actual, _dense_oracle(args, 263, None, 0.17), atol=1e-5, rtol=1e-5)
