@@ -12,6 +12,7 @@ from haliax import NamedArray
 from jax.sharding import PartitionSpec as P, reshard
 
 from levanter.inference.page_table import PageBatchInfo
+from levanter.inference.speculative import SpeculativeTargetOutput
 from levanter.layers.kv_cache import KvPageCache
 from levanter.models.eagle3 import Eagle3Draft
 
@@ -99,3 +100,81 @@ def propose_eagle3(
     )
     final, proposals = jax.lax.scan(step, initial, xs=None, length=num_draft_tokens)
     return Eagle3Proposals(proposals.T, final.cache)
+
+
+class Eagle3Reconciliation(NamedTuple):
+    cache: KvPageCache
+    committed_seq_lens: NamedArray
+    pending_tokens: jax.Array
+    target_auxiliary: jax.Array
+
+
+def reconcile_eagle3(
+    model: Eagle3Draft,
+    initial_pending_tokens: NamedArray,
+    initial_target_auxiliary: jax.Array,
+    tentative_cache: KvPageCache,
+    initial_batch_info: PageBatchInfo,
+    verification: SpeculativeTargetOutput,
+    *,
+    token_capacity: int,
+) -> Eagle3Reconciliation:
+    """Replace predicted draft-cache rows with the verified target residual prefix.
+
+    Replay the original target-grounded row plus accepted outputs preceding the
+    final pending token. Only verified lengths become visible; rejected or cancelled
+    suffixes retain no logical ownership. No pages are allocated or reclaimed.
+    Returned pending IDs and residuals seed the next proposal round; cancelled
+    rows contain -1 IDs and zero residuals and must be removed by the scheduler.
+    """
+    sequences, width = verification.tokens.token_ids.shape
+    if token_capacity < sequences * width:
+        raise ValueError("Reconciliation token capacity must cover every verified block")
+    active = jnp.arange(sequences) < initial_batch_info.num_seqs
+    lengths = jnp.where(active, verification.tokens.lengths, 0)
+    prefix_lengths = initial_batch_info.seq_lens.array - jnp.diff(initial_batch_info.cu_q_lens.array)
+    offsets = jnp.concatenate([jnp.zeros(1, jnp.int32), jnp.cumsum(lengths)])
+    sequence_rows = jnp.repeat(jnp.arange(sequences), lengths, total_repeat_length=token_capacity)
+    token_rows = jnp.arange(token_capacity) - offsets[sequence_rows]
+    valid = jnp.arange(token_capacity) < offsets[-1]
+    token_rows = jnp.clip(token_rows, 0, width - 1)
+    tokens = jnp.concatenate(
+        [initial_pending_tokens.array[:sequences, None], verification.tokens.token_ids[:, :-1]], axis=1
+    )
+    residuals = jnp.concatenate(
+        [initial_target_auxiliary[:sequences, None], verification.auxiliary_states[:, :-1]], axis=1
+    )
+    packed_tokens = tokens.at[sequence_rows, token_rows].get(out_sharding=P(None))
+    packed_residuals = residuals.at[sequence_rows, token_rows].get(out_sharding=P(None, None))
+    positions = prefix_lengths[sequence_rows] + token_rows
+    pages = initial_batch_info.page_indices.array.at[sequence_rows, positions // initial_batch_info.page_size].get(
+        out_sharding=P(None)
+    )
+    destinations = jnp.where(
+        valid, pages * initial_batch_info.page_size + positions % initial_batch_info.page_size, -1
+    )
+    info = PageBatchInfo(
+        slot_ids=initial_batch_info.slot_ids,
+        page_indices=initial_batch_info.page_indices,
+        seq_lens=hax.named(prefix_lengths + lengths, initial_batch_info.seq_lens.axes),
+        cu_q_lens=hax.named(offsets, initial_batch_info.cu_q_lens.axes),
+        num_seqs=initial_batch_info.num_seqs,
+        new_token_dests=hax.named(destinations, "position"),
+        page_size=initial_batch_info.page_size,
+    )
+    output = model.decode(
+        hax.named(jnp.where(valid, packed_tokens, 0), "position"),
+        reshard(model.project_target_states(packed_residuals), P(None, None)),
+        tentative_cache,
+        info,
+        hax.named(jnp.where(valid, positions, 0), "position"),
+    )
+    last = jnp.maximum(lengths - 1, 0)
+    pending = verification.tokens.token_ids.at[jnp.arange(sequences), last].get(out_sharding=P(None))
+    auxiliary = verification.auxiliary_states.at[jnp.arange(sequences), last].get(out_sharding=P(None, None))
+    return Eagle3Reconciliation(
+        output.cache,
+        info.seq_lens,
+        jnp.where(lengths > 0, pending, -1),
+        jnp.where(lengths[:, None] > 0, auxiliary, 0),
+    )
