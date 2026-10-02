@@ -10,6 +10,8 @@ import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from rigging.provenance import Provenance
+
 
 @dataclass(frozen=True)
 class TokenWorkload:
@@ -97,3 +99,23 @@ def measure_batches(
         "samples": [dataclasses.asdict(row) for row in samples],
         "median_output_tokens_per_second": statistics.median(row.output_tokens_per_second for row in samples),
     }
+
+
+@dataclass(frozen=True)
+class SourceProvenance:
+    revision: str | None
+    dirty: bool | None
+    origin: str
+    tree_hash: str | None = None
+
+
+def source_provenance(revision: str | None = None, dirty: bool | None = None) -> SourceProvenance:
+    """Use launcher provenance for source bundles, or inspect the current Git checkout."""
+    if revision is not None:
+        return SourceProvenance(revision, dirty, "launcher")
+    if dirty is not None:
+        raise ValueError("An explicit dirty state requires a source revision")
+    captured = Provenance.capture()
+    if not captured.base_commit:
+        return SourceProvenance(None, None, "unavailable")
+    return SourceProvenance(captured.base_commit, captured.dirty, "capture", captured.tree_hash or None)

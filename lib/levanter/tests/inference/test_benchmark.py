@@ -2,8 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
 
-from levanter.inference.benchmark import BatchMeasurement, TokenWorkload, measure_batches, summarize_batch
+from levanter.inference.benchmark import (
+    BatchMeasurement,
+    TokenWorkload,
+    measure_batches,
+    source_provenance,
+    summarize_batch,
+)
 
 
 def test_benchmark_excludes_compile_and_warmup_from_steady_state():
@@ -26,3 +33,17 @@ def test_benchmark_rejects_dropped_requests_and_truncated_generations():
     for outputs in [[[4, 5, 6]], [[4, 5, 6], [7]]]:
         with pytest.raises(ValueError, match="Incomplete generation"):
             summarize_batch(workload, BatchMeasurement(elapsed=2, first_token=[1, 1], tokens=outputs))
+
+
+def test_source_bundle_does_not_claim_a_clean_git_checkout(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+    absent = source_provenance()
+    assert absent.revision is None and absent.dirty is None
+    supplied = source_provenance("0123456789abcdef")
+    assert supplied.revision == "0123456789abcdef"
+    assert supplied.dirty is None
+    published = Provenance(tree_hash="tree123", base_commit="commit456", dirty=True, branch=None, built_by=None)
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, published.to_json())
+    inherited = source_provenance()
+    assert (inherited.revision, inherited.tree_hash, inherited.dirty) == ("commit456", "tree123", True)
