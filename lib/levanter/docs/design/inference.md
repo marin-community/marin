@@ -303,3 +303,22 @@ recorded in the report; eager inference can still compile CUDA kernels during st
 The async vLLM client distributes requests across data-parallel ranks when
 configured, while preserving per-request first-token timestamps. Larger
 workloads require a separate benchmark configuration.
+
+After both runtime commands finish, write the paired report:
+
+```bash
+uv run python -m experiments.benchmarks.matched_inference compare --fixture /tmp/hero-comparison
+```
+
+`comparison.json` checks checkpoint identity, loaded HF configuration, architecture,
+dtype, exact token workload, accelerator allocation label and kinds, and the
+supported parallelism pairing: native EP=N/TP1/data1 versus local vLLM DP=N with
+EP enabled for N>1. Backend attention selectors remain visible execution choices.
+Other configuration differences reject the comparison.
+
+Each runtime saves one additional validation batch after the timed samples. Its
+tokens and hash remain outside the throughput summary. The comparison records
+hash agreement across every batch, the first differing request and output-token
+position, and effective execution modes. It withholds the throughput ratio if
+outputs differ across backends or batches. Reports from before this validation
+capture must be rerun; timing hashes alone cannot identify a divergent token.
