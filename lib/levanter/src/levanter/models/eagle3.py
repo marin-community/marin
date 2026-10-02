@@ -151,7 +151,7 @@ class Eagle3Draft(eqx.Module):
     def from_state_dict(
         cls,
         config: Eagle3Config,
-        state: Mapping[str, Any],
+        state: Mapping[str, np.ndarray | jax.Array],
         *,
         target_embedding: jax.Array,
     ) -> "Eagle3Draft":
