@@ -14,7 +14,7 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator, Transformer
-from experiments.grug.moe_hero_pipeline.pipeline import _copy_array_to_host, split_transformer
+from experiments.grug.moe_hero_pipeline.pipeline import GrugMoePipelineStage, _copy_array_to_host, split_transformer
 
 
 def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
@@ -39,7 +39,9 @@ def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
         sconv=True,
         sconv_kernel=3,
         qb_estimator=qb_estimator,
-        qb_hist_bins=32,
+        # Keep this fixture's margins away from bin edges, where scan/stage
+        # roundoff can produce a full-bin quantile jump.
+        qb_hist_bins=33,
         attention_implementation="reference",
         moe_implementation="scatter",
         initializer_std=0.2,
@@ -102,16 +104,16 @@ def test_pipeline_embedding_recompute_preserves_values_and_gradients(dtype):
 def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimator):
     mesh, model = _tiny_hero(qb_estimator)
     batch = _packed_batch()
-    # Histogram binning is discontinuous: scan fusion can move a margin across a
-    # bin edge through rounding. Compare router statistics at the same per-layer
-    # execution boundaries; the tests below cover compiled loss and gradients.
-    with jax.set_mesh(mesh), jax.disable_jit():
-        expected_hidden, expected_metrics = model(batch.tokens, batch.attn_mask)
+    # Compile the scan and whole stages: executing shard_map primitives
+    # separately exceeds the CPU compilation budget.
+    with jax.set_mesh(mesh):
+        expected_hidden, expected_metrics = eqx.filter_jit(Transformer.__call__)(model, batch.tokens, batch.attn_mask)
         stages = split_transformer(model, 2, layer_counts=(2, 3))
         hidden = stages[0].embed(batch.tokens)
         stage_metrics = []
+        run_blocks = eqx.filter_jit(GrugMoePipelineStage.run_blocks)
         for stage in stages:
-            hidden, metrics = stage.run_blocks(hidden, batch.attn_mask)
+            hidden, metrics = run_blocks(stage, hidden, batch.attn_mask)
             stage_metrics.append(metrics)
         hidden = stages[-1].finish(hidden)
 
