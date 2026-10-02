@@ -48,6 +48,7 @@ _REASONING_RESERVE = 4096
 _OUTPUT_BUDGET_MULTIPLIER = 2
 _FINAL_ANSWER_PREFIX = "Final Answer:"
 _FINAL_ANSWER = re.compile(r"\[.*\]")
+_METRIC_NAMES = ("f1", "precision", "recall", "exact_match")
 
 
 @dataclass(frozen=True)
@@ -154,7 +155,7 @@ def _benchmark(n_benchmark: int, n_attempted: int) -> BenchmarkMetadataRef:
                 kind=MetricKind.BINARY if name == "exact_match" else MetricKind.CONTINUOUS,
                 higher_is_better=True,
             )
-            for name in ("f1", "precision", "recall", "exact_match")
+            for name in _METRIC_NAMES
         ),
         n_benchmark=n_benchmark,
         n_attempted=n_attempted,
@@ -375,7 +376,7 @@ class GraphWalksExecutor:
 
     def _evaluate(self, selection: _Selection, session: RemoteInferenceSession, output_dir: str) -> EvaluationOutcome:
         n_attempted = len(selection.examples)
-        totals: dict[str, list[float]] = {key: [] for key in ("f1", "precision", "recall", "exact_match")}
+        totals: dict[str, list[float]] = {key: [] for key in _METRIC_NAMES}
         errors: Counter[str] = Counter()
         n_unanswered = 0
         with EvaluationStore.open(output_dir, writer_id=f"marin-graphwalks-{uuid.uuid4().hex}") as store:
