@@ -178,9 +178,8 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
     if isinstance(sm_scale, (float, int)):
         kernel_scale = sm_scale
     else:
-        # Runtime scales cannot be static kernel arguments. Promote before scaling
-        # to avoid rounding BF16 queries before their dot product.
-        q_flat = q_flat.astype(jnp.float32) * sm_scale
+        # Runtime scales cannot be static kernel arguments.
+        q_flat = q_flat * sm_scale
         kernel_scale = 1.0
     with jax.default_matmul_precision("highest"):
         output = tpu_ragged_paged_attention(
