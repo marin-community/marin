@@ -4,6 +4,8 @@
 """Read public source catalogs without executing upstream code or downloading tasks."""
 
 import ast
+import hashlib
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -13,6 +15,7 @@ from typing import Any
 import httpx
 
 from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
+from .hf_sources import HF_ORIGIN, HuggingFaceSource
 from .source_annotations import (
     BENCHMARK_DATASETS,
     CARD_COUNT_DATASETS,
@@ -331,6 +334,8 @@ def set_count_metadata(
 
 def annotate_source(row: dict[str, Any]) -> None:
     """Apply audited classifications and canonical names without changing source IDs."""
+    if row["origin"] == HF_ORIGIN:
+        return
     if row["origin"] == TASKTROVE_ORIGIN:
         row["display_name"] = row["name"].replace("__", "/", 1)
         row.update(
@@ -565,3 +570,50 @@ def tasktrove_snapshot(manifest: dict[str, Any], info: dict[str, Any]) -> Snapsh
     if sum(row["task_count"] for row in rows) != manifest["clean_tasks"]:
         raise ValueError("Task Trove source counts disagree with release total")
     return Snapshot(TASKTROVE_ORIGIN, info["sha"], info["lastModified"], rows)
+
+
+def hf_snapshot(sources: tuple[HuggingFaceSource, ...]) -> Snapshot:
+    """Keep counts, execution contracts and review identities attached to checked-in releases."""
+    revision = hashlib.sha256(json.dumps([asdict(source) for source in sources], sort_keys=True).encode()).hexdigest()
+    rows = []
+    for source in sources:
+        release = f"https://huggingface.co/datasets/{source.dataset_id}"
+        pinned = f"{release}/blob/{source.revision}"
+        manifest = f"{pinned}/manifest.json"
+        row = source_row(HF_ORIGIN, source.dataset_id, source.revision, source.revised_at)
+        row.update(
+            url=f"{release}/tree/{source.revision}",
+            canonical_source=source.dataset_id,
+            canonical_url=f"{release}/tree/{source.revision}",
+            provenance_url=manifest,
+            dataset_id=source.dataset_id,
+            dataset_revision=source.revision,
+            dataset_revised_at=source.revised_at,
+            dataset_version=source.version,
+            task_count=sum(count for _, count in source.splits),
+            split=", ".join(name for name, _ in source.splits),
+            split_counts=dict(source.splits),
+            count_basis="Pinned release manifest: sum of registered split counts",
+            count_precision="exact",
+            count_url=manifest,
+            family=source.family,
+            family_basis="Pinned dataset card and release manifest",
+            family_url=manifest,
+            environment=source.environment,
+            type=source.type,
+            turns=source.turns,
+            classification_basis=source.classification_basis,
+            verification=source.verification,
+            # The executable verifier is bundled in the pinned dataset's task archives.
+            verifier_revision=source.revision,
+            verifier_revised_at=source.revised_at,
+            verifier_url=f"{pinned}/generator_source.tar.gz",
+            revision_basis="Checked-in dataset release; includes the bundled verifier",
+            benchmark_basis=source.benchmark_basis,
+            license=source.license,
+            notes=source.notes,
+            usage_url=source.usage_url,
+            validation_url=source.validation_url,
+        )
+        rows.append(row)
+    return Snapshot(HF_ORIGIN, revision, max((source.revised_at for source in sources), default=""), rows)

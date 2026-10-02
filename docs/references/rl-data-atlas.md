@@ -1,9 +1,11 @@
 # RL Data Atlas
 
 [Open RL Data Atlas](https://public.applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
-to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
+to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources,
+the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest,
+and registered Hugging Face releases without signing in.
 Task Trove packages converted datasets as tasks for the Harbor execution
-environment. The two catalogs are independent and can share original datasets.
+environment. The catalogs are independent and can share original datasets.
 Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link always opens the current release.
 
 Search and filter the table, including its Environment column, click column
@@ -22,6 +24,33 @@ several sources remains a filterable attribute of each source; it does not add a
 aggregate row. The Environment column and verifier dates follow the environment
 selected by that registry source. Distinct configurations, blends, and converted Task Trove releases
 remain separate source populations.
+
+Checked-in Hugging Face registrations in
+`infra/marina/applets/rl_data_catalog/server/hf_sources.py` pin a dataset commit,
+split counts, the execution contract, and evidence links. Refresh reads those
+registrations without downloading tasks or following a moving branch or tag.
+Release updates require a Marin PR. The dataset commit also identifies the
+verifier bundled in its task archives, so a new release invalidates earlier
+ratings while preserving their history.
+
+[PDBThink Coordinate Tasks v1.3.0](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/tree/3734406cb97b1702844319f9a5d860cbbf8fe660)
+registers 100,000 tasks across 19 protein-coordinate families: 91,154 train,
+4,411 validation and 4,435 test. The count covers all three grouped splits.
+Its training/evaluation instances exclude the frozen PDBThink benchmark's
+source entries, exact protein sequences and associated RCSB 30% clusters.
+The registration links the publisher's validation evidence and enters with
+quality and difficulty unreviewed.
+
+PDBThink is single-turn, tool-free RLVR packaged in Harbor. Use the pinned
+release's `CoordinateNoToolsAgent` and native-token budget manifest as described
+in its [execution instructions](https://huggingface.co/datasets/open-athena/pdbthink-coordinate-tasks/blob/3734406cb97b1702844319f9a5d860cbbf8fe660/USAGE.md).
+The default Atlas Terminus-2 review runner permits tools, which violates this
+protocol. This registration does not add a review-runner or training adapter. Supply only
+`prompt.json` to the solver; gold, provenance, test files and oracle solutions
+are evaluator-only. Snowball's 32,768-token context leaves 8,192 output tokens
+for 28,045 training tasks; other model/template combinations need native token
+counts. The existing GLM teacher traces retain their v1.2.0 prompts and scores
+and are not a current Atlas difficulty comparison.
 
 The **Canonical source** column identifies the registered source population. For
 sources that previously had Mixed interaction, each component has its own row

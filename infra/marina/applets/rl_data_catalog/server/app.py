@@ -24,11 +24,13 @@ from .catalog import (
     Snapshot,
     annotate_source,
     get_json,
+    hf_snapshot,
     merge_gym_sources,
     skyrl_snapshot,
     tasktrove_snapshot,
 )
 from .hf_auth import HFCredentialError, HuggingFaceAuth, runtime_hf_token
+from .hf_sources import HF_ORIGIN, HF_SOURCES
 from .verifier_policy import migrate_verifier_policy
 
 logger = logging.getLogger(__name__)
@@ -331,7 +333,7 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
     if not lock:
         return {"busy": True, "message": "Another visitor is refreshing the catalog. Your saved data remains available."}
     results = []
-    for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN):
+    for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN, HF_ORIGIN):
         previous = connection.execute(
             text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": origin}
         ).scalar_one_or_none()
@@ -346,7 +348,7 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                     ).scalars()
                 ]
                 snapshot = skyrl_snapshot(client, head, cached_rows, force=force)
-            else:
+            elif origin == TASKTROVE_ORIGIN:
                 info = get_json(client, f"https://huggingface.co/api/datasets/{TASKTROVE}")
                 revision = info["sha"]
                 manifest = (
@@ -355,6 +357,10 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                     else None
                 )
                 snapshot = tasktrove_snapshot(manifest, info) if manifest is not None else None
+            else:
+                # Refresh even an empty registration set so removing its last source retires it.
+                snapshot = hf_snapshot(HF_SOURCES)
+                revision = snapshot.revision
         except (
             httpx.HTTPError,
             HFCredentialError,
