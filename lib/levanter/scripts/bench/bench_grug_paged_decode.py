@@ -49,7 +49,9 @@ def _measure_jax(fn, inputs, repeats):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--implementation", choices=["reference", "tpu", "gpu_pallas"], required=True)
+    parser.add_argument(
+        "--implementation", choices=["reference", "tpu", "gpu_pallas", "gpu_pallas_bf16_3x"], required=True
+    )
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--context", type=int, required=True)
     parser.add_argument("--kv-heads", type=int, required=True)
@@ -65,6 +67,8 @@ def main():
     parser.add_argument("--kv-splits", type=int, choices=[8, 16], default=8)
     parser.add_argument("--baseline", choices=["flashinfer_xqa", "tpu_vllm_rpa", "tpu_vllm_rpa_fp32"])
     args = parser.parse_args()
+    if args.implementation == "gpu_pallas_bf16_3x":
+        args.av_precision = "bf16_3x"
     if args.baseline in ("tpu_vllm_rpa", "tpu_vllm_rpa_fp32"):
         # The optional fork sets its environment before initializing JAX devices.
         importlib.import_module(TPU_RPA_MODULE)
@@ -143,8 +147,11 @@ def main():
                 "device_type": jax.devices()[0].device_kind,
                 "device_count": 1,
                 "block_sizes": (
-                    {"page_size": args.page_size, "kv_splits": min(args.kv_splits, pages_per_sequence)}
-                    if args.implementation == "gpu_pallas"
+                    {
+                        "page_size": args.page_size,
+                        "kv_splits": min(args.kv_splits, 1 << (pages_per_sequence - 1).bit_length()),
+                    }
+                    if args.implementation in ("gpu_pallas", "gpu_pallas_bf16_3x")
                     else None
                 ),
                 "compile_time": measurements.compile_time,

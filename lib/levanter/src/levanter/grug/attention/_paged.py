@@ -14,7 +14,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.attention._paged_gpu import GpuPagedAvPrecision, gpu_paged_attention
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
-PagedAttentionImplementation = Literal["reference", "tpu", "gpu_pallas"]
+PagedAttentionImplementation = Literal["reference", "tpu", "gpu_pallas", "gpu_pallas_bf16_3x"]
 
 
 def ragged_paged_attention(
@@ -54,10 +54,14 @@ def ragged_paged_attention(
     for FP32 inputs; lower-precision inputs use the reference to preserve accuracy.
     GPU and CPU default to the reference implementation. The opt-in ``gpu_pallas``
     backend accelerates decode-only batches and uses the reference for prefill.
+    ``gpu_pallas_bf16_3x`` selects the same backend with three-component BF16 AV dots.
     Only the KV-head axis is partitioned; sequence metadata and pages are replicated.
     """
     if implementation is None:
         implementation = "tpu" if jax.default_backend() == "tpu" else "reference"
+    if implementation == "gpu_pallas_bf16_3x":
+        implementation = "gpu_pallas"
+        gpu_av_precision = "bf16_3x"
     if implementation not in ("tpu", "reference", "gpu_pallas"):
         raise ValueError(f"Unknown paged attention implementation: {implementation}")
     if sliding_window is not None and sliding_window <= 0:
