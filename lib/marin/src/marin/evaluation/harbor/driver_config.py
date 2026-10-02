@@ -7,8 +7,9 @@ import json
 import logging
 import subprocess
 import tempfile
+import tomllib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -35,6 +36,8 @@ _DRIVER_SYSTEM_ENV_KEYS = (
     "HOME",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "IRIS_UV_EXECUTABLE",
+    "IRIS_WORKDIR",
     "NO_PROXY",
     "PATH",
     "PYTHONHASHSEED",
@@ -71,23 +74,42 @@ _DRIVER_STORAGE_ENV_KEYS = (
     "GOOGLE_CLOUD_PROJECT",
 )
 
-HARBOR_PACKAGES = (HARBOR.requirement(("archive",)), *HARBOR.runtime_requirements)
-HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
+HARBOR_RUNTIME_PROJECT = "config/external/harbor"
+
+
+def harbor_runtime_descriptor(commit: str, runtime_project: str = HARBOR_RUNTIME_PROJECT) -> str:
+    dependency = replace(HARBOR, commit=commit)
+    if runtime_project == HARBOR_RUNTIME_PROJECT:
+        requirements = dependency.runtime_requirements
+    else:
+        lock_path = _harbor_env_dir(runtime_project) / "uv.lock"
+        with lock_path.open("rb") as lock_file:
+            packages = tomllib.load(lock_file)["package"]
+        by_name = {package["name"]: package for package in packages}
+        locked_commit = by_name["harbor"]["source"]["git"].rsplit("#", 1)[-1]
+        if locked_commit != commit:
+            raise ValueError(f"Harbor lock {lock_path} pins {locked_commit}, expected {commit}")
+        direct_dependencies = by_name["marin-external-harbor"]["dependencies"]
+        requirements = tuple(
+            f"{name}=={by_name[name]['version']}" for entry in direct_dependencies if (name := entry["name"]) != "harbor"
+        )
+    return "; ".join((dependency.requirement(("archive",)), *requirements))
+
+
+HARBOR_RUNTIME = harbor_runtime_descriptor(HARBOR.commit)
 
 # The isolated driver runs against the fully pinned lock under this directory, not a loose ``--with``
 # resolution: the git-branch and pre-release pins (harbor, litellm) drift daily, and only the locked
 # set is validated to import and to carry the fsspec backends the remote ``jobs_dir`` needs.
-_HARBOR_ENV_CONFIG = ("config", "external", "harbor")
-
 logger = logging.getLogger(__name__)
 
 
-def _harbor_env_dir() -> Path:
-    """The locked isolated-driver project (``config/external/harbor``) in the Marin workspace."""
+def _harbor_env_dir(runtime_project: str) -> Path:
+    """Resolve a locked isolated-driver project in the local Marin workspace."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("Harbor driver requires a Marin workspace to locate its pinned environment")
-    return workspace_root.joinpath(*_HARBOR_ENV_CONFIG)
+    return workspace_root / runtime_project
 
 
 class HarborDatasetKind(StrEnum):
@@ -127,6 +149,7 @@ class ValidatedHarborConfig:
     benchmark: BenchmarkMetadataRef
     trials_per_task: int
     verifier_env_keys: tuple[str, ...] = ()
+    runtime_project: str = HARBOR_RUNTIME_PROJECT
 
     @property
     def record_dataset(self) -> str:
@@ -162,17 +185,19 @@ class HarborRuntimeOverlay:
     served_model: str
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
+    verifier_env: Mapping[str, str]
     archive_root: str
     archive_dataset: str
 
 
-def _driver_command(command: str, *paths: Path) -> list[str]:
+def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[str]:
     return [
         "uv",
         "run",
         "--isolated",
         "--project",
-        str(_harbor_env_dir()),
+        str(_harbor_env_dir(runtime_project)),
+        "--frozen",
         "python",
         str(_TRIAL_DRIVER),
         command,
@@ -243,7 +268,7 @@ def _raise_for_backend_state(state: InferenceBackendState) -> None:
         raise RuntimeError("inference backend finished while Harbor was running")
 
 
-def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
+def _validated_config(payload: object, path: Path, runtime_project: str) -> ValidatedHarborConfig:
     if not isinstance(payload, Mapping):
         raise ValueError(f"Harbor preflight returned a non-object result for {path}")
 
@@ -340,11 +365,13 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
         max_output_tokens=required_int("max_output_tokens"),
         benchmark=benchmark,
         trials_per_task=required_positive_int("trials_per_task"),
+        runtime_project=runtime_project,
     )
 
 
 def preflight_harbor_configs(
     requests: Sequence[tuple[Path, Mapping[str, object]]],
+    runtime_project: str = HARBOR_RUNTIME_PROJECT,
 ) -> tuple[ValidatedHarborConfig, ...]:
     """Validate Harbor policies and their placeholder effective jobs before launch."""
     if not requests:
@@ -365,7 +392,7 @@ def preflight_harbor_configs(
             raise ValueError("Harbor model agent kwargs must be JSON-serializable") from exc
         request_path.chmod(_OWNER_ONLY_MODE)
         try:
-            completed = _capture_driver(_driver_command("preflight", request_path))
+            completed = _capture_driver(_driver_command(runtime_project, "preflight", request_path))
         except ValueError as exc:
             paths = ", ".join(str(path) for path, _ in requests)
             raise ValueError(f"invalid Harbor config in [{paths}]: {exc}") from exc
@@ -379,7 +406,9 @@ def preflight_harbor_configs(
             f"Harbor preflight returned {len(response) if isinstance(response, list) else 'invalid'} "
             f"result(s) for {len(requests)} request(s)"
         )
-    return tuple(_validated_config(payload, path) for payload, (path, _) in zip(response, requests, strict=True))
+    return tuple(
+        _validated_config(payload, path, runtime_project) for payload, (path, _) in zip(response, requests, strict=True)
+    )
 
 
 def run_harbor_driver(
@@ -389,7 +418,7 @@ def run_harbor_driver(
     backend_state: Callable[[], InferenceBackendState],
 ) -> None:
     """Apply a runtime overlay and run one Harbor job in the isolated environment."""
-    runtime = {"version": HARBOR.version, "commit": HARBOR.commit}
+    runtime = {"version": HARBOR.version, "commit": config.error_taxonomy.commit}
     logger.info("Harbor runtime: %s", json.dumps(runtime, sort_keys=True), extra={"harbor_runtime": runtime})
     with tempfile.TemporaryDirectory(prefix="marin-harbor-run-") as temp_dir:
         policy_path = Path(temp_dir) / "policy.json"
@@ -410,6 +439,6 @@ def run_harbor_driver(
             raise ValueError("Harbor runtime overlay must be JSON-serializable") from exc
         policy_path.chmod(_OWNER_ONLY_MODE)
         overlay_path.chmod(_OWNER_ONLY_MODE)
-        command = _driver_command("run", policy_path, overlay_path)
+        command = _driver_command(config.runtime_project, "run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
         _stream_driver(command, driver_env, backend_state)

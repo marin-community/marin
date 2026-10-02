@@ -44,9 +44,9 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -218,9 +218,6 @@ class AsyncPreset:
     first_token_admission: bool = True
     # Export the telemetry the async RL dashboard reads.
     telemetry: bool = True
-    # Track the cosine between successive gradients; costs one fp32 gradient copy per rank and one
-    # all-reduce per update.
-    grad_cosine: bool = False
 
 
 # An evaluation pauses generation for 256 prompts, about 13 minutes against a 55 to 97 second
@@ -426,13 +423,11 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             # No KL term against the reference, in the loss or in the reward.
             "use_kl_loss": False,
             "use_kl_in_reward": False,
-            # No truncated importance sampling on top of the clip.
-            "use_tis": False,
+            # The policy loss uses unit correction weights.
+            "off_policy_correction": "none",
             # Symmetric PPO clip.
             "eps_clip_low": 0.2,
             "eps_clip_high": 0.2,
-            "ratio_diagnostics": {"pooled": preset.telemetry},
-            "grad_cosine": {"enabled": preset.grad_cosine},
         },
         "policy": {
             "optimizer_config": {
@@ -528,7 +523,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
 
 @dataclass(frozen=True)
 class AsyncRun:
-    rl: ArtifactStep[SkyRLModel]
+    rl: ArtifactStep[SkyRLRun]
     evaluation: ArtifactStep[EvaluationResult]
 
 
@@ -581,6 +576,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             # cannot write there.
             wandb_entity=None,
         ),
+        export_hf=True,
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server.
     # evaluation_model_config adds max_new_tokens to request_window_tokens, so it gets the prompt share.

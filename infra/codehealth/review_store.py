@@ -59,6 +59,7 @@ MAX_SYNC_ATTEMPTS = 3
 MAX_ACTIVITY_RESULTS = 500
 STORED_ERROR_MAX_LENGTH = 4_000
 DATABASE_WRITE_BATCH_SIZE = 100
+FINELOG_SEQUENCE_FIELD = "seq"
 
 metadata = MetaData()
 json_type = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
@@ -865,43 +866,66 @@ def store_telemetry(
     findings: Sequence[LintFindingRecord],
 ) -> None:
     """Mirror bounded Finelog activity for single-store exploration queries."""
-    invocation_rows: list[dict[str, object]] = []
+    invocation_rows: dict[str, dict[str, object]] = {}
+    invocation_payloads: dict[str, dict[str, object]] = {}
+    invocation_sequences: dict[str, int] = {}
     for row in invocations:
         payload = _payload(row)
-        invocation_rows.append(
-            {
-                "invocation_id": row.invocation_id,
-                "repository": repository,
-                "ts": _utc_datetime(row.ts),
-                "pr_number": row.pr_number,
-                "head_sha": row.head_sha,
-                "catalog_sha": row.lint_catalog_sha,
-                "successful": (
-                    payload.get("agent_exit_code") is not None
-                    and int(payload["agent_exit_code"]) == 0
-                    and not bool(payload.get("timed_out"))
-                ),
-                "finding_count": int(payload.get("finding_count") or 0),
-                "record": payload,
-            }
-        )
-    finding_rows: list[dict[str, object]] = []
+        # Finelog can re-emit one invocation with a new ingestion sequence.
+        content = {key: value for key, value in payload.items() if key != FINELOG_SEQUENCE_FIELD}
+        previous = invocation_payloads.get(row.invocation_id)
+        if previous is not None and previous != content:
+            raise ValueError(f"conflicting Finelog invocation rows for {row.invocation_id}")
+        invocation_payloads[row.invocation_id] = content
+        sequence = int(payload[FINELOG_SEQUENCE_FIELD]) if payload.get(FINELOG_SEQUENCE_FIELD) is not None else -1
+        if row.invocation_id in invocation_rows and sequence <= invocation_sequences[row.invocation_id]:
+            continue
+        invocation_sequences[row.invocation_id] = sequence
+        invocation_rows[row.invocation_id] = {
+            "invocation_id": row.invocation_id,
+            "repository": repository,
+            "ts": _utc_datetime(row.ts),
+            "pr_number": row.pr_number,
+            "head_sha": row.head_sha,
+            "catalog_sha": row.lint_catalog_sha,
+            "successful": (
+                payload.get("agent_exit_code") is not None
+                and int(payload["agent_exit_code"]) == 0
+                and not bool(payload.get("timed_out"))
+            ),
+            "finding_count": int(payload.get("finding_count") or 0),
+            "record": payload,
+        }
+    finding_rows: dict[str, dict[str, object]] = {}
+    finding_sequences: dict[str, int] = {}
     for row in findings:
         payload = _payload(row)
-        finding_rows.append(
-            {
-                "finding_id": record_sha(payload),
-                "invocation_id": row.invocation_id,
-                "repository": repository,
-                "ts": _utc_datetime(row.ts),
-                "pr_number": row.pr_number,
-                "code": row.code or "",
-                "record": payload,
-            }
-        )
+        content = {key: value for key, value in payload.items() if key != FINELOG_SEQUENCE_FIELD}
+        finding_id = record_sha(content)
+        sequence = int(payload[FINELOG_SEQUENCE_FIELD]) if payload.get(FINELOG_SEQUENCE_FIELD) is not None else -1
+        if finding_id in finding_rows and sequence <= finding_sequences[finding_id]:
+            continue
+        finding_sequences[finding_id] = sequence
+        finding_rows[finding_id] = {
+            "finding_id": finding_id,
+            "invocation_id": row.invocation_id,
+            "repository": repository,
+            "ts": _utc_datetime(row.ts),
+            "pr_number": row.pr_number,
+            "code": row.code or "",
+            "record": payload,
+        }
     with engine.begin() as conn:
-        _upsert_many(conn, lint_invocations, invocation_rows, ("repository", "invocation_id"))
-        _upsert_many(conn, lint_findings, finding_rows, ("repository", "finding_id"))
+        _upsert_many(conn, lint_invocations, list(invocation_rows.values()), ("repository", "invocation_id"))
+        affected_invocations = {row.invocation_id for row in findings}
+        for invocation_batch in batched(affected_invocations, DATABASE_WRITE_BATCH_SIZE):
+            conn.execute(
+                lint_findings.delete().where(
+                    lint_findings.c.repository == repository,
+                    lint_findings.c.invocation_id.in_(invocation_batch),
+                )
+            )
+        _upsert_many(conn, lint_findings, list(finding_rows.values()), ("repository", "finding_id"))
 
 
 def store_catalog_snapshot(

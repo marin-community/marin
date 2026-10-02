@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
 from marin.evaluation.runner import EvaluationError
+from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
@@ -41,18 +44,24 @@ _ERROR_TAXONOMY = HarborErrorTaxonomy(
 )
 
 
-def _running_model() -> RunningModel:
+def _running_model(
+    base_url: str = "https://iris.example/proxy/t/token/serve.model/v1",
+    model: str = "qwen3-0.6b",
+) -> RunningModel:
     return RunningModel(
         endpoint=OpenAIEndpoint(
-            base_url="https://iris.example/proxy/t/token/serve.model/v1",
-            model="qwen3-0.6b",
+            base_url=base_url,
+            model=model,
         )
     )
 
 
-def _inference_session() -> RemoteInferenceSession:
+def _inference_session(
+    base_url: str = "https://iris.example/proxy/t/token/serve.model/v1",
+    model: str = "qwen3-0.6b",
+) -> RemoteInferenceSession:
     return RemoteInferenceSession(
-        model=_running_model(),
+        model=_running_model(base_url, model),
         jobs=(),
         endpoint_name="/serve/test",
         endpoint_health_timeout_seconds=1800.0,
@@ -420,6 +429,35 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     }
 
 
+def test_historical_harbor_descriptor_uses_locked_dependencies(tmp_path, monkeypatch):
+    commit = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
+    project = f"config/external/harbor/pins/{commit}"
+    lock_dir = tmp_path / project
+    lock_dir.mkdir(parents=True)
+    (lock_dir / "uv.lock").write_text(
+        f"""
+[[package]]
+name = "harbor"
+source = {{ git = "https://github.com/marin-community/harbor.git#{commit}" }}
+[[package]]
+name = "marin-external-harbor"
+dependencies = [{{ name = "gcsfs" }}]
+[[package]]
+name = "gcsfs"
+version = "1.0"
+"""
+    )
+    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: tmp_path)
+    monkeypatch.setattr(driver_config, "HARBOR", replace(HARBOR, runtime_requirements=("future==1",)))
+
+    descriptor = driver_config.harbor_runtime_descriptor(commit, project)
+
+    assert "gcsfs==1.0" in descriptor
+    assert "future==1" not in descriptor
+    with pytest.raises(ValueError, match="pins"):
+        driver_config.harbor_runtime_descriptor("0" * 40, project)
+
+
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):
     terminated_return_codes: list[int | None] = []
     terminate_process_group = driver_config.terminate_process_group
@@ -446,6 +484,7 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
                 served_model="model",
                 task_limit=1,
                 model_agent_kwargs={},
+                verifier_env={},
                 archive_root=str(tmp_path / "archive"),
                 archive_dataset="dataset",
             ),
@@ -455,6 +494,27 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
 
     assert len(terminated_return_codes) == 1
     assert terminated_return_codes[0] is not None
+
+
+def test_harbor_driver_can_use_iris_uv_wrapper(tmp_path, monkeypatch):
+    uv = tmp_path / "uv"
+    uv.write_text(
+        """#!/bin/bash
+set -u
+recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
+exec "$IRIS_UV_EXECUTABLE" "$@"
+"""
+    )
+    uv.chmod(0o755)
+    executable = tmp_path / "real-uv"
+    executable.write_text('#!/bin/bash\nprintf "%s" "$IRIS_WORKDIR"\n')
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("IRIS_UV_EXECUTABLE", str(executable))
+
+    completed = driver_config._capture_driver(["uv", "run"])
+    assert completed.stdout == str(tmp_path)
 
 
 def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):
@@ -474,6 +534,7 @@ def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_p
                 served_model="model",
                 task_limit=1,
                 model_agent_kwargs={},
+                verifier_env={},
                 archive_root=str(tmp_path / "archive"),
                 archive_dataset="dataset",
             ),
@@ -505,6 +566,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-harbor")
     session = _inference_session()
+    judge = _inference_session("https://iris.example/proxy/t/judge/serve.judge/v1", "qwen-judge")
     model = session.model
 
     selector = (
@@ -526,6 +588,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         session,
         str(tmp_path),
         env_vars,
+        judge=judge,
     )
 
     assert captured["config"] is executor.config
@@ -533,6 +596,11 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["overlay"].served_model == "qwen3-0.6b"
     assert captured["overlay"].task_limit == 7
     assert captured["overlay"].model_agent_kwargs == {"extra_body": "{}"}
+    assert captured["overlay"].verifier_env == {
+        "OPENAI_API_KEY": "EMPTY",
+        "OPENAI_BASE_URL": judge.model.endpoint.base_url,
+        "MODEL_NAME": "qwen-judge",
+    }
     assert captured["overlay"].archive_root == str(tmp_path)
     assert captured["overlay"].archive_dataset == executor.config.record_dataset
     assert captured["overlay"].dataset_path is None

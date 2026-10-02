@@ -47,6 +47,17 @@ def _matches(candidate: str, spec: ExactSpec) -> bool:
     return Counter(items) == Counter(expected)
 
 
+def grade_exact_candidate(spec: ExactSpec, candidate: str) -> Reward:
+    """Score answer content after the caller extracts it from its submission format."""
+    if not spec.expected:
+        raise InvalidTask("exact expects at least one expected string")
+    return scored(
+        float(_matches(candidate, spec)),
+        extracted=candidate.strip()[:MAX_DETAIL_CHARS],
+        expected=list(spec.expected),
+    )
+
+
 def grade(spec: ExactSpec, tests_dir: Path, workspace: Path) -> Reward:
     if not spec.expected:
         raise InvalidTask("exact expects at least one expected string")
@@ -56,6 +67,8 @@ def grade(spec: ExactSpec, tests_dir: Path, workspace: Path) -> Reward:
         return scored(0.0, reason="no_output")
     boxed = extract_boxed(text)
     candidates = [boxed, text] if boxed is not None else [text]
-    detail = {"extracted": candidates[0].strip()[:MAX_DETAIL_CHARS], "expected": list(spec.expected)}
-    match = any(_matches(candidate, spec) for candidate in candidates)
-    return scored(float(match), **detail)
+    result = grade_exact_candidate(spec, candidates[0])
+    if result.reward or len(candidates) == 1:
+        return result
+    fallback = grade_exact_candidate(spec, candidates[1])
+    return scored(fallback.reward, **result.detail)

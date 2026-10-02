@@ -27,9 +27,9 @@ from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -57,7 +57,7 @@ SEED = 17
 MAX_STEPS = 1
 REQUEST_WINDOW_TOKENS = 4096
 MAX_NEW_TOKENS_PER_TURN = 256
-MAX_TURNS = 1
+MAX_TURNS = 4
 
 # One H100 node with colocated policy and inference actors. Qwen3-0.6B is the smallest mirrored
 # policy that exercises the real vLLM, Harbor, weight-sync, optimizer, checkpoint, and export path.
@@ -142,7 +142,7 @@ terminal_bench:
     enabled: false
 
 trainer:
-  strategy: fsdp2
+  strategy: megatron
   flash_attn: true
   use_sample_packing: false
   algorithm:
@@ -152,7 +152,6 @@ trainer:
   max_steps: {MAX_STEPS}
   update_epochs_per_batch: 1
   eval_batch_size: {plan.train_batch_size}
-  micro_forward_batch_size_per_gpu: 8
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: {MAX_STEPS}
@@ -165,9 +164,6 @@ trainer:
     optimizer_config:
       lr: 2.0e-6
       max_grad_norm: 1.0
-    fsdp_config:
-      cpu_offload: false
-      reshard_after_forward: true
 generator:
   backend: vllm
   model_dtype: bfloat16
@@ -176,8 +172,6 @@ generator:
   enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
-  async_engine: true
-  batched: false
   enable_http_endpoint: true
   sampling_params:
     temperature: 1.0
@@ -189,20 +183,20 @@ data:
   val_data: []
 
 trajectory_runner:
-  process_pool:
-    num_coordinators: 2
-    cpus_per_coordinator: 4
+  rollout_workers:
+    num_workers: 2
+    cpus_per_worker: 4
 """
 
 
-def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
+def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(RL_ARTIFACT_NAME)
     return skyrl_step(
         SkyRLSpec(
             name=name,
             version=resolve_version(name, None),
             config_yaml=rl_config_yaml(ROLE_PLAN),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=model_step(MODEL_VERSION),
                 tokenizer_uri=QWEN3_MODEL,

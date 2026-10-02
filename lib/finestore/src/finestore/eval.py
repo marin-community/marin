@@ -223,9 +223,9 @@ SOURCES_PREFIX = "sources"
 # The archive's own keys on a samples row, added at write time (not EvalSample fields): a sample is
 # unique within a run by its task, its document, the trial that produced it (for multi-attempt Harbor
 # runs), and the extraction filter that scored it (for lm-eval tasks that apply more than one).
-# evalchemy leaves ``trial_id`` empty (one attempt per document). An lm-eval row names its filter
-# even when the task applies only one ("none"), so the column holds that name; a Harbor trial, or a
-# benchmark that reports no filter at all, leaves it empty.
+# Evalchemy uses ``trial_id`` for repeated samples and leaves it empty for a single attempt per
+# document. An lm-eval row names its filter even when the task applies only one ("none"), so the
+# column holds that name; a Harbor trial, or a benchmark that reports no filter at all, leaves it empty.
 TRIAL_ID_COLUMN = "trial_id"
 FILTER_COLUMN = "filter"
 SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, FILTER_COLUMN)
@@ -261,7 +261,7 @@ def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "", extraction_
     """One archive ``samples`` row plus its ``trial_id`` and extraction-filter merge keys.
 
     The explicit source filter supports custom lm-eval tasks that emit a filtered response without
-    a per-sample grade. Other producers derive it from :class:`Grading` as before.
+    a per-sample grade. Other producers derive it from :class:`Grading`.
     """
     row = sample.model_dump(mode="json")
     row[TRIAL_ID_COLUMN] = trial_id
