@@ -22,6 +22,8 @@ _QUERY_GROUP_ALIGNMENT = 8
 _INVERSE_LOG_2 = 1 / log(2)
 _MIN_NORMAL_LOG = -126 * log(2)
 _EXP_DEGREE = 12
+_DEKKER_LOW_SIGNIFICAND_BITS = 12
+_DEKKER_HIGH_MASK = -(1 << _DEKKER_LOW_SIGNIFICAND_BITS)
 
 
 class _FloatPair(NamedTuple):
@@ -48,8 +50,8 @@ def _two_sum(a, b):
 
 def _two_product(a, b):
     # Dekker splitting recovers FP32 multiplication's rounding residual.
-    a_high = jax.lax.bitcast_convert_type(jax.lax.bitcast_convert_type(a, jnp.int32) & -4096, jnp.float32)
-    b_high = jax.lax.bitcast_convert_type(jax.lax.bitcast_convert_type(b, jnp.int32) & -4096, jnp.float32)
+    a_high = jax.lax.bitcast_convert_type(jax.lax.bitcast_convert_type(a, jnp.int32) & _DEKKER_HIGH_MASK, jnp.float32)
+    b_high = jax.lax.bitcast_convert_type(jax.lax.bitcast_convert_type(b, jnp.int32) & _DEKKER_HIGH_MASK, jnp.float32)
     a_low, b_low = a - a_high, b - b_high
     high = a * b
     low = ((a_high * b_high - high) + a_high * b_low + a_low * b_high) + a_low * b_low
@@ -243,9 +245,8 @@ def tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale, *, dma_buffers=
     """Attend to local cache pages inside the caller's KV-head shard_map.
 
     Queries are [tokens, heads, groups, dim], cache pages are interleaved K/V,
-    and bounds are inclusive lower/exclusive upper token positions. FP32 high/low
-    pairs retain rounding residuals through softmax and BF16 output conversion. Empty
-    bounds return zero. This forward-only kernel requires positive page sizes
+    and bounds are inclusive lower/exclusive upper token positions. Empty bounds
+    return zero. Outputs preserve the query dtype. This forward-only kernel requires positive page sizes
     divisible by 16 and head dimensions divisible by 128. Two DMA buffers
     overlap the next page load with current-page math; one preserves serial DMA.
     """
