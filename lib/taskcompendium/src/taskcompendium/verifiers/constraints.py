@@ -10,9 +10,9 @@ from typing import Any
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
-from verifyit.grade import InvalidTask
-from verifyit.modes.grade_ifeval import grade_ifeval_candidate, resolve_checks
-from verifyit.modes.grade_json_schema import grade_json_schema_candidate
+from verifyit.grade import InvalidTask, scored
+from verifyit.modes.grade_ifeval import grade_ifeval_chat_candidate, resolve_checks
+from verifyit.modes.grade_json_schema import grade_json_document
 from verifyit.spec import Constraint, SchemaFormat
 
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, grade_result
@@ -66,7 +66,7 @@ class IfevalVerifier(Verifier):
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
         constraints = tuple(Constraint(c.name, c.parameters) for c in self.constraints)
-        return grade_result(grade_ifeval_candidate(constraints, text))
+        return grade_result(grade_ifeval_chat_candidate(constraints, text))
 
 
 class JsonSchemaVerifier(Verifier):
@@ -90,4 +90,4 @@ class JsonSchemaVerifier(Verifier):
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
         schema = json.loads(self.document_schema_json)
-        return grade_result(grade_json_schema_candidate(schema, self.schema_format, text))
+        return grade_result(scored(grade_json_document(schema, self.schema_format, text).reward))

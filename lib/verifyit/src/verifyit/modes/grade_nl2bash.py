@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskCompendium capture scoring for newline- or NUL-delimited records.
-
-The legacy TaskTrove source checker is self-contained and newline-only. This
-module preserves the previously pinned capture scorer's separate contract.
-"""
+"""TaskTrove normalized, order-insensitive shell-output comparison."""
 
 import collections
 import re
