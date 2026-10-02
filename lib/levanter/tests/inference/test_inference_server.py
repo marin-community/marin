@@ -5,6 +5,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,15 +14,20 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import pytest
+from tokenizers import Tokenizer, decoders, models
 
 from levanter.inference.jit_scheduler import FinishReason
+from levanter.inference.utils import is_valid
 from levanter.layers.kv_cache import KvPageCache
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
+from levanter.tokenizers import HfMarinTokenizer
 
 try:
+    import httpx
+    import uvicorn
     from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
@@ -362,6 +368,7 @@ class _FakeCompletionContext:
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
         cancel_event: threading.Event | None = None,
+        on_delta=None,
     ) -> str:
         if (
             prompt_tokens != [0, 1]
@@ -802,7 +809,7 @@ def test_chat_exact_token_continuation_matches_uninterrupted_decode(exact_token_
     streamed = exact_token_client.post("/v1/chat/completions", json={**body, "stream": True})
     chunks = _sse_chunks(streamed.text)
     assert chunks[0]["prompt_token_ids"] == full["prompt_token_ids"]
-    assert chunks[0]["choices"][0]["token_ids"] == expected["token_ids"]
+    assert [token for chunk in chunks for token in chunk["choices"][0].get("token_ids", [])] == expected["token_ids"]
     assert chunks[-1]["choices"][0]["finish_reason"] == "length"
 
 
@@ -1160,4 +1167,216 @@ async def test_http_disconnect_cancels_generation_without_poisoning_next_request
         release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        server.inference_context.shutdown()
+
+
+class _DecodeGatedModel(_TokenSensitiveCompletionModel):
+    entered: tuple[threading.Event, threading.Event] = eqx.field(static=True)
+    release: tuple[threading.Event, threading.Event] = eqx.field(static=True)
+
+    def __init__(self, entered, release):
+        super().__init__()
+        self.entered, self.release = entered, release
+
+    def _gate(self, positions):
+        last_position = int(positions.max())
+        if last_position >= 2:
+            gate = min(last_position - 2, 1)
+            self.entered[gate].set()
+            assert self.release[gate].wait(30), "test did not release the decode gate"
+
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        jax.debug.callback(self._gate, jnp.where(is_valid(pos_ids.array), pos_ids.array, -1))
+        return super().decode(input_ids, cache, batch_info, pos_ids)
+
+
+class _ReadyHttpServer(uvicorn.Server):
+    def __init__(self, app, ready):
+        super().__init__(uvicorn.Config(app, log_level="error", lifespan="off"))
+        self.ready = ready
+
+    async def startup(self, sockets=None):
+        await super().startup(sockets)
+        self.ready.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["completions", "chat/completions"])
+@pytest.mark.parametrize("disconnect", [False, True])
+async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, disconnect):
+    entered = (threading.Event(), threading.Event())
+    release = (threading.Event(), threading.Event())
+    config = _exact_token_config()
+    config = dataclasses.replace(config, service=dataclasses.replace(config.service, max_rounds=1))
+    model, tokenizer = _DecodeGatedModel(entered, release), _AliasingChatTokenizer()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        engine = InferenceEngine.from_model_with_config(model, tokenizer, config.service)
+    context = InferenceContext(model, tokenizer, engine, config)
+    server = InferenceServer(config, context, InferenceServer._create_app(context))
+    body = {"model": "gpt2", "max_tokens": 5, "temperature": 0, "return_token_ids": True}
+    if endpoint == "completions":
+        body.update(prompt=[0, 1], logprobs=0)
+    else:
+        body.update(messages=[{"role": "user", "content": "A"}], logprobs=True)
+    received = asyncio.Queue()
+
+    async def read_stream(client):
+        async with client.stream(
+            "POST", f"/v1/{endpoint}", json={**body, "stream": True}, headers={"x-request-id": "cancel-me"}
+        ) as response:
+            assert response.status_code == 200
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    await received.put(line[6:])
+
+    ready = asyncio.Event()
+    http_server = _ReadyHttpServer(server.app, ready)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        serving = asyncio.create_task(http_server.serve(sockets=[listener]))
+        await asyncio.wait_for(ready.wait(), 10)
+        try:
+            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=30) as client:
+                streaming = asyncio.create_task(read_stream(client))
+                peer = asyncio.create_task(client.post(f"/v1/{endpoint}", json=body, headers={"x-request-id": "peer"}))
+                collected = []
+                try:
+                    # Force both real HTTP requests into one engine batch.
+                    collected.append(await asyncio.to_thread(context.request_queue.get, True, 30))
+                    collected.append(await asyncio.to_thread(context.request_queue.get, True, 30))
+                finally:
+                    for request in collected:
+                        context.request_queue.put(request)
+                    context.start()
+                try:
+                    first = json.loads(await asyncio.wait_for(received.get(), 30))
+                    assert first["choices"][0]["token_ids"] == [3]
+                    assert first["choices"][0]["finish_reason"] is None
+                    assert await asyncio.to_thread(entered[0].wait, 30)
+                    assert not peer.done()
+                    if disconnect:
+                        cancellation = context.active_requests["cancel-me"]
+                        streaming.cancel()
+                        await asyncio.gather(streaming, return_exceptions=True)
+                        assert await asyncio.to_thread(cancellation.wait, 10)
+                        for gate in release:
+                            gate.set()
+                        complete = (await peer).json()["choices"][0]
+                        retry = await client.post(f"/v1/{endpoint}", json=body, headers={"x-request-id": "cancel-me"})
+                        assert retry.status_code == 200
+                        assert retry.json()["choices"][0]["token_ids"] == complete["token_ids"] == [3, 1, 3, 1, 3]
+                        return
+                    server.abort(["cancel-me"])
+                    release[0].set()
+                    chunks = [first]
+                    while (payload := await asyncio.wait_for(received.get(), 30)) != "[DONE]":
+                        chunks.append(json.loads(payload))
+                    await streaming
+                    assert chunks[-1]["choices"][0]["finish_reason"] == "abort"
+                    assert await asyncio.to_thread(entered[1].wait, 30)
+                    assert not peer.done()
+                    release[1].set()
+                    complete_response = await peer
+                    assert complete_response.status_code == 200
+                    complete = complete_response.json()["choices"][0]
+                    partial_ids = [token for chunk in chunks for token in chunk["choices"][0].get("token_ids", [])]
+                    assert partial_ids == complete["token_ids"][: len(partial_ids)] == [3, 1]
+                    retry_body = {**body, "max_tokens": 5 - len(partial_ids)}
+                    retry_body.update(
+                        {"prompt": [0, 1, *partial_ids]}
+                        if endpoint == "completions"
+                        else {"_skyrl_exact_prompt_token_ids": [0, 1, *partial_ids]}
+                    )
+                    retry_response = await client.post(f"/v1/{endpoint}", json=retry_body)
+                    assert retry_response.status_code == 200
+                    retry = retry_response.json()["choices"][0]
+                    assert partial_ids + retry["token_ids"] == complete["token_ids"]
+                    key = "token_logprobs" if endpoint == "completions" else "content"
+                    partial_logprobs = [
+                        item for chunk in chunks for item in (chunk["choices"][0].get("logprobs") or {}).get(key, [])
+                    ]
+                    assert partial_logprobs + retry["logprobs"][key] == complete["logprobs"][key]
+                finally:
+                    for gate in release:
+                        gate.set()
+                    streaming.cancel()
+                    peer.cancel()
+                    await asyncio.gather(streaming, peer, return_exceptions=True)
+        finally:
+            for gate in release:
+                gate.set()
+            http_server.should_exit = True
+            await serving
+            context.shutdown()
+
+
+def test_streamed_prompt_batches_keep_choice_ids_and_logprobs(exact_token_client):
+    body = {
+        "model": "gpt2",
+        "prompt": [[0, 1], [0, 2]],
+        "n": 2,
+        "max_tokens": 2,
+        "temperature": 0,
+        "return_token_ids": True,
+        "logprobs": 0,
+    }
+    full = exact_token_client.post("/v1/completions", json=body).json()
+    streamed = exact_token_client.post("/v1/completions", json={**body, "stream": True})
+    assert streamed.status_code == 200
+    chunks = _sse_chunks(streamed.text)
+    for expected in full["choices"]:
+        choices = [chunk["choices"][0] for chunk in chunks if chunk["choices"][0]["index"] == expected["index"]]
+        assert [token for choice in choices for token in choice["token_ids"]] == expected["token_ids"]
+        assert [lp for choice in choices for lp in choice["logprobs"]["token_logprobs"]] == expected["logprobs"][
+            "token_logprobs"
+        ]
+        assert "".join(choice["text"] for choice in choices) == expected["text"]
+        assert choices[-1]["finish_reason"] == expected["finish_reason"]
+
+
+class _UnicodeTokenModel(_TokenSensitiveCompletionModel):
+    def decode(self, input_ids, cache, batch_info, pos_ids):
+        return hax.nn.one_hot((pos_ids + 1) % 4, self.Vocab, dtype=jnp.float32), cache
+
+
+def test_streamed_unicode_keeps_byte_token_ids_without_replacement_text():
+    vocab = {"<0xAC>": 0, "A": 1, "<0xE2>": 2, "<0x82>": 3}
+    rust_tokenizer = Tokenizer(models.WordLevel(vocab))
+    rust_tokenizer.decoder = decoders.ByteFallback()
+    tokenizer = HfMarinTokenizer(
+        _tokenizer=rust_tokenizer,
+        _name_or_path="unicode-test",
+        _bos_id=None,
+        _eos_id=None,
+        _pad_id=None,
+        _bos_token=None,
+        _eos_token=None,
+        _chat_template=None,
+        _vocab_size=4,
+        _all_special_ids=[],
+    )
+    config = _exact_token_config()
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _UnicodeTokenModel(), tokenizer)
+    try:
+        with TestClient(server.app) as client:
+            response = client.post(
+                "/v1/completions",
+                json={
+                    "model": "gpt2",
+                    "prompt": [1, 1],
+                    "max_tokens": 3,
+                    "temperature": 0,
+                    "stream": True,
+                    "return_token_ids": True,
+                    "logprobs": 0,
+                },
+            )
+        assert response.status_code == 200
+        choices = [chunk["choices"][0] for chunk in _sse_chunks(response.text)]
+        assert [token for choice in choices for token in choice["token_ids"]] == [2, 3, 0]
+        assert "".join(choice["text"] for choice in choices) == "€"
+        assert choices[-1]["finish_reason"] == "length"
+    finally:
         server.inference_context.shutdown()

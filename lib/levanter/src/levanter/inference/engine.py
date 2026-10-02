@@ -1093,7 +1093,12 @@ class InferenceEngine:
         )
 
     def generate(
-        self, requests: Sequence[Request], step_callback=None, *, should_abort: Callable[[int], bool] | None = None
+        self,
+        requests: Sequence[Request],
+        step_callback=None,
+        *,
+        should_abort: Callable[[int], bool] | None = None,
+        output_callback: Callable[[int, list[DecodeResult]], None] | None = None,
     ) -> GenerationResult:
         """Generate tokens for a batch of Requests.
 
@@ -1103,6 +1108,8 @@ class InferenceEngine:
         Args:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
+            output_callback: Called at host extraction boundaries with each request's cumulative choices.
+                The callback must not mutate the results or retain their mutable lists.
             should_abort: Predicate on request IDs, checked before prefill and between decode rounds.
                 Unfinished choices return their exact partial output with an ABORT reason.
         """
@@ -1175,6 +1182,11 @@ class InferenceEngine:
                     "Increase max_stop_seqs/max_stop_tokens when constructing the service."
                 )
 
+        def publish_outputs() -> None:
+            if output_callback is not None:
+                for request in requests:
+                    output_callback(request.request_id, list(self.results[request.request_id].values()))
+
         def abort_requested() -> None:
             if should_abort is None:
                 return
@@ -1196,6 +1208,7 @@ class InferenceEngine:
                     del self.local_map[slot]
                     self.free_slots.append(slot)
                 self.free_slots.sort()
+            publish_outputs()
 
         def pending_requests() -> list[Request]:
             return [
@@ -1209,6 +1222,7 @@ class InferenceEngine:
         abort_requested()
         decode_outputs = self._prefill_batch(pending_requests())
         self._extract_outputs(decode_outputs)
+        publish_outputs()
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
@@ -1231,6 +1245,7 @@ class InferenceEngine:
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending)
                 self._extract_outputs(prefill_outputs)
+                publish_outputs()
                 pending = pending_requests()
                 if prefill_outputs is not None:
                     continue
@@ -1259,6 +1274,7 @@ class InferenceEngine:
 
             extract_start = time.time()
             new_tokens = self._extract_outputs(decode_outputs)
+            publish_outputs()
             extract_time = time.time() - extract_start
 
             iter_end = time.time()

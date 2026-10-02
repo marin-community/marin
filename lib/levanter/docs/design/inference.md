@@ -66,6 +66,21 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **Batching**: Support for concurrent requests with `JitScheduler`
 - **Streaming**: Server-Sent Events (SSE) for real-time token streaming
 
+### Streaming and cancellation
+
+`stream=true` sends sampled token IDs, logprobs, and text deltas after prefill and
+at each host decode boundary. `max_rounds` controls how many device decode rounds
+run between those boundaries; larger values trade response latency for throughput.
+Incomplete Unicode characters are held until their bytes can be decoded. Completion
+requests with `echo=true` retain buffered responses because echo logprobs rescore
+the complete sequence.
+
+Set `x-request-id` to name an HTTP request group. `InferenceServer.abort([id])`
+cancels that group at the next host boundary and returns its exact partial tokens
+with an `abort` finish reason. Other groups in the batch continue; the cancelled
+response does not wait for them to finish. Disconnecting a client cancels its group
+and releases the request ID. No separate remote cancellation endpoint is exposed.
+
 ## File/Code References
 - `src/levanter/main/sample_lm.py`: `SampleLmConfig`, `_load_model`, `GenState`, `run_generation_loop`, `_one_round`, `extract_outputs`.
 - `src/levanter/inference/jit_scheduler.py`: `JitScheduler`, `DecodeState`, `SeqDecodingParams`.
