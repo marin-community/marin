@@ -635,5 +635,5 @@ def _default_logsumexp(logits: jax.Array) -> jax.Array:
 
 
 def logsumexp_last_axis(logits: jax.Array) -> jax.Array:
-    """Normalize the last axis with full FP32 transcendental accuracy on TPU."""
+    """Reduce the last axis with log-sum-exp and accurate TPU exponentials/logarithms."""
     return jax.lax.platform_dependent(logits, tpu=_tpu_logsumexp, default=_default_logsumexp)
