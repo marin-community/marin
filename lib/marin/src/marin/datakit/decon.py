@@ -208,6 +208,8 @@ class EvalBloom(BaseModel):
     n_eval_records: int = 0
 
 
+# Bound once: _bloom_hash runs for every 13-gram of every document, and the module
+# attribute lookup on hashlib is a measurable share of that call.
 _blake2b = hashlib.blake2b
 
 
@@ -270,6 +272,8 @@ def _extract_streaming_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
             alpha_tokens -= had_alpha
 
         start, end = match.span()
+        # map over the token slice runs in C; a generator with a text[index] lookup per
+        # character costs ~3x more, and this runs for every token of every document.
         has_alpha = any(map(str.isalpha, text[start:end]))
         window.append((start, end, has_alpha))
         alpha_tokens += has_alpha
