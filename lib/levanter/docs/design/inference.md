@@ -253,3 +253,37 @@ nonidentity convolution taps, both RoPE conventions, packed documents, and both
 checkpoint layouts. Mixed-request incremental tests compare against full forward
 across page and sliding-window boundaries. Full-checkpoint accelerator throughput
 and matched vLLM performance remain unmeasured.
+For checkpoint-scale comparisons, set `--model-axis-size` and
+`--expert-axis-size` to match the vLLM tensor and expert parallel configuration.
+The remaining local devices partition the data axis; the result records the
+complete effective mesh and device list. Both drivers must use the same
+checkpoint identity, tokens, dtype, and device allocation.
+
+### Matched synthetic checkpoint smoke comparison
+
+`experiments.benchmarks.matched_inference` writes a small BF16 checkpoint with
+head dimension 128, a tokenizer, an immutable weight digest, and a token workload.
+It verifies every exported tensor through native HF loading. Both backends then
+load this identical checkpoint from local disk; this measures a complete small
+model and does not represent a production Snowball or Hero checkpoint.
+
+Run the following on one CUDA accelerator, with the same single device visible
+to both processes. Keep the fixture directory on that worker. The vLLM command
+uses Marin serving's promoted fork, PyTorch pin, and CUDA toolchain through an
+isolated environment. It does not install vLLM into the JAX environment.
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+uv run python -m experiments.benchmarks.matched_inference export \
+  --recipe hero --output /tmp/hero-comparison
+uv run python -m experiments.benchmarks.matched_inference native \
+  --fixture /tmp/hero-comparison --hardware-label H100x1
+uv run python -m experiments.benchmarks.matched_inference vllm \
+  --fixture /tmp/hero-comparison --hardware-label H100x1
+```
+
+Use `--recipe snowball` and a separate fixture directory for Snowball. Both
+measurement commands print their result JSON for remote log retention. Compare
+workload and generated-token hashes before comparing throughput. vLLM uses eager
+execution for this startup smoke test; tuned CUDA-graph serving and larger
+workloads require a separate benchmark configuration.
