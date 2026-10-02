@@ -147,8 +147,14 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
     padding = (-original_dim) % 128
     q_padded = jnp.pad(q, ((0, 0), (0, 0), (0, 0), (0, padding)))
     pages_padded = jnp.pad(kv_pages, ((0, 0), (0, 0), (0, 0), (0, padding)))
-    # Scaling q keeps runtime scales out of the kernel's static argument list.
-    q_flat = (q_padded * sm_scale).reshape(q.shape[0], -1, q_padded.shape[-1])
+    q_flat = q_padded.reshape(q.shape[0], -1, q_padded.shape[-1])
+    if isinstance(sm_scale, (float, int)):
+        kernel_scale = sm_scale
+    else:
+        # Runtime scales cannot be static kernel arguments. Promote before scaling
+        # to avoid rounding BF16 queries before their dot product.
+        q_flat = q_flat.astype(jnp.float32) * sm_scale
+        kernel_scale = 1.0
     # TPU default float32 dots truncate operands to BF16, including softmax weights.
     with jax.default_matmul_precision("highest"):
         output = tpu_ragged_paged_attention(
@@ -158,10 +164,10 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
             jnp.maximum(page_indices, 0),
             cu_q_lens,
             jnp.maximum(num_seqs, 0).reshape(1),
-            sm_scale=1.0,
+            sm_scale=kernel_scale,
             sliding_window=sliding_window,
             soft_cap=soft_cap,
         )
-    output = output.reshape(q_padded.shape)[..., :original_dim]
+    output = output.reshape(q_padded.shape)[..., :original_dim].astype(q.dtype)
     valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs).valid
     return jnp.where(valid[:, None, None, None], output, 0)

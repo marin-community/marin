@@ -78,9 +78,11 @@ def test_grug_paged_attention_explicit_head_sharding_matches_dense():
 
 @pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
 @pytest.mark.parametrize("window", [None, 5])
-def test_grug_tpu_paged_attention_matches_dense(window):
+@pytest.mark.parametrize("runtime_scale", [False, True])
+def test_grug_tpu_paged_attention_matches_dense(window, runtime_scale):
     args = _mixed_case(jnp.float32)
-    actual = jax.jit(partial(ragged_paged_attention, sm_scale=0.17, sliding_window=window, implementation="tpu"))(
-        *args
+    fn = partial(ragged_paged_attention, sliding_window=window, implementation="tpu")
+    actual = (
+        jax.jit(fn)(*args, sm_scale=jnp.array(0.17)) if runtime_scale else jax.jit(partial(fn, sm_scale=0.17))(*args)
     )
     np.testing.assert_allclose(actual, _dense_oracle(args, window, None, 0.17), atol=1e-4, rtol=1e-4)
