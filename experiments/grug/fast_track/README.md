@@ -183,6 +183,8 @@ download, normalization, embedding, quality scoring, deduplication, and store
 construction. Source recipes retain their task resource requests. Centroid
 training remains a separate CPU job. Model training uses a separate 8×H100 job.
 The data pool contains one worker with 120 CPUs, 1 TiB RAM, and 1 TiB disk.
+Up to 64 pipeline steps can submit work to this pool at the same time. This lets
+more sources supply tasks at once when each source has few shards.
 CPU and RAM requests control concurrent task admission. Task disk requests must
 fit the worker, but Zephyr does not account for concurrent disk use.
 
