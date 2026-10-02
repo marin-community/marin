@@ -18,8 +18,6 @@ from jax.sharding import NamedSharding, auto_axes
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
-from levanter.layers.attention_mask import AttentionMask as LevanterAttentionMask
-from levanter.layers.flash_attention import flash_attention
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
     SplashAttentionMaskSpec,
@@ -28,6 +26,8 @@ from levanter.kernels.pallas.splash_attention import (
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
 )
+from levanter.layers.attention_mask import AttentionMask as LevanterAttentionMask
+from levanter.layers.flash_attention import flash_attention
 
 GrugAttentionImplementation = Literal[
     "reference",
