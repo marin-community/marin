@@ -35,7 +35,7 @@ def test_archive_retains_harbor_evidence_and_runtime_identity(tmp_path, monkeypa
         path.write_text(content)
     uploaded = {}
 
-    def remote_sql(*args, **kwargs):
+    def remote_sql(*_args, **kwargs):
         payload = json.loads(kwargs["input"])
         for artifact in json.loads(payload["parameters"]["items"]):
             uploaded[artifact["path"]] = artifact

@@ -6,6 +6,7 @@
 import math
 from collections.abc import Mapping
 from enum import StrEnum
+from typing import Literal, TypedDict
 
 
 class HarborRewardMode(StrEnum):
@@ -13,7 +14,25 @@ class HarborRewardMode(StrEnum):
     SKILL2ENV_COMPONENTS = "skill2env_components"
 
 
-def skill2env_verification(rewards: Mapping[str, float]) -> dict:
+class Skill2EnvDiagnostics(TypedDict):
+    native_rewards: dict[str, float]
+    score_aggregation: Literal["component_mean"]
+    pass_criterion: Literal["all_components_equal_one"]
+
+
+class Skill2EnvVerification(TypedDict):
+    """Serialized verdict shared with the separately configured native runtime."""
+
+    status: Literal["verified"]
+    score: float
+    passed: bool
+    score_min: float
+    score_max: float
+    reason: None
+    diagnostics: Skill2EnvDiagnostics
+
+
+def skill2env_verification(rewards: Mapping[str, float]) -> Skill2EnvVerification:
     """Preserve component scores and apply Skill2Env's full-pass criterion."""
     if not rewards or any(not math.isfinite(value) or not 0 <= value <= 1 for value in rewards.values()):
         raise ValueError("Skill2Env requires nonempty finite component rewards in [0, 1]")

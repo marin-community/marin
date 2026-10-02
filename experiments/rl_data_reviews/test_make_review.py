@@ -34,7 +34,7 @@ def test_empty_provider_opinion_stays_incomplete_and_resume_preserves_raw_calls(
     ]
     pending = iter(responses)
     monkeypatch.setattr(
-        "urllib.request.urlopen", lambda request, timeout: io.BytesIO(json.dumps(next(pending)).encode())
+        "urllib.request.urlopen", lambda _request, **_kwargs: io.BytesIO(json.dumps(next(pending)).encode())
     )
     model = {"name": "reviewer", "base_url": "https://provider.invalid/v1", "parameters": {}, "timeout": 10}
     prompt = getattr(runner, prompt_name)

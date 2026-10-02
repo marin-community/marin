@@ -178,7 +178,7 @@ def test_harbor_refresh_preserves_review_and_survives_other_catalog_failures(cat
         {"id": source_id},
     )
 
-    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(503))) as client:
+    with httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(503))) as client:
         result = refresh_catalog(connection, client, True)
     record = connection.execute(text("SELECT * FROM catalog_sources WHERE id = :id"), {"id": source_id}).mappings().one()
     assert record["active"]
@@ -191,7 +191,7 @@ def test_harbor_refresh_preserves_review_and_survives_other_catalog_failures(cat
         text("SELECT payload FROM catalog_sources WHERE id = :id"), {"id": source_id}
     ).scalar_one()
     assert payload["url"] == snapshot.rows[0]["url"]
-    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(503))) as client:
+    with httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(503))) as client:
         unchanged = refresh_catalog(connection, client, False)
     assert not next(item for item in unchanged["results"] if item["origin"] == HARBOR_ORIGIN)["changed"]
 
