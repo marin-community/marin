@@ -164,8 +164,9 @@ class DataConfig:
         """Resolve the storage root for this config. Never returns ``None``.
 
         Precedence: ``MARIN_PREFIX`` env > ``self.root`` > region-local bucket
-        from ``region_buckets[<gcs metadata region>]`` > ``{scheme}://marin-{region}``
-        for a detected-but-unmapped region > :data:`_DEFAULT_LOCAL_PREFIX`.
+        from ``region_buckets[<gcs metadata region>]`` > :data:`_DEFAULT_LOCAL_PREFIX`
+        when no metadata region is detected. An unmapped metadata region raises
+        :class:`ValueError` before any storage access.
 
         The configured value is canonicalized so downstream joins do not duplicate
         separators. Relative local paths are anchored at the working directory.
@@ -180,7 +181,7 @@ class DataConfig:
             spec = self.region_buckets.get(region)
             if spec is not None:
                 return f"{self.scheme}://{spec.name}"
-            return f"{self.scheme}://marin-{region}"
+            raise ValueError(f"No data bucket configured for metadata region {region!r}; set MARIN_PREFIX explicitly")
         return _DEFAULT_LOCAL_PREFIX
 
 
@@ -195,9 +196,8 @@ def _canonical_root(prefix: str) -> str:
 # The marin cluster's storage layout lives in ``config/marin.yaml`` (loaded as
 # the default below). This in-code config is only a degraded fallback for when
 # no config file is discoverable — e.g. an installed package running outside a
-# marin checkout. Such contexts set ``MARIN_PREFIX`` (which wins in
-# ``resolved_root``) or detect a region (constructing ``gs://marin-{region}``),
-# so an empty ``region_buckets`` is sufficient.
+# marin checkout. Such contexts must set ``MARIN_PREFIX`` to use remote storage;
+# without it, an unmapped metadata region raises before storage access.
 _DEFAULT_CLUSTER = "marin"
 _FALLBACK_DATA_CONFIG: DataConfig = DataConfig(region_buckets={})
 
