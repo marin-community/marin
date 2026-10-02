@@ -21,10 +21,20 @@ def test_snapshot_copies_and_verifies_each_source_before_sealing(tmp_path):
         row = {
             "id": str(index),
             "messages": [
-                {"role": "user", "name": None, "channel": None, "recipient": None,
-                 "content": [{"type": "text", "text": "question"}]},
-                {"role": "assistant", "name": None, "channel": "final", "recipient": None,
-                 "content": [{"type": "text", "text": "answer"}]},
+                {
+                    "role": "user",
+                    "name": None,
+                    "channel": None,
+                    "recipient": None,
+                    "content": [{"type": "text", "text": "question"}],
+                },
+                {
+                    "role": "assistant",
+                    "name": None,
+                    "channel": "final",
+                    "recipient": None,
+                    "content": [{"type": "text", "text": "answer"}],
+                },
             ],
             "source": name,
             "source_id": str(index),

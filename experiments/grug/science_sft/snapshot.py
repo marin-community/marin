@@ -14,7 +14,6 @@ import pyarrow.parquet as pq
 from marin.datakit.chat_normalize import CHAT_SCHEMA
 from rigging.filesystem.buckets import filesystem_for
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +76,9 @@ def snapshot(source_url: str, destination_url: str, source_names: list[str], wor
     }
     names = {info["name"].rsplit("/", 1)[-1] for info in files}
     if copies.keys() != names:
-        raise ValueError(f"Snapshot file set differs: missing={len(names - copies.keys())}, extra={len(copies.keys() - names)}")
+        raise ValueError(
+            f"Snapshot file set differs: missing={len(names - copies.keys())}, extra={len(copies.keys() - names)}"
+        )
     if any(copies[info["name"].rsplit("/", 1)[-1]]["size"] != info["size"] for info in files):
         raise ValueError("Snapshot file size differs from the frozen listing")
 

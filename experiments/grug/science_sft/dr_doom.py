@@ -70,8 +70,12 @@ def prepare(snapshot_root: str, output_path: str, num_shards: int, max_workers: 
         raise ValueError("Tokenized conversation count differs from the sealed snapshot")
     if counts.overlength_conversations or counts.assistant_tokens == 0:
         raise ValueError("SFT snapshot contains overlength conversations or no assistant targets")
-    logging.info("Prepared %d conversations, %d assistant tokens, %d packed sequences", counts.conversations,
-                 counts.assistant_tokens, store.packed_sequences)
+    logging.info(
+        "Prepared %d conversations, %d assistant tokens, %d packed sequences",
+        counts.conversations,
+        counts.assistant_tokens,
+        store.packed_sequences,
+    )
     return store
 
 
