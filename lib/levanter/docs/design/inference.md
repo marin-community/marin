@@ -113,6 +113,43 @@ single-device adapter does not implement distributed JAX shard placement or a
 production-sized memory budget. The paired SkyRL remote client must forward the
 reload bracket and publication receipt; the repository's SkyRL pin is unchanged.
 
+### Weight-transfer validation
+
+`experiments.benchmarks.remote_weight_transfer` runs the real SkyRL remote client,
+a native HTTP server, and a separate Torch sender with a bounded synthetic Llama.
+It checks incomplete and stale publications, exact generation IDs/logprobs, cache
+reset, and one successful model-version transition. The script requires SkyRL
+commit `c2ed0d0b795e884ac452841d48455ceba06d5f54` on `PYTHONPATH` and records both
+repository revisions and runtime versions in its JSON result. It does not launch
+training or change the repository's fork pin.
+
+In a prepared CPU environment with serving and Torch dependencies:
+
+```bash
+PYTHONPATH=/path/to/MarinSkyRL/skyrl-train JAX_PLATFORMS=cpu \
+  uv run --no-sync python -m experiments.benchmarks.remote_weight_transfer \
+  --backend gloo --dtype bfloat16 --output /tmp/weight-transfer-gloo.json
+```
+
+For the pending NCCL gate, use a node with two GPUs and a prepared JAX/Torch CUDA
+environment. The sender owns physical GPU 0 and the receiver owns physical GPU 1;
+each process sees its GPU as `cuda:0`. The script checks their UUIDs differ, that the
+receiver sees one JAX device, and that installed arrays stay on that device.
+
+```bash
+CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_PREALLOCATE=false \
+  PYTHONPATH=/path/to/MarinSkyRL/skyrl-train \
+  uv run --no-sync python -m experiments.benchmarks.remote_weight_transfer \
+  --backend nccl --sender-device 0 --receiver-device 1 --dtype bfloat16 \
+  --output /tmp/weight-transfer-nccl.json
+```
+
+Run both dtypes (`float32` and `bfloat16`). The sender uses host-generated toy
+weights; the native receiver uses device-resident DLPack. This gate does not cover
+sharded production models, production-sized staging memory, or trainer execution.
+The CPU regression in `tests/inference/test_weight_reload.py` also covers Snowball
+and Hero with individual expert tensors and populated short-convolution history.
+
 ## File/Code References
 - `src/levanter/main/sample_lm.py`: `SampleLmConfig`, `_load_model`, `GenState`, `run_generation_loop`, `_one_round`, `extract_outputs`.
 - `src/levanter/inference/jit_scheduler.py`: `JitScheduler`, `DecodeState`, `SeqDecodingParams`.
