@@ -7,17 +7,42 @@ import argparse
 import json
 
 from iris.cli.job import resolve_multinode_defaults
-from iris.client.client import iris_ctx
+from iris.client.client import Job, iris_ctx
 from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.jax.multigpu import MultiGpuHook
+from iris.resources.state import is_job_finished
 from iris.rpc import job_pb2
-from rigging.timing import Duration
+from rigging.timing import Duration, ExponentialBackoff
 
 from experiments.grug.moe_hero_pipeline.runtime.apply_overlay import JAXPP_COMMIT
 
 PJRT_WHEEL = "https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260915-708c3a4ec79c/jax_cuda13_pjrt-0.11.1%2Bmarin.708c3a4ec79c-py3-none-manylinux_2_27_aarch64.whl"
 _TASK_TIMEOUT = 7200
+_QUEUE_TIMEOUT = 43200
+_FINALIZATION_GRACE = 600
+_COORDINATOR_TIMEOUT = 54000
+
+
+def wait_for_gang(job: Job) -> None:
+    """Wait for admission and execution with separate budgets; cancel on expiry."""
+
+    def started_or_finished() -> bool:
+        status = job.status()
+        # BUILDING includes Kueue admission waits. Only execution timestamps
+        # distinguish allocated workers from SchedulingGated pods.
+        return is_job_finished(status.state) or any(task.started_at is not None for task in status.tasks)
+
+    try:
+        ExponentialBackoff(initial=1, maximum=30).wait_until_or_raise(
+            started_or_finished,
+            timeout=Duration.from_seconds(_QUEUE_TIMEOUT),
+            error_message=f"GB200 gang {job.job_id} did not start within {_QUEUE_TIMEOUT} seconds",
+        )
+        job.wait(timeout=_TASK_TIMEOUT + _FINALIZATION_GRACE, raise_on_failure=True)
+    except TimeoutError:
+        job.cancel()
+        raise
 
 
 def main():
@@ -72,6 +97,10 @@ def main():
         source_model="moe_hero_ep.hero_recipe.HERO_MODEL_CONFIG",
         runtime="JAX 0.11.1 + Marin ARM PJRT; JAXPP 328f75a + pinned host/startup overlay",
         validation="experimental: JAXPP's declared JAX <=0.11.0 cap is overridden",
+        queue_timeout_seconds=_QUEUE_TIMEOUT,
+        task_timeout_seconds=_TASK_TIMEOUT,
+        finalization_grace_seconds=_FINALIZATION_GRACE,
+        coordinator_timeout_seconds=_COORDINATOR_TIMEOUT,
     )
     print(json.dumps(contract), flush=True)
     if args.dry_run:
@@ -119,10 +148,11 @@ def main():
         max_retries_failure=0,
         max_retries_preemption=0,
         max_task_failures=1,
+        scheduling_timeout=Duration.from_seconds(_QUEUE_TIMEOUT),
         timeout=Duration.from_seconds(_TASK_TIMEOUT),
     )
     print("SUBMITTED", job.job_id, flush=True)
-    job.wait(timeout=_TASK_TIMEOUT, raise_on_failure=True)
+    wait_for_gang(job)
 
 
 if __name__ == "__main__":
