@@ -31,11 +31,11 @@ import numpy as np
 from fray.types import ANY_REGION, ResourceConfig
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.grug._moe.availability import quack_grouped_gemm_available
 from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
 from levanter.grug._moe.ep_ragged_all_to_all import (
     _EXPERT_CHUNKS,
     RAGGED_REQUIRED_XLA_FLAGS,
-    _quack_grouped_gemm_available,
     _select_expert_mlp,
 )
 from levanter.grug.grug_moe import moe_mlp
@@ -167,7 +167,7 @@ def _runtime_row() -> RuntimeRow:
     return RuntimeRow(
         jax_version=jax.__version__,
         device_kind=jax.devices()[0].device_kind,
-        quack_grouped_gemm_available=_quack_grouped_gemm_available(),
+        quack_grouped_gemm_available=quack_grouped_gemm_available(),
         expert_mlp_silu=type(_select_expert_mlp(jax.nn.silu)).__name__,
         expert_mlp_gelu=type(_select_expert_mlp(jax.nn.gelu)).__name__,
         xla_flags=os.environ.get("XLA_FLAGS", ""),
