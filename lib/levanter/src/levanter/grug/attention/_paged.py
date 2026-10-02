@@ -4,16 +4,19 @@
 """Array-first attention over Levanter's interleaved paged KV cache."""
 
 from functools import partial
+from math import gcd
 from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention import ragged_paged_attention as tpu_ragged_paged_attention
+from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import get_min_heads_per_blk
 from jax.sharding import PartitionSpec as P
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
 PagedAttentionImplementation = Literal["reference", "tpu", "tpu_fp32_tiles"]
+_TPU_KV_HEAD_GROUP = 8
 
 
 def ragged_paged_attention(
@@ -187,21 +190,38 @@ def _tpu_kernel_attention(
         # Runtime scales cannot be static kernel arguments.
         q_flat = q_flat * sm_scale
         kernel_scale = 1.0
+    heads = q.shape[1]
+    try:
+        get_min_heads_per_blk(q_flat.shape[1], 2 * heads, q_flat.dtype, kv_pages.dtype)
+        heads_per_group = heads
+    except ValueError:
+        # The upstream kernel rejects packed head counts such as 3, 5, 6, and 12.
+        # Batch aligned head groups while keeping metadata shared and KV storage BF16.
+        heads_per_group = gcd(heads, _TPU_KV_HEAD_GROUP)
+    groups = heads // heads_per_group
+    kernel = partial(
+        tpu_ragged_paged_attention,
+        sm_scale=kernel_scale,
+        # Unit dequantization scales cast loaded tiles to FP32 in VMEM.
+        k_scale=1.0 if kv_pages.dtype != jnp.float32 else None,
+        v_scale=1.0 if kv_pages.dtype != jnp.float32 else None,
+        sliding_window=sliding_window,
+        soft_cap=soft_cap,
+    )
+    if groups > 1:
+        q_flat = q_flat.reshape(q.shape[0], groups, heads_per_group * q.shape[2], q_flat.shape[-1])
+        pages_padded = pages_padded.reshape(
+            *pages_padded.shape[:2], groups, 2 * heads_per_group, pages_padded.shape[-1]
+        )
+        kernel = jax.vmap(kernel, in_axes=(1, 2, None, None, None, None), out_axes=1)
     with jax.default_matmul_precision("highest"):
-        output = tpu_ragged_paged_attention(
+        output = kernel(
             q_flat,
             pages_padded,
             jnp.maximum(kv_lens, 0),
             jnp.maximum(page_indices, 0),
             cu_q_lens,
             jnp.maximum(num_seqs, 0).reshape(1),
-            sm_scale=kernel_scale,
-            # Unit dequantization scales cast loaded tiles to the FP32 query dtype
-            # in VMEM, without materializing a full FP32 cache in HBM.
-            k_scale=1.0 if kv_pages.dtype != jnp.float32 else None,
-            v_scale=1.0 if kv_pages.dtype != jnp.float32 else None,
-            sliding_window=sliding_window,
-            soft_cap=soft_cap,
         )
     output = output.reshape(q_padded.shape)[..., :original_dim].astype(q.dtype)
     valid = _query_metadata(q, kv_lens, cu_q_lens, num_seqs).valid
