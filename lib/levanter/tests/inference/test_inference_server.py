@@ -1462,7 +1462,7 @@ def test_chat_candidate_scores_match_streaming_and_reporting_mode(rollout_token_
             assert [item["token"] for item in row["top_logprobs"]] == [f"token_id:{token_id}", "token_id:0"]
             assert [item["logprob"] for item in row["top_logprobs"]] == pytest.approx(expected, abs=1e-6)
             assert row["logprob"] == pytest.approx(expected[0], abs=1e-6)
-        assert rows[0]["top_logprobs"][0]["bytes"] == list(b" X")
+        assert rows[0]["bytes"] == rows[0]["top_logprobs"][0]["bytes"] == list(b" X")
 
 
 class _UnicodeTokenModel(_TokenSensitiveCompletionModel):
