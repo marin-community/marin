@@ -44,6 +44,7 @@ import logging
 import os
 import random
 import re
+import tempfile
 from collections import Counter, deque
 from collections.abc import Callable, Container, Iterator, Mapping
 from dataclasses import dataclass
@@ -214,10 +215,26 @@ def _bloom_hash(x: str) -> int:
     return int.from_bytes(_blake2b(x.encode(), digest_size=8).digest(), "big")
 
 
+_BLOOM_CACHE_DIR = os.path.join(tempfile.gettempdir(), "marin-decon-bloom")
+
+
 @functools.lru_cache(maxsize=2)
 def _load_bloom(bloom_path: str) -> dupekit.Bloom:
-    """Load a bloom filter once per process; bloom dirs are content-addressed step outputs."""
-    return dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+    """Load a bloom filter once per process through a node-local copy.
+
+    The subprocess-per-shard runner starts a fresh interpreter for every shard,
+    so the process cache alone would re-read the filter from object storage per
+    shard; the node-local copy is shared by every process on the worker. Bloom
+    dirs are content-addressed step outputs, so a path identifies its contents.
+    """
+    local_path = os.path.join(_BLOOM_CACHE_DIR, hashlib.sha256(bloom_path.encode()).hexdigest())
+    if not os.path.exists(local_path):
+        os.makedirs(_BLOOM_CACHE_DIR, exist_ok=True)
+        partial_path = f"{local_path}.{os.getpid()}.partial"
+        with open(partial_path, "wb") as fh:
+            fh.write(StoragePath(bloom_path).read_bytes())
+        os.replace(partial_path, local_path)
+    return dupekit.Bloom.load(local_path)
 
 
 def _has_alpha(ngram: str) -> bool:
