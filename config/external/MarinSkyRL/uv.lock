@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -1331,7 +1331,7 @@ secrets = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#1dac11c1ca0d9d8cf3a059714c3350c51cfd8680" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#965d8c05c11bfc0e7e8e2192239b9d3395743ca8" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
