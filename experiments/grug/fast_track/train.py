@@ -76,7 +76,7 @@ from experiments.grug.fast_track.fact_probe import (
     FactProbeWriter,
     count_text_patterns,
     row_mean_loss,
-    summarize_attention,
+    summarize_recorded_attention,
     write_text_counts,
     write_train_batch,
 )
@@ -1146,13 +1146,7 @@ def _fact_probe_hook(
         loss, (span_loss, top_ids, top_probs, attention) = multihost_utils.process_allgather(outputs, tiled=True)
         if jax.process_index() == 0:
             attention = {name: np.asarray(value) for name, value in attention.items()}
-            for name in [n for n in attention if n.startswith(ATTN_PROBE_STAT)]:
-                probs = attention.pop(name).astype(np.float32)
-                attention[f"{name}_mass"], attention[f"{name}_entropy"] = summarize_attention(
-                    probs, probe.attn_queries, probe.attn_key_sets, ATTN_PROBE_KEYS
-                )
-                if probe.attn_full_queries:
-                    attention[name] = probs[: probe.attn_full_queries]
+            attention = summarize_recorded_attention(attention, probe, ATTN_PROBE_STAT, ATTN_PROBE_KEYS)
             writer.add(kind, count, span_loss, top_ids, top_probs, row_mean_loss(np.asarray(loss), weights), attention)
 
     scored: set[int] = set()

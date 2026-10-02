@@ -207,3 +207,20 @@ def summarize_attention(
         mass[q] = probs[q][:, index].sum(-1)
     entropy = -(probs * np.log(np.maximum(probs, 1e-30))).sum(-1)
     return mass, entropy.astype(np.float32)
+
+
+def summarize_recorded_attention(
+    recorded: dict[str, np.ndarray], probe: FactProbeInput, attn_stat: str, num_keys: int
+) -> dict[str, np.ndarray]:
+    """Replace each MLA layer's attention array (``<attn_stat>_L<layer>``, [Q, H, num_keys]) by its per-query
+    ``_mass`` / ``_entropy`` summaries, keeping the full array for the first ``attn_full_queries`` queries. Other
+    recordings (the spot's ``attn_in`` / ``attn_out`` share the stat prefix) pass through."""
+    out = dict(recorded)
+    for name in [n for n in recorded if n.startswith(f"{attn_stat}_L")]:
+        probs = out.pop(name).astype(np.float32)
+        out[f"{name}_mass"], out[f"{name}_entropy"] = summarize_attention(
+            probs, probe.attn_queries, probe.attn_key_sets, num_keys
+        )
+        if probe.attn_full_queries:
+            out[name] = probs[: probe.attn_full_queries]
+    return out

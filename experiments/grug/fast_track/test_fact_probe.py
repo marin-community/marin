@@ -17,6 +17,7 @@ from experiments.grug.fast_track.fact_probe import (
     FactProbeWriter,
     count_text_patterns,
     summarize_attention,
+    summarize_recorded_attention,
 )
 from experiments.grug.fast_track.model import (
     ATTN_PROBE_KEYS,
@@ -196,3 +197,24 @@ def test_attention_summary_is_mass_on_the_key_set_and_entropy():
     np.testing.assert_allclose(entropy[1, 0], np.log(2), rtol=1e-6)
     with pytest.raises(ValueError):
         summarize_attention(probs, queries, np.array([[1, -1], [4, -1]]), num_keys=4)
+
+
+def test_recorded_attention_summary_leaves_the_spot_vectors_alone():
+    probe = _probe(np.zeros((1, 16)), [(0, 3, 4)])
+    probe = FactProbeInput(
+        tokens=probe.tokens,
+        span_row=probe.span_row,
+        span_start=probe.span_start,
+        span_end=probe.span_end,
+        attn_queries=np.array([[0, 10], [0, 12]]),
+        attn_full_queries=1,
+        attn_key_sets=np.array([[9, 10], [12, -1]]),
+        spot=np.zeros(0),
+        spot_token_ids=np.zeros(0),
+    )
+    probs = np.full((2, 1, 4), 0.25, np.float32)
+    recorded = {"p_attn_L3": probs, "p_attn_in_L3": np.ones(8), "p_attn_out_L3": np.ones(8)}
+    out = summarize_recorded_attention(recorded, probe, "p_attn", num_keys=4)
+    assert sorted(out) == ["p_attn_L3", "p_attn_L3_entropy", "p_attn_L3_mass", "p_attn_in_L3", "p_attn_out_L3"]
+    assert out["p_attn_L3"].shape == (1, 1, 4)
+    np.testing.assert_allclose(out["p_attn_L3_mass"][:, 0], [0.5, 0.25])
