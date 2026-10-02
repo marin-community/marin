@@ -11,11 +11,13 @@ import pytest
 import experiments.grug.fast_track.test_kda_local as t
 from experiments.grug.fast_track.model import (
     KDA_CHUNK_SIZE,
+    KdaKernelOptions,
     _kda_kernel,
     _kda_kernel_paired,
     _pair_heads,
     _unpair_heads,
 )
+from experiments.grug.moe.kda_state_pallas import StateGrads
 
 _HEADS, _DIM = 4, 8
 
@@ -38,7 +40,8 @@ def _value_jacobian(kernel, token: int, head: int, source_head: int) -> np.ndarr
     beta = jax.nn.sigmoid(jax.random.normal(keys[3], shape[:3]))
 
     def out(v):
-        return kernel(q, k, v, g, beta, {}, save_chunk_states=False, chunk_size=KDA_CHUNK_SIZE)[0, token, head].sum()
+        options = KdaKernelOptions(KDA_CHUNK_SIZE, save_chunk_states=False, state_grads=StateGrads.XLA)
+        return kernel(q, k, v, g, beta, {}, options=options)[0, token, head].sum()
 
     return np.abs(np.asarray(jax.grad(out)(v)[0, :, source_head])).sum(axis=-1)
 

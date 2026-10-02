@@ -64,6 +64,8 @@ from experiments.grug.fast_track.router_metrics import (
     summarize_router_metrics,
 )
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
+from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
+from experiments.grug.moe.kda_state_pallas import StateGrads
 
 _GATED_NORM_RANK = 128
 _QB_HIST_BINS = 10_000
@@ -634,6 +636,13 @@ class GrugModelConfig:
     kda_chunk_size: int = 16
     """Chunk length of the fused (GPU) KDA kernels, one of ``KDA_CHUNK_TILES``: 32 runs the same exact
     math ~20% faster per layer on H100 (fwd+bwd 4.25 vs 5.36 ms at d512) via mid-referenced decay tiles."""
+    kda_onchip_decay_gate: bool = False
+    """Form the KDA log-decay ``-5 sigmoid(exp(A_log) (a + dt_bias))`` inside the fused kernels from the bf16
+    projection ``a`` instead of materializing it in fp32 (same math)."""
+    kda_onchip_erase_gate: bool = False
+    """Form the erase gate ``2 sigmoid(z)`` (``kda_erase_gate``) inside the fused kernels from its bf16 logits."""
+    kda_state_grads: StateGrads = StateGrads.XLA
+    """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a per-token softmax
     # attention over the residual-block history (the embedding, completed block sums and the running
     # partial), scored by a learned per-sublayer pseudo-query against the RMS-normalized sources.
@@ -1311,6 +1320,15 @@ class GrugModelConfig:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
+        if self.kda_onchip_decay_gate and (
+            self.kda_decay_per_head
+            or self.kda_dd_rope
+            or self.kda_push_buckets
+            or self.kda_head_pairing != KdaHeadPairing.NONE
+        ):
+            raise ValueError(
+                "kda_onchip_decay_gate needs the plain per-channel decay (no per-head/pair-tied/push/pairing)"
+            )
         if self.attn_res_key_rank is not None:
             if not self.attn_res or not 0 < self.attn_res_key_rank < self.hidden_dim:
                 raise ValueError("attn_res_key_rank needs attn_res and 0 < attn_res_key_rank < hidden_dim")
@@ -2317,18 +2335,32 @@ def _kda_rotate_qk(q, k, rate, segment_ids):
     return rotate(q), rotate(k)
 
 
-def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool, chunk_size: int):
+class KdaKernelOptions(NamedTuple):
+    """Static options of the KDA kernel call (``_kda_kernel``)."""
+
+    chunk_size: int  # fused (GPU) kernels' chunk length, see KDA_CHUNK_TILES
+    save_chunk_states: bool
+    state_grads: StateGrads
+
+
+def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
     """``_kda_kernel`` after rotating q and k by ``extras["rot_rate"]`` (``kda_dd_rope``)."""
     extras = dict(extras)
     q, k = _kda_rotate_qk(q, k, extras.pop("rot_rate"), extras.get("segment_ids"))
-    return _kda_kernel(q, k, v, g, beta, extras, save_chunk_states=save_chunk_states, chunk_size=chunk_size)
+    return _kda_kernel(q, k, v, g, beta, extras, options=options)
 
 
-def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool, chunk_size: int):
-    """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU (``chunk_size`` tokens per
-    chunk, see ``KDA_CHUNK_TILES``), else the XLA ``chunk_kda`` (heads-first layout, ``KDA_CHUNK_SIZE``).
-    ``extras`` optionally holds ``segment_ids`` and ``erase``."""
-    segment_ids, erase = extras.get("segment_ids"), extras.get("erase")
+def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
+    """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU, else the XLA ``chunk_kda``
+    (heads-first layout, ``KDA_CHUNK_SIZE``). ``extras`` optionally holds ``segment_ids``, the erase gate
+    ``erase`` or its logits ``erase_logits``, and ``gate_p`` / ``gate_bias`` (``kda_onchip_decay_gate``:
+    ``g`` is then the gate pre-activation of ``-KDA_MIN_LOG_DECAY * sigmoid(gate_p * (g + gate_bias))``)."""
+    segment_ids = extras.get("segment_ids")
+    gate = (extras["gate_p"], extras["gate_bias"]) if "gate_p" in extras else None
+    gate_fn = GateFn(GateKind.SIGMOID, KDA_MIN_LOG_DECAY)
+    erase, erase_input = extras.get("erase"), EraseInput.GATE
+    if "erase_logits" in extras:
+        erase, erase_input = extras["erase_logits"], EraseInput.LOGITS
     if jax.default_backend() == "gpu":
         return kda_fused(
             q,
@@ -2336,12 +2368,20 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_st
             v,
             g,
             beta,
+            gate=gate,
+            gate_fn=gate_fn,
             segment_ids=segment_ids,
             erase=erase,
-            chunk_size=chunk_size,
-            sub_chunk_size=KDA_CHUNK_TILES[chunk_size],
-            save_chunk_states=save_chunk_states,
+            erase_input=erase_input,
+            chunk_size=options.chunk_size,
+            sub_chunk_size=KDA_CHUNK_TILES[options.chunk_size],
+            save_chunk_states=options.save_chunk_states,
+            state_grads=options.state_grads,
         )
+    if gate is not None:
+        g = gate_log_decay(gate_fn, g.astype(jnp.float32), gate[0], gate[1])
+    if erase is not None and erase_input == EraseInput.LOGITS:
+        erase = 2.0 * jax.nn.sigmoid(erase.astype(jnp.float32))
     q, k, v, g, beta = (jnp.swapaxes(x, 1, 2) for x in (q, k, v, g, beta))
     seg = None if segment_ids is None else segment_ids[:, None, :]  # same documents for every head
     erase = None if erase is None else jnp.swapaxes(erase, 1, 2)
@@ -2363,17 +2403,18 @@ def _unpair_heads(t: jax.Array) -> jax.Array:
     return t.reshape(b, s2 // 2, 2 * half, *rest)
 
 
-def _kda_kernel_paired(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool, chunk_size: int):
+def _kda_kernel_paired(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
     """``_kda_kernel`` with adjacent (shard-local) heads sharing one state (``KdaHeadPairing``)."""
     if q.shape[2] % 2:
         raise ValueError(f"kda_head_pairing needs an even number of heads per shard, got {q.shape[2]}")
     paired_extras = {}
     if "segment_ids" in extras:
         paired_extras["segment_ids"] = jnp.repeat(extras["segment_ids"], 2, axis=1)
-    if "erase" in extras:
-        paired_extras["erase"] = _pair_heads(extras["erase"])
+    for name in ("erase", "erase_logits"):
+        if name in extras:
+            paired_extras[name] = _pair_heads(extras[name])
     paired = (_pair_heads(t) for t in (q, k, v, g, beta))
-    out = _kda_kernel(*paired, paired_extras, save_chunk_states=save_chunk_states, chunk_size=chunk_size)
+    out = _kda_kernel(*paired, paired_extras, options=options)
     return _unpair_heads(out)
 
 
@@ -2578,9 +2619,13 @@ class KimiDeltaAttention(eqx.Module):
         if self.sconv_a is not None:
             a_low = self.sconv_a(a_low, segment_ids)
         a = jnp.einsum("bsr,re->bse", a_low, self.w_a_up)
-        a = rearrange(a, "... (n d) -> ... n d", d=self.dt_bias.shape[-1]).astype(jnp.float32)
+        a = rearrange(a, "... (n d) -> ... n d", d=self.dt_bias.shape[-1])
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
-        g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a + self.dt_bias.astype(jnp.float32)))
+        onchip_gate = cfg.kda_onchip_decay_gate and not no_decay
+        if onchip_gate:  # the kernels form -5 sigmoid(scale (a + dt_bias)) from the bf16 projection
+            g = a
+        else:
+            g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a.astype(jnp.float32) + self.dt_bias.astype(jnp.float32)))
         if cfg.kda_decay_per_head:
             g = jnp.broadcast_to(g, (*g.shape[:-1], head_dim))
         elif cfg.kda_dd_rope:
@@ -2609,10 +2654,19 @@ class KimiDeltaAttention(eqx.Module):
         beta = reshard(beta, spec3)
         extras: dict[str, jax.Array] = {}
         extra_specs: dict[str, P] = {}
+        if onchip_gate:
+            head_spec = P("model", None)
+            extras["gate_p"] = reshard(jnp.broadcast_to(scale, self.dt_bias.shape), head_spec)
+            extras["gate_bias"] = reshard(self.dt_bias.astype(jnp.float32), head_spec)
+            extra_specs["gate_p"] = extra_specs["gate_bias"] = head_spec
         if self.w_erase is not None:
-            erase_logits = jnp.einsum("bsh,hd->bsd", proj_inputs.get("k", x), self.w_erase).astype(jnp.float32)
-            erase_logits = rearrange(erase_logits, "... (n d) -> ... n d", d=head_dim)
-            extras["erase"], extra_specs["erase"] = reshard(2.0 * jax.nn.sigmoid(erase_logits), spec4), spec4
+            z = jnp.einsum("bsh,hd->bsd", proj_inputs.get("k", x), self.w_erase)
+            z = rearrange(z, "... (n d) -> ... n d", d=head_dim)
+            erase_logits = z.astype(jnp.float32)
+            if cfg.kda_onchip_erase_gate:
+                extras["erase_logits"], extra_specs["erase_logits"] = reshard(z, spec4), spec4
+            else:
+                extras["erase"], extra_specs["erase"] = reshard(2.0 * jax.nn.sigmoid(erase_logits), spec4), spec4
             # b / 2 = sigmoid(z): H = -p log p - (1 - p) log(1 - p), max log 2 (the zero-init value).
             p_erase = jax.nn.sigmoid(erase_logits)
             entropy = -(p_erase * jax.nn.log_sigmoid(erase_logits) + (1 - p_erase) * jax.nn.log_sigmoid(-erase_logits))
@@ -2637,7 +2691,8 @@ class KimiDeltaAttention(eqx.Module):
             kernel_fn = _kda_kernel_paired
         else:
             kernel_fn = _kda_kernel
-        run = functools.partial(kernel_fn, save_chunk_states=cfg.kda_save_chunk_states, chunk_size=cfg.kda_chunk_size)
+        options = KdaKernelOptions(cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads)
+        run = functools.partial(kernel_fn, options=options)
         args = (q, k, v, g, beta, extras)
         in_specs = (spec4,) * 4 + (spec3, extra_specs)
         # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.
