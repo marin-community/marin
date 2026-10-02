@@ -256,6 +256,7 @@ class InferenceContext:
             self.pause_generation()
             try:
                 with self.model_lock, self.admission_lock:
+                    jax.block_until_ready(self.engine.gen_state)
                     self.model = candidate
                     self.engine.model = candidate
                     self.model_version += 1
