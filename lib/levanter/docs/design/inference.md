@@ -258,6 +258,43 @@ For a random-weight Hero smoke benchmark, use `config/inference/hero_tiny.json`
 with the same token workload and driver arguments as Snowball. Synthetic results
 measure the tiny configuration, not the production Hero model.
 
+### Production Hero cache accounting
+
+These dimensions refer specifically to
+[`HERO_MODEL` in `moe_hero_ep/heuristic.py`, lines 85–115](https://github.com/marin-community/marin/blob/2edea8e28c731e36ecd24bd1997b1a5f87ba88e4/experiments/grug/moe_hero_ep/heuristic.py#L85-L115),
+not every checkpoint called Hero. It has 48 layers, hidden width 6144, latent
+and expert intermediate widths 3072, 384 routed experts, and stored KV width
+`12 × 128 = 1536`. Kernel size four retains three previous inputs at each of
+its K, attention-output, and MLP-output convolution sites. K convolution runs
+before the global-layer head reduction, so its history width is 1536 in all
+48 layers; attention and MLP histories each have width 6144.
+
+The native [cache initializer](https://github.com/marin-community/marin/blob/2edea8e28c731e36ecd24bd1997b1a5f87ba88e4/lib/levanter/src/levanter/models/hero_model.py#L682-L708)
+allocates these BF16 arrays for one physical page of 128 tokens:
+
+| Arrays | Shape per array | Total bytes |
+| --- | --- | ---: |
+| 48 KV arrays | `(1, 128, 24, 128)` | 37,748,736 |
+| 48 K histories | `(1, 3, 1536)` | 442,368 |
+| 96 attention/MLP histories | `(1, 3, 6144)` | 3,538,944 |
+
+A CPU allocation of the actual initializer confirmed the sum, 41,730,048 bytes
+(39.796875 MiB), without initializing model weights. These are logical array
+bytes; physical memory also depends on sharding, replication, and execution
+buffers. Convolution history alone costs
+`48 × 3 × (1536 + 6144 + 6144) × 2 = 3,981,312` bytes per physical page.
+A 4096-token request spanning 32 such pages therefore occupies 121.5 MiB of
+history. One history slot per request would require 3.796875 MiB before
+allocation padding. The native implementation currently retains per-page
+history to follow the existing page-sharing and clone lifecycle.
+
+The routed expert weights alone contain
+`48 × 384 × 3 × 3072² = 521,838,526,464` parameters, or
+1,043,677,052,928 BF16 bytes (0.94921875 TiB), excluding shared experts, trunk,
+embeddings, and serving state. This configuration cannot fit on four or eight
+80 GB H100s in BF16. Tiny fixture results do not establish its memory footprint
+or serving throughput.
+
 For checkpoint-scale comparisons, set `--model-axis-size` and
 `--expert-axis-size` to match the vLLM tensor and expert parallel configuration.
 The remaining local devices partition the data axis; the result records the
