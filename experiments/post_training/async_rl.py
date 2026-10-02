@@ -257,7 +257,7 @@ DERIVED_CONTEXT_SETTINGS = frozenset(
     }
 )
 # Keys this launcher derives from the rendered trainer.eval_interval and trainer.max_steps.
-EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_interval"})
+EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_interval", "trainer.hf_save_interval"})
 
 
 def apply_setting(config: dict, setting: Setting) -> None:
@@ -280,7 +280,7 @@ def apply_setting(config: dict, setting: Setting) -> None:
     if key in DERIVED_CONTEXT_SETTINGS:
         raise click.BadParameter(f"MarinSkyRL derives {key!r} from context_budget; set context_budget instead")
     if key in EVAL_DERIVED_SETTINGS:
-        raise click.BadParameter(f"{key!r} follows trainer.eval_interval; set that instead")
+        raise click.BadParameter(f"{key!r} follows trainer.eval_interval and trainer.max_steps; set those instead")
     parts = key.split(".")
     node = config
     for part in parts[:-1]:
@@ -345,8 +345,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # Validation prompts scored per in-run evaluation.
         "eval_batch_size": 256,
         "eval_interval": preset.eval_interval,
-        # No periodic HF export; the terminal export MarinSkyRL runs after training stays.
-        "hf_save_interval": -1,
         "resume_mode": "latest",
         "max_ckpts_to_keep": RETENTION.resume_checkpoint_count,
         # Sampling and shuffling seed; --set trainer.seed=N changes it and the run's address with it.
@@ -449,6 +447,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
+    # Queue conversion requests at checkpoints for the terminal HF export.
+    trainer["hf_save_interval"] = trainer["ckpt_interval"]
     check_context_budget(config)
     return config
 
