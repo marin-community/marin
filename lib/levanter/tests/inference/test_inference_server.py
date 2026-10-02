@@ -487,7 +487,7 @@ def test_logprobs_deterministic_behavior(test_client):
         "prompt": "Once upon a time",
         "max_tokens": 4,
         "temperature": 0.0,  # Deterministic
-        "logprobs": True,
+        "logprobs": 0,
         "seed": 12345,
     }
 
@@ -1244,7 +1244,9 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
     entered = (threading.Event(), threading.Event())
     release = (threading.Event(), threading.Event())
     config = _exact_token_config()
-    config = dataclasses.replace(config, service=dataclasses.replace(config.service, max_rounds=1))
+    config = dataclasses.replace(
+        config, service=dataclasses.replace(config.service, max_rounds=1, max_logprobs=2, logprobs_mode="raw_logprobs")
+    )
     model, tokenizer = _DecodeGatedModel(entered, release), _AliasingChatTokenizer()
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         engine = InferenceEngine.from_model_with_config(model, tokenizer, config.service)
@@ -1252,7 +1254,7 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
     server = InferenceServer(config, context, InferenceServer._create_app(context))
     body = {"model": "gpt2", "max_tokens": 5, "temperature": 0, "return_token_ids": True}
     if endpoint == "completions":
-        body.update(prompt=[0, 1], logprobs=0)
+        body.update(prompt=[0, 1], logprobs=2, return_tokens_as_token_ids=True)
     else:
         body.update(messages=[{"role": "user", "content": "A"}], logprobs=True)
     received = asyncio.Queue()
@@ -1328,6 +1330,15 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
                         item for chunk in chunks for item in (chunk["choices"][0].get("logprobs") or {}).get(key, [])
                     ]
                     assert partial_logprobs + retry["logprobs"][key] == complete["logprobs"][key]
+                    if endpoint == "completions":
+                        partial_candidates = [
+                            row for chunk in chunks for row in chunk["choices"][0]["logprobs"]["top_logprobs"]
+                        ]
+                        assert len(partial_candidates) == len(partial_ids)
+                        assert (
+                            partial_candidates + retry["logprobs"]["top_logprobs"]
+                            == complete["logprobs"]["top_logprobs"]
+                        )
                 finally:
                     for gate in release:
                         gate.set()
@@ -1340,7 +1351,23 @@ async def test_live_sse_emits_tokens_and_abort_before_peer_finishes(endpoint, di
         context.shutdown()
 
 
-def test_streamed_prompt_batches_keep_choice_ids_and_logprobs(exact_token_client):
+@pytest.fixture(params=["raw_logprobs", "processed_logprobs"])
+def rollout_token_client(request):
+    config = _exact_token_config()
+    config = dataclasses.replace(
+        config, service=dataclasses.replace(config.service, max_logprobs=2, logprobs_mode=request.param)
+    )
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, _TokenSensitiveCompletionModel(), _AliasingChatTokenizer())
+    try:
+        with TestClient(server.app) as client:
+            yield client, request.param
+    finally:
+        server.inference_context.shutdown()
+
+
+def test_streamed_prompt_batches_keep_choice_ids_and_logprobs(rollout_token_client):
+    rollout_token_client, _ = rollout_token_client
     body = {
         "model": "gpt2",
         "prompt": [[0, 1], [0, 2]],
@@ -1348,10 +1375,11 @@ def test_streamed_prompt_batches_keep_choice_ids_and_logprobs(exact_token_client
         "max_tokens": 2,
         "temperature": 0,
         "return_token_ids": True,
-        "logprobs": 0,
+        "logprobs": 2,
+        "return_tokens_as_token_ids": True,
     }
-    full = exact_token_client.post("/v1/completions", json=body).json()
-    streamed = exact_token_client.post("/v1/completions", json={**body, "stream": True})
+    full = rollout_token_client.post("/v1/completions", json=body).json()
+    streamed = rollout_token_client.post("/v1/completions", json={**body, "stream": True})
     assert streamed.status_code == 200
     chunks = _sse_chunks(streamed.text)
     for expected in full["choices"]:
@@ -1360,8 +1388,39 @@ def test_streamed_prompt_batches_keep_choice_ids_and_logprobs(exact_token_client
         assert [lp for choice in choices for lp in choice["logprobs"]["token_logprobs"]] == expected["logprobs"][
             "token_logprobs"
         ]
+        assert [row for choice in choices for row in choice["logprobs"]["top_logprobs"]] == expected["logprobs"][
+            "top_logprobs"
+        ]
+        assert len(expected["logprobs"]["top_logprobs"]) == 2
+        for token, row in zip(expected["token_ids"], expected["logprobs"]["top_logprobs"], strict=True):
+            assert list(row) == [f"token_id:{token}", "token_id:0" if token != 0 else "token_id:1"]
+            assert list(row.values()) == pytest.approx([1 - math.log(math.e + 3), -math.log(math.e + 3)], abs=1e-6)
         assert "".join(choice["text"] for choice in choices) == expected["text"]
         assert choices[-1]["finish_reason"] == expected["finish_reason"]
+
+
+def test_rollout_capture_reports_requested_distribution_and_rejects_missing_evidence(rollout_token_client):
+    client, mode = rollout_token_client
+    request = {
+        "model": "gpt2",
+        "prompt": [0, 1],
+        "max_tokens": 1,
+        "temperature": 0.5,
+        "top_p": 0.6,
+        "logprobs": 2,
+        "return_tokens_as_token_ids": True,
+        "return_token_ids": True,
+    }
+    # A server must not silently return fewer candidates than the learner requested.
+    assert client.post("/v1/completions", json={**request, "logprobs": 3}).status_code == 400
+    response = client.post("/v1/completions", json=request)
+    assert response.status_code == 200, response.text
+    choice = response.json()["choices"][0]
+    assert choice["token_ids"] == [3]
+    expected = [1 - math.log(math.e + 3), -math.log(math.e + 3)] if mode == "raw_logprobs" else [0.0, -9999.0]
+    assert list(choice["logprobs"]["top_logprobs"][0]) == ["token_id:3", "token_id:0"]
+    assert list(choice["logprobs"]["top_logprobs"][0].values()) == pytest.approx(expected, abs=1e-6)
+    assert choice["logprobs"]["token_logprobs"] == pytest.approx(expected[:1], abs=1e-6)
 
 
 class _UnicodeTokenModel(_TokenSensitiveCompletionModel):
@@ -1421,6 +1480,9 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
     omegaconf = pytest.importorskip("omegaconf")
     entered, release = threading.Event(), threading.Event()
     config = _exact_token_config()
+    config = dataclasses.replace(
+        config, service=dataclasses.replace(config.service, max_logprobs=2, logprobs_mode="raw_logprobs")
+    )
     tokenizer = _AliasingChatTokenizer()
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, _BlockingTokenModel(entered, release), tokenizer)
@@ -1449,7 +1511,10 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
                     }
                 ),
             )
-            request = {"prompt_token_ids": [[0, 1]], "sampling_params": {"temperature": 0, "max_tokens": 3}}
+            request = {
+                "prompt_token_ids": [[0, 1]],
+                "sampling_params": {"temperature": 0, "max_tokens": 3, "logprobs": 2},
+            }
             pending = asyncio.create_task(client.generate(request))
             pausing = None
             try:
@@ -1462,12 +1527,18 @@ async def test_remote_skyrl_pause_retries_exact_tokens_after_resume():
                 paused = await engine.generate(request)
                 assert paused["stop_reasons"] == ["abort"]
                 assert paused["response_ids"] == paused["response_logprobs"] == [[]]
+                assert paused["student_topk_indices"] == paused["behavior_topk_logprobs"] == [[]]
                 assert not pending.done()
                 await client.resume_generation()
                 resumed = await asyncio.wait_for(pending, 30)
                 full = await engine.generate(request)
                 assert resumed["response_ids"] == full["response_ids"] == [[3, 1, 3]]
                 assert resumed["response_logprobs"] == full["response_logprobs"]
+                assert resumed["student_topk_indices"] == full["student_topk_indices"] == [[[3, 0], [1, 0], [3, 0]]]
+                assert resumed["behavior_topk_logprobs"] == full["behavior_topk_logprobs"]
+                expected = -math.log(math.e + 3)
+                for scores in resumed["behavior_topk_logprobs"][0]:
+                    assert scores == pytest.approx([1 + expected, expected], abs=1e-6)
                 assert resumed["stop_reasons"] == full["stop_reasons"] == ["length"]
             finally:
                 release.set()
