@@ -15,8 +15,8 @@ from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
 from haliax.nn import ArrayStacked
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
-from jax import core, random
-from jax.sharding import NamedSharding, get_abstract_mesh, reshard, PartitionSpec as P
+from jax import random
+from jax.sharding import get_abstract_mesh, reshard, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import (
@@ -37,7 +37,8 @@ from levanter.layers.kv_cache import PageCache, KvPageCache, ListCache
 from levanter.layers.paged_short_conv import ShortConvPageCache, paged_short_conv
 from levanter.models.hero import HeroConfig
 from levanter.models.lm_model import LmHeadModel
-from levanter.models.snowball import RMSNorm, GatedNorm
+from levanter.models.snowball import RMSNorm, GatedNorm, rms_norm
+from levanter.sharding import partition_spec_of
 from levanter.utils.activation import ActivationFunctionEnum
 
 _FSDP_AXES = ("data", "expert", "context")
@@ -47,6 +48,7 @@ _SEQ_AXIS_NAME = "context"
 _EMBED_PARTITION_SPEC = P(None, None)
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 _ROUTING_RENORM_SUM = 2.5
+_XSA_EPSILON = 1e-6
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -87,7 +89,7 @@ def _token_spec() -> P:
 
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
     """Preserve the input residual layout after an MLP flattens and restores tokens."""
-    return _partition_spec_of(x) or _batch_spec()
+    return partition_spec_of(x) or _batch_spec()
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -106,30 +108,17 @@ def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> F
     )(token_embed, token_ids)
 
 
-def _partition_spec_of(x: jax.Array) -> P | None:
-    sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
-    if isinstance(sharding, NamedSharding):
-        return sharding.spec
-    return None
-
-
 def _sequence_axis_of(x: jax.Array) -> str | None:
-    spec = _partition_spec_of(x)
+    spec = partition_spec_of(x)
     return spec[1] if spec is not None and len(spec) > 1 else None
 
 
 def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
     """Move ``x``'s sequence axis onto ``axis`` (None replicates it), keeping its other axes."""
-    spec = _partition_spec_of(x)
+    spec = partition_spec_of(x)
     if spec is None:
         return x
     return reshard(x, P(spec[0], axis, *spec[2:]))
-
-
-def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
-    """Non-parametric RMS norm over the last dimension."""
-    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
-    return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
 def _apply_rotary_embedding_fused(
@@ -182,8 +171,6 @@ class ShortConv(eqx.Module):
     (``weight[0]=1``, later taps 0) preserves the input before training.
     Context shards exchange a left halo of ``W-1`` sequence positions.
 
-    The body dispatches to ``levanter.kernels.pallas.short_conv``, which selects a fused Pallas
-    kernel on GPU and the pad-and-shift weighted sum everywhere else; see that module's docstring.
     """
 
     weight: Float[Array, "W C"]
@@ -300,10 +287,7 @@ class HeroAttention(eqx.Module):
         q = rms_norm(q)
         k = rms_norm(k)
 
-        # Half-RoPE: apply rotary embedding only to the first half of Q/K head_dim (second half is
-        # rope-free on every layer). ``disable_rope`` skips RoPE entirely on this layer -- long/global
-        # layers run rope-free. It rides in as a traced per-layer scalar from the layer scan, so RoPE
-        # is always computed and selected with ``jnp.where`` rather than a per-layer ``lax.cond``.
+        # Local layers rotate half of Q/K; global layers omit RoPE.
         if self.cfg.rope_fused:
             q, k = _apply_rotary_embedding_fused(
                 q,
@@ -349,27 +333,7 @@ class HeroAttention(eqx.Module):
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         if seq_axis is not None:
             attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
-        # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
-        aligned_v = align_kv_heads(v_local, num_q_heads=attn_out.shape[2])
-        # GPU XSA with GQA can give attn_out a backend-specific head sharding;
-        # match v to that dynamic sharding before the per-head projection math.
-        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
-        # Merge heads into hidden dim while keeping model-axis sharding for w_o and the residual's
-        # sequence layout: pinning the sequence to None here would all-gather it over context and
-        # run w_o on the whole sequence on every context shard.
-        attn_out = jnp.reshape(
-            attn_out,
-            (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
-            out_sharding=P(_BATCH_AXES, residual_seq_axis, "model"),
-        )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None))
+        return _attention_output(self, x, attn_out, v_local)
 
 
 class DenseMLP(eqx.Module):
@@ -968,18 +932,24 @@ def _decode_attention(
         or ("reference" if cfg.attention_implementation == "reference" else None),
     )
     output = output.reshape(x.shape[0], 1, cfg.num_heads, width)
-    aligned_v = reshard(
-        align_kv_heads(v, num_q_heads=cfg.num_heads), _partition_spec_of(output) or P(_BATCH_AXES, None, None, "model")
-    )
-    output = (
-        output
-        - (
-            jnp.sum(output * aligned_v, axis=-1, keepdims=True)
-            / (jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True) + 1e-6)
-        )
-        * aligned_v
-    )
-    gate = 2 * jax.nn.sigmoid(x @ attn.attn_gate)[..., None]
-    output = (output * gate).reshape(x.shape[0], 1, cfg.num_heads * width, out_sharding=P(_BATCH_AXES, None, "model"))
-    output = jnp.einsum("bsh,hd->bsd", output, attn.w_o, out_sharding=P(_BATCH_AXES, None, None))
+    output = _attention_output(attn, x, output, v)
     return output, dataclasses.replace(cache, kv=kv, k_history=k_history)
+
+
+def _attention_output(attn: HeroAttention, x: jax.Array, output: jax.Array, v: jax.Array) -> jax.Array:
+    # Exclusive Self Attention subtracts the component parallel to this token's value.
+    aligned_v = reshard(
+        align_kv_heads(v, num_q_heads=attn.cfg.num_heads),
+        partition_spec_of(output) or P(_BATCH_AXES, None, None, "model"),
+    )
+    dot = jnp.sum(output * aligned_v, axis=-1, keepdims=True)
+    norm = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+    output = output - (dot / (norm + _XSA_EPSILON)) * aligned_v
+    gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn.attn_gate))[..., None]
+    sequence_axis = _sequence_axis_of(x)
+    output = (output * gate).reshape(
+        *x.shape[:2],
+        attn.cfg.num_heads * attn.cfg.inferred_head_dim,
+        out_sharding=P(_BATCH_AXES, sequence_axis, "model"),
+    )
+    return jnp.einsum("bsh,hd->bsd", output, attn.w_o, out_sharding=P(_BATCH_AXES, sequence_axis, None))

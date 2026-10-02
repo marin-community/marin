@@ -8,7 +8,7 @@ from typing import NamedTuple
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from haliax.state_dict import StateDict
+from haliax.state_dict import StateDict, with_prefix
 from jax.sharding import reshard
 
 from levanter.models.hero_model import HeroBlock, HeroTransformer
@@ -81,20 +81,16 @@ def _block_parameters(block: HeroBlock) -> tuple[_Parameter, ...]:
     return tuple(parameters)
 
 
-def _prefix(prefix: str | None, name: str) -> str:
-    return name if prefix is None else f"{prefix}.{name}"
-
-
 def _transpose(value: jax.Array, transpose: bool) -> jax.Array:
     return jnp.swapaxes(value, -1, -2) if transpose else value
 
 
 def hero_to_state_dict(model: HeroTransformer, prefix: str | None = None) -> StateDict:
     """Export Hero with packed expert banks and canonical schema-v2 parameter names."""
-    state = {_prefix(prefix, p.name): _transpose(p.value, p.transpose) for p in _global_parameters(model)}
+    state = {with_prefix(prefix, p.name): _transpose(p.value, p.transpose) for p in _global_parameters(model)}
     for p in _block_parameters(model.stacked_blocks.stacked):
         for layer in range(model.config.num_layers):
-            state[_prefix(prefix, f"model.layers.{layer}.{p.name}")] = _transpose(p.value[layer], p.transpose)
+            state[with_prefix(prefix, f"model.layers.{layer}.{p.name}")] = _transpose(p.value[layer], p.transpose)
     return state
 
 
@@ -122,7 +118,7 @@ def hero_from_state_dict(
     """Load native banks or per-expert HF weights while preserving the template mesh."""
     globals_loaded = tuple(
         _match_template(
-            _read_parameter(state_dict, _prefix(prefix, p.name), p, num_experts=template.config.num_experts), p
+            _read_parameter(state_dict, with_prefix(prefix, p.name), p, num_experts=template.config.num_experts), p
         )
         for p in _global_parameters(template)
     )
@@ -132,7 +128,7 @@ def hero_from_state_dict(
         layers = [
             _read_parameter(
                 state_dict,
-                _prefix(prefix, f"model.layers.{layer}.{p.name}"),
+                with_prefix(prefix, f"model.layers.{layer}.{p.name}"),
                 p,
                 num_experts=model.config.num_experts,
             )
