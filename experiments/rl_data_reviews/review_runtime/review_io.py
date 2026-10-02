@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+NATIVE_CODE_INDEX_FILE = "native-code-index.json"
+
 
 def utc_now() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat()
@@ -186,4 +188,4 @@ def capture_native_sources(root: Path, called: set[str]) -> None:
         if name == "verifyit" or name.startswith("verifyit."):
             entry["package"] = verifyit
         index.append(entry)
-    write_json(root / "native-code-index.json", index)
+    write_json(root / NATIVE_CODE_INDEX_FILE, index)

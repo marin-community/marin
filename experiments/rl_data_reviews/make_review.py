@@ -27,7 +27,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from filelock import FileLock
 from jsonschema import Draft202012Validator, FormatChecker
-from review_runtime.review_io import digest, json_text, model_completion, utc_now, write_json
+from review_runtime.review_io import NATIVE_CODE_INDEX_FILE, digest, json_text, model_completion, utc_now, write_json
 
 HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = HERE / "quality-review.schema.json"
@@ -230,7 +230,7 @@ def text_bundle(directory: Path, root: Path, limit: int) -> list[dict]:
     """Return evidence entries with text or an explicit reason it was not inspected."""
     result = []
     size = 0
-    index_path = directory / "native-code-index.json"
+    index_path = directory / NATIVE_CODE_INDEX_FILE
     code_index = json.loads(index_path.read_text()) if index_path.exists() else []
     uncalled = {entry["path"] for entry in code_index if not entry["called_in_attempt"]}
     content_paths = {}
@@ -707,7 +707,7 @@ def independent_reviews(
         outcome = attempt(task, config, output / "tasks" / f"{index:04d}", output)
         outcomes.append(outcome)
         execution = output / outcome["execution_path"]
-        code_index = json.loads((execution / "native-code-index.json").read_text())
+        code_index = json.loads((execution / NATIVE_CODE_INDEX_FILE).read_text())
         packages = {json_text(entry["package"]) for entry in code_index if entry.get("package")}
         expected_verifyit = task.route == Route.GYM and bool(
             config["runtime"].get("gym_config", {}).get(task.env_id, {}).get("verifyit_enabled", False)

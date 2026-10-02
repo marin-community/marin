@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import httpx
 import pytest
@@ -38,6 +38,17 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
 )
 from infra.marina.applets.rl_data_catalog.server.composition import canonical_rows, component_rows
 from infra.marina.applets.rl_data_catalog.server.hf_auth import HuggingFaceAuth
+
+
+def cached_refresh_transport(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.MockTransport:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/marin-community/harbor/commits":
+            return httpx.Response(
+                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
+            )
+        return handler(request)
+
+    return httpx.MockTransport(upstream)
 
 
 def cached_verifier_metadata(rows: list[dict]) -> list[dict]:
@@ -772,10 +783,6 @@ def test_unchanged_git_head_refreshes_hf_counts_and_reports_latest_change(verifi
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/repos/marin-community/harbor/commits":
-            return httpx.Response(
-                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
-            )
         assert request.url.host == "huggingface.co"
         return httpx.Response(
             200,
@@ -786,7 +793,7 @@ def test_unchanged_git_head_refreshes_hf_counts_and_reports_latest_change(verifi
             },
         )
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
         snapshot = skyrl_snapshot(client, head, cached_verifier_metadata(cached))
     row = snapshot.rows[0]
     assert (row["revised_at"], row["task_count"], row["dataset_revision"]) == (expected, 9, "hf2")
@@ -876,10 +883,6 @@ def test_refresh_reads_card_counts_for_selected_population_and_canonical_names(
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/repos/marin-community/harbor/commits":
-            return httpx.Response(
-                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
-            )
         if request.url.path == f"/api/datasets/{dataset_id}/tree/hf2":
             return httpx.Response(200, json=[])
         if request.url.path == f"/api/datasets/{dataset_id}":
@@ -894,7 +897,7 @@ def test_refresh_reads_card_counts_for_selected_population_and_canonical_names(
         assert request.url.path == f"/datasets/{dataset_id}/raw/hf2/README.md"
         return httpx.Response(200, text=card)
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
         row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["count_precision"] == ("estimated" if environment == "nemotron_ultra" else "reported")
@@ -942,15 +945,11 @@ def test_gpqa_gated_viewer_preserves_audited_count_only_for_same_revision(revisi
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/repos/marin-community/harbor/commits":
-            return httpx.Response(
-                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
-            )
         if request.url.host == "huggingface.co":
             return httpx.Response(200, json={"sha": revision, "lastModified": "2026-09-28T00:00:00Z"})
         return httpx.Response(401, json={"error": "Gated dataset"})
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
         row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["count_metadata_error"]
@@ -977,10 +976,6 @@ def test_aime_benchmark_and_audited_family_survive_refresh_without_hf_tag() -> N
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/repos/marin-community/harbor/commits":
-            return httpx.Response(
-                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
-            )
         return httpx.Response(
             200,
             json={
@@ -991,7 +986,7 @@ def test_aime_benchmark_and_audited_family_survive_refresh_without_hf_tag() -> N
             },
         )
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
         row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["is_benchmark"] is True
     assert row["family"] == "math-answer"
@@ -1025,17 +1020,13 @@ def test_github_sources_resolve_counts_and_links_without_invalid_hf_requests(
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/repos/marin-community/harbor/commits":
-            return httpx.Response(
-                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
-            )
         if request.url.host == "api.github.com":
             return httpx.Response(200, json={"sha": "data1", "commit": {"committer": {"date": "2026-09-26T00:00:00Z"}}})
         assert request.url.host == "raw.githubusercontent.com"
         assert request.url.path == f"/{dataset_id}/data1/README.md"
         return httpx.Response(200, text=card)
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
         row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["url"] == f"https://github.com/{dataset_id}"
@@ -1103,10 +1094,6 @@ def test_gym_duplicates_stay_merged_after_dataset_metadata_refresh() -> None:
     )
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/repos/marin-community/harbor/commits":
-            return httpx.Response(
-                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
-            )
         assert request.url.path == "/api/datasets/org/math"
         return httpx.Response(
             200,
@@ -1117,7 +1104,7 @@ def test_gym_duplicates_stay_merged_after_dataset_metadata_refresh() -> None:
             },
         )
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
         result = skyrl_snapshot(client, head, cached_verifier_metadata([dataset, adapter]))
     assert len(result.rows) == 1
     refreshed_dataset = result.rows[0]

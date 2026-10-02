@@ -55,7 +55,7 @@ VERIFYIT_CAPABLE_ENVS = {
     "text2sql",
     "reasoning_gym",
 }
-# The 2026-10-01 route inventory covers all audited Nemotron components except IPI.
+# IPI keeps its native scorer; SWE pivot components use Harbor.
 VERIFYIT_NEMOTRON_COMPONENTS = {
     group["dataset"]
     for blend in NEMOTRON_COUNTS["blends"].values()
