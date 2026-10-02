@@ -33,6 +33,10 @@ from levanter.inference.jit_scheduler import (
     _DecodeOutputs,
 )
 from levanter.inference.page_table import PageTable
+from levanter.inference.eagle3 import Eagle3State, propose_eagle3, reconcile_eagle3
+from levanter.inference.speculative import verify_snowball_proposals
+from levanter.models.eagle3 import Eagle3Draft
+from levanter.models.snowball import SnowballLMHeadModel
 from levanter.inference.utils import INVALID, is_valid
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
@@ -69,6 +73,9 @@ class InferenceEngineConfig:
     """Maximum number of stop sequences per active sequence. 0 disables stop tokens."""
     max_stop_tokens: int = 16
     """Maximum tokens per stop sequence (position axis length)."""
+
+    num_eagle3_tokens: int = 0
+    """Opt-in learned proposal width. Requires a resident EAGLE3 draft."""
 
     max_logprobs: int = 0
     """Static rollout top-K capture capacity. Zero disables candidate buffers and computation."""
@@ -281,11 +288,13 @@ class GenState(eqx.Module):
 
     cache: PageCache
     decode_state: DecodeState
+    eagle3: Eagle3State | None = None
 
     def reset(self):
         return GenState(
             cache=self.cache.reset(),
             decode_state=self.decode_state.reset(),
+            eagle3=None if self.eagle3 is None else self.eagle3.reset(),
         )
 
     def clone_sequence(
@@ -424,6 +433,7 @@ def _prefill_kernel(
     sampler: Sampler,
     queue: TokenQueue,
     max_seqs_in_prefill: int,  # static
+    draft: Eagle3Draft | None = None,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
@@ -444,7 +454,35 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    if draft is None:
+        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    else:
+        assert isinstance(model, SnowballLMHeadModel)
+        assert gen_state.eagle3 is not None
+        logits, cache, auxiliary = model.decode_with_auxiliary_states(
+            tokens, gen_state.cache, binfo, pos_ids, layers=draft.config.auxiliary_layers
+        )
+        # Draft token t+1 consumes the target residual at t. The last prompt
+        # residual seeds the first sampled token, which remains pending.
+        prefix_length = binfo.seq_lens.array[0] - 1
+        indices = jnp.arange(tokens.size)
+        valid = indices < prefix_length
+        shifted = jnp.roll(tokens.array, -1)
+        draft_info = dataclasses.replace(
+            binfo,
+            seq_lens=hax.named(jnp.array([prefix_length]), binfo.seq_lens.axes),
+            cu_q_lens=hax.named(jnp.array([0, prefix_length]), binfo.cu_q_lens.axes),
+            new_token_dests=hax.named(jnp.where(valid, binfo.new_token_dests.array, -1), tokens.axes),
+        )
+        draft_output = draft.decode(
+            hax.named(jnp.where(valid, shifted, 0), tokens.axes),
+            jax.sharding.reshard(draft.project_target_states(auxiliary.array), PartitionSpec(None, None)),
+            gen_state.eagle3.cache,
+            draft_info,
+            pos_ids,
+        )
+        seed = auxiliary.array.at[jnp.array([prefix_length])].get(out_sharding=PartitionSpec(None, None))
+        gen_state = dataclasses.replace(gen_state, eagle3=Eagle3State(draft_output.cache, seed))
     logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -569,9 +607,10 @@ def _run_prefill(
     sampler: Sampler,
     work: PrefillWork,
     max_seqs_in_prefill: int,
+    draft: Eagle3Draft | None = None,
 ) -> tuple[GenState, _DecodeOutputs]:
     gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill, draft)
 
 
 def _handle_clones(
@@ -687,6 +726,102 @@ def _handle_clones(
 
     # Device-side release of finished sequences (jit-safe)
     return gen_state, outputs
+
+
+@functools.partial(jax.jit, static_argnames=("num_draft_tokens",), donate_argnames=("gen_state",))
+def _run_eagle3_round(
+    gen_state: GenState,
+    model: SnowballLMHeadModel,
+    draft: Eagle3Draft,
+    sampler: Sampler,
+    num_draft_tokens: int,
+) -> tuple[GenState, _DecodeOutputs]:
+    """Verify one resident request, committing only its accepted output prefix."""
+    assert gen_state.eagle3 is not None
+    width = num_draft_tokens + 1
+    decode_state, packed = gen_state.decode_state.pack_next_sequence(width)
+    original_lengths = decode_state.seq_lens
+    pending_position = packed.pos_ids.array[0]
+    slot = packed.slot_ids.array[0]
+    positions = hax.named(pending_position + jnp.arange(width), "position")
+    slots = hax.full({"position": width}, slot, jnp.int32)
+    decode_state, target_info = decode_state.allocate_for_seq(slots, positions)
+    # Allocation reserves tentative pages but must not commit tentative token counts.
+    decode_state = dataclasses.replace(
+        decode_state, sequences=dataclasses.replace(decode_state.sequences, seq_lens=original_lengths)
+    )
+    draft_positions = hax.named(jnp.where(jnp.arange(width) == 0, pending_position - 1, 0), "position")
+    page = target_info.page_indices.array[0, (pending_position - 1) // target_info.page_size]
+    destinations = (
+        jnp.full((width,), -1, jnp.int32)
+        .at[0]
+        .set(page * target_info.page_size + (pending_position - 1) % target_info.page_size)
+    )
+    draft_info = dataclasses.replace(
+        target_info,
+        seq_lens=hax.named(jnp.array([pending_position]), "seq"),
+        cu_q_lens=hax.named(jnp.array([0, 1]), "seq"),
+        new_token_dests=hax.named(destinations, "position"),
+    )
+    seed = jnp.pad(gen_state.eagle3.target_auxiliary, ((0, width - 1), (0, 0)))
+    proposals = propose_eagle3(
+        draft,
+        packed.tokens,
+        seed,
+        gen_state.eagle3.cache,
+        draft_info,
+        draft_positions,
+        num_draft_tokens=num_draft_tokens,
+    )
+    inputs = hax.named(jnp.concatenate([packed.tokens.array[:1], proposals.token_ids[0]]), "position")
+    key = decode_state.prng_keys_for(packed.slot_ids, packed.pos_ids)[0]
+    verified = verify_snowball_proposals(
+        model,
+        inputs,
+        gen_state.cache,
+        target_info,
+        positions,
+        decode_state.temperature.array,
+        decode_state.max_num_tokens.array - original_lengths.array,
+        jnp.zeros((1,), jnp.bool_),
+        max_draft_tokens=num_draft_tokens,
+        auxiliary_layers=draft.config.auxiliary_layers,
+        key=key,
+        logprobs_mode=sampler.logprobs_mode,
+    )
+    outputs = _DecodeOutputs.init(width, decode_state.max_seqs)
+    empty_queue = decode_state.tqueue
+    one_slot = hax.named(jnp.array([slot]), "position")
+
+    def commit(i, state):
+        current, outputs = state
+
+        # Every verified token goes through the ordinary stop-sequence and length
+        # checks. Replace the pending queue so only the last emitted token remains.
+        def emit(state):
+            current, outputs = state
+            current = dataclasses.replace(current, tqueue=empty_queue)
+            token = hax.named(verified.tokens.token_ids[0, i, None], "position")
+            score = hax.named(verified.tokens.logprobs[0, i, None], "position")
+            current = current.update_tokens(token, one_slot, score, 1)
+            outputs = outputs.append(token, one_slot, score, 1, current.finish_reasons)
+            return current, outputs
+
+        return jax.lax.cond(~current.finished.array[slot], emit, lambda x: x, state)
+
+    decode_state, outputs = jax.lax.fori_loop(0, verified.tokens.lengths[0], commit, (decode_state, outputs))
+    # A multi-token stop can truncate the verified block earlier than rejection.
+    verified = verified._replace(tokens=verified.tokens._replace(lengths=outputs.num_tokens[None]))
+    reconciled = reconcile_eagle3(
+        draft, packed.tokens, seed, proposals.tentative_cache, draft_info, verified, token_capacity=width
+    )
+    state = dataclasses.replace(
+        gen_state,
+        cache=verified.cache,
+        decode_state=decode_state,
+        eagle3=Eagle3State(reconciled.cache, reconciled.target_auxiliary),
+    )
+    return state, outputs
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
@@ -885,6 +1020,7 @@ class InferenceEngine:
         decode_state: DecodeState,
         sampler: Sampler,
         config: InferenceEngineConfig,
+        draft: Eagle3Draft | None = None,
     ) -> None:
         """
         Args:
@@ -896,9 +1032,19 @@ class InferenceEngine:
             config: Engine configuration with sizing and decode parameters.
         """
         self.model = model
+        self.draft = draft
         self.tokenizer = tokenizer
         self.sampler = sampler
-        self.gen_state: GenState = GenState(cache=cache, decode_state=decode_state)
+        eagle3 = None
+        if draft is not None:
+            eagle3 = Eagle3State(
+                draft.initial_cache(decode_state.page_table.spec(), dtype=config.compute_dtype),
+                jnp.zeros(
+                    (config.max_seqs, draft.config.hidden_dim * len(draft.config.auxiliary_layers)),
+                    dtype=config.compute_dtype,
+                ),
+            )
+        self.gen_state: GenState = GenState(cache=cache, decode_state=decode_state, eagle3=eagle3)
         self._initial_decode_state = decode_state
         # Impute max_prefill_size if not set
         if config.max_prefill_size is None:
@@ -926,8 +1072,25 @@ class InferenceEngine:
         tokenizer,
         config: InferenceEngineConfig,
         axis_resources: ResourceMapping | None = None,
+        *,
+        draft: Eagle3Draft | None = None,
     ) -> "InferenceEngine":
         """Build an engine using a EngineConfig for sizing knobs."""
+        if (draft is None) != (config.num_eagle3_tokens == 0):
+            raise ValueError("EAGLE requires both a draft and positive num_eagle3_tokens")
+        if draft is not None:
+            if not isinstance(model, SnowballLMHeadModel):
+                raise ValueError("Resident EAGLE currently requires Snowball")
+            if config.max_seqs != 1 or config.max_seqs_in_prefill != 1:
+                raise ValueError("Resident EAGLE currently supports one sequence at a time")
+            if config.max_pages is None or config.max_logprobs:
+                raise ValueError("Resident EAGLE requires explicit page capacity and max_logprobs=0")
+            if config.num_eagle3_tokens < 1 or config.num_eagle3_tokens >= config.max_seq_len:
+                raise ValueError("EAGLE proposal width must fit within the context capacity")
+            if draft.config.auxiliary_layers[-1] > model.config.num_layers:
+                raise ValueError("EAGLE auxiliary layers exceed the target depth")
+            if draft.embedding.shape != model.transformer.token_embed.shape:
+                raise ValueError("EAGLE and target embedding shapes differ")
         if config.max_pages is None:
             inferred_pages = _infer_max_pages_from_hbm(model, config, axis_resources)
             config = dataclasses.replace(config, max_pages=int(inferred_pages))
@@ -957,6 +1120,7 @@ class InferenceEngine:
             decode_state=decode_state,
             sampler=sampler,
             config=config,
+            draft=draft,
         )
 
     def reset(self) -> None:
@@ -989,7 +1153,7 @@ class InferenceEngine:
         if prefill_work is None:
             return None
         new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
+            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill, self.draft
         )
 
         # _run_prefill returns (GenState, _DecodeOutputs)
@@ -1171,6 +1335,11 @@ class InferenceEngine:
         """
         if not requests:
             return GenerationResult(tokens=[], logprobs=[], total_generated=0, finish_reasons=[])
+        if self.draft is not None:
+            if len(requests) != 1 or requests[0].n_generations != 1:
+                raise ValueError("Resident EAGLE currently supports one request and one choice")
+            if float(requests[0].decode_params.top_p) != 1.0:
+                raise ValueError("Resident EAGLE requires top_p=1")
         if len({r.request_id for r in requests}) != len(requests):
             raise ValueError("Request IDs must be unique within a generation batch.")
         assert self.config.max_prefill_size is not None
@@ -1190,6 +1359,12 @@ class InferenceEngine:
             )
             for request in requests
         ]
+
+        eagle3_budget = (
+            int(requests[0].decode_params.max_num_tokens) - len(requests[0].prompt_tokens)
+            if self.draft is not None
+            else 0
+        )
 
         # validate we don't have any sequences with n_generations exceeding max_seqs
         max_needed = max(int(r.n_generations) for r in requests)
@@ -1317,14 +1492,27 @@ class InferenceEngine:
 
             iter_start = time.time()
 
-            future_state, decode_outputs = _run_generation_loop(
-                self.gen_state,
-                self.model,
-                self.sampler,
-                # TODO: tune max_tokens_per_round
-                self.config.imputed_max_tokens_per_round,
-                self.config.max_rounds,
-            )
+            remaining = 0
+            if self.draft is not None:
+                request = requests[0]
+                emitted = len(self.results[request.request_id][0].token_list)
+                remaining = eagle3_budget - emitted
+            if self.draft is not None and remaining >= self.config.num_eagle3_tokens + 1:
+                future_state, decode_outputs = _run_eagle3_round(
+                    self.gen_state,
+                    self.model,
+                    self.draft,
+                    self.sampler,
+                    self.config.num_eagle3_tokens,
+                )
+            else:
+                future_state, decode_outputs = _run_generation_loop(
+                    self.gen_state,
+                    self.model,
+                    self.sampler,
+                    self.config.imputed_max_tokens_per_round,
+                    self.config.max_rounds,
+                )
             submit_done = time.time()
             self.gen_state = future_state
 
