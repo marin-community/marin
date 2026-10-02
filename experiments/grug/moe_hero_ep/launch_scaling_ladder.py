@@ -74,6 +74,8 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
+    flops_baseline_from_options,
+    flops_baseline_options,
     hero_grug_trainer_config,
     hero_trainer_config,
     validation_datasets,
@@ -438,18 +440,7 @@ def build_ladder_run(
     is_flag=True,
     help="Accept changed mixture stage boundaries when resuming with a new context length.",
 )
-@click.option(
-    "--flops-baseline-step",
-    type=click.IntRange(min=0),
-    default=None,
-    help="Completed steps at the context switch. Requires --flops-baseline-total.",
-)
-@click.option(
-    "--flops-baseline-total",
-    type=click.FloatRange(min=0),
-    default=None,
-    help="Cumulative FLOPs at the context switch. Requires --flops-baseline-step.",
-)
+@flops_baseline_options
 @build_options
 def main(
     run_id: str,
@@ -465,13 +456,7 @@ def main(
     flops_baseline_total: float | None,
     accept_mixture_boundary_shift: bool,
 ) -> ArtifactStep[HeroThroughputResult]:
-    if (flops_baseline_step is None) != (flops_baseline_total is None):
-        raise click.UsageError("--flops-baseline-step and --flops-baseline-total must be provided together")
-    flops_baseline = (
-        FlopsBaseline(flops_baseline_step, flops_baseline_total)
-        if flops_baseline_step is not None and flops_baseline_total is not None
-        else None
-    )
+    flops_baseline = flops_baseline_from_options(flops_baseline_step, flops_baseline_total)
     return build_ladder_run(
         run_id=run_id,
         size=size,
