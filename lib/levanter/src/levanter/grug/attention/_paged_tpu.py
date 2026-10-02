@@ -24,6 +24,7 @@ _MIN_NORMAL_LOG = -126 * log(2)
 _EXP_DEGREE = 12
 _FLOAT32_EXPONENT_BIAS = 127
 _FLOAT32_MANTISSA_BITS = 23
+_BFLOAT16_STORAGE_SHIFT = 16
 _DEKKER_LOW_SIGNIFICAND_BITS = 12
 _DEKKER_HIGH_MASK = -(1 << _DEKKER_LOW_SIGNIFICAND_BITS)
 
@@ -121,10 +122,19 @@ def _fixed_high(value):
     return jnp.round(value * inverse) * quantum
 
 
+def _exact_bfloat16(value):
+    # Only use for FP32 values already representable in BF16. Dropping the
+    # zero low bits avoids a general rounding conversion in Mosaic.
+    bits = jax.lax.bitcast_convert_type(value, jnp.uint32)
+    packed = (bits >> _BFLOAT16_STORAGE_SHIFT).astype(jnp.uint16)
+    return jax.lax.bitcast_convert_type(packed, jnp.bfloat16)
+
+
 def _query_key_components(value):
-    high = _fixed_high(value).astype(jnp.bfloat16)
-    low = (value - high.astype(jnp.float32)).astype(jnp.bfloat16)
-    return high, low
+    high = _fixed_high(value)
+    # The high component has eight significant bits; subtracting it from a
+    # BF16 input leaves an exactly representable BF16 residual.
+    return _exact_bfloat16(high), _exact_bfloat16(value - high)
 
 
 def _query_key_dot(query, key, query_dtype, key_dtype):
