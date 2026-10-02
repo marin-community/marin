@@ -46,6 +46,7 @@ from levanter.grug.attention import (
     fa4_cute_segment_bounds,
     inkling_rel_bias,
 )
+from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, rel_extent_of_band
 from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
@@ -107,11 +108,23 @@ _MTP_KEY_SALT = 0x3F7
 # Per-layer product-key memory diagnostics, lifted out of the layer stats into ``train/attn_res/knob_mem_*``.
 # Per-layer stats with this prefix returned by a layer are exported as ``<name>_L<layer>``.
 _LAYER_KNOB_PREFIX = "attn_res_knob_"
-# Diagnostic attention probe (``attention_probe``): MLA layers report each probe query's softmax probabilities over
-# its ``ATTN_PROBE_KEYS`` most recent keys under this per-layer stat (``..._L<layer>``).
-ATTN_PROBE_STAT = f"{_LAYER_KNOB_PREFIX}attn_probe"
+# Diagnostic forward probe (``forward_probe``). Every recorded value is a stat named with ``PROBE_STAT`` (per-layer ones
+# end in ``_L<layer>``): MLA layers report each attention query's softmax probabilities over its ``ATTN_PROBE_KEYS``
+# most recent keys; at the one probe ``spot`` every layer reports its AttnRes inputs and sublayer outputs, the final
+# AttnRes its sources, gate and mix, and the head its input and the lm_head columns of ``spot_token_ids``.
+PROBE_STAT = f"{_LAYER_KNOB_PREFIX}probe_"
+ATTN_PROBE_STAT = f"{PROBE_STAT}attn"
 ATTN_PROBE_KEYS = 2048
-_ATTENTION_PROBE_QUERIES: tuple[tuple[int, int], ...] | None = None
+
+
+@dataclass(frozen=True)
+class ForwardProbe:
+    attn_queries: tuple[tuple[int, int], ...]
+    spot: tuple[int, int] | None
+    spot_token_ids: tuple[int, ...]
+
+
+_FORWARD_PROBE: ForwardProbe | None = None
 _MEMORY_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}mem_"
 _KDA_ERASE_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}kda_erase_"
 # Bound on one chunk's gathered ``[tokens, rows, dim]`` memory rows in the product-key EmbeddingBag.
@@ -2037,10 +2050,10 @@ class CausalSelfAttention(eqx.Module):
         # The Inkling bias: a per-head content-dependent bias (from x) on the pre-softmax logits.
         rel_bias = self.rel_pos(x) if self.rel_pos is not None else None
         q, k = _transform_qk(q, k)
-        if _ATTENTION_PROBE_QUERIES is not None and self.cfg.mla:
-            if fox_key_bias is not None or rel_bias is not None or second_qk is not None:
-                raise ValueError("attention_probe supports plain MLA attention only")
-            stats[ATTN_PROBE_STAT] = jax.lax.stop_gradient(_probe_attention(q, k, mask, _ATTENTION_PROBE_QUERIES))
+        if _FORWARD_PROBE is not None and _FORWARD_PROBE.attn_queries and self.cfg.mla:
+            if fox_key_bias is not None or second_qk is not None:
+                raise ValueError("forward_probe attention supports MLA without FoX or differential attention")
+            stats[ATTN_PROBE_STAT] = _probe_attention(q, k, mask, rel_bias, _FORWARD_PROBE.attn_queries)
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
@@ -4801,40 +4814,62 @@ def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | N
 
 
 @contextmanager
-def attention_probe(queries: tuple[tuple[int, int], ...]) -> Iterator[None]:
-    """Forwards traced inside this context make every MLA layer recompute, for each ``(row, position)`` query, its
-    softmax attention probabilities over the query's ``ATTN_PROBE_KEYS`` most recent keys (``ATTN_PROBE_STAT``). Read
-    at trace time, so a jitted function must be first traced inside it."""
-    global _ATTENTION_PROBE_QUERIES
-    previous, _ATTENTION_PROBE_QUERIES = _ATTENTION_PROBE_QUERIES, tuple(queries)
+def forward_probe(probe: ForwardProbe) -> Iterator[None]:
+    """Forwards traced inside this context record ``probe`` (see ``PROBE_STAT``). Read at trace time, so a jitted
+    function must be first traced inside it."""
+    global _FORWARD_PROBE
+    previous, _FORWARD_PROBE = _FORWARD_PROBE, probe
     try:
         yield
     finally:
-        _ATTENTION_PROBE_QUERIES = previous
+        _FORWARD_PROBE = previous
+
+
+def _probe_spot() -> tuple[int, int] | None:
+    return None if _FORWARD_PROBE is None else _FORWARD_PROBE.spot
+
+
+def _select_row(x: jax.Array, row: int) -> jax.Array:
+    """Row ``row`` of a batch-sharded ``[B, ...]`` array, replicated, as a one-hot contraction (moves one row)."""
+    one_hot = jax.nn.one_hot(row, x.shape[0], dtype=jnp.float32)
+    out = jnp.einsum("b...,b->...", x.astype(jnp.float32), one_hot, out_sharding=P(*([None] * (x.ndim - 1))))
+    return out
+
+
+def _at_spot(x: Float[Array, "B S ..."], spot: tuple[int, int]) -> jax.Array:
+    return jax.lax.stop_gradient(_select_row(x, spot[0])[spot[1]])
 
 
 def _probe_attention(
-    q: Float[Array, "B S H D"], k: Float[Array, "B S Hk D"], mask: AttentionMask | jax.Array, queries
+    q: Float[Array, "B S H D"],
+    k: Float[Array, "B S Hk D"],
+    mask: AttentionMask | jax.Array,
+    rel_bias: Float[Array, "B H S W"] | None,
+    queries: tuple[tuple[int, int], ...],
 ) -> Float[Array, "Q H K"]:
     """Each query's softmax probabilities over keys ``position - ATTN_PROBE_KEYS + 1 .. position`` (zero outside its
-    document), from the kernel's inputs: scale ``1/sqrt(head_dim)``, causal, document-masked."""
+    document), from the kernel's inputs: scale ``1/sqrt(head_dim)``, the banded Inkling bias, causal, document-masked."""
     if not isinstance(mask, AttentionMask):
-        raise ValueError("attention_probe needs an AttentionMask")
-    replicated = P(None, None, None, None)
-    q = reshard(q, replicated).astype(jnp.float32)
-    k = reshard(align_kv_heads(k, num_q_heads=q.shape[2]), replicated).astype(jnp.float32)
-    rows = jnp.asarray([row for row, _ in queries], jnp.int32)
-    positions = jnp.asarray([position for _, position in queries], jnp.int32)
-    key_positions = positions[:, None] - (ATTN_PROBE_KEYS - 1) + jnp.arange(ATTN_PROBE_KEYS)[None]
-    valid = key_positions >= 0
-    key_positions = jnp.maximum(key_positions, 0)
-    keys = k[rows[:, None], key_positions]  # [Q, K, H, D]
-    logits = jnp.einsum("qhd,qkhd->qhk", q[rows, positions], keys) / math.sqrt(q.shape[-1])
-    if mask.segment_ids is not None:
-        segments = reshard(mask.segment_ids[1], P(None, None))
-        valid &= segments[rows[:, None], key_positions] == segments[rows, positions][:, None]
-    logits = jnp.where(valid[:, None, :], logits, -jnp.inf)
-    return jax.nn.softmax(logits, axis=-1)
+        raise ValueError("forward_probe attention needs an AttentionMask")
+    k = align_kv_heads(k, num_q_heads=q.shape[2])
+    out = []
+    for row, position in queries:
+        q_row, k_row = _select_row(q, row), _select_row(k, row)  # [S, H, D]
+        key_positions = position - (ATTN_PROBE_KEYS - 1) + jnp.arange(ATTN_PROBE_KEYS)
+        valid = key_positions >= 0
+        key_positions = jnp.maximum(key_positions, 0)
+        logits = jnp.einsum("hd,khd->hk", q_row[position], k_row[key_positions]) / math.sqrt(q.shape[-1])
+        if rel_bias is not None:
+            band = _select_row(rel_bias, row)[:, position]  # [H, W]
+            column = key_positions - (position // REL_BIAS_BLOCK) * REL_BIAS_BLOCK + rel_extent_of_band(rel_bias)
+            in_band = (column >= 0) & (column < band.shape[-1])
+            gathered = jnp.take(band, jnp.clip(column, 0, band.shape[-1] - 1), axis=-1)
+            logits = logits + jnp.where(in_band[None], gathered, 0.0)
+        if mask.segment_ids is not None:
+            segments = _select_row(mask.segment_ids[1], row)
+            valid &= segments[key_positions] == segments[position]
+        out.append(jax.nn.softmax(jnp.where(valid[None], logits, -jnp.inf), axis=-1))
+    return jax.lax.stop_gradient(jnp.stack(out))
 
 
 def _soft_capped(logits: jax.Array, cap: float | tuple[float, float, float] | None) -> jax.Array:
@@ -5129,6 +5164,7 @@ def _attn_res_layer(
     }
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias, **opts)
     h = _ple_inject(layer, h, logit_bias)
+    attn_in = h
     attn_branch = type(layer).attn_branch
     if cfg.attn_res_remat_attention:
         attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
@@ -5166,6 +5202,15 @@ def _attn_res_layer(
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
+    spot = _probe_spot()
+    if spot is not None:
+        router_stats = {
+            **router_stats,
+            f"{PROBE_STAT}attn_in": _at_spot(attn_in, spot),
+            f"{PROBE_STAT}attn_out": _at_spot(attn_out, spot),
+            f"{PROBE_STAT}mlp_in": _at_spot(h, spot),
+            f"{PROBE_STAT}mlp_out": _at_spot(mlp_out, spot),
+        }
     return partial + mlp_out, {
         **router_stats,
         **attn_stats,
@@ -6447,6 +6492,7 @@ class Transformer(eqx.Module):
 
         weight_logs: dict[int, tuple[jax.Array, bool]] = {}
         layer_logs: dict[str, jax.Array] = {}
+        probe_logs: dict[str, jax.Array] = {}
         kv_inputs = None
         if self.kv_stream is not None:
             gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
@@ -6540,6 +6586,12 @@ class Transformer(eqx.Module):
                 logits = [jnp.zeros_like(logit) for logit in logits]
             logits = _soft_cap_logits(logits, cfg.attn_res_logit_soft_cap)
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
+            spot = _probe_spot()
+            if spot is not None:
+                probe_logs[f"{PROBE_STAT}final_sources"] = jnp.stack([_at_spot(src, spot) for src in [*blocks, partial]])
+                probe_logs[f"{PROBE_STAT}final_gate_logits"] = jnp.stack([_at_spot(lg, spot) for lg in logits])
+                probe_logs[f"{PROBE_STAT}final_gate_weights"] = jnp.stack([_at_spot(w, spot) for w in weights])
+                probe_logs[f"{PROBE_STAT}final_query"] = jax.lax.stop_gradient(queries[final_index])
             if cfg.attn_res_final_mode == "attn":
                 mixed = _gate_variants(mixed, [*blocks, partial], logit_bias, final_index, eps, has_partial=True)
             if cfg.attn_res_final_mode == "sum":
@@ -6557,6 +6609,8 @@ class Transformer(eqx.Module):
             )
             max_weight = jax.lax.stop_gradient(jnp.mean(jnp.max(weights, axis=0)))
             entropy = jax.lax.stop_gradient(jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0)))
+            if spot is not None:
+                probe_logs[f"{PROBE_STAT}final_mixed"] = _at_spot(mixed, spot)
             return mixed, _gate_z(logits), max_weight, entropy
 
         def merge_passes(per_pass_stats):
@@ -6621,6 +6675,7 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
             final_stats.update(_learned_knob_stats(layer, i))
         final_stats.update(layer_logs)
+        final_stats.update(probe_logs)
         if self.router_tok_a is not None:
             final_stats["attn_res_knob_router_tok_a_rms"] = jnp.sqrt(
                 jnp.mean(jnp.square(jax.lax.stop_gradient(self.router_tok_a).astype(jnp.float32)))
@@ -6742,11 +6797,19 @@ class Transformer(eqx.Module):
         k: int,
     ) -> tuple[Float[Array, " T"], Int[Array, "T k"], Float[Array, "T k"], dict[str, Float[Array, "Q H K"]]]:
         """At each ``(row, position)``: the loss of the actual next token and the top-``k`` next-token ids and
-        probabilities, through the training head (bigram prior, bias and soft-cap included). The dict holds each MLA
-        layer's ``attention_probe`` probabilities when traced inside one (else empty)."""
+        probabilities, through the training head (bigram prior, bias and soft-cap included). The dict holds the
+        ``forward_probe`` recordings when traced inside one (else empty)."""
         hidden, metrics = self(token_ids, mask=mask)
-        attention = {name: value for name, value in metrics.items() if name.startswith(ATTN_PROBE_STAT)}
+        probe = {name: value for name, value in metrics.items() if name.startswith(PROBE_STAT)}
         head_in, lm_head = self._lm_head_operands(hidden, token_ids)
+        spot = _probe_spot()
+        if spot is not None:
+            assert _FORWARD_PROBE is not None
+            probe[f"{PROBE_STAT}head_in"] = _at_spot(head_in, spot)
+            ids = jnp.asarray(_FORWARD_PROBE.spot_token_ids, jnp.int32)
+            probe[f"{PROBE_STAT}lm_head_cols"] = jax.lax.stop_gradient(
+                reshard(lm_head, P(None, None))[:, ids].astype(jnp.float32)
+            )
         head_in = reshard(head_in, P(None, None, None))
         picked = head_in[positions[:, 0], positions[:, 1]].astype(jnp.float32)
         logits = jnp.einsum(
@@ -6756,7 +6819,7 @@ class Transformer(eqx.Module):
         targets = reshard(token_ids, P(None, None))[positions[:, 0], positions[:, 1] + 1]
         loss = -jnp.take_along_axis(logp, targets[:, None], axis=-1)[:, 0]
         top_logp, top_ids = jax.lax.top_k(logp, k)
-        return loss, top_ids, jnp.exp(top_logp), attention
+        return loss, top_ids, jnp.exp(top_logp), probe
 
     def _output_bigram_features(self, token_ids: Int[Array, "B S"], dtype: jnp.dtype) -> Float[Array, "B S R"]:
         assert self.output_bigram_u is not None
