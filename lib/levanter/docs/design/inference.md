@@ -227,3 +227,26 @@ the rings. The implementation uses a JAX scan and matches the existing
 short-convolution reference's lag-ordered arithmetic. CPU FP32/BF16 parity covers
 mixed request order, page crossings, clone divergence, and reset. This component
 has not yet been integrated into a native Hero model or validated on accelerators.
+
+### Native Hero schema-v2 model
+
+`HeroConfig` and `HeroLMHeadModel` load schema-v2 `grug_moe` exports through
+`HFCheckpointConverter`. The recipe preserves latent routed experts, independent
+shared experts, local/global KV-head counts, all three short-convolution sites,
+and the checkpoint's fused or unfused RoPE convention. Snowball schema-v1 and
+Hero schema-v2 configurations are resolved separately. Packed expert banks and
+per-expert export weights map to the same native model.
+
+Paged prefill and decode use `HeroLayerCache`, combining KV pages with the
+short-convolution histories described above. Supply absolute token positions and
+a `compact_grug_mesh` with context size one. Packed token buffer lengths must
+be divisible by the data and expert mesh axes. Convolution currently gathers
+packed activations for a causal scan; this is a correctness baseline and still
+needs accelerator profiling. The stored KV layout duplicates global heads to
+the maximum local/global count so all layers share one scan shape.
+
+CPU tests compare the native full forward path with the experiment using
+nonidentity convolution taps, both RoPE conventions, packed documents, and both
+checkpoint layouts. Mixed-request incremental tests compare against full forward
+across page and sliding-window boundaries. Full-checkpoint accelerator throughput
+and matched vLLM performance remain unmeasured.
