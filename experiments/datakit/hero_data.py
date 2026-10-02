@@ -131,7 +131,9 @@ DOMAIN_ASSIGN_BATCH_SIZE = 4096
 # also hash the run id into their own steps.
 EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
 FUZZY_DUPS_ID = "dedup_709f5997"
-VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_c757e4f0"
+# Verification against materialized clusters at 0.75 containment on word 3-grams.
+# The artifact has the current normalized source keys for all 292 sources.
+VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_v11_c075"
 
 
 def _refuse_to_run(output_path: str) -> NoReturn:

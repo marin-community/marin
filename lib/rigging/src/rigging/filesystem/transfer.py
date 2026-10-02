@@ -13,8 +13,8 @@ from typing import Any, cast
 from fsspec import AbstractFileSystem
 
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.hashing import file_md5_for_path
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.hashing import file_md5_for_path
 
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
 DIRECTORY_TYPE = "directory"
@@ -99,6 +99,20 @@ class SyncPlan:
     deletes: tuple[DeleteAction, ...]
 
 
+def copy(source_url: str, destination_url: str, *, recursive: bool = False, no_clobber: bool = False) -> None:
+    """Copy a local path or storage URL to another routed filesystem.
+
+    Args:
+        source_url: File or directory to copy.
+        destination_url: Output path. An existing directory or trailing slash
+            appends the source basename; otherwise this is the exact output path.
+        recursive: Include directory contents.
+        no_clobber: Skip existing destination files.
+    """
+    plan = copy_plan((source_url,), destination_url, recursive=recursive, no_clobber=no_clobber)
+    execute_copy_plan(plan)
+
+
 def copy_plan(
     source_urls: tuple[str, ...],
     destination_url: str,
@@ -113,7 +127,7 @@ def copy_plan(
     sources = _sources(source_urls)
     for source in sources:
         if source.is_directory and not recursive:
-            raise TransferError(f"{source.location.url} is a directory; pass -r to copy it recursively")
+            raise TransferError(f"{source.location.url} is a directory; set recursive=True (-r in fsutil)")
         if source.is_directory and (
             _same_location(source.location, destination) or _strictly_contains(source.location, destination)
         ):

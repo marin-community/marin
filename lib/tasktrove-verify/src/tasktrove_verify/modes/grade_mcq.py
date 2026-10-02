@@ -29,7 +29,12 @@ def answer_letters(text: str) -> list[str]:
     return ANSWER.findall(WRAPPERS.sub("", BOXED_LETTER.sub(r"\1", text)))
 
 
-def grade(spec: McqSpec, tests_dir: Path, workspace: Path) -> Reward:
+def grade_mcq_candidate(spec: McqSpec, candidate: str) -> Reward:
+    """Score an extracted MCQ option letter against a validated task spec.
+
+    The caller extracts the candidate from its own output format. An empty candidate
+    means no answer was found; an option outside the declared range scores zero.
+    """
     if not 1 <= spec.options <= MAX_OPTIONS:
         raise InvalidTask(f"mcq options must be 1..{MAX_OPTIONS}, got {spec.options}")
     letters = string.ascii_uppercase[: spec.options]
@@ -37,13 +42,20 @@ def grade(spec: McqSpec, tests_dir: Path, workspace: Path) -> Reward:
     if expected not in letters:
         raise InvalidTask(f"mcq expected {spec.expected!r} is not one of {letters!r}")
 
+    extracted = candidate.strip().upper()
+    if not extracted:
+        return scored(0.0, reason="no_answer_line", expected=expected)
+    if extracted not in letters:
+        return scored(0.0, reason="out_of_range", extracted=extracted, expected=expected)
+    return scored(float(extracted == expected), extracted=extracted, expected=expected)
+
+
+def grade(spec: McqSpec, tests_dir: Path, workspace: Path) -> Reward:
+    no_answer_line = grade_mcq_candidate(spec, "")
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
     matches = answer_letters(text)
     if not matches:
-        return scored(0.0, reason="no_answer_line", expected=expected)
-    extracted = matches[-1].strip().upper()
-    if extracted not in letters:
-        return scored(0.0, reason="out_of_range", extracted=extracted, expected=expected)
-    return scored(float(extracted == expected), extracted=extracted, expected=expected)
+        return no_answer_line
+    return grade_mcq_candidate(spec, matches[-1])

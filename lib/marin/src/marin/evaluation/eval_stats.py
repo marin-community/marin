@@ -48,8 +48,10 @@ BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy", "norma
 
 # lm-eval records a task's graded-document count under this key, beside the metrics themselves.
 SAMPLE_COUNT_METRIC = "sample_len"
-# evalchemy's chat-native benchmarks and Harbor report counts directly instead.
-TOTAL_METRICS = ("num_total", "total", "total_examples")
+# Evalchemy code tasks report graded items under scored_count; other task totals may
+# include attempted-but-ungraded items, so scored_count takes precedence when present.
+SCORED_COUNT_METRIC = "scored_count"
+TOTAL_METRICS = (SCORED_COUNT_METRIC, "num_total", "total", "total_examples")
 UNGRADED_ERROR = "ungraded"
 
 # Bisection bounds for the Imbens-Manski critical value: the two-sided normal quantile when nothing is

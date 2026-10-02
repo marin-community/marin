@@ -128,16 +128,23 @@ def _last_number(text: str) -> float | None:
     return None
 
 
-def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
+def grade_numeric_candidate(spec: NumericSpec, value: float) -> Reward:
+    """Score a numeric value after the caller extracts it from its submission format."""
     tolerance = numeric_tolerance(spec)
+    match = abs(value - spec.expected) <= tolerance
+    return scored(float(match), extracted=value, expected=spec.expected, tolerance=tolerance)
+
+
+def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
     text = read_output(spec, workspace)
     if text is None:
+        numeric_tolerance(spec)
         return scored(0.0, reason="no_output")
     value = _last_number(text)
     if value is None:
+        numeric_tolerance(spec)
         return scored(0.0, reason="no_number", expected=spec.expected)
-    match = abs(value - spec.expected) <= tolerance
-    return scored(float(match), extracted=value, expected=spec.expected, tolerance=tolerance)
+    return grade_numeric_candidate(spec, value)
 
 
 def grade(spec: MathSpec | NumericSpec, tests_dir: Path, workspace: Path) -> Reward:

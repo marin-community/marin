@@ -109,6 +109,8 @@ class ShellSimMachine:
     async def run(self, command: Command) -> Result:
         if not command.argv:
             raise ValueError("Command argv is empty")
+        if command.user not in (None, "0", "root"):
+            raise UnsupportedMachineSpec("ShellSim does not provide separate execution users")
         for name in command.env:
             if ENV_NAME.fullmatch(name) is None:
                 raise ValueError(f"Invalid environment variable name: {name}")
@@ -176,6 +178,8 @@ class ShellSimMachineFactory:
         self.output = output
 
     async def create(self, spec: MachineSpec) -> ShellSimMachine:
+        if spec.cpus is not None or spec.storage_mb is not None or spec.gpus:
+            raise UnsupportedMachineSpec("ShellSim does not provide machine CPU, storage, or GPU allocations")
         if not isinstance(spec.source, ShellSimBuiltins):
             raise UnsupportedMachineSpec("ShellSim uses only its built-in commands; select ShellSimBuiltins")
         if spec.network is not NetworkPolicy.DENY:
