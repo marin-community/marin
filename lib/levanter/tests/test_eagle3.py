@@ -478,8 +478,8 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_ca
 
 
 @pytest.mark.parametrize("termination", ["length", "stop", "abort", "accept_all", "accept_stop", "short_prompt"])
-@jax.default_matmul_precision("highest")
-def test_resident_eagle_generation_matches_ordinary_target_and_retry(termination):
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_resident_eagle_generation_matches_ordinary_target_and_retry(termination, dtype):
     hf_config, weights, _ = _checkpoint()
     draft_config = dataclasses.replace(
         Eagle3Config.from_hf_config(hf_config), inference_attention_implementation="reference"
@@ -494,13 +494,14 @@ def test_resident_eagle_generation_matches_ordinary_target_and_retry(termination
         max_tokens_per_round=4,
         max_queued_tokens=16,
         max_rounds=1,
-        compute_dtype=jnp.float32,
+        compute_dtype=dtype,
     )
     request = Request([2, 7, 5], 17, dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(14)), 1)
     if termination == "short_prompt":
         request = dataclasses.replace(request, prompt_tokens=[2])
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         target = SnowballLMHeadModel.init(Axis("vocab", 32), _target_config(), key=jax.random.key(13))
+        target = jax.tree.map(lambda x: x.astype(dtype) if eqx.is_inexact_array(x) else x, target)
         if termination in ("accept_all", "accept_stop"):
             # Uniform target and draft heads make every greedy proposal agree,
             # exposing bonus-token and within-block stop boundaries.
