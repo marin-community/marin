@@ -121,9 +121,8 @@ def _reference_attention(
         allowed &= key_position < kv_lens[seq, None]
         if sliding_window is not None:
             allowed &= key_position > position[:, None] - sliding_window
-        scores = jnp.einsum(
-            "thgd,tshd->thgs", q.astype(jnp.float32) * sm_scale, k, precision=jax.lax.Precision.HIGHEST
-        )
+        scores = jnp.einsum("thgd,tshd->thgs", q.astype(jnp.float32), k, precision=jax.lax.Precision.HIGHEST)
+        scores = scores * sm_scale
         if soft_cap is not None:
             # TPU tanh uses an approximation that can flip BF16 output rounding.
             scaled = scores / soft_cap
@@ -170,9 +169,8 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
     if isinstance(sm_scale, (float, int)):
         kernel_scale = sm_scale
     else:
-        # Runtime scales cannot be static kernel arguments. Promote before scaling
-        # to avoid rounding BF16 queries before their dot product.
-        q_flat = q_flat.astype(jnp.float32) * sm_scale
+        # Runtime scales cannot be static kernel arguments.
+        q_flat = q_flat * sm_scale
         kernel_scale = 1.0
     with jax.default_matmul_precision("highest"):
         output = tpu_ragged_paged_attention(
