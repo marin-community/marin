@@ -649,14 +649,15 @@ supplied draft head loads unchanged.
 `propose_eagle3` projects target residuals once and generates greedy proposals
 with an independent paged draft cache. Draft input tokens are shifted one position
 ahead of their target residuals. The caller supplies allocated pages and space
-for all proposal steps. The returned draft cache is tentative: after target
-verification, rows generated from predicted draft states must be replaced by
-accepted target residuals before the next proposal round. A canceled request
-must discard its tentative rows.
+for all proposal steps. The returned draft cache is tentative. `reconcile_eagle3` replays the initial
+target-grounded row and accepted target residuals, replacing predicted draft
+state rows before the next proposal round. It returns committed draft lengths,
+the pending target token, and the residual that predicts it. Cancelled rows
+retain their original visible prefix and return no pending token. The caller
+still owns page allocation, reclamation, and removal of finished rows.
 
 The learned proposal primitive can feed `verify_snowball_proposals`; it does not
-yet enable speculation in the serving scheduler. Online draft refresh and
-cross-round draft-cache reconciliation remain unimplemented. The pinned online
+yet enable speculation in the serving scheduler. Online draft refresh remains unimplemented. The pinned online
 trainer publishes only trainable draft tensors. Its target synchronization also
 refreshes the draft's mapped target head; a native refresh implementation must
 preserve this distinction when staging a complete candidate.

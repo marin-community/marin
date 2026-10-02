@@ -10,11 +10,12 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from safetensors.numpy import save_file
 
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.inference.eagle3 import propose_eagle3
+from levanter.inference.eagle3 import propose_eagle3, reconcile_eagle3
 from levanter.inference.speculative import verify_snowball_proposals
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from haliax import Axis
@@ -150,7 +151,7 @@ def _decode_inputs(token_ids: list[int], position: int):
     destinations[:count] = positions[:count]
     info = PageBatchInfo(
         slot_ids=hax.named(jnp.array([0], jnp.int32), "seq"),
-        page_indices=hax.named(jnp.arange(4, dtype=jnp.int32)[None], ("seq", "page")),
+        page_indices=hax.named(jnp.arange(8, dtype=jnp.int32)[None], ("seq", "page")),
         seq_lens=hax.named(jnp.array([position + count], jnp.int32), "seq"),
         cu_q_lens=hax.named(jnp.array([0, count], jnp.int32), "seq"),
         num_seqs=jnp.array(1, jnp.int32),
@@ -240,8 +241,9 @@ def test_eagle3_learned_recurrent_proposals_match_full_torch_with_separate_cache
         )
 
 
+@pytest.mark.parametrize("proposal_case", ["learned", "accept_all", "accept_prefix", "cancelled"])
 @jax.default_matmul_precision("highest")
-def test_learned_eagle_proposals_verify_against_real_snowball_target():
+def test_learned_eagle_proposals_verify_against_real_snowball_target(proposal_case):
     hf_config, state, _ = _checkpoint()
     config = dataclasses.replace(
         Eagle3Config.from_hf_config(hf_config), inference_attention_implementation="reference"
@@ -257,7 +259,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target():
         num_heads=4,
         num_kv_heads=2,
         head_dim=4,
-        max_seq_len=8,
+        max_seq_len=16,
         sliding_window=2,
         initializer_std=0.2,
         attention_implementation="reference",
@@ -275,7 +277,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target():
                 prompt.positions,
                 layers=config.auxiliary_layers,
             )
-        )(target, target.initial_cache(PageTableSpec(4, 2), dtype=jnp.float32))
+        )(target, target.initial_cache(PageTableSpec(8, 2), dtype=jnp.float32))
         pending = int(np.asarray(prefilled.logits.array)[2].argmax())
         target_states = np.asarray(prefilled.auxiliary_states.array)
         draft_prefix = _decode_inputs([7, 5], 0)
@@ -288,7 +290,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target():
                 draft_prefix.batch_info,
                 draft_prefix.positions,
             )
-        )(draft, draft.initial_cache(PageTableSpec(4, 2), dtype=jnp.float32))
+        )(draft, draft.initial_cache(PageTableSpec(8, 2), dtype=jnp.float32))
         seed = _decode_inputs([pending], 2)
         auxiliary = np.zeros_like(target_states)
         auxiliary[0] = target_states[2]
@@ -309,14 +311,21 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target():
         cache = prefilled.cache
         oracle_ids, oracle_scores, oracle_logits = [], [], []
         token = pending
-        for step in range(5):
+        for step in range(9):
             logits, cache = decode_target(target, cache, _decode_inputs([token], 3 + step))
             row = np.asarray(logits.array, dtype=np.float64)[0]
             token = int(row.argmax())
             oracle_ids.append(token)
             oracle_scores.append(row[token] - np.logaddexp.reduce(row))
             oracle_logits.append(row)
-        block = _decode_inputs([pending, *np.asarray(proposed.token_ids)[0].tolist()], 3)
+        proposal_ids = np.asarray(proposed.token_ids)[0].tolist()
+        if proposal_case in ("accept_all", "accept_prefix"):
+            # Keep the learned tentative cache: it must be rebuilt from the target
+            # even when a better proposal sequence is supplied to verification.
+            proposal_ids = oracle_ids[:3].copy()
+            if proposal_case == "accept_prefix":
+                proposal_ids[-1] = (proposal_ids[-1] + 1) % 32
+        block = _decode_inputs([pending, *proposal_ids], 3)
         verified = eqx.filter_jit(
             lambda m, c: verify_snowball_proposals(
                 m,
@@ -326,7 +335,7 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target():
                 block.positions,
                 jnp.zeros(1),
                 jnp.array([5]),
-                jnp.zeros(1, dtype=bool),
+                jnp.array([proposal_case == "cancelled"]),
                 max_draft_tokens=3,
                 auxiliary_layers=config.auxiliary_layers,
                 key=jax.random.key(19),
@@ -334,8 +343,129 @@ def test_learned_eagle_proposals_verify_against_real_snowball_target():
             )
         )(target, prefilled.cache)
         length = int(np.asarray(verified.tokens.lengths)[0])
+        if proposal_case == "cancelled":
+            reconciled = eqx.filter_jit(
+                lambda m, c: reconcile_eagle3(
+                    m,
+                    seed.tokens,
+                    jnp.asarray(auxiliary),
+                    c,
+                    seed.batch_info,
+                    verified,
+                    token_capacity=seed.tokens.size,
+                )
+            )(draft, proposed.tentative_cache)
+            np.testing.assert_array_equal(reconciled.committed_seq_lens.array, [2])
+            np.testing.assert_array_equal(reconciled.pending_tokens, [-1])
+            np.testing.assert_array_equal(reconciled.target_auxiliary, 0)
+            retried = eqx.filter_jit(
+                lambda m, c: propose_eagle3(
+                    m,
+                    seed.tokens,
+                    jnp.asarray(auxiliary),
+                    c,
+                    seed.batch_info,
+                    seed.positions,
+                    num_draft_tokens=3,
+                )
+            )(draft, reconciled.cache)
+            np.testing.assert_array_equal(retried.token_ids, proposed.token_ids)
+            np.testing.assert_allclose(
+                retried.tentative_cache.kv_pages.array, proposed.tentative_cache.kv_pages.array, rtol=1e-4, atol=1e-4
+            )
+            return
         np.testing.assert_array_equal(np.asarray(verified.tokens.token_ids)[0, :length], oracle_ids[:length])
         np.testing.assert_allclose(np.asarray(verified.tokens.logprobs)[0, :length], oracle_scores[:length], atol=1e-5)
         next_input = _decode_inputs([oracle_ids[length - 1]], 3 + length)
         logits, _ = decode_target(target, verified.cache, next_input)
         np.testing.assert_allclose(np.asarray(logits.array)[0], oracle_logits[length], rtol=1e-4, atol=1e-4)
+
+        reconciled = eqx.filter_jit(
+            lambda m, c: reconcile_eagle3(
+                m,
+                seed.tokens,
+                jnp.asarray(auxiliary),
+                c,
+                seed.batch_info,
+                verified,
+                token_capacity=seed.tokens.size,
+            )
+        )(draft, proposed.tentative_cache)
+        np.testing.assert_array_equal(reconciled.committed_seq_lens.array, [2 + length])
+        assert int(np.asarray(reconciled.pending_tokens)[0]) == oracle_ids[length - 1]
+        next_seed = _decode_inputs([oracle_ids[length - 1]], 2 + length)
+        next_auxiliary = np.zeros_like(auxiliary)
+        next_auxiliary[0] = np.asarray(reconciled.target_auxiliary)[0]
+        next_proposals = eqx.filter_jit(
+            lambda m, c: propose_eagle3(
+                m,
+                next_seed.tokens,
+                jnp.asarray(next_auxiliary),
+                c,
+                next_seed.batch_info,
+                next_seed.positions,
+                num_draft_tokens=3,
+            )
+        )(draft, reconciled.cache)
+
+        # Rebuild the draft prefix from original target rows, without speculative KV.
+        replay_tokens = [7, 5, pending, *oracle_ids[: length - 1]]
+        replay_auxiliary = np.zeros_like(auxiliary)
+        replay_auxiliary[:3] = target_states[:3]
+        replay_auxiliary[3 : 2 + length] = np.asarray(verified.auxiliary_states)[0, : length - 1]
+        replay = _decode_inputs(replay_tokens, 0)
+        fresh = eqx.filter_jit(
+            lambda m, c: m.decode(
+                replay.tokens,
+                m.project_target_states(jnp.asarray(replay_auxiliary)),
+                c,
+                replay.batch_info,
+                replay.positions,
+            )
+        )(draft, draft.initial_cache(PageTableSpec(8, 2), dtype=jnp.float32))
+        fresh_proposals = eqx.filter_jit(
+            lambda m, c: propose_eagle3(
+                m,
+                next_seed.tokens,
+                jnp.asarray(next_auxiliary),
+                c,
+                next_seed.batch_info,
+                next_seed.positions,
+                num_draft_tokens=3,
+            )
+        )(draft, fresh.cache)
+        np.testing.assert_array_equal(next_proposals.token_ids, fresh_proposals.token_ids)
+        np.testing.assert_allclose(
+            next_proposals.tentative_cache.kv_pages.array,
+            fresh_proposals.tentative_cache.kv_pages.array,
+            rtol=1e-4,
+            atol=1e-4,
+        )
+        second_block = _decode_inputs(
+            [oracle_ids[length - 1], *np.asarray(next_proposals.token_ids)[0].tolist()], 3 + length
+        )
+        second = eqx.filter_jit(
+            lambda m, c: verify_snowball_proposals(
+                m,
+                second_block.tokens,
+                c,
+                second_block.batch_info,
+                second_block.positions,
+                jnp.zeros(1),
+                jnp.array([5]),
+                jnp.zeros(1, dtype=bool),
+                max_draft_tokens=3,
+                auxiliary_layers=config.auxiliary_layers,
+                key=jax.random.key(20),
+                logprobs_mode="raw_logprobs",
+            )
+        )(target, verified.cache)
+        second_length = int(np.asarray(second.tokens.lengths)[0])
+        np.testing.assert_array_equal(
+            np.asarray(second.tokens.token_ids)[0, :second_length], oracle_ids[length : length + second_length]
+        )
+        np.testing.assert_allclose(
+            np.asarray(second.tokens.logprobs)[0, :second_length],
+            oracle_scores[length : length + second_length],
+            atol=1e-5,
+        )
