@@ -15,7 +15,7 @@ from shellbox.image import DockerfileSource, ImageCache, PreparedImage, Registry
 
 
 @pytest.mark.parametrize("working_directory,expected", [("/task workspace", "/task workspace"), ("", "/")])
-def test_prepared_image_workdir_comes_from_its_digest_bound_config(tmp_path, working_directory, expected):
+def test_image_working_directory(tmp_path, working_directory, expected):
     blobs = tmp_path / "blobs" / "sha256"
     blobs.mkdir(parents=True)
     config = json.dumps({"config": {"WorkingDir": working_directory}}).encode()
