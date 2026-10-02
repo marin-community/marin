@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import time
 
 from levanter.tokenizers import load_tokenizer
@@ -82,6 +83,8 @@ def prepare(snapshot_root: str, output_path: str, num_shards: int, max_workers: 
 
 def launch(store_path: str, snapshot_root: str, version: str, wait_for_store_minutes: int) -> None:
     configure_coreweave_s3()
+    if not os.environ.get("WANDB_API_KEY"):
+        raise ValueError("WANDB_API_KEY must be set before dispatching the Dr Doom trainer")
     if wait_for_store_minutes < 1:
         raise ValueError("wait_for_store_minutes must be positive")
     record = StoragePath(prefix_join(store_path, ".artifact.json"))

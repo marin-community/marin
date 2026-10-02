@@ -117,6 +117,7 @@ def build_run_config(store: SftTokenStore, version: str, recipe: ScienceSftRecip
             id=identity,
             mode="online",
             resume="allow",
+            save_code=False,
             tags=list(recipe.tags),
         ),
         use_explicit_mesh_axes=True,
