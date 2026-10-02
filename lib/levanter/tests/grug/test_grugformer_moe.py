@@ -44,6 +44,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.sonic import sonic_gather_sum
+from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
@@ -848,6 +849,26 @@ def test_sonic_gather_sum_matches_jax_reference_on_gpu():
     sonic_out.block_until_ready()
     reference_out.block_until_ready()
     np.testing.assert_allclose(np.asarray(sonic_out), np.asarray(reference_out), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("width", [7, 37, 100, 384, 1000, 1023])
+def test_top_k_indices_match_lax_top_k_on_gpu(width):
+    _skip_without_sonic_gpu_runtime()
+    rows, k = 96, 7
+    rng = np.random.default_rng(width)
+    values = rng.standard_normal((rows, width)).astype(np.float32)
+    values[0::4] = rng.integers(0, 3, size=values[0::4].shape)  # heavy ties
+    values[1::4] = np.where(rng.random(values[1::4].shape) < 0.5, -0.0, 0.0)  # signed zeros
+    special = np.array([np.inf, -np.inf, np.nan, -np.nan], np.float32)
+    values[2::4] = np.where(
+        rng.random(values[2::4].shape) < 0.3, rng.choice(special, values[2::4].shape), values[2::4]
+    )
+    values = jnp.asarray(values)
+
+    actual = jax.jit(lambda v: top_k_indices(v, min(k, width)))(values)
+
+    expected = jax.jit(lambda v: jax.lax.top_k(v, min(k, width))[1])(values)
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
 def test_moe_mlp_sonic_matches_jax_gather_reference_on_gpu():
