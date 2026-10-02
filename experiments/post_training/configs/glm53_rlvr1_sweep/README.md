@@ -2,11 +2,14 @@
 
 Each arm starts from
 [`open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21`](https://huggingface.co/open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21).
-The six YAML files in this directory fix the training and validation dataset,
+The six loop and length penalty arms below fix the training and validation dataset,
 seed, 128-GPU allocation, optimizer settings, 65,536-token request window,
 16,384-token per-turn output cap, and grader runtime. They run for 16 optimizer
 steps with the same 100 validation prompts at baseline and every two steps.
 Validation uses temperature zero. Checkpoints are saved every four steps.
+Three additional `turn*_t1` arms vary the per-turn output cap (16,384,
+32,768, or 49,152 tokens). Those arms run for two steps, evaluate every step,
+and checkpoint at step two; they are separate from the penalty comparison.
 
 | Arm | Loop penalty per charged token | Loop penalty cap | Maximum length penalty |
 | --- | ---: | ---: | ---: |
@@ -35,8 +38,8 @@ RL_VERSION=2026.09.29.19 RL_SWEEP_ARM=loop1_length02 bash configs/launch_glm53_r
 
 Replace `loop1_length02` with any arm name in the table. Each arm writes to
 `users/benfeuer/checkpoints/glm53-rlvr1-sweep-<arm>@2026.09.29.19` and
-has the W&B run name in its YAML. The launcher pins MarinSkyRL commit
-`cce1d4969e8a40cd3809c72aa74459d7a689241c`.
+has the W&B run name in its YAML. The MarinSkyRL revision is the immutable
+`MARIN_SKYRL.commit` pin in `lib/marin/src/marin/external_dependencies.py`.
 
 Compare holdout pass@1 and average score at matched steps. Record the number
 of responses stopped by the token limit, responses ending in a tool call, and
