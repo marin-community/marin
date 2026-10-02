@@ -46,16 +46,22 @@ def _page_kernel(
     pages_per_split,
     soft_cap,
     av_precision,
+    padded_groups,
 ):
     split = pl.program_id(0)
     head = pl.program_id(2)
-    q = q_ref[...]
+    group = jnp.arange(padded_groups)
+    dims = jnp.arange(q_ref.shape[-1])
+    q = plgpu.load(
+        q_ref.at[pl.program_id(1), head, group[:, None], dims[None, :]],
+        mask=group[:, None] < q_ref.shape[2],
+        other=0,
+    )
     lower, upper = bounds_ref[0], bounds_ref[1]
     first_page = jnp.maximum(split * pages_per_split, lower // page_size)
     last_page = jnp.minimum((split + 1) * pages_per_split, pl.cdiv(upper, page_size))
     last_page = jnp.where(upper > lower, last_page, first_page)
     slots = jnp.arange(page_size)
-    dims = jnp.arange(q.shape[-1])
     initial = (
         jnp.zeros(q.shape, jnp.float32),
         jnp.zeros(q.shape[0], jnp.float32),
@@ -86,6 +92,17 @@ def _page_kernel(
     max_ref[...] = maximum
 
 
+def _combine_splits(output_ref, denominator_ref, maximum_ref, result_ref):
+    output, denominator, maximum = output_ref[...], denominator_ref[...], maximum_ref[...]
+    maximum = jnp.where(denominator > 0, maximum, -jnp.inf)
+    global_maximum = maximum.max()
+    global_maximum = jnp.where(jnp.isfinite(global_maximum), global_maximum, 0)
+    correction = jnp.exp(maximum - global_maximum)
+    total = (denominator * correction).sum()
+    result = (output * correction[:, None]).sum(axis=0) / jnp.where(total > 0, total, 1)
+    result_ref[...] = result.astype(result_ref.dtype)
+
+
 def gpu_paged_attention(
     q,
     kv_pages,
@@ -113,18 +130,17 @@ def gpu_paged_attention(
     if av_precision not in ("ieee", "bf16_3x"):
         raise ValueError(f"Unknown AV precision: {av_precision}")
     padded_groups = max(16, pl.next_power_of_2(groups))
-    q = jnp.pad(q, ((0, 0), (0, 0), (0, padded_groups - groups), (0, 0)))
     if kv_splits not in (8, 16):
         raise ValueError("GPU paged attention supports 8 or 16 KV splits")
-    num_splits = min(kv_splits, token_pages.shape[1])
+    num_splits = min(kv_splits, pl.next_power_of_2(token_pages.shape[1]))
     pages_per_split = pl.cdiv(token_pages.shape[1], num_splits)
     padded_pages = num_splits * pages_per_split
     token_pages = jnp.pad(token_pages, ((0, 0), (0, padded_pages - token_pages.shape[1])))
     sm_scale = jnp.asarray(sm_scale, jnp.float32)
     out_shape = (
-        jax.ShapeDtypeStruct((num_splits, *q.shape), jnp.float32),
-        jax.ShapeDtypeStruct((num_splits, *q.shape[:-1]), jnp.float32),
-        jax.ShapeDtypeStruct((num_splits, *q.shape[:-1]), jnp.float32),
+        jax.ShapeDtypeStruct((num_splits, tokens, heads, padded_groups, dim), jnp.float32),
+        jax.ShapeDtypeStruct((num_splits, tokens, heads, padded_groups), jnp.float32),
+        jax.ShapeDtypeStruct((num_splits, tokens, heads, padded_groups), jnp.float32),
     )
 
     def cost_math(query, key, value):
@@ -154,10 +170,11 @@ def gpu_paged_attention(
             pages_per_split=pages_per_split,
             soft_cap=soft_cap,
             av_precision=av_precision,
+            padded_groups=padded_groups,
         ),
         grid=(num_splits, tokens, heads),
         in_specs=(
-            pl.BlockSpec((None, None, padded_groups, dim), lambda s, t, h: (t, h, 0, 0)),
+            pl.BlockSpec(q.shape, lambda s, t, h: (0, 0, 0, 0)),
             pl.BlockSpec(kv_pages.shape, lambda s, t, h: (0, 0, 0, 0)),
             pl.BlockSpec((None, padded_pages), lambda s, t, h: (t, 0)),
             pl.BlockSpec((None, 2), lambda s, t, h: (t, 0)),
@@ -174,10 +191,28 @@ def gpu_paged_attention(
         cost_estimate=cost,
         name="grug_paged_decode",
     )(q, kv_pages, token_pages, bounds, sm_scale)
-    maximum = jnp.where(denominator > 0, maximum, -jnp.inf)
-    global_maximum = maximum.max(axis=0)
-    global_maximum = jnp.where(jnp.isfinite(global_maximum), global_maximum, 0)
-    correction = jnp.exp(maximum - global_maximum[None])
-    total = (denominator * correction).sum(axis=0)
-    result = (output * correction[..., None]).sum(axis=0) / jnp.where(total > 0, total, 1)[..., None]
-    return result[:, :, :groups].astype(q.dtype)
+    result_shape = jax.ShapeDtypeStruct(q.shape, q.dtype)
+    combine_cost = with_io_bytes_accessed(
+        pl.CostEstimate(
+            flops=tokens * heads * groups * num_splits * (2 * dim + 3),
+            transcendentals=tokens * heads * groups * num_splits,
+            bytes_accessed=0,
+        ),
+        kernel_inputs_specs=(output, denominator, maximum),
+        kernel_outputs_specs=(result_shape,),
+    )
+    return pl.pallas_call(
+        _combine_splits,
+        grid=(tokens, heads, groups),
+        in_specs=(
+            pl.BlockSpec((num_splits, None, None, None, dim), lambda t, h, g: (0, t, h, g, 0)),
+            pl.BlockSpec((num_splits, None, None, None), lambda t, h, g: (0, t, h, g)),
+            pl.BlockSpec((num_splits, None, None, None), lambda t, h, g: (0, t, h, g)),
+        ),
+        out_specs=pl.BlockSpec((None, None, None, dim), lambda t, h, g: (t, h, g, 0)),
+        out_shape=result_shape,
+        compiler_params=plgpu.CompilerParams(num_warps=4),
+        interpret=interpret,
+        cost_estimate=combine_cost,
+        name="grug_paged_combine_splits",
+    )(output, denominator, maximum)
