@@ -87,6 +87,8 @@ def _resolve_benchmark_config(environ: Mapping[str, str]) -> GrugPipelineTrainCo
         attention_implementation=environ.get("PIPELINE_ATTENTION", "gpu_fa4_cute"),
         moe_implementation=environ.get("PIPELINE_MOE", "ring"),
         schedule=PipelineSchedule(environ.get("PIPELINE_SCHEDULE", PipelineSchedule.ZERO_BUBBLE)),
+        checkpoint_root=environ.get("PIPELINE_CHECKPOINT_ROOT"),
+        checkpoint_every_steps=_env_int(environ, "PIPELINE_CHECKPOINT_EVERY_STEPS", 0),
     )
 
 

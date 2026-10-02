@@ -46,8 +46,8 @@ class TestAutoscalerWaterfallEndToEnd:
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"])
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
 
-        platform_primary, service_primary = make_gcp_provider(config_primary)
-        platform_fallback, _ = make_gcp_provider(config_fallback)
+        platform_primary, service_primary = make_gcp_provider()
+        platform_fallback, _ = make_gcp_provider()
         service_primary.set_zone_quota("us-central1-a", 0)
 
         group_primary = ScalingGroup(config_primary, platform_primary)
@@ -75,8 +75,8 @@ class TestAutoscalerWaterfallEndToEnd:
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"])
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
 
-        platform_primary, service_primary = make_gcp_provider(config_primary)
-        platform_fallback, _ = make_gcp_provider(config_fallback)
+        platform_primary, service_primary = make_gcp_provider()
+        platform_fallback, _ = make_gcp_provider()
         service_primary.set_zone_quota("us-central1-a", 0)
 
         group_primary = ScalingGroup(config_primary, platform_primary, quota_timeout=Duration.from_ms(1000))
@@ -119,8 +119,8 @@ class TestAutoscalerWaterfallEndToEnd:
         config_primary = make_scale_group_config(name="primary", max_slices=1, priority=10, zones=["us-central1-a"])
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
 
-        platform_primary, service_primary = make_gcp_provider(config_primary)
-        platform_fallback, _ = make_gcp_provider(config_fallback)
+        platform_primary, service_primary = make_gcp_provider()
+        platform_fallback, _ = make_gcp_provider()
 
         group_primary = ScalingGroup(config_primary, platform_primary)
         group_fallback = ScalingGroup(config_fallback, platform_fallback)
@@ -154,8 +154,8 @@ class TestAutoscalerWaterfallEndToEnd:
             name="v5lite-group", accelerator_variant="v5litepod-4", max_slices=5, priority=10, zones=["us-central1-a"]
         )
 
-        platform_v5p, _ = make_gcp_provider(config_v5p)
-        platform_v5lite, _ = make_gcp_provider(config_v5lite)
+        platform_v5p, _ = make_gcp_provider()
+        platform_v5lite, _ = make_gcp_provider()
 
         group_v5p = ScalingGroup(config_v5p, platform_v5p)
         group_v5lite = ScalingGroup(config_v5lite, platform_v5lite)
@@ -180,8 +180,8 @@ class TestAutoscalerWaterfallEndToEnd:
         config_primary = make_scale_group_config(name="primary", max_slices=1, priority=10, zones=["us-central1-a"])
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
 
-        platform_primary, _ = make_gcp_provider(config_primary)
-        platform_fallback, _ = make_gcp_provider(config_fallback)
+        platform_primary, _ = make_gcp_provider()
+        platform_fallback, _ = make_gcp_provider()
 
         group_primary = ScalingGroup(config_primary, platform_primary)
         group_fallback = ScalingGroup(config_fallback, platform_fallback)
@@ -227,8 +227,8 @@ class TestAutoscalerWaterfallEndToEnd:
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"])
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
 
-        platform_primary, service_primary = make_gcp_provider(config_primary)
-        platform_fallback, _ = make_gcp_provider(config_fallback)
+        platform_primary, service_primary = make_gcp_provider()
+        platform_fallback, _ = make_gcp_provider()
         service_primary.set_tpu_type_unavailable("v5p-8")
 
         group_primary = ScalingGroup(config_primary, platform_primary)
@@ -273,7 +273,7 @@ def test_bootstrap_state_with_worker_config():
         controller_address="controller:10000",
         cache_dir="/tmp/iris-test-cache",
     )
-    platform, service = make_gcp_provider(sg_config)
+    platform, service = make_gcp_provider()
     group = ScalingGroup(
         sg_config,
         platform,
@@ -312,7 +312,7 @@ def test_no_bootstrap_without_worker_config():
         max_slices=4,
         zones=["us-central1-a"],
     )
-    platform, service = make_gcp_provider(sg_config)
+    platform, service = make_gcp_provider()
     group = ScalingGroup(
         sg_config,
         platform,
@@ -351,7 +351,7 @@ def test_no_bootstrap_without_worker_config():
 def test_incremental_demand_growth_triggers_scale_up():
     """Starting with small demand then adding more triggers appropriate multi-slice scale-up."""
     config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
-    platform, service = make_gcp_provider(config)
+    platform, service = make_gcp_provider()
     group = ScalingGroup(config, platform, scale_up_rate_limit=1000)
 
     as_config = AutoscalerConfig(evaluation_interval=Duration.from_seconds(0.001))
@@ -411,7 +411,7 @@ def test_marin_style_lifecycle():
     for num_vms, priority in [(1, 10), (2, 20), (4, 30), (8, 40), (16, 50)]:
         name = f"tpu-{num_vms}vm"
         cfg = make_scale_group_config(name=name, max_slices=4, num_vms=num_vms, priority=priority)
-        plat, svc = make_gcp_provider(cfg)
+        plat, svc = make_gcp_provider()
         services[name] = svc
         groups[name] = ScalingGroup(cfg, plat)
 
@@ -503,7 +503,7 @@ class TestScaleUpRateLimiting:
     def test_rate_limited_scale_up_logs_action(self):
         """With rate_limit=1, 5 decisions produce 1 scale_up + 1 aggregated rate_limited action (#5580)."""
         config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
-        platform, _ = make_gcp_provider(config)
+        platform, _ = make_gcp_provider()
         group = ScalingGroup(config, platform, scale_up_rate_limit=1)
 
         as_config = AutoscalerConfig(evaluation_interval=Duration.from_seconds(0.001))
@@ -536,7 +536,7 @@ class TestScaleUpRateLimiting:
     def test_rate_limited_decisions_served_next_cycle(self):
         """Deferred decisions get served on subsequent evaluate+execute cycles as tokens refill."""
         config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
-        platform, _ = make_gcp_provider(config)
+        platform, _ = make_gcp_provider()
         group = ScalingGroup(config, platform, scale_up_rate_limit=2)
 
         as_config = AutoscalerConfig(evaluation_interval=Duration.from_seconds(0.001))
@@ -569,7 +569,7 @@ class TestScaleUpRateLimiting:
     def test_high_rate_limit_allows_all_decisions(self):
         """With a high rate limit, all decisions execute in one cycle."""
         config = make_scale_group_config(name="test-group", max_slices=10, num_vms=1, priority=10)
-        platform, _ = make_gcp_provider(config)
+        platform, _ = make_gcp_provider()
         group = ScalingGroup(config, platform, scale_up_rate_limit=1000)
 
         as_config = AutoscalerConfig(evaluation_interval=Duration.from_seconds(0.001))

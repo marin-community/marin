@@ -7,6 +7,7 @@ import json
 import logging
 import math
 from collections.abc import Mapping
+from dataclasses import replace
 from functools import cache
 from pathlib import Path, PurePosixPath
 
@@ -16,7 +17,7 @@ from iris.cluster.setup_scripts import default_setup_script
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
     BrokerConfig,
@@ -41,6 +42,13 @@ DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
+_SPECULATIVE_METRIC_FAMILIES = frozenset(
+    {
+        "vllm:spec_decode_num_accepted_tokens",
+        "vllm:spec_decode_num_draft_tokens",
+        "vllm:spec_decode_num_drafts",
+    }
+)
 
 # vLLM loads a checkpoint through host memory: the weight files land in the page cache and the
 # loader stages shard buffers on the way to device memory. Both are charged to the serve child's
@@ -111,6 +119,19 @@ def auto_serve_overrides(
         config_path = StoragePath(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision))
     config = json.loads(config_path.read_text())
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
+
+
+def resolved_serve_config(model: ModelConfig) -> ServeConfig:
+    """Resolve checkpoint-derived vLLM settings and retain them for serving."""
+    serve = model.serve
+    if serve.backend is not ServeBackend.VLLM or not serve.auto_overrides:
+        return serve
+    rendered_args = serve_config_vllm_args(serve)
+    resolved_args, max_model_len = auto_serve_overrides(
+        model.location, serve.max_model_len, rendered_args, revision=model.revision
+    )
+    extra_args = (*serve.vllm_extra_args, *resolved_args[len(rendered_args) :])
+    return replace(serve, max_model_len=max_model_len, vllm_extra_args=extra_args, auto_overrides=False)
 
 
 def _is_weight_file(name: str) -> bool:
@@ -189,6 +210,8 @@ def _vllm_engine_config(
         ),
         max_num_seqs=serve.max_num_seqs,
         extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
+        extra_metric_families=_SPECULATIVE_METRIC_FAMILIES if serve.speculative is not None else frozenset(),
+        speculative=serve.speculative,
     )
 
 
@@ -218,17 +241,13 @@ def inference_config_for_model(
     broker: BrokerConfig | None = None,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
-    serve = model.serve
+    serve = resolved_serve_config(model)
+    if serve.speculative is not None and accelerator.platform is not Platform.GPU:
+        raise ValueError("speculative serving requires the GPU vLLM backend")
+    geometry = serving_geometry(serve, accelerator)
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
-    if serve.backend is ServeBackend.VLLM and serve.auto_overrides:
-        extra_args, max_model_len = auto_serve_overrides(
-            model.location,
-            max_model_len,
-            extra_args,
-            revision=model.revision,
-        )
 
     hint = model.resource_hint
     cpu = hint.cpu or DEFAULT_SERVE_CPU
@@ -240,6 +259,7 @@ def inference_config_for_model(
         resources = ResourceConfig.with_gpu(
             accelerator.gpu_type or "H100",
             count=accelerator.gpu_count,
+            replicas=geometry.task_count if geometry is not None else 1,
             cpu=cpu,
             ram=memory,
             disk=disk,
@@ -279,12 +299,14 @@ def inference_config_for_model(
             revision=model.revision,
             api_model=api_model,
             tokenizer=model.tokenizer or model.location,
+            tokenizer_revision=model.effective_tokenizer_revision,
             max_model_len=max_model_len,
             tensor_parallel_size=serve.tensor_parallel_size,
             chat_template_content=serve.chat_template,
         ),
         engine=engine,
         iris=IrisConfig(
+            serving_geometry=geometry,
             worker_resources=resources,
             worker_environment=environment,
             endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,

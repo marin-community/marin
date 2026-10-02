@@ -699,23 +699,6 @@ class InMemoryK8sService:
         for name in to_delete:
             self.delete(resource, name)
 
-    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
-        """List pods in an explicit namespace (not the service's own)."""
-        self._check_failure("list_pods_in_namespace")
-        self.namespaced_pod_calls.append(("list", namespace))
-        if namespace == self._namespace:
-            return self.list_json(K8sResource.PODS)
-        return [manifest for (ns, _), manifest in self._namespaced_pods.items() if ns == namespace]
-
-    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
-        """Delete a pod in an explicit namespace, ignoring NotFound."""
-        self._check_failure("delete_pod_in_namespace")
-        self.namespaced_pod_calls.append(("delete", namespace))
-        if namespace == self._namespace:
-            self.delete(K8sResource.PODS, name)
-            return
-        self._namespaced_pods.pop((namespace, name), None)
-
     def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
         """Strip a single finalizer from a stored resource (no-op if absent)."""
         self._check_failure("remove_finalizer")

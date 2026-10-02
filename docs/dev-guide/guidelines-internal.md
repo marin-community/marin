@@ -1,112 +1,89 @@
-# Marin (internal)
+# Internal onboarding
 
-This documentation is for internal developers.
+This page is for Marin team members who need access to the shared GCP and
+CoreWeave infrastructure. External contributors should start with
+[Installation](../tutorials/installation.md) and
+[Contributing to Marin](contributing.md).
 
-## Prerequisites
+## Ask a coding agent to verify your setup
 
-- Please read the general guidelines in [guidelines.md](../explanations/guidelines.md)
-- Complete the environment setup in [installation.md](../tutorials/installation.md)
+Marin's commands and infrastructure change often. Use a coding agent from the
+repository checkout for setup and infrastructure tasks. The repository's
+`AGENTS.md`, skills, and operational guides give the agent the current
+procedures and safety constraints.
 
-## Setup
+Ask the agent:
 
-Behind the scenes, we run an instance of Marin on Google Cloud Platform (GCP).
+> Onboard me as an internal Marin developer. Verify my local checkout,
+> development dependencies, GitHub access, GCP access, and Iris access. Fix
+> local setup problems when safe. Do not print secrets, change shared
+> infrastructure, or request accelerator capacity. Ask before submitting a
+> remote smoke job. Report what is ready and which access is missing.
 
-Ensure that someone (e.g. @dlwh) adds you to the `hai-gcp-models` project on GCP
-as a `Marin Dev`. Make sure to [install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts) and then run:
+The agent should use the repository's `onboard-marin` skill. Keep the agent in
+the Marin checkout so it can read current project instructions.
 
-```bash
-gcloud auth login
-gcloud auth application-default login
-gcloud config set account <your-email-account>
-gcloud config set project hai-gcp-models
+## Access you will need
 
-# [Verification] Should show a [core] entry with `account = <your-email-account` and `project = hai-gcp-models`
-gcloud config list
+Ask a Marin infrastructure maintainer for the access your work requires:
 
-# [Verification] Should not throw a permission error
-gcloud storage ls gs://marin-us-central2
+- Write access to `marin-community/marin` on GitHub.
+- The `Marin Dev` role in the `hai-gcp-models` GCP project.
+- Iris IAP access to the shared clusters.
+- Access to the `marin-community` Weights & Biases entity.
+- CoreWeave object-storage credentials if you need to inspect GPU job outputs.
+  Iris authorizes and schedules the GPU job separately.
 
-make dev_setup
-```
+Create a Hugging Face account and accept the licenses for any gated models or
+datasets you need. Keep API keys and tokens in environment variables or a
+gitignored `.env` file. Do not commit them.
 
-If you don't have permissions for `hai-gcp-models` or you run into permissions
-issues, contact David Hall for help!
+GCP project access, Iris IAP access, GitHub access, and external-service access
+are separate grants. The onboarding agent can identify a missing grant. Ask
+your manager or a Marin infrastructure maintainer to route the request.
 
-## Iris Cluster + Job Submission
+### Pulumi operators
 
-Once authenticated for GCP, all other work happens through our
-[Iris cluster](https://github.com/marin-community/marin/blob/main/lib/iris/README.md). Cluster config templates live
-under [`lib/iris/config/`](https://github.com/marin-community/marin/tree/main/lib/iris/config):
+Running `pulumi up` for the `marin` GCP stack requires elevated access outside
+ordinary developer onboarding. An operator needs both project custom roles:
 
-- `marin.yaml` — production TPU cluster on GCP
-- `marin-dev.yaml` — dev TPU cluster on GCP (smaller scale caps)
-- `cw-<region>.yaml` — GPU clusters on CoreWeave, one per region (`cw-us-east-02a.yaml`, `cw-rno2a.yaml`, …)
+- `projects/hai-gcp-models/roles/marindev`
+- `projects/hai-gcp-models/roles/marinPulumiAdmin`
 
-`--cluster=<name>` resolves `<name>` against the top-level `*.yaml` files in that directory (and
-`~/.config/marin/clusters`, which wins on conflict). `ci-*.yaml` are test-harness configs, and
-`examples/` is deliberately outside name resolution — pass an explicit path to use one.
+`marinPulumiAdmin` can change resource-scoped IAM policy. Grant it only to
+trusted operators of the `marin` stack. A maintainer adds an operator through
+the [Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants):
+`add-grant` creates a PR with the encrypted principal and role bindings. A
+separate reviewer runs `review-grant`, confirms the decrypted grant, merges the
+PR, and applies the `marin` stack. Do not store a plaintext email in the public
+repository or change the managed IAM bindings with `gcloud`.
 
-**Iris uses these configs as the single source of truth for cluster operations** -- controller URL, SSH tunneling, and
-auth are all derived from the config file you pass with `--config`. You don't need to manage SSH keys, head-node IPs,
-or dashboard ports yourself.
+The onboarding agent should verify both live role bindings, local Pulumi
+tooling, and read access to the Pulumi state. It must not run `pulumi up` as an
+access check. CoreWeave stacks also require the kubeconfig credentials described
+in the Pulumi infrastructure guide.
 
-For day-to-day debugging and operating live clusters, see
-[`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md).
+## What humans should read
 
-### Connecting to the Dashboard and Submitting Jobs
+Ask the onboarding agent to execute the installation and access checks. Read
+the product and workflow docs that explain the work you will do:
 
-There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
-cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
-`marin` Python environment as well):
+1. The [project README](https://github.com/marin-community/marin) explains
+   Marin's purpose and current work.
+2. [First Experiment](../tutorials/first-experiment.md) introduces Marin's
+   experiment model through a small run. Ask the agent to run it when you are
+   ready to download the tutorial data and create local artifacts.
+3. [Experiments](../explanations/experiments.md),
+   [Lazy artifacts](../explanations/lazy-artifacts.md), and
+   [The language modeling pipeline](../explanations/lm-pipeline.md) explain how
+   experiment graphs, artifacts, and the standard pipeline fit together.
+4. [Contributing to Marin](contributing.md) defines the development, test, and
+   pull-request workflow.
 
-```bash
-# [Terminal 1] Open SSH tunnel, print the dashboard URL, and block.
-uv run iris --cluster=marin cluster dashboard
+The operational references are primarily for coding agents and infrastructure
+work. [Iris operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
+covers jobs and shared compute. [Marin infrastructure](https://github.com/marin-community/marin/blob/main/infra/README.md)
+routes infrastructure changes to the relevant subsystem guide. Neither is
+required reading before ordinary experiment development.
 
-# [Browser] Navigate to the URL printed above.
-# Clicking a job opens its per-task/log view.
-```
-
-The tunnel lives as long as this process does — keep the terminal open. (If you're familiar with the NLP SLURM
-workflow, think of this as your connection to `sc`.)
-
-To submit jobs, use `iris job run`. Job IDs are canonical paths of the form `/<user>/<job-name>-<timestamp>`:
-
-```bash
-# [Terminal 2] Submit a job and return immediately.
-#   =>> Will print a line like `Job submitted: /<user>/hello_world-20260420-120000`
-uv run iris --cluster=marin job run \
-    --enable-extra-resources --no-wait --extra marin-core:tpu --tpu v5litepod-16 \
-    -- python experiments/tutorials/hello_world.py
-
-# List jobs (filter by --state and --prefix; --limit bounds how many are fetched).
-uv run iris --cluster=marin job list
-
-# Follow logs (includes child-job task logs by default).
-uv run iris --cluster=marin job logs /<user>/<job-name>
-
-# Cancel Job (if necessary / error / bug) -- cancels the job and all its child tasks.
-uv run iris --cluster=marin job cancel /<user>/<job-name>
-```
-
-Notes:
-
-- `--extra marin-core:tpu` installs the Marin TPU deps into the task container; use `--extra marin-core:cpu` for CPU-only
-  entrypoints. On CoreWeave, `--gpu` requests hardware and `--extra gpu` requests the Python deps; see
-  [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) for current request names.
-- Request TPU hardware with `--tpu v5litepod-16` (or similar). `--reserve` is only a placement constraint — it holds
-  no capacity and attaches no device, so a job that needs an accelerator still has to ask for it with `--tpu`/`--gpu`.
-- `HF_TOKEN` and `WANDB_API_KEY` are forwarded from your shell when they are set, and jobs default to
-  `HF_DATASETS_TRUST_REMOTE_CODE=1` and `TOKENIZERS_PARALLELISM=false`. Pass other env vars with
-  `-e KEY VALUE` (two positional args — quote `$VALUE` if it may be unset).
-- See `iris job run --help` and [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
-  for the full flag list (`--memory`, `--job-name`, priority bands, etc.).
-
-## Forking External Packages
-
-See [Forking Policy](forking-policy.md) for our requirements on maintaining
-forked dependencies under `marin-community/`.
-
-## Precommit
-
-`./infra/pre-commit.py --all-files --fix`
+Do not start, stop, or restart a shared cluster as part of onboarding.

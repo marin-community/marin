@@ -70,12 +70,16 @@ export interface PanelCell {
   interval_kind: IntervalKind
   metric: string
   metric_kind: string
+  declared: boolean
   n_scored: number
+  n_benchmark: number | null
   n_attempted: number | null
   coverage: number | null
+  benchmark_rate: number | null
   errors: Record<string, number>
   item_cap: number | null
   flags: string[]
+  num_fewshot: number | null
   run_id: string
   created_at: string
   version: string | null
@@ -115,10 +119,13 @@ export interface PanelRow {
   missing: Record<string, MissingCell>
   aggregate: PanelAggregate | null
   covered: number
+  // Maximum created_at among the row's cells.
+  last_updated: string | null
 }
 
 export interface PanelRequest {
   min_coverage: number
+  min_benchmark_coverage: number
   cohort: string
   cohort_version: string | null
   completeness: string
@@ -127,10 +134,27 @@ export interface PanelRequest {
   statuses: string[]
 }
 
+export interface PanelFamily {
+  family: string
+  variants: string[]
+  /** The variant with the most admitted cells under this request; ties go to the first eval name. */
+  default: string
+}
+
+export interface PolicyRejection {
+  run_id: string
+  model: string
+  benchmark: string
+  reasons: string[]
+}
+
 export interface Panel {
   benchmarks: string[]
+  protocols: Record<string, { metric: string; kind: string }>
   panel: string[]
+  families: PanelFamily[]
   rows: PanelRow[]
+  policy_rejections: PolicyRejection[]
   request: PanelRequest
 }
 
@@ -157,6 +181,7 @@ export interface Comparison {
   benchmarks: string[]
   shared: string[]
   rows: ComparisonRow[]
+  policy_rejections: PolicyRejection[]
   aggregates: Record<string, PanelAggregate | null>
 }
 
@@ -165,10 +190,19 @@ export interface EvalSuite {
   evals: string[]
 }
 
+// Meta includes variants omitted from a narrowed panel.
+export interface EvalFamily {
+  family: string
+  variants: string[]
+}
+
 export interface Meta {
   models: string[]
+  default_cohort: string
+  verified_cohorts: string[]
   evals: string[]
   suites: EvalSuite[]
+  families: EvalFamily[]
   archived_models: string[]
   users: string[]
   statuses: string[]
@@ -217,6 +251,24 @@ export interface Status {
 export interface EvalTask {
   name: string
   num_fewshot: number | null
+  benchmark: BenchmarkMetadata | null
+}
+
+export interface BenchmarkMetric {
+  name: string
+  source_name: string
+  kind: 'binary' | 'continuous'
+  higher_is_better: boolean
+}
+
+export interface BenchmarkMetadata {
+  schema_version: 1
+  task: string
+  primary_metric: string
+  metric_kind: 'binary' | 'continuous'
+  metrics: BenchmarkMetric[]
+  n_benchmark: number | null
+  n_attempted: number | null
 }
 
 // The canonical record.json shape (records.EvalRunRecord). `headline` is not stored on the record --
@@ -229,12 +281,14 @@ export interface EvalRecord {
   created_at: string
   user: string
   model: { name: string; location: string; backend: string }
+  comparison_model: string
   eval: { name: string; mechanism: string; tasks: EvalTask[] }
   hardware: { platform: string; accelerator: string; region_or_cluster: string }
   status: string
   error: string | null
   results_path: string
   metrics: Record<string, Record<string, number>>
+  canonical_metrics: Record<string, Record<string, number>>
   jobs: Record<string, string>
   log_tails: Record<string, string[]>
   provenance: { git_sha: string; eval_runtime: string; launch_host: string }
@@ -247,6 +301,7 @@ export interface EvalRecord {
     extra: Record<string, string>
   } | null
   headline: PanelCell | null
+  policy_violations: string[]
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---
@@ -506,6 +561,7 @@ export interface ModelRun {
   created_at: string | null
   version: string | null
   headline: PanelCell | null
+  policy_violations: string[]
   /** Why the run produced no headline; null when it did. */
   gap_reason: string | null
 }

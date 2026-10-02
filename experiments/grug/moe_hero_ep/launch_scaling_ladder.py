@@ -47,10 +47,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import (
-    data_local_temporary_checkpoint_base_path,
-    temporary_checkpoint_base_path,
-)
+from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -115,6 +112,12 @@ TOKENS_PER_ACTIVE_PARAM = 791
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
+# Rolling resume checkpoints expire this many days after they are written. The live run's newest one
+# is at most RESUME_SAVE_INTERVAL old, so the TTL only deletes checkpoints that replaced runs leave
+# behind. Each is several TB in a zone with a 100 TiB quota, which the 14-day default let fill
+# (#8506, 2026-09-23). A run stalled this long without saving resumes from its newest permanent
+# checkpoint instead.
+RESUME_CHECKPOINT_TTL_DAYS = 3
 # A rung runs up to 176 tasks for hundreds of GPU-days, where a hardware fault or a host
 # out-of-memory on one task is routine. A rung resumes from its newest checkpoint, thus a retry
 # continues the run instead of repeating it. Retry deeply so one bad task does not end a rung.
@@ -232,6 +235,7 @@ def build_ladder_run(
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
+        gc_interval=100,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -248,9 +252,8 @@ def build_ladder_run(
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
-        temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
-        data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
-        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path, data_local_checkpoint_path]
+        temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS)
+        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path]
         if initialize_from_checkpoint is not None:
             load_checkpoint_path.append(initialize_from_checkpoint)
         trainer = hero_trainer_config(
@@ -283,7 +286,6 @@ def build_ladder_run(
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,
                 startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
-            # Existing 02A temporaries remain valid resume candidates for this lineage.
             load_checkpoint_path=load_checkpoint_path,
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
             # exists, so a retry after a hardware or memory fault continues the run. Continuing

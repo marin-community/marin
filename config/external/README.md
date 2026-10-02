@@ -6,17 +6,24 @@ isolated runtime environments.
 The Evalchemy, Harbor, and MarinSkyRL uv projects are excluded from the root
 workspace so their dependency graphs do not have to resolve with Marin's
 training and serving dependencies. Each `pyproject.toml` follows the external
-repository's `main` branch, and its adjacent `uv.lock` records the exact commit
-Marin uses.
+repository by branch or immutable revision, and its adjacent `uv.lock` records
+the exact commit Marin uses.
+
+Verified evaluation cohorts select revisions from `RUNTIME_COMMITS` in
+`lib/marin/src/marin/evaluation/eval_policy.py`. The `harbor/pins/<Harbor commit>/`
+snapshots retain their full dependency locks. Preflight and workers run the
+selected lock with `uv run --frozen`; the external dependency updater advances
+only the top-level projects.
 
 `vllm/gpu.toml` records the promoted CUDA release, Torch backend, and
 architecture-specific wheel URLs and SHA-256 digests. It is updated from the
 release manifest only after the H100 and GB200 publication gates pass. It is
 not a uv project and the nightly update does not advance it.
 
-`vllm/tpu.toml` records the `vllm` and `tpu-inference` fork SHAs for the
-TPU serving stack, which runs from an isolated uvx env rather than the workspace.
-It is not a uv project either; refresh it through
+`vllm/tpu.toml` records an exact vLLM source from the fork's maintained `main`
+lineage and the matching `tpu-inference` SHA. The TPU stack runs from an
+isolated uvx env rather than the workspace. It is not a uv project either;
+refresh it through
 `.agents/skills/refresh-fork/SKILL.md`.
 
 The packaged pin table at
@@ -73,8 +80,9 @@ The external configurations intentionally model only what Marin needs:
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
-- `vllm` records the promoted GPU wheels (`gpu.toml`) and the TPU source
-  fork pins (`tpu.toml`). Neither is a workspace dependency.
+- `vllm` records the promoted GPU wheels (`gpu.toml`) and a main-line source
+  paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
+  independent build and promotion paths. Neither is a workspace dependency.
 
 Evaluation provenance stores the generated commit-pinned runtime requirement.
 For Evalchemy it identifies the exact Evalchemy checkout; for Harbor the one

@@ -3,6 +3,7 @@
 
 """Tests for the import-driven test selector (infra/ci/select_tests.py)."""
 
+import subprocess
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +17,7 @@ from infra.ci.select_tests import (
     SelectionResult,
     classify,
     matrix_leg,
+    select_all_tests,
     select_changed_tests,
     select_local_tests,
 )
@@ -257,6 +259,187 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         "tests/infra/ci/test_analyze_import_graph.py",
         "tests/infra/ci/test_select_tests.py",
     ]
+
+
+def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
+    selection = select_changed_tests(["lib/taskcompendium/src/taskcompendium/lowering.py"], tmp_path)
+
+    assert selection.matrix == []
+    assert selection.suites == ["taskcompendium-unit"]
+
+    full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
+    assert "taskcompendium-unit" in full_selection.suites
+
+
+def _verifier_members(verifier: str) -> str:
+    if verifier == "tasktrove-verify":
+        return '"lib/levanter", "lib/haliax", "lib/tasktrove-verify"'
+    return '"lib/levanter", "lib/haliax"'
+
+
+def _tpu_lock(
+    *,
+    jax_version: str = "0.11.1",
+    shared_version: str = "1",
+    leaf_version: str = "1",
+    verifier: str = "tasktrove-verify",
+    tpu_marker: str = "",
+    jax_source: str = 'registry = "https://pypi.org/simple"',
+) -> str:
+    verifier_source = (
+        f'editable = "lib/{verifier}"'
+        if verifier == "tasktrove-verify"
+        else ('git = "https://github.com/marin-community/verifyit?rev=abc123"')
+    )
+    marker = f', marker = "{tpu_marker}"' if tpu_marker else ""
+    return f"""\
+    version = 1
+    requires-python = ">=3.12"
+    [manifest]
+    members = [{_verifier_members(verifier)}]
+    [[package]]
+    name = "marin-root"
+    version = "0.1.0"
+    source = {{ editable = "." }}
+    dependencies = [{{ name = "{verifier}" }}]
+    [[package]]
+    name = "{verifier}"
+    version = "0.1.0"
+    source = {{ {verifier_source} }}
+    [[package]]
+    name = "marin-levanter"
+    version = "0.2.0"
+    source = {{ editable = "lib/levanter" }}
+    dependencies = [{{ name = "marin-haliax" }}, {{ name = "shared" }}]
+    [package.optional-dependencies]
+    tpu = [{{ name = "jax", version = "{jax_version}"{marker} }}]
+    [package.dev-dependencies]
+    test = [{{ name = "pytest" }}]
+    [[package]]
+    name = "marin-haliax"
+    source = {{ editable = "lib/haliax" }}
+    dependencies = [{{ name = "shared" }}]
+    [[package]]
+    name = "shared"
+    version = "{shared_version}"
+    source = {{ registry = "https://pypi.org/simple" }}
+    dependencies = [{{ name = "leaf" }}]
+    [[package]]
+    name = "leaf"
+    version = "{leaf_version}"
+    source = {{ registry = "https://pypi.org/simple" }}
+    [[package]]
+    name = "jax"
+    version = "{jax_version}"
+    source = {{ {jax_source} }}
+    [[package]]
+    name = "pytest"
+    version = "8.0.0"
+    source = {{ registry = "https://pypi.org/simple" }}
+    """
+
+
+def _tpu_manifest(verifier: str = "tasktrove-verify") -> str:
+    source = (
+        "{ workspace = true }"
+        if verifier == "tasktrove-verify"
+        else ('{ git = "https://github.com/marin-community/verifyit", rev = "abc123" }')
+    )
+    return f"""\
+    [project]
+    name = "marin-root"
+    requires-python = ">=3.12"
+    dependencies = ["{verifier}"]
+    [tool.uv.workspace]
+    members = [{_verifier_members(verifier)}]
+    [tool.uv.sources]
+    {verifier} = {source}
+    """
+
+
+def _commit_base_tpu_workspace(tmp_path: Path) -> str:
+    write(tmp_path, "uv.lock", _tpu_lock())
+    write(tmp_path, "pyproject.toml", _tpu_manifest())
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(tmp_path, "lib/levanter/tests/test_torch.py", "@pytest.mark.torch\ndef test_torch():\n    assert True\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "base"],
+        cwd=tmp_path,
+        check=True,
+    )
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+
+def test_verifier_extraction_keeps_cpu_coverage_without_tpu(tmp_path: Path) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    write(tmp_path, "uv.lock", _tpu_lock(verifier="verifyit"))
+    write(tmp_path, "pyproject.toml", _tpu_manifest("verifyit"))
+
+    selection = select_changed_tests(["uv.lock", "pyproject.toml"], tmp_path, base_ref=base)
+
+    assert selection.reason == "broad-trigger"
+    assert "marin-levanter" in {leg.package for leg in selection.matrix}
+    assert "levanter-tpu" not in selection.suites
+    assert selection.suite_test_paths["levanter-torch"] == ["lib/levanter/tests/test_torch.py"]
+
+
+@pytest.mark.parametrize(
+    "lock_change",
+    [
+        {"jax_version": "0.11.2"},
+        {"shared_version": "2"},
+        {"leaf_version": "2"},
+        {"tpu_marker": "python_version >= '3.12'"},
+        {"jax_source": 'git = "https://github.com/jax-ml/jax?rev=abc123"'},
+    ],
+)
+def test_reachable_dependency_changes_select_tpu(tmp_path: Path, lock_change: dict[str, str]) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    write(tmp_path, "uv.lock", _tpu_lock(**lock_change))
+
+    selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
+
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_unavailable_or_invalid_dependency_graph_selects_tpu(tmp_path: Path, missing: bool) -> None:
+    base = _commit_base_tpu_workspace(tmp_path)
+    if missing:
+        (tmp_path / "uv.lock").unlink()
+    else:
+        write(tmp_path, "uv.lock", "[[package]\n")
+
+    selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
+
+    assert "levanter-tpu" in selection.suites
+
+
+def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+
+    selection = select_all_tests(tmp_path)
+
+    assert selection.reason == "run-all-tests"
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "lib/levanter/src/levanter/model.py",
+        "lib/haliax/src/haliax/core.py",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ],
+)
+def test_source_and_ci_changes_still_select_tpu(tmp_path: Path, path: str) -> None:
+    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    selection = select_changed_tests([path], tmp_path, run_all_tests=True)
+
+    assert "levanter-tpu" in selection.suites
 
 
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:

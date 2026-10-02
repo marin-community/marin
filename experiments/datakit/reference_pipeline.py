@@ -10,6 +10,33 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 - ``sample``: a pre-built testbed sample registered as already-normalized
   sources (``--sample-prefix``), K=64 -- a true end-to-end run on real data.
 
+Decontamination has four stages that you can run separately:
+
+- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v3.
+- ``decon-drop`` builds source and global corpus DF filters.
+- ``decon-mark`` marks each selected source from completed Bloom and drop-set stages.
+- ``decon-report`` reads completed marks and writes the validation report.
+
+Run preparation first. This reuses the canonical eval v3 Bloom when it is built::
+
+    python -m experiments.datakit.reference_pipeline \
+        --mode full --target decon-drop --sources all \
+        --pool-workers 60 --pool-gpu GB200 \
+        --pool-cpu 16 --pool-ram 128g --pool-disk 128g
+
+After it succeeds, start the marking job. Use ``--mark-sources`` to test a
+source subset while the marks keep their full-pipeline identities::
+
+    python -m experiments.datakit.reference_pipeline \
+        --mode full --target decon-mark --sources all \
+        --mark-sources all \
+        --pool-workers 60 --pool-gpu GB200 \
+        --pool-cpu 16 --pool-ram 128g --pool-disk 128g \
+        --max-concurrent 16
+
+Use the same source selection with ``--target decon-report`` after all marks
+succeed.
+
 Per source::
 
     normalize → tokenize
@@ -21,7 +48,7 @@ Per source::
 Then:
     global_exact_dedup([<normalized source>])
     fuzzy_dups([<minhash per source>])
-    verify_fuzzy_dups([<normalized source>], [<minhash per source>], fuzzy_dups)
+    large_clusters → cluster_text([<normalized source>], fuzzy_dups) → verify_fuzzy_clusters
     build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, verified_dedup)
     one ``datakit/report/<stage>`` step per stage -- a single self-contained
     HTML page built from that stage's counters + site/sample outputs
@@ -33,7 +60,7 @@ exact dedup, fuzzy dedup, the decontamination DF filter, and the store combine s
 Worker fleet: subprocess-compatible stages share one Zephyr coordinator and
 worker group. Steps that require process-local model caches use dedicated
 ``InlineRunner`` contexts. One :class:`PoolConfig` sets the worker count and
-worker shape. ``--max-concurrent`` limits concurrent StepRunner steps.
+worker and task shapes. ``--max-concurrent`` limits concurrent StepRunner steps.
 
 Public API: :func:`reference_datakit_steps`. Pass ``sources`` (a ``{name:
 normalize_step}`` mapping), a ``quality_model`` dir, and optionally pre-staged
@@ -42,7 +69,7 @@ domain centroids (``None`` trains them inline).
 Region-agnostic: worker sizing is one :class:`PoolConfig`. ``MARIN_PREFIX`` is
 resolved by :func:`rigging.filesystem.cluster_config.marin_prefix` -- unset (the normal iris-
 worker case) it falls back to the in-region bucket, so source artifacts, the
-eval corpus (``EVAL_ROOT``), and every output land in-region. Override via
+eval corpus (``eval_corpus_root()``), and every output land in-region. Override via
 ``iris job run -e MARIN_PREFIX <bucket>``.
 
 Submit the sample-mode end-to-end run on iris::
@@ -73,7 +100,7 @@ data gets a different output path per region). Two consequences:
   store exactly, replicate those bytes (pass the trained centroids as
   ``domain_centroids``) rather than recomputing inline.
 
-Known gap: ``EVAL_ROOT`` (the decontam bloom's eval corpus) is still hashed as a
+Known gap: ``eval_corpus_root()`` (the decontam bloom's eval corpus) is still hashed as a
 ``marin_prefix()``-derived path via ``build_eval_bloom_step``, so the bloom (and
 its decontam consumers) re-key per region -- tracked as a follow-up to give the
 eval corpus a version tag.
@@ -82,6 +109,7 @@ eval corpus a version tag.
 import argparse
 import logging
 import posixpath
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
 from fray.types import ResourceConfig
@@ -97,8 +125,15 @@ from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
-from marin.execution.step_runner import StepRunner
+from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.cluster_dedup import ClusterDedupParams
+from marin.processing.classification.deduplication.cluster_text import ClusterTextParams
+from marin.processing.classification.deduplication.cluster_verify import (
+    ClusterVerificationLimits,
+    ClusterVerifiedFuzzyDupsAttrData,
+    cluster_verify_step,
+)
 from marin.processing.classification.deduplication.fuzzy_dups import (
     FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
@@ -109,20 +144,14 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
-from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-    FuzzyVerificationStoreConfig,
-    VerifiedFuzzyDupsAttrData,
-    verify_fuzzy_dups,
-)
+from marin.processing.classification.deduplication.large_clusters import LargeClusterParams, large_clusters_step
+from marin.processing.classification.deduplication.materialize_cluster_text import cluster_text_step
 from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
 )
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 from zephyr.runners import SubprocessRunner
@@ -167,7 +196,7 @@ from experiments.datakit.global_exact_dedup import (
     global_exact_deduplicate,
 )
 from experiments.datakit.reports.decontam import decontam_report
-from experiments.datakit.reports.dedup import dedup_report
+from experiments.datakit.reports.dedup import cluster_dedup_report
 from experiments.datakit.reports.domain import assign_report
 from experiments.datakit.reports.normalize import normalize_report
 from experiments.datakit.reports.quality import quality_report
@@ -196,9 +225,6 @@ TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
 # Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
-EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
-AA_MANIFEST_PATH = f"{EVAL_ROOT}/{AA_MANIFEST_RELATIVE}"
-LMH_MANIFEST_PATH = f"{EVAL_ROOT}/{LMH_MANIFEST_RELATIVE}"
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
 # hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
 # ~270 MB filter.
@@ -206,6 +232,7 @@ ESTIMATED_DOC_COUNT = 50_000_000
 FALSE_POSITIVE_RATE = 1e-9
 NGRAM_LENGTH = 13
 OVERLAP_THRESHOLD = 0.5
+MIN_MATCHED_FEATURES = 2
 # Contaminated docs reservoir-sampled per shard into the flagged side output
 # the decontam stage report reads.
 FLAGGED_SAMPLE_SIZE = 8
@@ -253,13 +280,18 @@ class PoolConfig:
     """The Zephyr worker fleet for the reference pipeline.
 
     ``n_workers`` sets the shared pool size. ``worker`` sets each worker shape.
-    Subprocess-compatible stages share this pool. Inline stages create a
-    dedicated pool with the same settings. The worker must fit the largest
-    task that can use the pool.
+    ``task`` sets the resource budget for each subprocess in the shared pool.
+    ``coordinator`` sets the resources for the shared-pool coordinator. The
+    coordinator holds shard metadata, so large pipelines need more than the
+    Zephyr default. Subprocess-compatible stages share this pool. Inline stages
+    create a dedicated pool with the worker settings. The worker must fit the
+    largest task that can use the shared pool.
     """
 
     n_workers: int = 512
     worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
+    task: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
+    coordinator: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="8g", preemptible=False))
 
 
 @dataclass(frozen=True)
@@ -278,6 +310,28 @@ class MinhashConfig:
     seed: int = 42
 
 
+# Preserve selected source text that the word-shingle rule can misclassify.
+# Exact dedup still applies. Policy: https://github.com/marin-community/marin/pull/8405
+FUZZY_DEDUP_EXEMPT_SOURCES = (
+    "biocollection/free_text_stream",
+    "biocollection/instruction_stream",
+    "biocorpus",
+    "cp/data_provenance",
+    "davinci-dev/ctx-native",
+    "dna/functional-regions",
+    "massive_function_calling",
+    "nemotron_legal/globalcit",
+    "nemotron_specialized_v1_1/code_concepts",
+    "nemotron_specialized_v1_1/economics",
+    "nemotron_specialized_v1_1/formal_logic",
+    "nemotron_specialized_v1_1/multiple_choice",
+    "nemotron_specialized_v1_2/fact_seeking",
+    "nemotron_specialized_v1_2/generative",
+    "nemotron_specialized_v1_2/multiple_choice",
+    "swe-rebench-contree",
+)
+
+
 @dataclass(frozen=True)
 class StoreConfig:
     """Execution shape for the final map-only clustered store.
@@ -287,12 +341,27 @@ class StoreConfig:
     large RAM and local-disk request out of the shared upstream worker pool.
     """
 
+    fuzzy_exempt_sources: tuple[str, ...] = FUZZY_DEDUP_EXEMPT_SOURCES
     task_count: int | None = 192
     partition_processes: int = 32
     max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES
     worker: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="900g", preemptible=False)
     )
+
+
+@dataclass(frozen=True)
+class FuzzyClusterConfig:
+    """Production duplicate rule, materialization policy, and worker shapes."""
+
+    plan: LargeClusterParams = field(default_factory=LargeClusterParams)
+    text: ClusterTextParams = field(default_factory=ClusterTextParams)
+    rule: ClusterDedupParams = field(default_factory=ClusterDedupParams)
+    limits: ClusterVerificationLimits = field(default_factory=ClusterVerificationLimits)
+    worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=32, ram="192g", disk="512g"))
+    map_task: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="12g", disk="48g"))
+    reduce_task: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="26g", disk="48g"))
+    max_workers: int = 64
 
 
 @dataclass(frozen=True)
@@ -307,6 +376,7 @@ class PipelineScale:
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
     pool: PoolConfig = field(default_factory=PoolConfig)
     minhash: MinhashConfig = field(default_factory=MinhashConfig)
+    fuzzy: FuzzyClusterConfig = field(default_factory=FuzzyClusterConfig)
     store: StoreConfig = field(default_factory=StoreConfig)
     embed_batch_size: int = 4096
     assign_batch_size: int = 4096
@@ -324,8 +394,19 @@ DEFAULT_SCALE = PipelineScale()
 """Production full-fleet sizing (every ``all_sources()`` entry, K=5000)."""
 
 SMOKE_SCALE = PipelineScale(
+    fuzzy=FuzzyClusterConfig(
+        text=ClusterTextParams(output_shards=64),
+        worker=ResourceConfig(cpu=2, ram="8g", disk="16g"),
+        map_task=ResourceConfig(cpu=1, ram="4g", disk="8g"),
+        reduce_task=ResourceConfig(cpu=1, ram="4g", disk="8g"),
+        max_workers=16,
+    ),
     cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
-    pool=PoolConfig(n_workers=16, worker=ResourceConfig(cpu=2, ram="8g", disk="8g")),
+    pool=PoolConfig(
+        n_workers=16,
+        worker=ResourceConfig(cpu=2, ram="8g", disk="8g"),
+        task=ResourceConfig(cpu=2, ram="8g", disk="8g"),
+    ),
     store=StoreConfig(
         task_count=None,
         partition_processes=DEFAULT_PARTITION_PROCESSES,
@@ -556,6 +637,16 @@ class DatakitSteps:
 
 
 @dataclass(frozen=True)
+class DecontaminationSteps:
+    """Stages for a restartable decontamination run."""
+
+    bloom: StepSpec
+    drop_sets: StepSpec
+    marks: dict[str, StepSpec]
+    report: StepSpec
+
+
+@dataclass(frozen=True)
 class ZephyrDatakitSteps:
     """Storage-backed Datakit stages implemented as Zephyr pipelines."""
 
@@ -572,6 +663,7 @@ def zephyr_datakit_steps(
 ) -> ZephyrDatakitSteps:
     """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
     source_names = sorted(sources)
+    worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
         deps=[sources[name] for name in source_names],
@@ -579,7 +671,7 @@ def zephyr_datakit_steps(
         fn=lambda output_path: global_exact_deduplicate(
             sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
             output_path=output_path,
-            worker_resources=scale.pool.worker,
+            worker_resources=worker_resources,
             max_workers=scale.pool.n_workers,
             zephyr_context=zephyr_context,
         ),
@@ -596,7 +688,7 @@ def zephyr_datakit_steps(
             tokenizer_backend=TOKENIZER_BACKEND,
             tokenizer_revision=TOKENIZER_REVISION,
             max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
+            worker_resources=worker_resources,
             zephyr_context=zephyr_context,
         )
         minhash_steps[name] = StepSpec(
@@ -618,7 +710,7 @@ def zephyr_datakit_steps(
                 ngram_size=mh.ngram_size,
                 text_cap_chars=mh.text_cap_chars,
                 seed=mh.seed,
-                worker_resources=scale.pool.worker,
+                worker_resources=worker_resources,
                 zephyr_context=zephyr_context,
             ),
         )
@@ -632,7 +724,7 @@ def zephyr_datakit_steps(
             output_path=output_path,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
-            worker_resources=scale.pool.worker,
+            worker_resources=worker_resources,
             zephyr_context=zephyr_context,
         ),
     )
@@ -642,6 +734,102 @@ def zephyr_datakit_steps(
         minhash=minhash_steps,
         fuzzy_dedup=fuzzy_dedup,
     )
+
+
+def eval_corpus_root() -> str:
+    """Return the evaluation corpus path for the current storage prefix."""
+    return prefix_join(marin_prefix(), EVALS_RELATIVE)
+
+
+def decontamination_steps(
+    sources: dict[str, StepSpec],
+    *,
+    scale: PipelineScale = DEFAULT_SCALE,
+    zephyr_context: ZephyrContext | None = None,
+    mark_source_names: list[str] | None = None,
+) -> DecontaminationSteps:
+    """Build decontamination stages with one full-source preparation.
+
+    ``mark_source_names`` selects marks without changing the source set used to
+    build the shared drop-set step. Thus, a subset mark has the same identity as
+    its mark in the complete reference graph.
+    """
+    selected_names = set(sources if mark_source_names is None else mark_source_names)
+    unknown_names = selected_names - sources.keys()
+    if unknown_names:
+        raise ValueError(f"unknown mark sources: {sorted(unknown_names)}")
+
+    worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
+    eval_root = eval_corpus_root()
+    bloom = build_eval_bloom_step(
+        name="datakit/bloom/_combined_fixed",
+        eval_data_sources=[eval_root],
+        ngram_length=NGRAM_LENGTH,
+        overlap_threshold=OVERLAP_THRESHOLD,
+        min_matched_features=MIN_MATCHED_FEATURES,
+        estimated_doc_count=ESTIMATED_DOC_COUNT,
+        false_positive_rate=FALSE_POSITIVE_RATE,
+        exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
+        required_eval_manifest_path=f"{eval_root}/{AA_MANIFEST_RELATIVE}",
+        required_eval_corpus_version=EVAL_CORPUS_VERSION,
+        required_eval_names=AA_BENCHMARK_NAMES,
+        best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
+        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
+        worker_resources=worker_resources,
+        max_workers=scale.pool.n_workers,
+        zephyr_context=zephyr_context,
+    )
+    drop_sets = all_source_drop_sets_step(
+        name="datakit/decon_drop/_combined",
+        sources=[
+            DropSetSource(
+                name=source_name,
+                data_path=f"{normalize_step.output_path.rstrip('/')}/outputs/main",
+                dependency=normalize_step,
+            )
+            for source_name, normalize_step in sources.items()
+        ],
+        prebuilt_bloom=bloom,
+        ngram_length=NGRAM_LENGTH,
+        sample_docs=SOURCE_DF_SAMPLE_DOCS,
+        common_frac=SOURCE_DF_COMMON_FRAC,
+        common_min_abs=SOURCE_DF_COMMON_MIN_ABS,
+        global_sample_docs=GLOBAL_DF_SAMPLE_DOCS,
+        global_common_min_abs=GLOBAL_DF_COMMON_MIN_ABS,
+        global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
+        worker_resources=worker_resources,
+        max_workers=scale.pool.n_workers,
+        zephyr_context=zephyr_context,
+    )
+    marks = {
+        name: decon_step(
+            name=f"datakit/decontam/{name}",
+            normalized=normalize_step,
+            prebuilt_bloom=bloom,
+            drop_sets=drop_sets,
+            drop_set_source=name,
+            ngram_length=NGRAM_LENGTH,
+            overlap_threshold=OVERLAP_THRESHOLD,
+            min_matched_features=MIN_MATCHED_FEATURES,
+            estimated_doc_count=ESTIMATED_DOC_COUNT,
+            false_positive_rate=FALSE_POSITIVE_RATE,
+            flagged_sample_size=FLAGGED_SAMPLE_SIZE,
+            worker_resources=worker_resources,
+            zephyr_context=zephyr_context,
+        )
+        for name, normalize_step in sources.items()
+        if name in selected_names
+    }
+    report = StepSpec(
+        name="datakit/report/decontam",
+        deps=list(marks.values()),
+        hash_attrs={"v": 1},
+        fn=lambda output_path: decontam_report(
+            output_path,
+            {name: read_artifact(step.output_path, DeconAttributes) for name, step in marks.items()},
+        ),
+    )
+    return DecontaminationSteps(bloom=bloom, drop_sets=drop_sets, marks=marks, report=report)
 
 
 def reference_datakit_steps(
@@ -692,6 +880,15 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
     """
     cluster = scale.cluster
+    fuzzy = scale.fuzzy
+    if fuzzy.plan.minimum_size > fuzzy.text.max_cluster_size:
+        raise ValueError(
+            f"Fuzzy cluster plan minimum_size ({fuzzy.plan.minimum_size}) exceeds "
+            f"text max_cluster_size ({fuzzy.text.max_cluster_size})"
+        )
+    unknown_exempt = set(scale.store.fuzzy_exempt_sources) - (all_sources().keys() | sources.keys())
+    if unknown_exempt:
+        raise ValueError(f"Unknown fuzzy-exempt sources: {sorted(unknown_exempt)!r}")
     zephyr_steps = zephyr_datakit_steps(sources, scale, zephyr_context)
     exact_dedup = zephyr_steps.exact_dedup
     embed_steps = build_per_source_embed_steps(sources, scale)
@@ -702,48 +899,7 @@ def reference_datakit_steps(
         domain_centroids, cluster, centroids_version
     )
     quality_model_hash = _resolve_quality_model_version(quality_model, quality_model_version)
-
-    # One combined decontam bloom (no merge step); every per-source decon
-    # consumes it directly. Same name/params as the testbed decon arm, so runs
-    # sharing a prefix share the built bloom.
-    decon_bloom_step = build_eval_bloom_step(
-        name="datakit/bloom/_combined_fixed",
-        eval_data_sources=[EVAL_ROOT],
-        ngram_length=NGRAM_LENGTH,
-        overlap_threshold=OVERLAP_THRESHOLD,
-        estimated_doc_count=ESTIMATED_DOC_COUNT,
-        false_positive_rate=FALSE_POSITIVE_RATE,
-        exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_manifest_path=AA_MANIFEST_PATH,
-        required_eval_corpus_version=EVAL_CORPUS_VERSION,
-        required_eval_names=AA_BENCHMARK_NAMES,
-        best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
-        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
-    )
-    # Count eval-ngram document frequency across normalized sources before
-    # marking. Each decon consumes its source-local set and the global set.
-    decon_drop_sets = all_source_drop_sets_step(
-        name="datakit/decon_drop/_combined",
-        sources=[
-            DropSetSource(
-                name=source_name,
-                data_path=f"{normalize_step.output_path.rstrip('/')}/outputs/main",
-                dependency=normalize_step,
-            )
-            for source_name, normalize_step in sources.items()
-        ],
-        prebuilt_bloom=decon_bloom_step,
-        ngram_length=NGRAM_LENGTH,
-        sample_docs=SOURCE_DF_SAMPLE_DOCS,
-        common_frac=SOURCE_DF_COMMON_FRAC,
-        common_min_abs=SOURCE_DF_COMMON_MIN_ABS,
-        global_sample_docs=GLOBAL_DF_SAMPLE_DOCS,
-        global_common_min_abs=GLOBAL_DF_COMMON_MIN_ABS,
-        global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
-        worker_resources=scale.pool.worker,
-        max_workers=scale.pool.n_workers,
-        zephyr_context=zephyr_context,
-    )
+    decontamination = decontamination_steps(sources, scale=scale, zephyr_context=zephyr_context)
 
     # ---- Per-source steps ------------------------------------------------------
     per_source: dict[str, dict[str, StepSpec]] = {}
@@ -789,20 +945,7 @@ def reference_datakit_steps(
             ),
         )
 
-        decontam = decon_step(
-            name=f"datakit/decontam/{name}",
-            normalized=normalize_step,
-            prebuilt_bloom=decon_bloom_step,
-            drop_sets=decon_drop_sets,
-            drop_set_source=name,
-            ngram_length=NGRAM_LENGTH,
-            overlap_threshold=OVERLAP_THRESHOLD,
-            estimated_doc_count=ESTIMATED_DOC_COUNT,
-            false_positive_rate=FALSE_POSITIVE_RATE,
-            flagged_sample_size=FLAGGED_SAMPLE_SIZE,
-            worker_resources=scale.pool.worker,
-            zephyr_context=zephyr_context,
-        )
+        decontam = decontamination.marks[name]
 
         minhash = zephyr_steps.minhash[name]
 
@@ -817,34 +960,32 @@ def reference_datakit_steps(
 
     dedup = zephyr_steps.fuzzy_dedup
 
-    verification_params = FuzzyVerificationParams()
-    verification_store_config = FuzzyVerificationStoreConfig(
-        recovery_timeout=1_800,
-        ready_timeout=1_800,
-        lookup_batch_size=128,
+    cluster_plan = large_clusters_step(
+        name="datakit/large_fuzzy_clusters",
+        candidates=dedup,
+        params=fuzzy.plan,
+        max_workers=fuzzy.max_workers,
+        worker_resources=fuzzy.worker,
+        task_resources=fuzzy.map_task,
     )
-    verified_dedup = StepSpec(
-        name="datakit/verify_fuzzy_dups",
-        deps=[*sources.values(), *(stages["minhash"] for stages in per_source.values()), dedup],
-        hash_attrs={
-            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-            "verification": verification_params.model_dump(mode="json"),
-            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
-        },
-        fn=lambda op: verify_fuzzy_dups(
-            normalized_sources={name: read_artifact(step.output_path, NormalizedData) for name, step in sources.items()},
-            minhash_sources={
-                name: read_artifact(stages["minhash"].output_path, MinHashAttrData)
-                for name, stages in per_source.items()
-            },
-            candidates=read_artifact(dedup.output_path, FuzzyDupsAttrData),
-            output_path=op,
-            verification_params=verification_params,
-            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            store_config=verification_store_config,
-            max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
-        ),
+    cluster_text = cluster_text_step(
+        name="datakit/fuzzy_cluster_text",
+        plan=cluster_plan,
+        params=fuzzy.text,
+        max_workers=fuzzy.max_workers,
+        worker_resources=fuzzy.worker,
+        map_task_resources=fuzzy.map_task,
+        reduce_task_resources=fuzzy.reduce_task,
+    )
+    verified_dedup = cluster_verify_step(
+        name="datakit/verify_fuzzy_clusters",
+        cluster_text=cluster_text,
+        params=fuzzy.rule,
+        limits=fuzzy.limits,
+        max_workers=fuzzy.max_workers,
+        worker_resources=fuzzy.worker,
+        map_task_resources=fuzzy.map_task,
+        reduce_task_resources=fuzzy.reduce_task,
     )
 
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
@@ -857,10 +998,11 @@ def reference_datakit_steps(
             },
             quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
             exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
-            dedup=read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
+            dedup=read_artifact(verified_dedup.output_path, ClusterVerifiedFuzzyDupsAttrData),
             output_path=output_path,
             cluster_view=cluster.cluster_view,
             split=SPLIT,
+            fuzzy_exempt_sources=frozenset(scale.store.fuzzy_exempt_sources) & per_source.keys(),
             worker_resources=scale.store.worker,
             max_workers=scale.pool.n_workers,
             task_count=scale.store.task_count,
@@ -882,7 +1024,8 @@ def reference_datakit_steps(
             "cluster_view": cluster.cluster_view,
             "split": SPLIT,
             "task_count": scale.store.task_count,
-            "v": 3,
+            "fuzzy_exempt_sources": sorted(scale.store.fuzzy_exempt_sources),
+            "v": 4,
         },
         fn=_store_fn,
     )
@@ -895,7 +1038,6 @@ def reference_datakit_steps(
     tokenize_paths = {n: s["tokenize"].output_path for n, s in per_source.items()}
     quality_paths = {n: s["quality"].output_path for n, s in per_source.items()}
     assign_paths = {n: s["assign"].output_path for n, s in per_source.items()}
-    decontam_paths = {n: s["decontam"].output_path for n, s in per_source.items()}
     reports = [
         StepSpec(
             name="datakit/report/normalize",
@@ -927,20 +1069,15 @@ def reference_datakit_steps(
                 op, {n: read_artifact(p, AssignmentAttrData) for n, p in assign_paths.items()}, cluster.cluster_view
             ),
         ),
-        StepSpec(
-            name="datakit/report/decontam",
-            deps=[s["decontam"] for s in per_source.values()],
-            hash_attrs={"v": 1},
-            fn=lambda op: decontam_report(op, {n: read_artifact(p, DeconAttributes) for n, p in decontam_paths.items()}),
-        ),
+        decontamination.report,
         StepSpec(
             name="datakit/report/dedup",
             deps=[dedup, verified_dedup],
             hash_attrs={"v": 2},
-            fn=lambda op: dedup_report(
+            fn=lambda op: cluster_dedup_report(
                 op,
                 read_artifact(dedup.output_path, FuzzyDupsAttrData),
-                read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
+                read_artifact(verified_dedup.output_path, ClusterVerifiedFuzzyDupsAttrData),
             ),
         ),
         StepSpec(
@@ -951,12 +1088,12 @@ def reference_datakit_steps(
         ),
     ]
 
-    all_steps: list[StepSpec] = [exact_dedup, decon_bloom_step, decon_drop_sets]
+    all_steps: list[StepSpec] = [exact_dedup, decontamination.bloom, decontamination.drop_sets]
     if isinstance(domain_centroids, StepSpec):
         all_steps.append(domain_centroids)
     for s in per_source.values():
         all_steps += list(s.values())
-    all_steps += [dedup, verified_dedup, store, *reports]
+    all_steps += [dedup, cluster_plan, cluster_text, verified_dedup, store, *reports]
     return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
 
 
@@ -1045,12 +1182,67 @@ def _select_pipeline_sources(args: argparse.Namespace) -> dict[str, StepSpec]:
 
 def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> PipelineScale:
     """Override the scale's worker fleet from ``--pool-*`` flags."""
+    worker_device = (
+        ResourceConfig.with_gpu(args.pool_gpu).device if args.pool_gpu is not None else scale.pool.worker.device
+    )
     worker = replace(
         scale.pool.worker,
+        device=worker_device,
         **{k: v for k, v in (("cpu", args.pool_cpu), ("ram", args.pool_ram), ("disk", args.pool_disk)) if v is not None},
     )
+    task = replace(
+        scale.pool.task,
+        **{
+            k: v
+            for k, v in (
+                ("cpu", args.pool_task_cpu),
+                ("ram", args.pool_task_ram),
+                ("disk", args.pool_task_disk),
+            )
+            if v is not None
+        },
+    )
+    coordinator = replace(
+        scale.pool.coordinator,
+        **{
+            k: v
+            for k, v in (
+                ("cpu", args.pool_coordinator_cpu),
+                ("ram", args.pool_coordinator_ram),
+            )
+            if v is not None
+        },
+    )
     n_workers = args.pool_workers if args.pool_workers is not None else scale.pool.n_workers
-    return replace(scale, pool=PoolConfig(n_workers=n_workers, worker=worker))
+    return replace(
+        scale,
+        pool=replace(scale.pool, n_workers=n_workers, worker=worker, task=task, coordinator=coordinator),
+    )
+
+
+def _require_built_steps(steps: dict[str, StepSpec], label: str) -> None:
+    missing = [name for name, step in steps.items() if not step_is_built(step)]
+    if not missing:
+        return
+    shown = ", ".join(missing[:20])
+    remainder = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
+    raise RuntimeError(f"missing {label} for {len(missing)} sources: {shown}{remainder}")
+
+
+def _decontamination_target_steps(result: DecontaminationSteps, target: str) -> list[StepSpec]:
+    if target == "decon-bloom":
+        return [result.bloom]
+    if target == "decon-drop":
+        return [result.drop_sets]
+    if target == "decon-mark":
+        missing = [step.name for step in (result.bloom, result.drop_sets) if not step_is_built(step)]
+        if missing:
+            raise RuntimeError(f"decontamination preparation is not complete: {', '.join(missing)}")
+        return list(result.marks.values())
+    if target == "decon-report":
+        _require_built_steps(result.marks, "decontamination marks")
+        return [result.report]
+    raise ValueError(f"unknown decontamination target: {target}")
 
 
 def main() -> None:
@@ -1060,6 +1252,16 @@ def main() -> None:
         choices=("full", "sample"),
         default="full",
         help="full: registry sources, K=5000. sample: a pre-built testbed sample (see --sample-prefix), K=64.",
+    )
+    parser.add_argument(
+        "--target",
+        choices=("all", "decon-bloom", "decon-drop", "decon-mark", "decon-report"),
+        default="all",
+        help=(
+            "all: complete reference DAG. decon-bloom: eval Bloom and index. "
+            "decon-drop: source and global corpus DF filters. decon-mark: per-source marks from completed "
+            "preparation stages. decon-report: report from completed marks."
+        ),
     )
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX, help="testbed sample root (--mode sample)")
     parser.add_argument(
@@ -1081,10 +1283,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--quality-model-version",
-        required=True,
         help=(
-            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2'). Hashed in "
-            "place of the region-specific model dir for cross-region reproducibility."
+            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2'). Required for --target all. "
+            "Hashed in place of the region-specific model dir for cross-region reproducibility."
         ),
     )
     parser.add_argument(
@@ -1092,10 +1293,21 @@ def main() -> None:
         default=None,
         help="comma-separated source names, or 'all' for every source. Omit: full=all, sample=curated subset.",
     )
+    parser.add_argument(
+        "--mark-sources",
+        default=None,
+        help="comma-separated sources to mark from the full --sources preparation, or 'all'; decon-mark/report only",
+    )
     parser.add_argument("--pool-workers", type=int, default=None, help="Zephyr worker count (override scale)")
     parser.add_argument("--pool-cpu", type=float, default=None, help="per-worker CPUs (override scale)")
     parser.add_argument("--pool-ram", default=None, help="per-worker RAM, e.g. 16g (override scale)")
     parser.add_argument("--pool-disk", default=None, help="per-worker disk, e.g. 16g (override scale)")
+    parser.add_argument("--pool-gpu", default=None, help="place shared-pool workers on nodes with one GPU of this type")
+    parser.add_argument("--pool-task-cpu", type=float, default=None, help="CPUs for each shared-pool task")
+    parser.add_argument("--pool-task-ram", default=None, help="RAM for each shared-pool task, e.g. 32g")
+    parser.add_argument("--pool-task-disk", default=None, help="disk for each shared-pool task, e.g. 16g")
+    parser.add_argument("--pool-coordinator-cpu", type=float, default=None, help="CPUs for the pool coordinator")
+    parser.add_argument("--pool-coordinator-ram", default=None, help="RAM for the pool coordinator, e.g. 8g")
     parser.add_argument("--max-concurrent", type=int, default=8, metavar="N", help="max steps StepRunner runs at once")
     parser.add_argument(
         "--run-tag",
@@ -1106,15 +1318,34 @@ def main() -> None:
 
     configure_logging(logging.INFO)
 
+    if args.target == "all" and not args.quality_model_version:
+        parser.error("--quality-model-version is required with --target all")
+    if args.mark_sources is not None and args.target not in ("decon-mark", "decon-report"):
+        parser.error("--mark-sources can only be used with --target decon-mark or decon-report")
+
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
+    if args.target in ("decon-drop", "decon-mark"):
+        _require_built_steps(sources, "normalized artifacts")
 
-    with ZephyrContext(
-        name="datakit-reference",
-        resources=scale.pool.worker,
-        max_workers=scale.pool.n_workers,
-        stage_runner_factory=SubprocessRunner,
-    ) as zephyr_context:
+    mark_source_names = None
+    if args.mark_sources not in (None, "all"):
+        mark_source_names = [name.strip() for name in args.mark_sources.split(",") if name.strip()]
+        if not mark_source_names:
+            parser.error("--mark-sources must name at least one source or use 'all'")
+
+    zephyr_context = (
+        None
+        if args.target == "decon-report"
+        else ZephyrContext(
+            name="datakit-reference",
+            resources=scale.pool.worker,
+            coordinator_resources=scale.pool.coordinator,
+            max_workers=scale.pool.n_workers,
+            stage_runner_factory=SubprocessRunner,
+        )
+    )
+    if args.target == "all":
         result = reference_datakit_steps(
             sources,
             quality_model=args.quality_model,
@@ -1124,7 +1355,17 @@ def main() -> None:
             scale=scale,
             zephyr_context=zephyr_context,
         )
-        StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
+        target_steps = result.all_steps
+    else:
+        decontamination = decontamination_steps(
+            sources,
+            scale=scale,
+            zephyr_context=zephyr_context,
+            mark_source_names=mark_source_names,
+        )
+        target_steps = _decontamination_target_steps(decontamination, args.target)
+    with zephyr_context if zephyr_context is not None else nullcontext():
+        StepRunner().run(target_steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":

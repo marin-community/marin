@@ -554,7 +554,7 @@ def marin_temp_bucket(
     ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
     override_prefix = os.environ.get(_MARIN_TEMP_PREFIX_ENV) if use_env_override else None
-    mp = override_prefix or marin_prefix()
+    mp = override_prefix or source_prefix or marin_prefix()
 
     # A cluster temp override takes precedence over explicit source routing so
     # all disposable writes from the cluster share one lifecycle-managed bucket.

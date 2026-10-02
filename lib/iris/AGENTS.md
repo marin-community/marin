@@ -6,20 +6,19 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 
 - `README.md` — overview + quick start
 - `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug`, `use-iris`)
-- Echo — durable incident and debugging records; use `write-ops-log` after an
-  infrastructure investigation and link the canonical Echo URL
+- Echo — live infrastructure incident records; use `write-ops-log` when an
+  investigation diagnoses a service, production run, or shared operational
+  system failure or degradation
 - `TESTING.md` — testing policy, markers, and commands
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
 - `docs/federation.md` — peer routing, root-job-only handoff, and cross-cluster storage
 - `docs/image-push.md` — multi-region image push/pull architecture
 
-Archived design docs (implemented, read code instead): `.agents/projects/2026*_iris_*.md`
-
 ## Source Layout
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
-- `src/iris/cluster/controller/` — controller server: `service.py` (RPC handlers), `controller.py` (main loop), `backend.py` (the `TaskBackend` contract), `scheduling/` (`scheduler.py` + `policy.py`), `autoscaler/` (capacity), `auth_setup.py` (auth config), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
+- `src/iris/cluster/controller/` — controller server: `service.py` (thin RPC adapter), noun and concern modules such as `jobs.py`, `tasks.py`, `workers.py`, and `attempts.py` (request handling), `controller.py` (main loop), `backend.py` (the `TaskBackend` contract), `scheduling/` (`scheduler.py` + `policy.py`), `autoscaler/` (capacity), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
 - `src/iris/cluster/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
 - `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
 - `src/iris/cluster/worker/` — worker agent
@@ -73,6 +72,13 @@ Use SQLAlchemy result APIs directly (`.first()`, `.all()`, `.scalar()`); do
 not add wrapper methods that duplicate SQLAlchemy. Define row protocols or
 dataclasses at the usage boundary when a caller needs a typed shape.
 
+Controller request behavior belongs in the noun or concern module that owns it.
+Connect service implementations may construct dependency records and delegate
+generated methods, but must not contain authorization, query, transition,
+federation, or response-building logic. Operation modules may accept and return
+protobuf messages when the wire type already expresses the internal request.
+Do not add a second native request type solely to isolate protobuf imports.
+
 ## Code Conventions
 
 - Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
@@ -123,6 +129,10 @@ against (notably `$IRIS_VENV`, the venv the run phase activates), child
 inheritance, and the Docker gotcha (setup runs in a separate container, so
 `export` does not reach the command — use `env_vars`) all live in
 `iris.cluster.setup_scripts`. See https://github.com/marin-community/marin/issues/6595.
+
+Iris-managed uv installs use symlinks on TPU worker hosts, including CPU tasks
+scheduled there. Other hosts default to copy mode. Kubernetes keeps copies because its
+node agent may clean the shared uv cache while tasks run.
 
 ## Architecture Notes
 

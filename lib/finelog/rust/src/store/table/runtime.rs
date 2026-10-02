@@ -417,6 +417,13 @@ impl TableRuntime {
         acknowledged.max(self.controller.claimed_high_water())
     }
 
+    /// Highest sequence recoverable from the object-state HEAD selected by
+    /// this process. Local writes can be visible above this watermark while a
+    /// remote publication is deferred.
+    pub fn published_seq(&self) -> i64 {
+        self.controller.published_high_water()
+    }
+
     /// The table's readable segments as one consistent observation.
     ///
     /// A table is on the snapshot path once it has an activated object-native

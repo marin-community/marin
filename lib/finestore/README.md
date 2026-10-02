@@ -197,6 +197,18 @@ requires the owner to quiesce and seal its writers first.
 
 ## Package boundary
 
-`marin-finestore` contains storage, transactions, read views, compaction, and generic
-cache adapters. Evaluation record types and `EvaluationStore` live in
-`marin.evaluation.archive`. FineStore has no evaluation or Marin pipeline dependency.
+`marin-finestore` contains storage, transactions, read views, compaction, generic cache adapters,
+and the versioned `finestore.eval` schema and table API. Harbor and Evalchemy map their own native
+formats into that contract and use the table API to write dashboard-ready `samples` and `steps`
+without depending on `marin-core`. The contract also defines evaluator-neutral `rollouts_vN` rows
+keyed by evaluation identity, turn, and part; Marin converts the evaluator-owned rows into the table
+for the current schema version.
+Evaldash reads the same schemas. Marin separately records each evaluation or RL attempt in Finelog's
+`marin.rollout_runs` discovery table, with a URI pointing back to its rollout store. FineStore
+contains no evaluator conversion policy, Finelog integration, or Marin pipeline dependency.
+
+`finestore.rl.mismatch_probe` defines the frozen-response, scorer and manifest tables
+shared by MarinSkyRL producers and Marin's mismatch reports. Tokenizer identity,
+relative updates and absolute trainer steps are typed provenance fields. This
+contract sits next to `finestore.eval` so producers need only `marin-finestore`
+and CPU report readers need no trainer or inference-engine dependencies.

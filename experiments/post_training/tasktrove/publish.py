@@ -3,17 +3,15 @@
 
 """Publish the retained TaskTrove rows and their rejection ledger.
 
-    tasks/part-00000.parquet every surviving task with its selection columns
-    ledger.parquet           one row per task that did not survive: its status and the reason
-    manifest.json            revision, tool ref, counts per status, source, converter, mode, tag, check
-                             and Dockerfile, plus every source's verdict and normalized task shape
+    tasks/part-00000.parquet RL compatibility view with the previous row schema
+    rl/part-00000.parquet    MCQA tasks routed to RL, with routing provenance
+    sft/part-00000.parquet   MCQA tasks routed to SFT, with routing provenance
+    ledger.parquet           one row per task omitted from ``tasks/``: its status and reason
+    manifest.json            revision, tool ref, counts per status, route, source, converter, mode,
+                             tag, check, and Dockerfile
     report.md                the manifest as tables, regenerated every run
 
-The survivors are copied by a Zephyr stage that reads only converted rows; the ledger and counts
-come from one pass over the filtered rows' small columns. The only binaries read are one task per
-distinct Dockerfile, for its base image.
-
-    python -m experiments.post_training.tasktrove.publish summary <filtered_path> <output_path> <tool_ref>
+    python -m experiments.post_training.tasktrove.publish summary <routed_path> <output_path> <tool_ref>
     python -m experiments.post_training.tasktrove.publish export <tasks_dir> <path> [--dest DIR]
     python -m experiments.post_training.tasktrove.publish huggingface <release_path> [--repo-id REPO]
 
@@ -29,7 +27,7 @@ import tempfile
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import click
 import pyarrow as pa
@@ -40,6 +38,12 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from experiments.post_training.tasktrove.apply_mcqa_routing import (
+    ROUTED_GLOB,
+    ROUTED_SCHEMA,
+    ROUTED_SFT_STATUS,
+    ROUTING_COLUMNS,
+)
 from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dataset import (
@@ -49,8 +53,9 @@ from experiments.post_training.tasktrove.dataset import (
     WORKER_RESOURCES,
     load_source_verdicts,
 )
+from experiments.post_training.tasktrove.mcqa_routing import Route
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
-from experiments.post_training.tasktrove.verify import FILTERED_GLOB, VERIFIED_STATUS
+from experiments.post_training.tasktrove.verify import VERIFIED_STATUS
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +74,8 @@ TASK_COLUMNS = (
     "solution_binary",
 )
 TASKS_SCHEMA = pa.schema([CONVERTED_SCHEMA.field(name) for name in TASK_COLUMNS])
+ROUTED_TASK_COLUMNS = (*TASK_COLUMNS, *ROUTING_COLUMNS)
+ROUTED_TASKS_SCHEMA = pa.schema([ROUTED_SCHEMA.field(name) for name in ROUTED_TASK_COLUMNS])
 LEDGER_COLUMNS = ("source", "path", "status", "error")
 SUMMARY_COLUMNS = (
     "source",
@@ -80,6 +87,7 @@ SUMMARY_COLUMNS = (
     "dockerfile_id",
     "language",
     "tags",
+    "route",
 )
 _READERS = 32
 FINAL_SHARDS = 1
@@ -130,14 +138,41 @@ class HuggingFaceApi(Protocol):
     ) -> object: ...
 
 
-def _write_tasks(filtered_path: str, output_path: str) -> None:
-    """Zephyr stage: copy the converted rows' task columns into ``tasks/``."""
-    files = Dataset.from_files(str(StoragePath(filtered_path) / FILTERED_GLOB))
-    ds = files.load_parquet(columns=[*TASK_COLUMNS, "status"], approx_shard_bytes=APPROX_SHARD_BYTES)
-    ds = ds.filter(lambda row: row["status"] == ConvertStatus.CONVERTED)
-    ds = ds.map(lambda row: {name: row[name] for name in TASK_COLUMNS}).reshard(FINAL_SHARDS)
-    ds = ds.write_parquet(str(StoragePath(output_path) / "tasks/part-{shard:05d}.parquet"), schema=TASKS_SCHEMA)
-    ZephyrContext(name="tasktrove-publish", resources=WORKER_RESOURCES).execute(ds)
+def _is_main_task(row: dict) -> bool:
+    return row["status"] == ConvertStatus.CONVERTED
+
+
+def _is_rl_task(row: dict) -> bool:
+    return row["status"] == ConvertStatus.CONVERTED and row["route"] == Route.RL
+
+
+def _is_sft_task(row: dict) -> bool:
+    return row["status"] == ROUTED_SFT_STATUS
+
+
+def _write_tasks(routed_path: str, output_path: str, split: str) -> None:
+    """Write the main task set or one MCQA route split."""
+    files = Dataset.from_files(str(StoragePath(routed_path) / ROUTED_GLOB))
+    if split == "tasks":
+        columns = TASK_COLUMNS
+        schema = TASKS_SCHEMA
+        predicate = _is_main_task
+    elif split == Route.RL:
+        columns = ROUTED_TASK_COLUMNS
+        schema = ROUTED_TASKS_SCHEMA
+        predicate = _is_rl_task
+    elif split == Route.SFT:
+        columns = ROUTED_TASK_COLUMNS
+        schema = ROUTED_TASKS_SCHEMA
+        predicate = _is_sft_task
+    else:
+        raise ValueError(f"unknown TaskTrove split {split!r}")
+
+    ds = files.load_parquet(columns=[*ROUTED_TASK_COLUMNS, "status"], approx_shard_bytes=APPROX_SHARD_BYTES)
+    ds = ds.filter(predicate)
+    ds = ds.map(lambda row: {name: row[name] for name in columns}).reshard(FINAL_SHARDS)
+    ds = ds.write_parquet(str(StoragePath(output_path) / split / "part-{shard:05d}.parquet"), schema=schema)
+    ZephyrContext(name=f"tasktrove-publish-{split}", resources=WORKER_RESOURCES).execute(ds)
 
 
 def read_columns(glob: StoragePath, columns: tuple[str, ...]) -> pa.Table:
@@ -194,6 +229,7 @@ def build_manifest(filtered: pa.Table, tool_ref: str, dockerfiles: dict[str, str
     by_mode: Counter = Counter()
     by_check: Counter = Counter()
     by_tag: Counter = Counter()
+    by_route: Counter = Counter()
     by_dockerfile: dict[str, dict] = {
         dockerfile_id: {
             "base_image": " / ".join(_FROM_LINE.findall(text)),
@@ -205,13 +241,15 @@ def build_manifest(filtered: pa.Table, tool_ref: str, dockerfiles: dict[str, str
     }
     columns = {
         name: filtered.column(name).to_pylist()
-        for name in ("source", "status", "converter", "mode", "dockerfile_id", "language", "tags")
+        for name in ("source", "status", "converter", "mode", "dockerfile_id", "language", "tags", "route")
     }
-    for source, status, converter, mode, dockerfile_id, language, tags in zip(*columns.values(), strict=True):
+    for source, status, converter, mode, dockerfile_id, language, tags, route in zip(*columns.values(), strict=True):
         by_status[status] += 1
         by_source[source][status] += 1
         if converter:
             by_converter[converter][status] += 1
+        if route:
+            by_route[route] += 1
         if status.startswith(VERIFIED_STATUS):
             by_check[status.removeprefix(VERIFIED_STATUS)] += 1
         if status == ConvertStatus.CONVERTED:
@@ -236,6 +274,7 @@ def build_manifest(filtered: pa.Table, tool_ref: str, dockerfiles: dict[str, str
         "by_check": dict(by_check.most_common()),
         "by_mode": dict(by_mode.most_common()),
         "by_tag": dict(by_tag.most_common()),
+        "by_route": dict(by_route.most_common()),
         "by_source": {s: dict(c.most_common()) for s, c in sorted(by_source.items())},
         "source_details": {
             source: {name: dict(counts.most_common()) for name, counts in detail.items()}
@@ -256,13 +295,14 @@ def build_manifest(filtered: pa.Table, tool_ref: str, dockerfiles: dict[str, str
     }
 
 
-def publish_release(filtered_path: str, output_path: str, tool_ref: str) -> None:
+def publish_release(routed_path: str, output_path: str, tool_ref: str) -> None:
     out = StoragePath(output_path)
-    for stale in ("tasks", "ledger.parquet"):
+    for stale in ("tasks", Route.RL, Route.SFT, "ledger.parquet"):
         if (out / stale).exists():
             (out / stale).rmtree()
-    _write_tasks(filtered_path, output_path)
-    write_summary(filtered_path, output_path, tool_ref)
+    for split in ("tasks", Route.RL, Route.SFT):
+        _write_tasks(routed_path, output_path, split)
+    write_summary(routed_path, output_path, tool_ref)
 
 
 def _copy_to_local(source: StoragePath, destination: Path) -> None:
@@ -384,9 +424,9 @@ def publish_to_huggingface(
     with tempfile.TemporaryDirectory(prefix="tasktrove-hf-") as staging_dir:
         staging = Path(staging_dir)
         stage_huggingface_release(release_path, staging, repo_id)
-        api = api or HfApi()
-        api.create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
-        api.upload_folder(
+        client = api if api is not None else cast(HuggingFaceApi, HfApi())
+        client.create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
+        client.upload_folder(
             repo_id=repo_id,
             folder_path=staging,
             repo_type="dataset",
@@ -396,14 +436,14 @@ def publish_to_huggingface(
     logger.info("published %s to https://huggingface.co/datasets/%s", release_path, repo_id)
 
 
-def write_summary(filtered_path: str, output_path: str, tool_ref: str) -> None:
-    """Write ``ledger.parquet``, ``manifest.json`` and ``report.md`` from the filtered rows."""
+def write_summary(routed_path: str, output_path: str, tool_ref: str) -> None:
+    """Write ``ledger.parquet``, ``manifest.json`` and ``report.md`` from the routed rows."""
     out = StoragePath(output_path)
-    filtered = read_columns(StoragePath(filtered_path) / FILTERED_GLOB, SUMMARY_COLUMNS)
-    ledger = filtered.filter(pa.compute.not_equal(filtered.column("status"), ConvertStatus.CONVERTED.value))
+    routed = read_columns(StoragePath(routed_path) / ROUTED_GLOB, SUMMARY_COLUMNS)
+    ledger = routed.filter(pa.compute.not_equal(routed.column("status"), ConvertStatus.CONVERTED.value))
     with (out / "ledger.parquet").open("wb") as handle:
         pq.write_table(ledger.select(list(LEDGER_COLUMNS)), handle)
-    manifest = build_manifest(filtered, tool_ref, dockerfile_texts(filtered))
+    manifest = build_manifest(routed, tool_ref, dockerfile_texts(routed))
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1))
     (out / "report.md").write_text(render_report(manifest))
     logger.info("published: %d of %d tasks; %s", manifest["clean_tasks"], manifest["input_tasks"], manifest["by_status"])
@@ -427,6 +467,12 @@ def render_report(manifest: dict) -> str:
         "| status | tasks |",
         "|---|---:|",
         *(f"| {s} | {n} |" for s, n in manifest["by_status"].items()),
+        "",
+        "## Routed MCQA tasks",
+        "",
+        "| route | tasks |",
+        "|---|---:|",
+        *(f"| {route} | {count} |" for route, count in manifest["by_route"].items()),
         "",
         "## Kept sources",
         "",
@@ -531,11 +577,11 @@ def export(tasks_dir: str, path: str, dest: Path) -> None:
 
 
 @main.command(help="Rewrite the ledger, manifest and report of an existing release.")
-@click.argument("filtered_path")
+@click.argument("routed_path")
 @click.argument("output_path")
 @click.argument("tool_ref")
-def summary(filtered_path: str, output_path: str, tool_ref: str) -> None:
-    write_summary(filtered_path, output_path, tool_ref)
+def summary(routed_path: str, output_path: str, tool_ref: str) -> None:
+    write_summary(routed_path, output_path, tool_ref)
 
 
 @main.command(name="huggingface", help="Publish a built release to a Hugging Face dataset repository.")

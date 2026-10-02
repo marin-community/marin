@@ -373,8 +373,8 @@ def _effective_pack(component: DatasetComponent) -> bool | int:
 def _resolve_pack_config(
     pack: bool | int,
     *,
-    packed_slice_strategy: Literal["left", "right", "raise"] = "left",
-) -> tuple[int, Literal["left", "right", "raise"]]:
+    packed_slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
+) -> tuple[int, Literal["left", "right", "raise", "drop"]]:
     """Resolve a ``pack`` value to ``(max_segments_per_example, slice_strategy)``.
 
     A falsy value (``False``/``0``) selects one document per example, padded to
@@ -398,7 +398,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         cache: TreeCache[dict],
         Pos: Axis,
         max_segments_per_example: int = 64,
-        slice_strategy: Literal["left", "right", "raise"] = "left",
+        slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
     ):
@@ -426,7 +426,6 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
-                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -444,7 +443,6 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
-                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -463,7 +461,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         cache: TreeCache[ProcessedChatDict],
         Pos: Axis,
         max_segments_per_example: int = 64,
-        slice_strategy: Literal["left", "right", "raise"] = "left",
+        slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
     ):
@@ -497,7 +495,6 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
                 tokens=tokens,
                 loss_weight=loss_weight,
                 segment_ids=seg_ids_raw,
-                max_segments=max_segments_per_example + 1,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
@@ -534,7 +531,7 @@ def dataset_for_component(
         )
     elif isinstance(fmt, ChatLmDatasetFormat):
         # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
-        max_segments, slice_strategy = _resolve_pack_config(pack)
+        max_segments, slice_strategy = _resolve_pack_config(pack, packed_slice_strategy=fmt.slice_strategy)
         return ChatDataset(
             cache,
             Pos,

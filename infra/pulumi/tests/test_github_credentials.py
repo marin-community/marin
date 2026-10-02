@@ -59,7 +59,6 @@ def test_committed_stack_covers_workflow_references_and_isolates_removal_candida
     assert set(report.removal_candidates) == EXPECTED_REMOVAL_CANDIDATES
     assert set(report.referenced_missing) == {
         "repository:marin-community/marin:ANTHROPIC_ADMIN_KEY",
-        "repository:marin-community/marin:CLAUDE_MAX_OAUTH_TOKEN",
         "repository:marin-community/marin:COREWEAVE_API_TOKEN",
         "repository:marin-community/marin:OPENAI_ADMIN_KEY",
     }

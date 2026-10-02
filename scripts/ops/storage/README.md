@@ -3,11 +3,17 @@
 Storage reporting for the `marin-*` GCS buckets and telemetry for CoreWeave
 object storage.
 
-## Weekly storage report
+## Storage report (on demand)
+
+> **The weekly automation is retired (2026-09).** The `marin-*` buckets are
+> scanned daily by [gcs.oa.dev](https://gcs.oa.dev) ([Open-Athena/marin-gcs-usage](https://github.com/Open-Athena/marin-gcs-usage)),
+> which posts a running monthly digest thread (weekly bullets in the opening
+> post, one reply per scan, owners per prefix) to Discord `#gcs-usage`. Use
+> the tooling below for a manual run or a cross-check.
 
 `generate_report.py` is a one-command orchestrator: it opens a tunnel to the
 Iris cluster, submits the compute as Iris jobs, then publishes from the laptop
-(or CI runner).
+(the same tooling ran from a GitHub Actions runner until 2026-09).
 
 ```
 scan_fs (Iris) ─> dedup (Zephyr) ─> render_report (DuckDB) ─> gist + Discord
@@ -17,7 +23,7 @@ scan_fs (Iris) ─> dedup (Zephyr) ─> render_report (DuckDB) ─> gist + Disco
 # Full run, publish a public gist (default)
 uv run scripts/ops/storage/generate_report.py
 
-# What the weekly automation runs (secret gist + Discord summary)
+# Secret gist plus a Discord summary
 uv run scripts/ops/storage/generate_report.py --gist secret --discord internal-discuss
 
 # Reuse prior stages (cheap iteration): skip scan / dedup / report as needed
@@ -25,8 +31,8 @@ uv run scripts/ops/storage/generate_report.py --skip-scan --skip-dedup --skip-re
 ```
 
 Key flags: `--gist {public,secret,none}`, `--discord <channel>`, `--workers N`,
-`--history-dir`, `--run-id` (defaults to the UTC date; keeps weekly Iris job
-names unique), `--change-threshold-gib`, `--dry-run`.
+`--history-dir`, `--run-id` (defaults to the UTC date; keeps Iris job names
+unique across runs), `--change-threshold-gib`, `--dry-run`.
 
 **Week-over-week diff.** Each run archives a compact per-`(bucket, dir_prefix)`
 snapshot (prefixes ≥ 1 GiB, ~1 MiB) to `--history-dir`. The next run flags
@@ -39,11 +45,10 @@ snapshot.
 via `rigging.filesystem`), `render_report.py` (DuckDB
 rollup + diff + markdown), `generate_report.py` (orchestrate + publish).
 
-**Automation.** `.github/workflows/ops-storage-report.yaml` runs it weekly
-(Mondays 14:00 UTC) and on manual `workflow_dispatch`. There is no
-cluster-native cron — the schedule lives in GitHub Actions, which tunnels into
-the controller (SA + SSH key, like `marin-canary-ferry`) and runs
-`generate_report`. Discord posting uses the `internal-discuss` webhook (no bot).
+**Automation.** None. The `ops-storage-report` workflow that ran this weekly
+from GitHub Actions was deleted in 2026-09 (see above); run `generate_report.py`
+from a laptop with a reachable `marin` controller. Discord posting uses the
+channel webhook resolved by `scripts/ops/discord.py` (no bot).
 
 **Prereqs:** `gh` (for `--gist`), `gcloud` + ADC (fetch `report.md`), a
 reachable `marin` controller, and the channel webhook for `--discord`.
@@ -116,8 +121,10 @@ For a quota warning, check the zone values in the Storage dashboard and in the
 [CoreWeave quota page].
 
 Both rules read the `storage.usage` namespace, which exists only after the
-collector writes its first rows. Until then the query fails, and because both
-rules set `execErrState: Alerting`, each one pages with `[no value]` labels. Run
-the collector once when you add a rule that reads a new namespace.
+collector writes its first rows. Until then Finelog reports the namespace as
+missing, and both rules alert on that non-retryable query error. Run the
+collector once when you add a rule that reads a new namespace. A retryable
+Finelog service failure returns no data and stays normal; `FinelogFleetUnhealthy`
+reports the outage instead.
 
 [CoreWeave quota page]: https://docs.coreweave.com/products/storage/object-storage/manage-quotas

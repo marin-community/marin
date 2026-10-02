@@ -4,7 +4,6 @@ import { RouterLink } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import {
-  formatCoverage,
   formatDuration,
   formatInterval,
   formatScore,
@@ -58,8 +57,12 @@ const gradedNote = computed<{ label: string; warn: boolean }>(() => {
   if (headline.interval_kind !== INTERVAL_KIND.IDENTIFIED) {
     return { label: 'attempted count unreported', warn: false }
   }
-  if (!isPartialCoverage(headline)) return { label: 'all items graded', warn: false }
-  return { label: formatCoverage(headline.coverage), warn: true }
+  const attempted = `${headline.n_attempted ?? 'unknown'}${headline.n_benchmark === null ? '' : ` of ${headline.n_benchmark}`}`
+  const graded = `${headline.n_scored}${headline.n_attempted === null ? '' : ` of ${headline.n_attempted}`}`
+  return {
+    label: `attempted ${attempted} · graded ${graded}`,
+    warn: isPartialCoverage(headline) || (headline.benchmark_rate !== null && headline.benchmark_rate < 1),
+  }
 })
 
 // Properties the statistics engine flagged on this grade, spelled out. A flagged run is still a real
@@ -142,7 +145,7 @@ async function copyPath() {
         </div>
         <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-secondary">
           <RouterLink
-            :to="`/models/${encodeURIComponent(data.model.name)}`"
+            :to="{ path: `/models/${encodeURIComponent(data.comparison_model)}`, query: { cohort: data.version ?? 'unversioned' } }"
             class="font-mono text-accent hover:underline"
           >{{ data.model.name }}</RouterLink>
           <span class="text-text-muted">·</span>
@@ -157,6 +160,10 @@ async function copyPath() {
 
       <div v-if="data.error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
         <span class="font-semibold">Error:</span> {{ data.error }}
+      </div>
+
+      <div v-if="data.policy_violations.length" class="rounded border border-status-warning-border bg-status-warning-bg text-status-warning text-sm px-3 py-2">
+        Excluded from cohort comparisons: {{ data.policy_violations.join('; ') }}
       </div>
 
       <!-- Result: the grade is the hero; duration and finish time sit beside it in one strip -->

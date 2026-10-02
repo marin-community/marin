@@ -29,6 +29,7 @@ import httpx
 import pytest
 import uvicorn
 from iris.cluster.controller import reads
+from iris.cluster.controller.attempts import CapabilityUrlConfig
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     FederationTokenProvider,
@@ -39,7 +40,7 @@ from iris.cluster.controller.auth import (
     create_controller_auth,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
+from iris.cluster.controller.endpoints import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
@@ -48,7 +49,7 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_URL_HEADER,
     NativeProxy,
 )
-from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import EndpointAccess, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2

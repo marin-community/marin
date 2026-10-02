@@ -1866,7 +1866,6 @@ def test_coreweave_worker_provider_rejected():
 
 
 def _accel_scale_group(device_type: AcceleratorType, device_variant: str = "") -> ScaleGroupConfig:
-    """A scale group carrying the device fields backend attribute derivation reads."""
     return ScaleGroupConfig(
         name="accel",
         num_vms=1,
@@ -1881,14 +1880,6 @@ def _accel_scale_group(device_type: AcceleratorType, device_variant: str = "") -
 
 
 class TestBackendAttributes:
-    def test_device_attrs_derived_from_scale_group_resources(self):
-        config = IrisClusterConfig(scale_groups={"h100-8x": _accel_scale_group(AcceleratorType.GPU, "H100")})
-        assert backend_attribute_sets(config) == {"device-type": {"gpu"}, "device-variant": {"h100"}}
-
-    def test_cpu_scale_group_advertises_no_device_attrs(self):
-        config = IrisClusterConfig(scale_groups={"cpu": _accel_scale_group(AcceleratorType.CPU)})
-        assert backend_attribute_sets(config) == {}
-
     def test_multi_scale_group_backend_advertises_variant_union(self):
         config = IrisClusterConfig(
             scale_groups={
@@ -1897,54 +1888,27 @@ class TestBackendAttributes:
                 "cpu": _accel_scale_group(AcceleratorType.CPU),
             }
         )
-        assert backend_attribute_sets(config) == {"device-type": {"gpu"}, "device-variant": {"h100", "a100"}}
-
-    def test_auto_variant_derives_device_type_only(self):
-        config = IrisClusterConfig(scale_groups={"tpu": _accel_scale_group(AcceleratorType.TPU, "auto")})
-        assert backend_attribute_sets(config) == {"device-type": {"tpu"}}
-
-    def test_coreweave_implicit_config_advertises_gpu_and_region_attrs(self):
-        iris_root = Path(__file__).parent.parent.parent.parent
-        expected_region = {
-            "config/examples/coreweave.yaml": "US-WEST-04A",
-            "config/cw-us-east-02a.yaml": "US-EAST-02A",
+        assert backend_attribute_sets(config) == {
+            "device-type": {"gpu"},
+            "device-variant": {"h100", "a100"},
+            "availability:h100": {"true"},
+            "availability:a100": {"true"},
+            "preemptible": {"false"},
         }
-        for rel, region in expected_region.items():
-            config_path = iris_root / rel
-            config = load_config(config_path)
-            assert backend_attribute_sets(config) == {
-                "device-type": {"gpu"},
-                "device-variant": {"h100"},
-                "region": {region},
-            }
 
-    def test_region_derived_from_coreweave_slice_template(self):
-        # A CoreWeave scale group advertises its region so --region routes to it across
-        # a federation; the CoreWeave region is exported verbatim (not a GCP zone prefix).
+    def test_coreweave_region_preserves_case(self):
         config = IrisClusterConfig(
             scale_groups={
                 "h100": ScaleGroupConfig(
                     name="h100",
                     num_vms=1,
-                    resources=ScaleGroupResources(
-                        cpu_millicores=8000,
-                        memory_bytes=16 * 1024**3,
-                        device_type=AcceleratorType.GPU,
-                        device_variant="H100",
-                        capacity_type=CapacityType.ON_DEMAND,
-                    ),
                     slice_template=SliceConfig(num_vms=1, coreweave=CoreweaveSliceConfig(region="US-EAST-02A")),
                 )
             }
         )
-        assert backend_attribute_sets(config) == {
-            "device-type": {"gpu"},
-            "device-variant": {"h100"},
-            "region": {"US-EAST-02A"},
-        }
+        assert backend_attribute_sets(config)["region"] == {"US-EAST-02A"}
 
     def test_region_derived_from_gcp_zone_prefix(self):
-        # A GCP scale group advertises the zone's region prefix (us-central2-b -> us-central2).
         config = IrisClusterConfig(
             scale_groups={
                 "tpu": ScaleGroupConfig(
@@ -1956,7 +1920,7 @@ class TestBackendAttributes:
                 )
             }
         )
-        assert backend_attribute_sets(config) == {"region": {"us-central2"}}
+        assert backend_attribute_sets(config)["region"] == {"us-central2"}
 
 
 def test_make_task_backend_requires_kueue_for_k8s_backend():

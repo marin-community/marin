@@ -18,8 +18,6 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.server_auth import VerifiedIdentity, require_identity
 
-from iris.rpc.resource_registry import ResourceVerb
-
 # Browser session cookie the dashboard sets; passed to rigging's auth
 # interceptors as ``cookie_name`` so a cookie-bearing browser RPC authenticates.
 SESSION_COOKIE = "iris_session"
@@ -45,8 +43,8 @@ FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "Feder
 # On-demand debug proxies a federation-peer identity may call, but only after the
 # handler confirms the target task belongs to a job that peer federated here (its
 # RECEIVED handle) — a peer must not profile/exec/inspect the receiving cluster's own
-# tasks or its controller. authorize_method admits these; the controller service's
-# _authorize_federated_debug_target enforces the per-target ownership.
+# tasks or its controller. authorize_method admits these; the attempt operation
+# validates ownership against the peer's received handoff.
 FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus"})
 
 
@@ -100,8 +98,6 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
     }
 )
 
-RESOURCE_READABLE_RPCS: frozenset[str] = frozenset({"Get", "List", "BatchGet"})
-
 
 def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     """Enforce per-method access for restricted roles before dispatch.
@@ -116,51 +112,22 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     ``authorize_resource_owner``. Raises ``PERMISSION_DENIED`` for a dashboard
     caller invoking a non-readable method.
     """
-    _authorize_method(
-        identity,
-        method_name,
-        dashboard_methods=DASHBOARD_READABLE_RPCS,
-        federation_methods=FEDERATION_RPCS | FEDERATION_SCOPED_RPCS,
-    )
-
-
-def authorize_resource_method(identity: VerifiedIdentity, method_name: str) -> None:
-    _authorize_method(
-        identity,
-        method_name,
-        dashboard_methods=RESOURCE_READABLE_RPCS,
-        federation_methods=frozenset(),
-    )
-
-
-def authorize_resource_access(dashboard_readable: bool, resource_type: str, verb: ResourceVerb) -> None:
-    identity = require_identity()
-    if identity.role == DASHBOARD_ROLE and not dashboard_readable:
-        raise ConnectError(
-            Code.PERMISSION_DENIED,
-            f"Read-only dashboard access cannot call {resource_type}/{verb.value}",
-        )
-
-
-def _authorize_method(
-    identity: VerifiedIdentity,
-    method_name: str,
-    *,
-    dashboard_methods: frozenset[str],
-    federation_methods: frozenset[str],
-) -> None:
     if identity.audience is not None:
         raise ConnectError(
             Code.PERMISSION_DENIED,
             "endpoint-scoped token cannot call control RPCs",
         )
-    if identity.role == DASHBOARD_ROLE and method_name not in dashboard_methods:
+    if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
         raise ConnectError(
             Code.PERMISSION_DENIED,
             f"Read-only dashboard access cannot call {method_name}; "
             "this identity is not provisioned for write access",
         )
-    if identity.role == FEDERATION_PEER_ROLE and method_name not in federation_methods:
+    if (
+        identity.role == FEDERATION_PEER_ROLE
+        and method_name not in FEDERATION_RPCS
+        and method_name not in FEDERATION_SCOPED_RPCS
+    ):
         raise ConnectError(
             Code.PERMISSION_DENIED,
             f"Federation-peer identity cannot call {method_name}; it is scoped to the federation RPC subset",

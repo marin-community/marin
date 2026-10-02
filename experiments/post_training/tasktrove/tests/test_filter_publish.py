@@ -12,10 +12,17 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from experiments.post_training.tasktrove.apply_mcqa_routing import (
+    ROUTED_GARBAGE_STATUS,
+    ROUTED_MISSING_STATUS,
+    ROUTED_SFT_STATUS,
+    route_tasks,
+)
 from experiments.post_training.tasktrove.convert import ConvertedRecord, convert_one
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.converters.registry import converter_index
 from experiments.post_training.tasktrove.dataset import SourceInfo, SourceVerdict
+from experiments.post_training.tasktrove.mcqa_routing import ROUTE_MAPPINGS_FILENAME
 from experiments.post_training.tasktrove.publish import (
     DEFAULT_HF_REPO_ID,
     TASK_COLUMNS,
@@ -82,6 +89,26 @@ def _rows(path: Path) -> dict[str, dict]:
     return {row["path"]: row for f in files for row in pq.read_table(f).to_pylist()}
 
 
+def _write_routes(path: Path, routes: dict[str, str]) -> Path:
+    rows = [
+        {
+            "task_id": task_id,
+            "route": route,
+            "route_source": "test",
+            "policy_version": "test-v1",
+            "reason_codes": [f"route:{route}"],
+        }
+        for task_id, route in routes.items()
+    ]
+    path.mkdir()
+    (path / ROUTE_MAPPINGS_FILENAME).write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return path
+
+
+def _route(filtered: str, routed: str, mapping_path: Path, routes: dict[str, str]) -> None:
+    route_tasks(filtered, str(_write_routes(mapping_path, routes)), routed)
+
+
 def test_filter_marks_repeated_instructions_and_capped_rows(tmp_path):
     blob = (FIXTURES / "nemotron_mcqa.tar.gz").read_bytes()
     original = read_task_binary(blob).text(INSTRUCTION)
@@ -116,16 +143,19 @@ def test_publish_writes_survivors_and_rejection_ledger(tmp_path):
     leaking = _leaking_math_record("leak.tar.gz")
     unconverted = replace(_record("bad.tar.gz", blob), status=ConvertStatus.NULL_GRADER, error="empty", task_binary=None)
     converted = _write_converted(tmp_path / "converted", [good, duplicate, leaking, unconverted])
-    filtered, release = (str(tmp_path / name) for name in ("filtered", "release"))
+    filtered, routed, release = (str(tmp_path / name) for name in ("filtered", "routed", "release"))
 
     filter_tasks(str(converted), filtered, max_tasks_per_source=None)
-    publish_release(filtered, release, tool_ref="ref")
+    _route(filtered, routed, tmp_path / "routing-artifact", {"good.tar.gz": "rl"})
+    publish_release(routed, release, tool_ref="ref")
 
     assert [path.name for path in (tmp_path / "release" / "tasks").glob("*.parquet")] == ["part-00000.parquet"]
     tasks = _rows(tmp_path / "release" / "tasks")
     assert set(tasks) == {"good.tar.gz"}
     assert tasks["good.tar.gz"]["mode"] == "mcq" and tasks["good.tar.gz"]["converter"] == "nemotron_mcqa"
     assert set(tasks["good.tar.gz"]) == set(TASK_COLUMNS)
+    assert set(_rows(tmp_path / "release" / "rl")) == {"good.tar.gz"}
+    assert _rows(tmp_path / "release" / "sft") == {}
     manifest = json.loads((tmp_path / "release" / "manifest.json").read_text())
     assert manifest["clean_tasks"] == 1 and manifest["input_tasks"] == 4
     assert manifest["by_status"] == {"converted": 1, "duplicate": 1, "verified:gold_leak": 1, "null_grader": 1}
@@ -149,13 +179,57 @@ def test_publish_writes_survivors_and_rejection_ledger(tmp_path):
     assert (exported / "tests" / "verifier.toml").is_file() and (exported / "environment" / "Dockerfile").is_file()
 
 
+def test_route_tasks_splits_mcqa_and_fails_closed(tmp_path):
+    blob = (FIXTURES / "nemotron_mcqa.tar.gz").read_bytes()
+    math_blob = (FIXTURES / "nemotron_math.tar.gz").read_bytes()
+    instruction = read_task_binary(blob).text(INSTRUCTION)
+    records = [
+        _record("rl.tar.gz", blob),
+        _record("sft.tar.gz", _reworded(blob, instruction + " Explain the answer.")),
+        _record("garbage.tar.gz", _reworded(blob, instruction + " Answer carefully.")),
+        _record("missing.tar.gz", _reworded(blob, instruction + " Be concise.")),
+        _record("other.tar.gz", math_blob, MATH_SOURCE, "math-answer"),
+    ]
+    converted = _write_converted(tmp_path / "converted", records)
+    filtered, routed, release = (str(tmp_path / name) for name in ("filtered", "routed", "release"))
+    filter_tasks(str(converted), filtered, max_tasks_per_source=None)
+    _route(
+        filtered,
+        routed,
+        tmp_path / "routing-artifact",
+        {"rl.tar.gz": "rl", "sft.tar.gz": "sft", "garbage.tar.gz": "garbage"},
+    )
+
+    routed_rows = _rows(tmp_path / "routed" / "graded")
+    assert routed_rows["rl.tar.gz"]["status"] == ConvertStatus.CONVERTED
+    assert routed_rows["sft.tar.gz"]["status"] == ROUTED_SFT_STATUS
+    assert routed_rows["sft.tar.gz"]["task_binary"] is not None
+    assert routed_rows["garbage.tar.gz"]["status"] == ROUTED_GARBAGE_STATUS
+    assert routed_rows["garbage.tar.gz"]["task_binary"] is None
+    assert routed_rows["missing.tar.gz"]["status"] == ROUTED_MISSING_STATUS
+    assert routed_rows["missing.tar.gz"]["task_binary"] is None
+    assert routed_rows["other.tar.gz"]["status"] == ConvertStatus.CONVERTED
+    assert routed_rows["other.tar.gz"]["route"] == ""
+
+    publish_release(routed, release, tool_ref="ref")
+    assert set(_rows(tmp_path / "release" / "tasks")) == {"rl.tar.gz", "other.tar.gz"}
+    rl_rows = _rows(tmp_path / "release" / "rl")
+    assert set(rl_rows) == {"rl.tar.gz"}
+    assert rl_rows["rl.tar.gz"]["route"] == "rl"
+    assert set(_rows(tmp_path / "release" / "sft")) == {"sft.tar.gz"}
+    manifest = json.loads((tmp_path / "release" / "manifest.json").read_text())
+    assert manifest["by_route"] == {"rl": 1, "sft": 1, "garbage": 1}
+
+
 def test_huggingface_publish_uploads_tasks_and_audit_metadata(tmp_path):
     blob = (FIXTURES / "nemotron_mcqa.tar.gz").read_bytes()
     converted = _write_converted(tmp_path / "converted", [_record("good.tar.gz", blob)])
     filtered = str(tmp_path / "filtered")
+    routed = str(tmp_path / "routed")
     release = str(tmp_path / "release")
     filter_tasks(str(converted), filtered, max_tasks_per_source=None)
-    publish_release(filtered, release, tool_ref="ref")
+    _route(filtered, routed, tmp_path / "routing-artifact", {"good.tar.gz": "rl"})
+    publish_release(routed, release, tool_ref="ref")
     api = RecordingHubApi()
 
     publish_to_huggingface(release, private=True, api=api)

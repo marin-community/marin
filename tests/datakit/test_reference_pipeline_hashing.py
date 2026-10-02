@@ -14,13 +14,16 @@ import json
 
 import pytest
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.cluster_text import ClusterTextParams
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
+from marin.processing.classification.deduplication.large_clusters import LargeClusterParams
 
 from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PoolConfig,
+    decontamination_steps,
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
@@ -77,7 +80,7 @@ def test_benchmark_routes_every_stage_under_one_prefix():
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
     # A region-specific gs:// path in a hash means byte-identical data gets a
     # different output path per region. The only remaining leak is the decontam
-    # bloom's EVAL_ROOT (tracked follow-up); everything else must be clean.
+    # bloom's eval root (tracked follow-up); everything else must be clean.
     for step in _build().all_steps:
         if step.name == "datakit/bloom/_combined_fixed":
             continue
@@ -130,6 +133,26 @@ def test_decon_drop_set_tracks_normalized_source_identity():
     assert _steps_by_name(changed)["datakit/decon_drop/_combined"].hash_id != base
 
 
+def test_decontamination_mark_subset_preserves_full_graph_identity():
+    sources = _sources()
+    full = decontamination_steps(sources, scale=SMOKE_SCALE)
+    subset = decontamination_steps(sources, scale=SMOKE_SCALE, mark_source_names=["a"])
+
+    assert list(subset.marks) == ["a"]
+    assert subset.bloom.hash_id == full.bloom.hash_id
+    assert subset.drop_sets.hash_id == full.drop_sets.hash_id
+    assert subset.marks["a"].hash_id == full.marks["a"].hash_id
+
+
+def test_decontamination_eval_root_rekeys_bloom(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://first-region")
+    first = decontamination_steps(_sources(), scale=SMOKE_SCALE)
+    monkeypatch.setenv("MARIN_PREFIX", "gs://second-region")
+    second = decontamination_steps(_sources(), scale=SMOKE_SCALE)
+
+    assert first.bloom.hash_id != second.bloom.hash_id
+
+
 def test_centroid_seed_rekeys_training():
     base = _steps_by_name(_build())["datakit/cluster/train_centroids"].hash_id
     seeded = dataclasses.replace(SMOKE_SCALE.cluster, train_seed=7)
@@ -160,6 +183,17 @@ def test_external_path_requires_version_tag():
             domain_centroids="gs://r/centroids",
             centroids_version=None,
         )
+
+
+def test_fuzzy_plan_threshold_cannot_exceed_text_cap():
+    fuzzy = dataclasses.replace(
+        SMOKE_SCALE.fuzzy,
+        plan=LargeClusterParams(minimum_size=11),
+        text=ClusterTextParams(max_cluster_size=10),
+    )
+
+    with pytest.raises(ValueError, match=r"minimum_size \(11\).*max_cluster_size \(10\)"):
+        _build(scale=dataclasses.replace(SMOKE_SCALE, fuzzy=fuzzy))
 
 
 def test_quality_model_version_not_path_drives_identity():
@@ -211,3 +245,38 @@ def test_dedup_step_builders_match_the_datakit_graph_identity():
         name: step.hash_id for name, step in graph.minhash.items()
     }
     assert dedup.hash_id == graph.fuzzy_dedup.hash_id
+
+
+@pytest.mark.parametrize("parameter", ["plan", "text", "rule", "limits"])
+def test_cluster_parameters_rekey_verification_and_store(parameter):
+    base = _steps_by_name(_build())
+    fuzzy = SMOKE_SCALE.fuzzy
+    updates = {
+        "plan": {"stride": 128},
+        "text": {"split_subdivisions": 8},
+        "rule": {"minimum_containment": 0.8},
+        "limits": {"maximum_document_chars": 1024},
+    }
+    changed_params = getattr(fuzzy, parameter).model_copy(update=updates[parameter])
+    changed_scale = dataclasses.replace(SMOKE_SCALE, fuzzy=dataclasses.replace(fuzzy, **{parameter: changed_params}))
+    changed = _steps_by_name(_build(scale=changed_scale))
+
+    assert changed["datakit/dedup"].hash_id == base["datakit/dedup"].hash_id
+    assert changed["datakit/verify_fuzzy_clusters"].hash_id != base["datakit/verify_fuzzy_clusters"].hash_id
+    assert changed["datakit/store"].hash_id != base["datakit/store"].hash_id
+
+
+def test_fuzzy_source_exemptions_rekey_only_the_store():
+    base = _steps_by_name(_build())
+    store = dataclasses.replace(SMOKE_SCALE.store, fuzzy_exempt_sources=("a",))
+    changed = _steps_by_name(_build(scale=dataclasses.replace(SMOKE_SCALE, store=store)))
+
+    assert changed["datakit/store"].hash_id != base["datakit/store"].hash_id
+    assert changed["datakit/verify_fuzzy_clusters"].hash_id == base["datakit/verify_fuzzy_clusters"].hash_id
+
+
+def test_unknown_fuzzy_exemption_fails_before_building_the_pipeline():
+    store = dataclasses.replace(SMOKE_SCALE.store, fuzzy_exempt_sources=("misspelled-source",))
+
+    with pytest.raises(ValueError, match=r"Unknown fuzzy-exempt sources.*misspelled-source"):
+        _build(scale=dataclasses.replace(SMOKE_SCALE, store=store))

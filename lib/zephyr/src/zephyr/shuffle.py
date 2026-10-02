@@ -438,12 +438,13 @@ def _merge_sorted_frames(
         logger.info("[shard %d] Final merge of %d frames (%d spill pass(es))", shard, len(frames), pass_index)
         yield from pl.merge_sorted(frames, key=sort_key).collect_batches()
     finally:
-        if spill_files:
+        # Per-file, so one failed delete does not strand every run after it:
+        # a spill run holds a whole fan_in group of the shard's payload.
+        for spill_file in sorted(spill_files, key=str):
             try:
-                for spill_file in sorted(spill_files, key=str):
-                    spill_file.rm()
+                spill_file.rm()
             except Exception:
-                logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)
+                logger.warning("Failed to delete external-sort run file %s", spill_file, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -468,11 +469,15 @@ class ScatterReader:
         target_shard: int,
         avg_item_bytes: float,
         shard_payload_bytes: float = 0.0,
+        shard_payload_rows: int = 0,
+        contributing_sidecars: int = 0,
     ) -> None:
         self._chunk_files = chunk_files
         self._target_shard = target_shard
         self.avg_item_bytes = avg_item_bytes
         self.shard_payload_bytes = shard_payload_bytes
+        self.shard_payload_rows = shard_payload_rows
+        self.contributing_sidecars = contributing_sidecars
 
     @classmethod
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
@@ -484,7 +489,7 @@ class ScatterReader:
         thousands of mappers.
         """
         chunk_files: list[_ChunkFile] = []
-        shard_payload_bytes = 0.0
+        shard_payload_bytes = 0
         shard_payload_rows = 0
 
         with log_time(
@@ -525,6 +530,8 @@ class ScatterReader:
             target_shard=target_shard,
             avg_item_bytes=avg_item_bytes,
             shard_payload_bytes=shard_payload_bytes,
+            shard_payload_rows=shard_payload_rows,
+            contributing_sidecars=contributing_sidecars,
         )
 
     def get_frames(self) -> list[pl.LazyFrame]:

@@ -2,7 +2,30 @@
 
 ## Dashboard
 
-See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and `dashboard-proxy`. The proxy serves a locally-built frontend against the remote controller — restart it after frontend changes.
+Open the coordinator task in the Iris dashboard. Select its endpoint link to
+open the Zephyr dashboard.
+
+Select a pipeline to see its plan, status, counters, and metrics. The worker
+view shows all workers in the coordinator pool. Completed executions disappear
+after the driver reads the result and releases coordinator state.
+
+See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and
+`dashboard-proxy` commands.
+
+## Shuffle inputs
+
+Zephyr reports reducer input rows, encoded payload bytes, and mapper counts to `zephyr.shuffle` in Finelog when each reducer attempt finishes. Use the [Zephyr Grafana dashboard](https://grafana.oa.dev/d/marin-zephyr) to debug slow shuffles; null sizes mean unreported and numeric zero means an empty target.
+
+## Execution history
+
+Coordinator task status links to Marina's execution page. The page joins
+`zephyr.execution`, `zephyr.stage`, `zephyr.worker`, and `zephyr.shuffle` records
+to show stage dependencies, progress, and reducer input sizes. Execution
+records exclude source values and callables.
+
+Local runs need `ZephyrContext(stats_config=StatsConfig(url))`; their job IDs
+are empty. Records remain available after coordinator shutdown according to
+Finelog retention, but failed delivery leaves no discoverable execution record.
 
 ## Architecture
 

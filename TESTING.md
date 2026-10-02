@@ -32,10 +32,35 @@ A formatter-only mechanical edit does not require another test run. Rerun the
 repository formatting and lint checks after the edit; rerun tests only when the
 follow-up changes executable behavior or test expectations.
 
+## Adding a New Library
+
+When adding a new `lib/<name>/` package, run its unit tests through
+[unified-unit.yaml](.github/workflows/unified-unit.yaml). Add its short name to
+`SCOPES` and its uv package name to `UV_PACKAGE` in
+[select_tests.py](infra/ci/select_tests.py). The selector uses
+`lib/<name>/tests` by default; update `TEST_DIRS` if its tests live elsewhere.
+These registrations include the library in pull request, push, and full-suite
+runs.
+
+Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
+Levanter TPU lane runs for those changes when the resolved dependencies of
+`marin-levanter` with its `tpu` extra and `test` group change, including
+transitive dependencies. If the selector cannot compare the base and head
+lockfiles, it runs the TPU lane. Levanter or Haliax source changes also select
+the lane. The Levanter Torch lane retains its root manifest trigger. Scheduled
+or manual runs without a base ref run every suite.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an
 implementation detail, wording choice, helper call, or command assembly changed.
+
+Do not add a test for every validation branch. A scalar or configuration guard
+such as `count > 0`, enum membership, a required field, or a simple range check
+does not justify a checked-in test by itself. Test such a guard only when it
+reproduces a reported regression or protects a compatibility-critical public
+contract. Otherwise, test the consequential behavior on the valid path or omit
+the test.
 
 Prefer integration-style tests that validate externally observable behavior:
 
@@ -77,6 +102,10 @@ Delete or rewrite tests with negative value:
 - Obvious error-condition behavior: Obvious error-condition tests that only prove a type checker, dataclass
   constructor, or standard library function works. Infrastructure failure modes
   are valid when the failure is externally observable.
+- Scalar and configuration guards: standalone tests that only set a count,
+  timeout, enum, boolean, or other config value outside an obvious allowed range
+  and assert that construction raises. Keep one only for a reported regression
+  or a compatibility-critical public contract.
 - Tests for Python language semantics.
 - Registration tests: Tests that check that specific items are registered in global registries.
 - Configuration projections: assertions that a lowered or constructed field equals the same value
@@ -100,6 +129,11 @@ error promised by the API. Assert on structured fields when possible.
 Command construction is rarely the contract. Prefer to run through the boundary
 and assert the effect. If the command line is the contract, assert the parsed
 argv or structured command object, not a substring in rendered shell text.
+
+Exact dependency versions, default scalar values, and serialized configuration
+text are not contracts by default. Test the compatibility behavior they enable.
+Assert an exact value or representation only when external consumers depend on
+it.
 
 ## Mocks And Fakes
 
@@ -171,6 +205,10 @@ When reviewing tests, flag the test if the answer to any question is "yes":
 - Is it asserting on private state, call counts, or internal dispatch?
 - Does it duplicate the implementation instead of checking an independent
   oracle or observable behavior?
+- Does it only mirror a scalar or config guard without a reported regression or
+  compatibility-critical public contract?
+- Does it pin an exact dependency version, default, or serialized config detail
+  instead of the compatibility behavior that matters?
 - Is the mock inside the system under test rather than at an external boundary?
 - Does it sleep, skip permanently, or lack a real assertion?
 - Did the change weaken a numerical tolerance or test expectation without justification?

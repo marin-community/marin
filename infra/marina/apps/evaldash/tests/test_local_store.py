@@ -13,7 +13,7 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
-from marin.evaluation.records import list_records, write_record
+from marin.evaluation.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
 
@@ -44,6 +44,13 @@ def _panel(store, **kwargs):
     return store.panel(metrics.panel_request(**kwargs), None, False)
 
 
+def test_api_defaults_to_the_current_verified_cohort(client):
+    expected = "eval-policy-2026-09-24-verified"
+    assert client.get("/panel").json()["request"]["cohort_version"] == expected
+    assert client.get("/panel", params={"cohort": ""}).json()["request"]["cohort_version"] == expected
+    assert client.get("/panel", params={"cohort": "all"}).json()["request"]["cohort_version"] is None
+
+
 def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
     panel = _panel(store)
     qwen = next(row for row in panel["rows"] if row["model"] == "qwen3-8b")
@@ -54,10 +61,10 @@ def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
 
 def test_panel_reports_coverage_of_the_selected_benchmarks(store):
     rows = {row["model"]: row for row in _panel(store)["rows"]}
-    # snowball ran every headline suite; llama3-8b only mmlu. Coverage makes that visible, and no
+    # snowball ran every headline suite; llama3-8b only mmlu and aime. Coverage makes that visible, and no
     # cross-benchmark mean is offered to paper over the difference.
-    assert rows["snowball"]["covered"] == 5
-    assert rows["llama3-8b"]["covered"] == 1
+    assert rows["snowball"]["covered"] == 6
+    assert rows["llama3-8b"]["covered"] == 2
     assert rows["snowball"]["aggregate"] is None
 
 
@@ -86,7 +93,7 @@ def test_groups_roll_up_mixed_launch_status(store):
     # tootsie-8b's launch has a success, an eval failure, and an infra failure -> mixed.
     assert groups["tootsie-8b-2026.07.20"]["status"] == "mixed"
     assert groups["snowball-2026.07.20"]["status"] == "succeeded"
-    assert groups["snowball-2026.07.20"]["n_succeeded"] == 5
+    assert groups["snowball-2026.07.20"]["n_succeeded"] == 7
 
 
 def test_status_rollup_does_not_invent_evaluator_failure():
@@ -125,17 +132,44 @@ def test_ungraded_sample_does_not_count_as_incorrect_answer(store):
     assert all(row.correct is False for row in incorrect.rows)
 
 
+def test_aime_fixture_orders_differently_by_score_and_by_lower_bound(client):
+    """Guards the fixture property the local dashboard demonstrates: one column whose score order is
+    not its lower-bound order. The panel sorts on the score and Compare ranks on the interval, and the
+    SPA sort itself is not exercised here; the intervals come from the engine, not from the fixture.
+    """
+    rows = client.get("/panel", params={"cohort": "all"}).json()["rows"]
+    cells = {row["model"]: row["cells"]["aime"] for row in rows if "aime" in row["cells"]}
+
+    by_score = sorted(cells, key=lambda model: -cells[model]["value"])
+    by_lower_bound = sorted(cells, key=lambda model: -cells[model]["low"])
+
+    assert by_score == ["llama3-8b", "snowball", "qwen3-8b"]
+    assert by_lower_bound == ["qwen3-8b", "llama3-8b", "snowball"]
+
+
+def test_aime24_fixture_reads_the_evalchemy_repeat_standard_error(client):
+    """aime24 records carry ``accuracy_avg`` with ``accuracy_std_err``, the Evalchemy repeated-sample
+    spelling. The panel's interval comes from that standard error rather than falling to [0, 1]."""
+    rows = client.get("/panel", params={"cohort": "all"}).json()["rows"]
+    cell = next(row for row in rows if row["model"] == "snowball")["cells"]["aime24"]
+
+    assert cell["metric"] == "accuracy"  # the legacy alias for accuracy_avg
+    assert "no_dispersion" not in cell["flags"]
+    assert 0.35 < cell["low"] < cell["value"] < cell["high"] < 0.5
+
+
 def test_api_surface_over_fixtures(client):
     meta = client.get("/meta").json()
     assert meta["store"] == "memory"
     assert "snowball" in meta["models"]
+    assert meta["verified_cohorts"] == ["eval-policy-2026-09-16-verified", "eval-policy-2026-09-24-verified"]
 
-    panel = client.get("/panel").json()
+    panel = client.get("/panel", params={"cohort": "all"}).json()
     assert set(panel["benchmarks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}
     assert panel["request"]["min_coverage"] == pytest.approx(0.9)
 
     runs = client.get("/runs?limit=100").json()
-    assert len(runs) == 15
+    assert len(runs) == 21
     # Rows carry version (from the record jsonb) so the client can facet on it.
     assert any(row["version"] == "2026.07.20" for row in runs)
     assert {row["version"] for row in runs} >= {"2026.07.19", "2026.07.20", "2026.07.21"}
@@ -143,7 +177,7 @@ def test_api_surface_over_fixtures(client):
     detail = client.get("/runs/snowball-2026.07.20-mmlu").json()
     assert detail["status"] == "succeeded"
     # The detail endpoint attaches the rolled-up headline grade and the captured timing window.
-    assert detail["headline"]["metric"] == "acc,none"
+    assert detail["headline"]["metric"] == "accuracy"
     assert detail["headline"]["value"] == pytest.approx(0.741)
     assert detail["timing"]["started_at"] and detail["timing"]["finished_at"]
     # Serving params round-trip through the record and reach the detail response.
@@ -175,8 +209,22 @@ def test_run_detail_headline_is_null_for_a_failed_run(client):
     assert detail["timing"]["finished_at"]
 
 
+def test_unverified_policy_run_has_no_headline_in_detail_or_group(store, client):
+    record = store.get_record("snowball-2026.07.20-mmlu")
+    assert record is not None
+    invalid = EvalRunRecord.model_validate(record).model_copy(update={"version": "eval-policy-2026-09-24-verified"})
+    store.refresh([invalid])
+
+    detail = client.get(f"/runs/{invalid.run_id}").json()
+    assert detail["headline"] is None
+    assert detail["policy_violations"]
+
+    group = client.get("/groups").json()[0]
+    assert group["evals"][0]["headline"] is None
+
+
 def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(client):
-    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b"}).json()
+    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"}).json()
 
     assert set(comparison["shared"]) >= {"mmlu", "arc-challenge"}
     mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
@@ -188,7 +236,9 @@ def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(cl
 
 
 def test_api_compare_applies_the_selection_it_is_given(client):
-    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu"}).json()
+    comparison = client.get(
+        "/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu", "cohort": "all"}
+    ).json()
 
     assert comparison["benchmarks"] == ["mmlu"]
     assert comparison["shared"] == ["mmlu"]
@@ -208,6 +258,8 @@ def test_api_panel_rejects_an_unusable_query_rather_than_answering_a_different_o
 
     assert client.get("/panel", params={"min_coverage": "ninety"}).status_code == 400
     assert client.get("/panel", params={"min_coverage": "90"}).status_code == 400
+    assert client.get("/panel", params={"min_benchmark_coverage": "ninety"}).status_code == 400
+    assert client.get("/panel", params={"min_benchmark_coverage": "90"}).status_code == 400
 
 
 def test_api_agentic_artifact_is_run_local(client):
@@ -230,7 +282,7 @@ def test_ingestor_surfaces_parse_failures(tmp_path):
     asyncio.run(ingestor.run_once())
 
     probe = ingestor.status()["prefixes"][0]
-    assert probe["record_count"] == 15
+    assert probe["record_count"] == 21
     assert probe["error"] is None
     assert len(probe["parse_failures"]) == 1
     assert probe["parse_failures"][0]["path"].endswith("20260722-000000-legacy-mmlu-broken/record.json")

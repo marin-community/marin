@@ -59,6 +59,7 @@ from zephyr.stage_io import (
     ZephyrWorkerError,
     _shared_data_path,
 )
+from zephyr.stats import StatsConfig
 from zephyr.worker import ZephyrWorker
 from zephyr.writers import ensure_parent_dir
 
@@ -256,13 +257,15 @@ class ZephyrContext:
         max_concurrent_pipelines: Maximum pipelines one pool runs at the same
             time. A pipeline past the limit is rejected, not queued. Raise it
             for a driver that fans many pipelines onto one shared pool.
+        stats_config: Explicit Finelog endpoint for local reporting.
+            When absent, discover Finelog through the Iris context.
     """
 
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig | None = None
     coordinator_resources: ResourceConfig = field(
-        default_factory=lambda: ResourceConfig(cpu=0.1, ram="1g", preemptible=False)
+        default_factory=lambda: ResourceConfig(cpu=0.1, ram="4g", preemptible=False)
     )
     chunk_storage_prefix: str | None = None
     name: str = ""
@@ -273,6 +276,7 @@ class ZephyrContext:
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
     max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES
+    stats_config: StatsConfig | None = None
 
     _shared_data: ContextVar[dict[str, Any] | None] = field(init=False, repr=False)
     _state: _ContextState = field(init=False, default=_ContextState.NEW, repr=False)
@@ -511,6 +515,8 @@ class ZephyrContext:
             max_shard_infra_failures=self.max_shard_infra_failures,
             drain_idle_workers=idle_policy is _IdleWorkerPolicy.DRAIN,
             max_concurrent_pipelines=self.max_concurrent_pipelines,
+            expected_workers=worker_count,
+            stats_config=self.stats_config,
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,
@@ -567,6 +573,7 @@ class ZephyrContext:
             coordinator.run_pipeline.submit(
                 plan,
                 execution_id,
+                self.name,
                 ZephyrTaskResources.from_resource_config(map_task_resources),
                 ZephyrTaskResources.from_resource_config(reduce_task_resources),
             ).result()

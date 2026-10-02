@@ -63,6 +63,14 @@ on the assistant message. For tools, pass the recorded definitions through
 the converter can associate results with calls before producing Harmony messages.
 Do not reconstruct tool definitions from observed arguments.
 
+Some agent datasets use a text protocol instead of API tool calls. Terminus is
+a terminal-agent protocol whose responses are JSON objects with a `commands`
+list and often `analysis`, `plan`, and `task_complete` fields. Its source exports
+record command output as user turns. Keep the source record's initial user prompt
+and train on the JSON responses as assistant text. The
+`terminus_protocol_messages` parser in `download/terminus.py` extracts the JSON
+object and keeps the command observations as user turns.
+
 For a source that constructs Harmony `Message` objects directly, use
 `chat_document` to serialize them instead.
 
@@ -75,14 +83,18 @@ The schema and validators live in `marin.datakit.chat_normalize`:
 - The conversation starts with a nonblank user request. User messages have no
   channel or recipient, and adjacent user messages must be combined by the source.
 - Assistant messages contain nonblank text and identify `analysis`, `commentary`,
-  or `final`. After a final answer, a continuing conversation needs a new user turn.
+  or `final`. Each assistant turn ends with a final answer or a tool call. A new
+  user turn may follow a final answer or the observation for a tool call.
 - Tool calls are assistant commentary addressed to `functions.<name>`, with a JSON
   object of arguments. Every called tool needs an explicit definition with a unique
   name and an object-valued `parameters` field.
 - Tool replies are commentary addressed to `assistant`, named for their calls.
   Replies must match pending calls in order before the conversation resumes.
-- Records end with an assistant message. Reasoning-only endings and unanswered
-  final batches of tool calls are allowed, preserving incomplete attempts.
+- Records end with an assistant final answer or tool call. Unanswered final
+  batches of tool calls are allowed, preserving incomplete attempts.
+
+Restore withheld prompts before chat conversion; a source hash is a lookup key,
+not a substitute for the original user request.
 
 The normalizer expects serialized Harmony, not source fields such as `tool_calls`
 or `reasoning_content`. Incorrect answers and tool arguments that violate the
@@ -125,6 +137,12 @@ columns. Pass the same schema to both writing stages so optional fields survive.
 Normalization validates conversations, hashes messages plus template arguments,
 and removes exact duplicates. Bump the source transformation version when its
 output changes so cached processed and normalized artifacts are rebuilt.
+It also filters a conversation when the assistant repeats the same tool call a
+third time after two identical text replies. The sequence must occur before the
+next user message, and each call must follow the preceding reply. Parallel calls
+do not trigger this filter. The count is `normalize_chat/repeated_tool_calls_filtered`.
+These filtered records are separate from malformed-record quarantines and the
+5% quarantine health limit.
 
 ## 5. Register and verify the source
 
@@ -198,6 +216,11 @@ rendered with different templates need not deduplicate. Use the same template
 version when combining rendered sources. The structured Harmony artifact remains
 available through `source.chat_normalized`.
 
+Rendered text has no per-turn loss mask. `ChatLmDatasetFormat` currently masks
+user turns and trains on every assistant turn. The Nemotron adapter retains its
+source `train_turns` list as `source_train_turns`, but neither renderer nor
+trainer applies it.
+
 Stored text omits BOS; the standard text tokenizer prepends it and appends its
 normal space-plus-EOS document separator after the final chat EOT. Direct
 `render_marin_chat` calls include BOS by default for inference.
@@ -215,11 +238,12 @@ function calls use `<tool_call>` JSON blocks, and named tool replies use
 `<tool_response>` blocks. The template also accepts `reasoning_content` from
 inference clients and serializes structured tool definitions as JSON. API tool
 reply IDs are resolved to function names; the rendered text omits the IDs. Reasoning
-from earlier turns is retained, including records ending in analysis or unanswered
-tool calls. Supported per-record `chat_template_kwargs` are `tools` (a list of
+from earlier turns is retained, and records may end with unanswered tool calls.
+Supported per-record `chat_template_kwargs` are `tools` (a list of
 recorded function definitions), `enable_thinking` (a boolean), and
-`custom_instructions` (a string). `enable_thinking` adds a `/think` or `/nothink`
-system instruction; omitting it adds neither. It does not remove reasoning.
+`custom_instructions` (a string). Chat normalization sets `enable_thinking` from
+the canonical messages: it is enabled when the conversation contains assistant
+analysis and disabled otherwise. The setting does not remove reasoning.
 
 All rendering helpers are in `marin.datakit.chat_render`.
 For an existing directory of normalized chat Parquet, use

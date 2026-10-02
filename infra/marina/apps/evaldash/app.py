@@ -43,7 +43,16 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
+from marin.evaluation.eval_measurements import measurements_from_records
+from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_stats import (
+    DEFAULT_MIN_COVERAGE,
+    Completeness,
+    MissingPolicy,
+    SelectionRequest,
+    declared_protocols,
+)
+from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
@@ -127,12 +136,16 @@ class PanelCellResponse(BaseModel):
     interval_kind: str
     metric: str
     metric_kind: str
+    declared: bool
     n_scored: int
+    n_benchmark: int | None
     n_attempted: int | None
     coverage: float | None
+    benchmark_rate: float | None
     errors: dict[str, int]
     item_cap: int | None
     flags: list[str]
+    num_fewshot: int | None
     run_id: str
     created_at: str
     version: str | None
@@ -167,10 +180,12 @@ class PanelRowResponse(BaseModel):
     missing: dict[str, MissingCellResponse]
     aggregate: PanelAggregateResponse | None
     covered: int
+    last_updated: str | None
 
 
 class PanelRequestResponse(BaseModel):
     min_coverage: float
+    min_benchmark_coverage: float
     cohort: str
     cohort_version: str | None
     completeness: str
@@ -179,15 +194,40 @@ class PanelRequestResponse(BaseModel):
     statuses: list[str]
 
 
+class PanelFamilyResponse(BaseModel):
+    """One leaderboard column: a benchmark, the settings it was run under, and the one to show."""
+
+    family: str
+    variants: list[str]
+    default: str
+
+
+class MetricProtocolResponse(BaseModel):
+    metric: str
+    kind: str
+
+
+class PolicyRejectionResponse(BaseModel):
+    run_id: str
+    model: str
+    benchmark: str
+    reasons: list[str]
+
+
 class PanelResponse(BaseModel):
     benchmarks: list[str]
+    protocols: dict[str, MetricProtocolResponse]
     panel: list[str]
+    families: list[PanelFamilyResponse]
     rows: list[PanelRowResponse]
+    policy_rejections: list[PolicyRejectionResponse]
     request: PanelRequestResponse
 
 
 class RunDetailResponse(EvalRunRecord):
     headline: PanelCellResponse | None
+    comparison_model: str
+    policy_violations: list[str]
 
 
 class LogEntryResponse(BaseModel):
@@ -311,7 +351,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "created_at": record.created_at,
         "version": record.version,
         "user_name": record.user,
-        "model_name": record.model.name,
+        "model_name": comparison_model_name(record.model),
         "model_location": record.model.location,
         "eval_name": record.evaluation.name,
         "mechanism": record.evaluation.mechanism,
@@ -334,7 +374,7 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
-        "model_name": record.model.name,
+        "model_name": comparison_model_name(record.model),
         "status": record.status.value,
         "created_at": record.created_at,
     }
@@ -394,7 +434,11 @@ class RecordStore:
     def get_record(self, run_id: str) -> dict | None:
         _records, by_id = self._snapshot()
         record = by_id.get(run_id)
-        return record.model_dump(mode="json", by_alias=True) if record is not None else None
+        return (
+            {**record.model_dump(mode="json", by_alias=True), "comparison_model": comparison_model_name(record.model)}
+            if record is not None
+            else None
+        )
 
     def fetch_runs(
         self,
@@ -429,7 +473,11 @@ class RecordStore:
         records, _by_id = self._snapshot()
         archived = self.archived_models()
         if not include_archived:
-            records = [record for record in records if record.model.name not in archived]
+            records = [
+                record
+                for record in records
+                if record.model.name not in archived and comparison_model_name(record.model) not in archived
+            ]
         return build_panel(records, request, frozenset(archived), aggregate)
 
     def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
@@ -456,7 +504,7 @@ class RecordStore:
         records, _by_id = self._snapshot()
         by_group: dict[str, list[EvalRunRecord]] = {}
         for record in records:
-            if (model and record.model.name != model) or (user and record.user != user):
+            if (model and comparison_model_name(record.model) != model) or (user and record.user != user):
                 continue
             by_group.setdefault(record.group_id, []).append(record)
         groups: list[dict] = []
@@ -467,7 +515,7 @@ class RecordStore:
             groups.append(
                 {
                     "group_id": group_id,
-                    "model_name": newest.model.name,
+                    "model_name": comparison_model_name(newest.model),
                     "version": newest.version,
                     "description": newest.description,
                     "user_name": newest.user,
@@ -489,11 +537,20 @@ class RecordStore:
         primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
+        task_records = [
+            record
+            for record in records
+            if comparison_model_name(record.model) == model
+            and record.evaluation.name == task
+            and not record_policy_violations(record)
+        ]
+        protocol_records = [
+            record for record in records if record.evaluation.name == task and not record_policy_violations(record)
+        ]
+        protocols = declared_protocols(measurements_from_records(protocol_records))
         points = []
-        for record in records:
-            if record.model.name != model or record.evaluation.name != task:
-                continue
-            headline = record_headline(record)
+        for record in task_records:
+            headline = record_headline(record, protocols.get(task))
             if headline is None:
                 continue
             points.append({**headline, "status": record.status.value})
@@ -957,16 +1014,16 @@ def _parse_names(raw: str | None) -> tuple[str, ...] | None:
     return names or None
 
 
-def _parse_coverage(raw: str | None) -> float:
+def _parse_coverage(raw: str | None, name: str = "min_coverage") -> float:
     """The coverage floor a result must clear to be displayed."""
     if not raw:
         return DEFAULT_MIN_COVERAGE
     try:
         value = float(raw)
     except ValueError as exc:
-        raise BadRequest(f"min_coverage must be a number in [0, 1], got {raw!r}") from exc
+        raise BadRequest(f"{name} must be a number in [0, 1], got {raw!r}") from exc
     if not 0.0 <= value <= 1.0:
-        raise BadRequest(f"min_coverage must be in [0, 1], got {value}")
+        raise BadRequest(f"{name} must be in [0, 1], got {value}")
     return value
 
 
@@ -1028,11 +1085,11 @@ def _status_rollup(statuses: set[str]) -> str:
     return "mixed"
 
 
-def _run_headline(record: dict) -> dict | None:
-    """The run's overall grade for the detail header: its rolled-up primary metric with the interval
-    and coverage behind it, or None when nothing scored (an infra or eval failure that never produced
-    metrics)."""
-    return record_headline(EvalRunRecord.model_validate(record))
+def _run_headline(record: EvalRunRecord) -> dict | None:
+    """Return an admitted run's primary grade, or None when it scored nothing or violates policy."""
+    if record_policy_violations(record):
+        return None
+    return record_headline(record)
 
 
 def _group_member(record: EvalRunRecord) -> dict:
@@ -1042,7 +1099,7 @@ def _group_member(record: EvalRunRecord) -> dict:
         "eval_name": record.evaluation.name,
         "status": record.status.value,
         "created_at": record.created_at,
-        "headline": record_headline(record),
+        "headline": _run_headline(record),
     }
 
 
@@ -1105,7 +1162,10 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        return RunDetailResponse.model_validate({**record, "headline": _run_headline(record)})
+        parsed = EvalRunRecord.model_validate(record)
+        return RunDetailResponse.model_validate(
+            {**record, "headline": _run_headline(parsed), "policy_violations": list(record_policy_violations(parsed))}
+        )
 
     @router.get("/runs/{run_id}/jobs")
     async def api_run_jobs(request: Request) -> JSONResponse:
@@ -1171,6 +1231,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
         if not task:
             return JSONResponse({"error": "task is required"}, status_code=400)
+        typed_record = EvalRunRecord.model_validate(record)
         payload = await asyncio.to_thread(
             samples.fetch_samples,
             record.get("results_path"),
@@ -1179,6 +1240,7 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             limit=_parse_int(limit, default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=correct or "all",
             extraction_filter=extraction_filter or None,
+            primary_metric_name=samples.declared_primary_metric(typed_record, task),
         )
         return payload
 
@@ -1243,11 +1305,13 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
+    cohort = params.get("cohort") or SEPTEMBER_24_VERSION
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
-        cohort_version=params.get("cohort") or None,
+        cohort_version=None if cohort == "all" else cohort,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
+        min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),
         filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
         model_query=params.get("model") or None,
         include_flagged=_parse_flag(params.get("include_flagged")),
@@ -1279,6 +1343,7 @@ def _analysis_router(store: RecordStore) -> APIRouter:
         cohort: str | None = None,
         complete: str | None = None,
         min_coverage: str | None = None,
+        min_benchmark_coverage: str | None = None,
         accelerator: str | None = None,
         platform: str | None = None,
         backend: str | None = None,
@@ -1296,6 +1361,7 @@ def _analysis_router(store: RecordStore) -> APIRouter:
                 "cohort": cohort,
                 "complete": complete,
                 "min_coverage": min_coverage,
+                "min_benchmark_coverage": min_benchmark_coverage,
                 "accelerator": accelerator,
                 "platform": platform,
                 "backend": backend,
