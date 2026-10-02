@@ -10,6 +10,7 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 from haliax import AxisSelector, NamedArray
+from levanter.utils.jax_utils import logsumexp_last_axis
 
 LogprobsMode = Literal["raw_logprobs", "processed_logprobs"]
 
@@ -124,7 +125,7 @@ class Sampler(eqx.Module):
             jnp.expand_dims(tokens.array.astype(jnp.int32), axis=-1),
             axis=-1,
         ).squeeze(-1)
-        log_z = jax.nn.logsumexp(reporting_logits_array, axis=-1)
+        log_z = logsumexp_last_axis(reporting_logits_array)
         log_prob_tokens = hax.named(selected_logits - log_z, tokens.axes)
 
         if self.max_logprobs == 0:

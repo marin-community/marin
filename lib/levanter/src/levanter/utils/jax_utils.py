@@ -620,3 +620,20 @@ def sharded_tree_size(
             return jnp.dtype(type(x)).itemsize
 
     return sum(jax.tree.leaves(jax.tree.map(_size, tree, is_leaf=is_named_array)))
+
+
+def _tpu_logsumexp(logits: jax.Array) -> jax.Array:
+    # Default TPU logarithms can introduce ~1e-4 errors in FP32 cross-entropy.
+    maximum = jnp.max(logits, axis=-1)
+    maximum = jax.lax.stop_gradient(jnp.where(jnp.isfinite(maximum), maximum, 0))
+    total = jnp.sum(jax.lax.exp(logits - maximum[..., None], accuracy=jax.lax.AccuracyMode.HIGHEST), axis=-1)
+    return maximum + jax.lax.log(total, accuracy=jax.lax.AccuracyMode.HIGHEST)
+
+
+def _default_logsumexp(logits: jax.Array) -> jax.Array:
+    return jax.nn.logsumexp(logits, axis=-1)
+
+
+def logsumexp_last_axis(logits: jax.Array) -> jax.Array:
+    """Normalize the last axis with full FP32 transcendental accuracy on TPU."""
+    return jax.lax.platform_dependent(logits, tpu=_tpu_logsumexp, default=_default_logsumexp)
