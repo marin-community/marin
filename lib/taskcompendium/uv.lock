@@ -2344,6 +2344,7 @@ test = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]

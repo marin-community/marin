@@ -28,6 +28,7 @@ all = ["verifyit[answer,schema,judge,reasoning-gym]"]
 test = [
     "pytest>=8.3.2",
     "pytest-timeout",
+    "pytest-xdist",
     "pytest-json-report>=1.5",
 ]
 
