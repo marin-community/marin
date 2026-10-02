@@ -124,15 +124,12 @@ def _reference_attention(
         scores = jnp.einsum("thgd,tshd->thgs", q.astype(jnp.float32), k, precision=jax.lax.Precision.HIGHEST)
         scores = scores * sm_scale
         if soft_cap is not None:
-            # TPU tanh uses an approximation that can flip BF16 output rounding.
-            scaled = scores / soft_cap
-            numerator = -jnp.expm1(-2 * jnp.abs(scaled))
-            scores = soft_cap * jnp.sign(scaled) * numerator / (2 - numerator)
+            scores = soft_cap * jax.lax.tanh(scores / soft_cap, accuracy=jax.lax.AccuracyMode.HIGHEST)
         scores = jnp.where(allowed[:, None, None, :], scores, -jnp.inf)
         next_maximum = jnp.maximum(maximum, jnp.max(scores, axis=-1))
         safe_maximum = jnp.where(jnp.isfinite(next_maximum), next_maximum, 0)
-        correction = jnp.exp(maximum - safe_maximum)
-        probabilities = jnp.exp(scores - safe_maximum[..., None])
+        correction = jax.lax.exp(maximum - safe_maximum, accuracy=jax.lax.AccuracyMode.HIGHEST)
+        probabilities = jax.lax.exp(scores - safe_maximum[..., None], accuracy=jax.lax.AccuracyMode.HIGHEST)
         # Unallocated slots can contain NaNs; masked values must not leak through 0 * NaN.
         v = jnp.where(allowed[:, :, None, None], v, 0)
         output = output * correction[..., None] + jnp.einsum(
