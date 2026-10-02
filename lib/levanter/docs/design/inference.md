@@ -68,7 +68,7 @@ The inference server is built around a `GenerationService` that encapsulates:
 
 ### Streaming and cancellation
 
-`stream=true` sends sampled token IDs, logprobs, and text deltas after prefill and
+`stream=true` sends text deltas and requested token IDs and logprobs after prefill and
 at each host decode boundary. `max_rounds` controls how many device decode rounds
 run between those boundaries; larger values trade response latency for throughput.
 Incomplete Unicode characters are held until their bytes can be decoded. Completion
