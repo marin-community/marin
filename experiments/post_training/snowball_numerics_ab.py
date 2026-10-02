@@ -175,7 +175,8 @@ def build_run(
             # The W&B key decides the entity.
             wandb_entity=None,
         ),
-        export_hf=True,
+        # No terminal HF export; the last two Megatron checkpoints stay under the run's temporary checkpoint root.
+        export_hf=False,
     )
 
 
