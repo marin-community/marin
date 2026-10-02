@@ -5,6 +5,7 @@ import dataclasses
 import functools
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import NamedTuple
 
 import jax
@@ -232,6 +233,15 @@ _OKLS_FAMILIES: dict[str, re.Pattern] = {
 _SOFTMAX_QK = re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|k|uk|q2|uk2)$")
 # Query/key projections of every attention layer: KDA ``w_q`` / ``w_k`` and MLA ``w_q`` / ``w_uk``.
 _QK_PROJECTIONS = re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_(q|k|uk)$")
+# The MLA layers' query, KV-latent down and key up projections.
+_MLA_QK_PROJECTIONS = re.compile(r"stacked_blocks(_tail)?\.stacked\.attn\.w_(q|dkv|uk)$")
+
+
+class QkScope(StrEnum):
+    """Which projections ``muonh_qk_lr_mult`` / ``muonh_qk_momentum`` apply to."""
+
+    ALL = "all"  # every attention layer's query/key projections (``_QK_PROJECTIONS``)
+    MLA = "mla"  # the MLA layers' w_q / w_dkv / w_uk (``_MLA_QK_PROJECTIONS``)
 
 
 _MEMORY_VALUES = re.compile(r"memory\.\d+\.values")
@@ -250,7 +260,7 @@ def _is_gate_or_router_weight(path_lower: str) -> bool:
     Matches the leaf attribute name at the end of the path, so it selects ``...attn.attn_gate`` and
     ``...mlp.router`` but not the separate ``...mlp.router_bias`` leaf.
     """
-    return path_lower.endswith((".attn_gate", ".router", ".router_down", ".router_up"))
+    return path_lower.endswith((".attn_gate", ".attn_gate_up", ".router", ".router_down", ".router_up"))
 
 
 def _is_router_weight(path_lower: str) -> bool:
@@ -1300,6 +1310,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ``w_q``/``w_uk``). Tests whether q/k norms make those matrices want a gentler or a bolder step."""
     muonh_qk_momentum: float | None = None
     """MuonH momentum for the query/key projections (None: ``momentum``)."""
+    muonh_qk_scope: QkScope = QkScope.ALL
+    """The projections the two ``muonh_qk_*`` knobs cover."""
     muonh_routed_momentum: float | None = None
     muon_truncate_family: str | None = None
     """Matrix type (``_TRUNCATE_FAMILIES``) whose MuonH updates drop their weakest ``muon_truncate_frac`` of
@@ -1912,7 +1924,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 if self.upper_qk_lr_mult != 1.0 and _SOFTMAX_QK.search(path_lower):
                     return "upper_qk"
                 qk_own_group = self.muonh_qk_lr_mult != 1.0 or self.muonh_qk_momentum is not None
-                if qk_own_group and _QK_PROJECTIONS.search(path_lower):
+                qk_pattern = _MLA_QK_PROJECTIONS if self.muonh_qk_scope == QkScope.MLA else _QK_PROJECTIONS
+                if qk_own_group and qk_pattern.search(path_lower):
                     return "muonh_qk"
                 if self.muonh_attn_lr_mult != 1.0 and _OKLS_FAMILIES["attn"].search(path_lower):
                     return "muonh_attn"

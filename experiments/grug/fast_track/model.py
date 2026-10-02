@@ -1191,6 +1191,9 @@ class GrugModelConfig:
     attn_gate_elementwise: bool = False
     """Gated attention (arXiv 2505.06708, its best variant G1): the output gate is per channel,
     ``2 sigmoid(x W_g)`` with ``W_g`` [D, N*H] zero-init, instead of one scalar per head."""
+    attn_gate_rank: int = 0
+    """Low-rank per-channel output gate in the GatedNorm form: ``2 sigmoid(silu(x W_down) W_up)``, ``W_down``
+    [D, r] (stored as ``attn_gate``) and zero-init ``W_up`` [r, N*H] (``attn_gate_up``), so it starts at 1. 0: off."""
     qk_mult_per_head: bool = False
     """With ``learnable_qk_mult``, one logit scale per head instead of per layer, so each head picks its own
     softmax temperature (with q and k normalized, qk_mult is the whole temperature)."""
@@ -1654,7 +1657,8 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"] | None
     w_v: Float[Array, "D MH"] | None
     w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D G"]  # G = N heads (headwise) or N*H channels (cfg.attn_gate_elementwise)
+    attn_gate: Float[Array, "D G"]  # G = N heads, N*H channels (attn_gate_elementwise) or the rank (attn_gate_rank)
+    attn_gate_up: Float[Array, "R G"] | None  # attn_gate_rank's zero-init up-projection to N*H channels
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
     sconv_q: "ShortConv | None"  # MLA only: SConv after the q projection ("q" in cfg.sconv_sites)
     rel_pos: "InklingRelPos | None"  # Inkling relative-position bias (replaces RoPE when set)
@@ -1691,11 +1695,16 @@ class CausalSelfAttention(eqx.Module):
         """``layer_index`` (0-indexed, may be traced under the stacked init) sets the DIFF ``lambda_init``."""
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         std = cfg.initializer_std
-        attn_gate = (
-            reshard(jnp.zeros((d, n * h)), P(None, "model"))
-            if cfg.attn_gate_elementwise
-            else reshard(jnp.zeros((d, n)), P(None, None))
-        )
+        attn_gate_up = None
+        if cfg.attn_gate_rank:
+            if cfg.attn_gate_elementwise:
+                raise ValueError("attn_gate_rank and attn_gate_elementwise are alternative gates")
+            attn_gate = reshard(_init_weight(random.fold_in(key, 7), (d, cfg.attn_gate_rank), std), P(None, None))
+            attn_gate_up = reshard(jnp.zeros((cfg.attn_gate_rank, n * h)), P(None, "model"))
+        elif cfg.attn_gate_elementwise:
+            attn_gate = reshard(jnp.zeros((d, n * h)), P(None, "model"))
+        else:
+            attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
         if cfg.mla:
             k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
             # A separate key stream, so turning mla_diff_attn on leaves every other initial weight unchanged.
@@ -1711,6 +1720,7 @@ class CausalSelfAttention(eqx.Module):
                 w_v=None,
                 w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
                 attn_gate=attn_gate,
+                attn_gate_up=attn_gate_up,
                 sconv_k=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
                 sconv_q=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "q" in cfg.sconv_sites else None),
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
@@ -1768,6 +1778,7 @@ class CausalSelfAttention(eqx.Module):
             w_v=reshard(_init_weight(k_v, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
             attn_gate=attn_gate,
+            attn_gate_up=attn_gate_up,
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
             sconv_q=None,
             rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
@@ -2103,8 +2114,13 @@ class CausalSelfAttention(eqx.Module):
             mixed = jnp.einsum("bsg,bsgd->bsd", w1 / n_heads, attn_out.astype(jnp.float32))
             attn_out = attn_out + (w2[..., None] * mixed[:, :, None, :]).astype(attn_out.dtype)
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head (or per channel).
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))
-        gate = rearrange(gate, "... (n d) -> ... n d", d=head_dim) if self.cfg.attn_gate_elementwise else gate[..., None]
+        if self.attn_gate_up is not None:
+            hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.attn_gate))
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsr,rn->bsn", hidden, self.attn_gate_up))
+        else:
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))
+        per_channel = self.cfg.attn_gate_elementwise or self.attn_gate_up is not None
+        gate = rearrange(gate, "... (n d) -> ... n d", d=head_dim) if per_channel else gate[..., None]
         attn_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
