@@ -71,6 +71,8 @@ use and check suite. `RecipeInputs` declares staged file selection and pinned
 experiment translates those declarations into artifacts without source-name
 acquisition switches.
 
+Examples of source families:
+
 | Family | Shared contract |
 |---|---|
 | `math_answers` | Ten typed-math sources, including MATH-500 and Hendrycks MATH; named extraction functions retain schema differences |

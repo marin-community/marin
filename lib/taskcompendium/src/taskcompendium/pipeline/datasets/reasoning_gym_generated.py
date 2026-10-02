@@ -3,7 +3,18 @@
 
 """Direct generated Reasoning Gym entries with their pinned native scorer contract."""
 
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+from collections.abc import Iterator
+from tempfile import TemporaryDirectory, TemporaryFile
+from typing import Any
+
 from pydantic import BaseModel, ValidationError
+from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.models import (
     AnswerType,
@@ -59,6 +70,44 @@ RUBRIC = ReviewRubric(
         ),
     ),
 )
+
+
+def generated_rows(archive_path: StoragePath) -> Iterator[dict[str, Any]]:
+    """Run the pinned generator checkout without importing it into the audit worker."""
+    with TemporaryDirectory() as directory:
+        local_archive = os.path.join(directory, "generator.tar.gz")
+        with archive_path.open("rb") as source, open(local_archive, "wb") as destination:
+            shutil.copyfileobj(source, destination)
+        with tarfile.open(local_archive, mode="r:gz") as archive:
+            roots = {member.name.split("/", 1)[0] for member in archive if member.name}
+            if len(roots) != 1:
+                raise ValueError("Pinned generator archive has multiple roots")
+            archive.extractall(directory, filter="data")
+        root = os.path.join(directory, roots.pop())
+        environment = {
+            **os.environ,
+            "PYTHONPATH": root + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "MPLCONFIGDIR": directory,
+        }
+        with TemporaryFile(mode="w+t") as errors:
+            process = subprocess.Popen(
+                [sys.executable, "-m", "taskcompendium.pipeline.reasoning_gym_source"],
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                text=True,
+                env=environment,
+            )
+            try:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    yield json.loads(line)
+                if process.wait() != 0:
+                    errors.seek(0)
+                    raise RuntimeError(f"Pinned reasoning-gym generator failed: {errors.read()}")
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait()
 
 
 class RecordedReward(BaseModel):
@@ -142,7 +191,7 @@ def recipe() -> DatasetRecipe:
         version="reasoning-gym-direct-v1",
         source=HFSource(DATASET, REVISION, "generated", "generated"),
         inputs=RecipeInputs(
-            files=SourceFiles(("generator.tar.gz",), SourceFormat.GENERATED),
+            files=SourceFiles(("generator.tar.gz",), SourceFormat.GENERATED, reader=generated_rows),
             downloads=(UrlDownload(f"https://api.github.com/repos/{DATASET}/tarball/{REVISION}", "generator.tar.gz"),),
         ),
         normalize=normalize,

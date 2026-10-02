@@ -3,7 +3,7 @@
 
 """Pinned downloads and staged record selection owned by a recipe."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -26,6 +26,7 @@ class SourceFiles:
     format: SourceFormat
     selector: Callable[[dict[str, Any], StoragePath], bool] | None = None
     decoder: Callable[[dict[str, Any], StoragePath], dict[str, Any]] | None = None
+    reader: Callable[[StoragePath], Iterator[dict[str, Any]]] | None = None
 
 
 @dataclass(frozen=True)

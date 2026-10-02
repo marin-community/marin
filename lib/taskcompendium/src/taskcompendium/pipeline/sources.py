@@ -8,15 +8,10 @@ import csv
 import hashlib
 import io
 import json
-import os
-import shutil
-import subprocess
-import sys
 import tarfile
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, is_dataclass
-from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Any, cast
 
 from rigging.filesystem.factory import url_to_fs
@@ -45,6 +40,7 @@ def source_files_identity(spec: SourceFiles) -> dict[str, Any]:
         "format": spec.format.value,
         "selector": _callable_identity(spec.selector),
         "decoder": _callable_identity(spec.decoder),
+        "reader": _callable_identity(spec.reader),
     }
 
 
@@ -65,44 +61,6 @@ def staged_files(path: str, spec: SourceFiles) -> tuple[str, ...]:
     return tuple(sorted(files))
 
 
-def _generated_rows(archive_path: StoragePath) -> Iterator[dict[str, Any]]:
-    """Run the pinned generator checkout without importing it into the audit worker."""
-    with TemporaryDirectory() as directory:
-        local_archive = os.path.join(directory, "generator.tar.gz")
-        with archive_path.open("rb") as source, open(local_archive, "wb") as destination:
-            shutil.copyfileobj(source, destination)
-        with tarfile.open(local_archive, mode="r:gz") as archive:
-            roots = {member.name.split("/", 1)[0] for member in archive if member.name}
-            if len(roots) != 1:
-                raise ValueError("Pinned generator archive has multiple roots")
-            archive.extractall(directory, filter="data")
-        root = os.path.join(directory, roots.pop())
-        environment = {
-            **os.environ,
-            "PYTHONPATH": root + os.pathsep + os.environ.get("PYTHONPATH", ""),
-            "MPLCONFIGDIR": directory,
-        }
-        with TemporaryFile(mode="w+t") as errors:
-            process = subprocess.Popen(
-                [sys.executable, "-m", "taskcompendium.pipeline.reasoning_gym_source"],
-                stdout=subprocess.PIPE,
-                stderr=errors,
-                text=True,
-                env=environment,
-            )
-            try:
-                assert process.stdout is not None
-                for line in process.stdout:
-                    yield json.loads(line)
-                if process.wait() != 0:
-                    errors.seek(0)
-                    raise RuntimeError(f"Pinned reasoning-gym generator failed: {errors.read()}")
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait()
-
-
 def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[dict[str, Any]]:
     if source_format == SourceFormat.PARQUET:
         yield from load_parquet(str(path))
@@ -121,8 +79,6 @@ def _decoded_rows(path: StoragePath, source_format: SourceFormat) -> Iterator[di
         with path.open("rb") as stream:
             root = ET.parse(stream).getroot()
         yield from ({**item.attrib, **{child.tag: child.text or "" for child in item}} for item in root.iter("Problem"))
-    elif source_format == SourceFormat.GENERATED:
-        yield from _generated_rows(path)
     else:
         raise ValueError(f"Unsupported staged source format: {source_format}")
 
@@ -133,7 +89,8 @@ def staged_file_rows(path: str, relative_file: str, spec: SourceFiles) -> Iterat
         raise ValueError(f"Source file must be relative to its staged root: {relative_file}")
     root = StoragePath(path)
     file = root / relative_file
-    for index, row in enumerate(_decoded_rows(file, spec.format)):
+    records = spec.reader(file) if spec.reader is not None else _decoded_rows(file, spec.format)
+    for index, row in enumerate(records):
         if not isinstance(row, dict):
             raise ValueError(f"Expected an object at {relative_file}:{index}")
         if spec.selector is not None and not spec.selector(row, root):
