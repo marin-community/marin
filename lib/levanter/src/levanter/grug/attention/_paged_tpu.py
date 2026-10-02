@@ -89,8 +89,8 @@ def tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale, *, interpret=Fa
 
     Queries are [tokens, heads, groups, dim], cache pages are interleaved K/V,
     and bounds are inclusive lower/exclusive upper token positions. Empty
-    bounds return zero. This forward-only kernel requires page_size >= 16 and
-    head dimensions divisible by 128.
+    bounds return zero. This forward-only kernel requires positive page sizes
+    divisible by 16 and head dimensions divisible by 128.
     """
     tokens, heads, groups, dim = q.shape
     page_size = kv_pages.shape[1]
