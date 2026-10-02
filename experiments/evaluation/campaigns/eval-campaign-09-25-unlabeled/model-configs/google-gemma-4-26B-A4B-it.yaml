@@ -2,7 +2,7 @@
 # pre-trained google/gemma-4-26B-A4B; see google-gemma-4-26B-A4B.yaml). Multimodal MoE served
 # text-only, 52 GB bf16, native context 262,144 tokens. Follows the vLLM Gemma 4 recipe
 # (docs.vllm.ai/projects/recipes/en/stable/Google/Gemma4.html): gemma4 reasoning and tool parsers,
-# thinking on for every request via --default-chat-template-kwargs so Evalchemy and Harbor match.
+# thinking enabled by default; benchmark chat-template kwargs select the request mode.
 # The repo's own chat_template.jinja (Google's canonical template dated 2026-07-09) supersedes the
 # recipe's examples/tool_chat_template_gemma4.jinja and is served as shipped. generation_config.json
 # supplies temperature 1.0, top_p 0.95, top_k 64 for requests that omit sampling parameters.

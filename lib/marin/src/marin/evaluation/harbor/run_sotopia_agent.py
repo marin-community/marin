@@ -20,7 +20,7 @@ from sotopia.envs.evaluators import (  # pyrefly: ignore[missing-import]
     unweighted_aggregate_evaluate,
 )
 from sotopia.envs.parallel import ParallelSotopiaEnv  # pyrefly: ignore[missing-import]
-from sotopia.messages import Message  # pyrefly: ignore[missing-import]
+from sotopia.messages import AgentAction, Message  # pyrefly: ignore[missing-import]
 
 EvaluatorResponse = list[tuple[str, tuple[tuple[str, int | float | bool], str]]]
 Transcript = list[list[tuple[str, str, Message]]]
@@ -141,7 +141,7 @@ async def _run_conversation(
     messages: Transcript = [[("Environment", agent_name, observations[agent_name]) for agent_name in env.agents]]
     terminated = {agent_name: False for agent_name in env.agents}
     while not all(terminated.values()):
-        action_tasks: list[asyncio.Task[Any]] = []
+        action_tasks: list[asyncio.Task[AgentAction]] = []
         async with asyncio.TaskGroup() as task_group:
             for agent_name in env.agents:
                 action_tasks.append(task_group.create_task(agents[agent_name].aact(observations[agent_name])))

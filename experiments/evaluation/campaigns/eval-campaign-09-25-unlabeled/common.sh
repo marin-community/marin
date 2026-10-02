@@ -21,7 +21,6 @@ COREWEAVE_SECRET_PROJECT="${COREWEAVE_SECRET_PROJECT:-hai-gcp-models}"
 
 FEDERATED_CLUSTER="${FEDERATED_CLUSTER:-cw-rno2a}"
 PRIORITY="${PRIORITY:-interactive}"
-JUDGE_MODEL="${JUDGE_MODEL:-openai/gpt-oss-120b}"
 JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://api.together.xyz/v1}"
 TAU2_JUDGE_MODEL="${TAU2_JUDGE_MODEL:-openai/openai/gpt-oss-120b}"
 
@@ -174,14 +173,14 @@ prepare_judge_environment() {
   resolve_hf_token
   resolve_together_api_key
   export JUDGE_API_KEY="$TOGETHER_API_KEY"
-  export JUDGE_BASE_URL JUDGE_MODEL
+  export JUDGE_BASE_URL
   export OPENAI_API_KEY="$TOGETHER_API_KEY" OPENAI_BASE_URL="$JUDGE_BASE_URL"
   export TAU2_USER_MODEL="$TAU2_JUDGE_MODEL"
   export TAU2_NL_ASSERTIONS_MODEL="$TAU2_JUDGE_MODEL"
 }
 
-# Stage canonical Harbor configs, applying only model-specific policy values from
-# the campaign config. The resulting effective configs are snapshotted at launch.
+# Apply model-specific policy values and harness profiles to canonical Harbor configs.
+# The resulting effective configs are snapshotted at launch.
 stage_harbor_configs() {
   local model=$1
   STAGED_HARBOR_DIR="$STAGING_ROOT/$model/harbor"

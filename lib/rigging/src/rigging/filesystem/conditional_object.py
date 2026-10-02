@@ -43,10 +43,9 @@ _S3_CONDITIONAL_READ_RETRY_CODES = frozenset({"PathStyleRequestNotAllowed"})
 def _is_retryable_s3_conditional_read(error: Exception) -> bool:
     if is_transient_s3_error(error):
         return True
-    response = getattr(error, "response", None)
-    if not isinstance(response, dict):
+    if not isinstance(error, ClientError):
         return False
-    return response.get("Error", {}).get("Code") in _S3_CONDITIONAL_READ_RETRY_CODES
+    return error.response.get("Error", {}).get("Code") in _S3_CONDITIONAL_READ_RETRY_CODES
 
 
 class ConditionalWriteError(RuntimeError):

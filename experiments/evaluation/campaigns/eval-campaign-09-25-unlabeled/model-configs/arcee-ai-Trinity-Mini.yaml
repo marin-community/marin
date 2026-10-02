@@ -1,5 +1,5 @@
 # Trinity-Mini: 26B-A3B AFMoE with sliding/full attention interleave, 52 GB bf16, 128k context.
-# Thinking is always on: the chat template opens every assistant turn with <think>, with no toggle.
+# Thinking is enabled by default; benchmark chat-template kwargs can disable it.
 # Parsers follow the model card's vLLM recipe (--reasoning-parser deepseek_r1 --tool-call-parser
 # hermes). generation_config.json supplies temperature 0.15, top_p 0.75, top_k 50, min_p 0.06 for
 # requests that omit sampling parameters.

@@ -65,9 +65,11 @@ def test_chat_route_can_load_the_served_tokenizer_for_context_preflight():
 def test_completion_route_omits_chat_template_kwargs():
     config = _payload(_config(chat_template_kwargs={"enable_thinking": False}))
 
-    model_args = build_model_args(config, use_chat=False, max_length=None)
+    model_args = dict(
+        pair.split("=", 1) for pair in build_model_args(config, use_chat=False, max_length=None).split(",")
+    )
 
-    assert "chat_template_kwargs=" not in model_args
+    assert "chat_template_kwargs" not in model_args
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():

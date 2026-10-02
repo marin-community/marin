@@ -1494,12 +1494,28 @@ def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
     assert evalchemy.apply_chat_template is True
 
 
-def test_file_evalchemy_chat_template_kwargs_override_model_per_key(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("generation", "expected"),
+    (
+        (
+            GenerationConfig(chat_template_kwargs={"enable_thinking": True, "strict_format": False}),
+            {"enable_thinking": False, "strict_format": False},
+        ),
+        (
+            GenerationConfig(
+                chat_template_kwargs={"reasoning_effort": "high"},
+                thinking_off_template_kwargs={"reasoning_effort": "low"},
+            ),
+            {"reasoning_effort": "low"},
+        ),
+    ),
+)
+def test_file_evalchemy_chat_template_kwargs_override_model_per_key(tmp_path, monkeypatch, generation, expected):
     config_path = tmp_path / "thinking.yaml"
     config_path.write_text("tasks: [triviaqa]\nchat_template_kwargs:\n  enable_thinking: false\n")
     model = replace(
         models()["qwen3-8b"],
-        generation=GenerationConfig(chat_template_kwargs={"enable_thinking": True, "strict_format": False}),
+        generation=generation,
     )
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
@@ -1520,39 +1536,7 @@ def test_file_evalchemy_chat_template_kwargs_override_model_per_key(tmp_path, mo
 
     evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
     assert evalchemy is not None
-    assert evalchemy.chat_template_kwargs == {"enable_thinking": False, "strict_format": False}
-
-
-def test_file_evalchemy_thinking_off_uses_model_lowest_reasoning_setting(tmp_path, monkeypatch):
-    config_path = tmp_path / "thinking-off.yaml"
-    config_path.write_text("tasks: [triviaqa]\nchat_template_kwargs:\n  enable_thinking: false\n")
-    model = replace(
-        models()["qwen3-8b"],
-        generation=GenerationConfig(
-            chat_template_kwargs={"reasoning_effort": "high"},
-            thinking_off_template_kwargs={"reasoning_effort": "low"},
-        ),
-    )
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    spec = LaunchSpec(
-        model=model,
-        evals=(),
-        evalchemy_definitions=(EvalchemyDefinition(name="thinking-off", config_path=config_path),),
-        harbor_definitions=(),
-        platform=Platform.TPU,
-        accelerator=None,
-        limit=1,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster=None,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-    )
-
-    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
-
-    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
-    assert evalchemy is not None
-    assert evalchemy.chat_template_kwargs == {"reasoning_effort": "low"}
+    assert evalchemy.chat_template_kwargs == expected
 
 
 @pytest.mark.parametrize(
