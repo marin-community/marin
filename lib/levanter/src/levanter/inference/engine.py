@@ -1223,9 +1223,7 @@ class InferenceEngine:
                 self.config.max_rounds,
             )
             submit_done = time.time()
-            # Time spent with device executing (and the host thread waiting)
             self.gen_state = future_state
-            device_time = time.time() - submit_done
 
             extract_start = time.time()
             new_tokens = self._extract_outputs(decode_outputs)
@@ -1233,16 +1231,12 @@ class InferenceEngine:
 
             iter_end = time.time()
             iter_time = iter_end - iter_start
-            # Host time is everything except the device execution wait
-            host_time = max(iter_time - device_time, 0.0)
             submit_time = submit_done - iter_start
             if iter_time > 0:
                 tps_total = new_tokens / iter_time
                 logger.info(
-                    f"Decode iter: total {iter_time:.3f}s (device {device_time:.3f}s, host {host_time:.3f}s, "
-                    f"submit {submit_time:.3f}s), "
-                    f"{tps_total:.2f} tok/s, {new_tokens} new"
-                    f" (extract {extract_time:.3f}s)"
+                    f"Decode iter: total {iter_time:.3f}s (submit {submit_time:.3f}s, "
+                    f"extract/wait {extract_time:.3f}s), {tps_total:.2f} tok/s, {new_tokens} new"
                 )
 
             decode_iteration += 1
