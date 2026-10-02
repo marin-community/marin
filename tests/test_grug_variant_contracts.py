@@ -509,7 +509,7 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
                 backward_flow=train_module.BackwardFlowConfig(interval=0),
             ),
             eval=train_module.GrugEvalConfig(
-                eval_batch_size=1,
+                eval_batch_size=max(1, len(jax.devices())),
                 steps_per_eval=1,
                 max_eval_batches=1,
                 eval_current=True,

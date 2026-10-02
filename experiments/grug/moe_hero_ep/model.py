@@ -755,8 +755,7 @@ class DenseMLP(eqx.Module):
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
         # Reshard after the reshape so the shared-expert output carries the same sharding as the
-        # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
-        # for why the unflattened tensor cannot keep the fused token tuple.
+        # routed MoE output (MoEMLP reshards its routed result identically).
         return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
 
 

@@ -22,10 +22,7 @@ from jaxtyping import PRNGKeyArray
 from transformers import AutoConfig
 
 from levanter.layers.attention import AttentionMask
-
-
-def skip_if_not_enough_devices(count: int):
-    return pytest.mark.skipif(len(jax.devices()) < count, reason=f"Not enough devices ({len(jax.devices())})")
+from levanter.testing.cpu_devices import skip_if_not_enough_devices  # noqa: F401  # Re-exported for tests.
 
 
 class MLP(eqx.Module):
