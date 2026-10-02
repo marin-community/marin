@@ -93,6 +93,11 @@ def main():
         "evidence_kind": "checkpoint",
         "vllm_distribution_source": None if direct_url is None else json.loads(direct_url),
         "engine_args": engine_args,
+        "effective_execution": {
+            "compilation_mode": str(engine.vllm_config.compilation_config.mode),
+            "cudagraph_mode": str(engine.vllm_config.compilation_config.cudagraph_mode),
+            "enforce_eager": engine.vllm_config.model_config.enforce_eager,
+        },
         "versions": {name: importlib.metadata.version(name) for name in ["vllm", "torch"]},
         "devices": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())],
     }
