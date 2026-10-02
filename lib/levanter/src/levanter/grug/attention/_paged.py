@@ -56,8 +56,9 @@ def ragged_paged_attention(
     Query positions start at ``kv_lens - diff(cu_q_lens)`` for each sequence.
     Padding queries produce zero. The TPU path uses JAX's existing ragged kernel
     for FP32 inputs; lower-precision inputs use the reference to preserve accuracy.
-    ``tpu_fp32_tiles`` promotes BF16 cache tiles to FP32 inside the TPU kernel,
-    preserving the cache storage dtype. GPU and CPU default to the reference.
+    ``tpu_fp32_tiles`` uses accurate softmax and FP32 VMEM tiles for decode, preserving
+    cache storage. Mixed/prefill batches and soft-capped attention use the reference.
+    GPU and CPU default to the reference.
     The opt-in ``gpu_pallas`` backend accelerates decode-only batches and uses
     the reference for prefill. ``gpu_pallas_bf16_3x`` selects three-component BF16 AV dots.
     Only the KV-head axis is partitioned; sequence metadata and pages are replicated.
