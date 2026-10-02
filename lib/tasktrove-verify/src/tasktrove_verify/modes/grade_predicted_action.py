@@ -88,7 +88,7 @@ def grade_predicted_action_candidate(spec: PredictedActionSpec, actual: tuple[Fu
     return scored(float(len(matching) == len(spec.expected_calls)))
 
 
-def grade(spec: PredictedActionSpec, tests_dir: Path, workspace: Path) -> Reward:
+def grade(spec: PredictedActionSpec, _tests_dir: Path, workspace: Path) -> Reward:
     validate_predicted_action(spec)
     candidate = read_output(spec, workspace)
     if candidate is None:
