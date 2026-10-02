@@ -59,7 +59,7 @@ def _decode_kernel(table_ref, bounds_ref, q_ref, cache_ref, scale_ref, output_re
         copy = pltpu.make_async_copy(cache_ref.at[physical, :, head], page_buffer, semaphore)
         copy.start()
         copy.wait()
-        # Cast the loaded tile before splitting its interleaved K/V dimension.
+        # Converting first gives Mosaic unpacked FP32 rows for the K/V slice.
         loaded = page_buffer[...].astype(jnp.float32)
         key, value = loaded[:, 0], loaded[:, 1]
         position = page * page_size + jnp.arange(page_size)

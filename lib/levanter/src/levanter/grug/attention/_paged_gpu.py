@@ -8,7 +8,7 @@ attention bound for sliding windows. This backend is forward-only.
 """
 
 from functools import partial
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -18,6 +18,12 @@ from jax.experimental.pallas import triton as plgpu
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
 GpuPagedAvPrecision = Literal["ieee", "bf16_3x"]
+
+
+class _AttentionState(NamedTuple):
+    output: jax.Array
+    denominator: jax.Array
+    maximum: jax.Array
 
 
 def _attention_values(probabilities, values, precision):
@@ -62,7 +68,7 @@ def _page_kernel(
     last_page = jnp.minimum((split + 1) * pages_per_split, pl.cdiv(upper, page_size))
     last_page = jnp.where(upper > lower, last_page, first_page)
     slots = jnp.arange(page_size)
-    initial = (
+    initial = _AttentionState(
         jnp.zeros(q.shape, jnp.float32),
         jnp.zeros(q.shape[0], jnp.float32),
         jnp.full((q.shape[0],), -jnp.inf, jnp.float32),
@@ -84,7 +90,7 @@ def _page_kernel(
         probabilities = jnp.exp(logits - next_maximum[:, None])
         v = jnp.where(allowed[:, None], v, 0)
         output = correction[:, None] * output + _attention_values(probabilities, v, av_precision)
-        return output, correction * denominator + probabilities.sum(axis=-1), next_maximum
+        return _AttentionState(output, correction * denominator + probabilities.sum(axis=-1), next_maximum)
 
     output, denominator, maximum = jax.lax.fori_loop(first_page, last_page, body, initial)
     out_ref[...] = output

@@ -122,6 +122,23 @@ def _query_metadata(q, kv_lens, cu_q_lens, num_seqs) -> _QueryMetadata:
     return _QueryMetadata(seq, position, valid)
 
 
+class _DecodeMetadata(NamedTuple):
+    pages: jax.Array
+    bounds: jax.Array
+    decode_only: jax.Array
+
+
+def _decode_metadata(q, kv_lens, page_indices, cu_q_lens, num_seqs, sliding_window) -> _DecodeMetadata:
+    metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
+    upper = jnp.where(metadata.valid, metadata.position + 1, 0)
+    lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
+    bounds = jnp.stack((lower, upper), axis=-1)
+    token_pages = jnp.maximum(page_indices[metadata.sequence], 0)
+    active = jnp.arange(kv_lens.shape[0]) < num_seqs.reshape(())
+    decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
+    return _DecodeMetadata(token_pages, bounds, decode_only)
+
+
 class _ReferenceState(NamedTuple):
     output: jax.Array
     denominator: jax.Array
@@ -270,20 +287,14 @@ def _gpu_attention(
     kv_splits,
     av_precision,
 ):
-    metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
-    upper = jnp.where(metadata.valid, metadata.position + 1, 0)
-    lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
-    bounds = jnp.stack((lower, upper), axis=-1)
-    token_pages = jnp.maximum(page_indices[metadata.sequence], 0)
-    active = jnp.arange(kv_lens.shape[0]) < num_seqs.reshape(())
-    decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
+    metadata = _decode_metadata(q, kv_lens, page_indices, cu_q_lens, num_seqs, sliding_window)
     return jax.lax.cond(
-        decode_only,
+        metadata.decode_only,
         lambda: gpu_paged_attention(
             q,
             kv_pages,
-            token_pages,
-            bounds,
+            metadata.pages,
+            metadata.bounds,
             sm_scale,
             soft_cap=soft_cap,
             kv_splits=kv_splits,
@@ -325,15 +336,9 @@ def _tpu_decode_attention(
         or q.shape[-1] % TPU_HEAD_ALIGNMENT
     ):
         return reference()
-    metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
-    upper = jnp.where(metadata.valid, metadata.position + 1, 0)
-    lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
-    bounds = jnp.stack((lower, upper), axis=-1)
-    token_pages = jnp.maximum(page_indices[metadata.sequence], 0)
-    active = jnp.arange(kv_lens.shape[0]) < num_seqs.reshape(())
-    decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
+    metadata = _decode_metadata(q, kv_lens, page_indices, cu_q_lens, num_seqs, sliding_window)
     return jax.lax.cond(
-        decode_only,
-        lambda: tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale),
+        metadata.decode_only,
+        lambda: tpu_paged_decode(q, kv_pages, metadata.pages, metadata.bounds, sm_scale),
         reference,
     )
