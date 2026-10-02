@@ -176,7 +176,7 @@ def test_greedy_correctness_against_hf(test_client, hf_reference_model_and_token
                 "prompt": prompt,
                 "max_tokens": max_tokens,
                 "temperature": 0.0,
-                "logprobs": True,
+                "logprobs": 0,
                 "seed": 0,
             },
         )
