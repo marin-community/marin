@@ -23,6 +23,10 @@ from levanter.models.snowball import SnowballConfig
 from experiments.benchmarks.snowball_trace import DiagnosticEmbeddingGate, decode_with_trace
 
 DIAGNOSTIC_PAGE_SIZE = 128
+DIAGNOSTIC_MAX_LAYERS = 2
+DIAGNOSTIC_MAX_WIDTH = 512
+DIAGNOSTIC_MAX_VOCAB = 4096
+DIAGNOSTIC_MAX_SEQUENCES = 8
 
 
 class PrefixBatch(NamedTuple):
@@ -148,7 +152,7 @@ def main():
     if (
         len(lengths) != 1
         or not 0 < inputs["prefill_length"] <= len(sequences[0]) <= DIAGNOSTIC_PAGE_SIZE
-        or len(sequences) > 8
+        or len(sequences) > DIAGNOSTIC_MAX_SEQUENCES
     ):
         raise ValueError(
             f"Diagnostic requires at most eight equal-length prefixes of at most {DIAGNOSTIC_PAGE_SIZE} tokens"
@@ -159,9 +163,9 @@ def main():
     config = converter.config_from_hf_config(converter.hf_config_from_hf_checkpoint())
     if (
         not isinstance(config, SnowballConfig)
-        or config.vocab_size > 4096
-        or config.num_layers > 2
-        or config.hidden_dim > 512
+        or config.vocab_size > DIAGNOSTIC_MAX_VOCAB
+        or config.num_layers > DIAGNOSTIC_MAX_LAYERS
+        or config.hidden_dim > DIAGNOSTIC_MAX_WIDTH
     ):
         raise ValueError("This diagnostic supports Snowball with at most two layers, width512, and vocabulary4096")
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=args.expert_axis_size)):

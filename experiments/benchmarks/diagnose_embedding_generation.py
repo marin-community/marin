@@ -23,7 +23,14 @@ from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
 from levanter.main.inference_benchmark import measure_levanter_batch
 from levanter.models.snowball import SnowballConfig
 
-from experiments.benchmarks.diagnose_native_prefix import embedding_gate_weight_digests
+from experiments.benchmarks.diagnose_native_prefix import (
+    DIAGNOSTIC_MAX_LAYERS,
+    DIAGNOSTIC_MAX_SEQUENCES,
+    DIAGNOSTIC_MAX_VOCAB,
+    DIAGNOSTIC_MAX_WIDTH,
+    DIAGNOSTIC_PAGE_SIZE,
+    embedding_gate_weight_digests,
+)
 from experiments.benchmarks.matched_comparison import (
     MANIFEST_FILENAME,
     WORKLOAD_FILENAME,
@@ -63,11 +70,11 @@ def main() -> None:
     config = draccus.decode(SnowballConfig, {k: v for k, v in native["model_config"].items() if k != "type"})
     if (
         native["model_config"]["type"] != "snowball"
-        or config.num_layers > 2
-        or config.hidden_dim > 512
-        or config.vocab_size > 4096
-        or len(workload.prompts) > 8
-        or max(map(len, workload.prompts)) + workload.output_tokens > 128
+        or config.num_layers > DIAGNOSTIC_MAX_LAYERS
+        or config.hidden_dim > DIAGNOSTIC_MAX_WIDTH
+        or config.vocab_size > DIAGNOSTIC_MAX_VOCAB
+        or len(workload.prompts) > DIAGNOSTIC_MAX_SEQUENCES
+        or max(map(len, workload.prompts)) + workload.output_tokens > DIAGNOSTIC_PAGE_SIZE
     ):
         raise ValueError("This diagnostic is bounded to small Snowball fixtures")
     checkpoint = root / "checkpoint"
