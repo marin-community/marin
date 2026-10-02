@@ -606,3 +606,30 @@ Hero remains unsupported by this pinned TPU fixture. The vLLM fork at
 accepts only schema v1. A Hero TPU baseline needs a cache-preserving short-conv
 bridge and full-model parity before timing; disabling short convolutions would
 change the model.
+
+### Speculative target prerequisite
+
+`levanter.inference.speculative.verify_snowball_proposals` verifies packed blocks
+containing one pending token followed by deterministic draft proposals. It runs
+Snowball's paged target once, accepts a prefix, and returns a target recovery or
+bonus token. Stochastic verification uses a one-hot draft distribution; target
+sampling supports temperature with top-p equal to one. Reported logprobs describe
+the target distribution before rejection sampling, in the selected raw or
+temperature-only processed reporting mode.
+
+The returned sequence lengths commit only the visible prefix. Callers must use
+those lengths for continuation: rejected KV entries remain in allocated pages
+but are masked and overwritten. Stop tokens, remaining generation budgets, and
+cancelled rows truncate both emitted tokens and auxiliary states. The recovery
+or bonus token remains pending until the next target call.
+
+`SnowballLMHeadModel.decode_with_auxiliary_states` captures selected residual
+boundaries for EAGLE: boundary zero follows embedding normalization and gating,
+and boundary `i` follows block `i`, before final normalization. Unique boundaries
+are concatenated in ascending order. Ordinary `decode` retains its existing scan
+without allocating auxiliary buffers.
+
+This is an opt-in target primitive. It does not load an EAGLE draft checkpoint,
+manage a draft cache, allocate or reclaim pages, refresh draft weights, or enable
+speculation in the serving scheduler. Full EAGLE serving and throughput parity
+remain separate work.

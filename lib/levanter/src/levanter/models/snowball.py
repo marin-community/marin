@@ -845,7 +845,6 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             caches.append(KvPageCache(hax.named(pages, cache.kv_pages.axes)))
         return ListCache(tuple(caches))
 
-    @named_call
     def decode(
         self,
         input_ids: NamedArray,
@@ -855,6 +854,40 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        logits, cache, _ = self._decode(input_ids, kv_cache, batch_info, pos_ids, ())
+        return logits, cache
+
+    def decode_with_auxiliary_states(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        layers: tuple[int, ...],
+    ) -> tuple[NamedArray, ListCache[KvPageCache], NamedArray]:
+        """Return EAGLE target residual states alongside paged logits and KV state.
+
+        Boundary zero is the normalized/gated embedding; boundary i is the residual
+        after block i, before final normalization. Unique boundaries are concatenated
+        in ascending order, matching vLLM's EAGLE3 target convention.
+        """
+        layers = tuple(sorted(set(layers)))
+        if not layers or layers[0] < 0 or layers[-1] > self.config.num_layers:
+            raise ValueError("Auxiliary boundaries must be between zero and the number of layers")
+        logits, cache, auxiliary = self._decode(input_ids, kv_cache, batch_info, pos_ids, layers)
+        assert auxiliary is not None
+        return logits, cache, auxiliary
+
+    @named_call
+    def _decode(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        auxiliary_layers: tuple[int, ...],
+    ) -> tuple[NamedArray, ListCache[KvPageCache], NamedArray | None]:
         """Prefill or decode packed sequences using absolute positions and paged KV state.
 
         Tokens occupy a flat position axis, with a valid prefix described by batch_info.
@@ -895,13 +928,36 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             x = x + (block.mlp(mlp_in, token_valid=token_valid) + block.shared(mlp_in))
             return x, cache.kv_pages.array
 
-        hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
+        auxiliary = None
+        if auxiliary_layers:
+            states = jnp.stack([hidden if layer == 0 else jnp.zeros_like(hidden) for layer in auxiliary_layers])
+            boundaries = jnp.asarray(auxiliary_layers)
+
+            def capture_step(carry, layer_data):
+                x, captured = carry
+                block, pages, use_long, index = layer_data
+                x, pages = layer_step(x, (block, pages, use_long))
+                captured = jnp.where((boundaries == index + 1)[:, None, None, None], x[None], captured)
+                return (x, captured), pages
+
+            (hidden, states), cache_pages = jax.lax.scan(
+                capture_step,
+                (hidden, states),
+                (stacked, cache_pages, long_schedule, jnp.arange(len(kv_cache))),
+            )
+            features = jnp.transpose(states[:, :, 0, :], (1, 0, 2)).reshape(
+                tokens.shape[0], -1, out_sharding=P(_BATCH_AXES, None)
+            )
+            features = jnp.where(token_valid[:, None], features, 0)
+            auxiliary = hax.named(features, (*input_ids.axes, Axis("auxiliary", features.shape[-1])))
+        else:
+            hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
         logits = jnp.einsum(
             "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
         )
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
-        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
+        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches, auxiliary
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
