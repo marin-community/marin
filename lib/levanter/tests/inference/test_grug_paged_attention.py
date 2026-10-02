@@ -199,3 +199,24 @@ def test_grug_gpu_full_shape_bf16_decode_matches_float64():
     )(*args)
     expected = _dense_oracle(args, 2048, None, dim**-0.5).astype(np.asarray(q).dtype)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
+@pytest.mark.parametrize("heads,groups", [(3, 4), (5, 1), (6, 8), (12, 4)])
+def test_grug_tpu_bf16_unaligned_heads_match_float64(heads, groups):
+    rng = np.random.default_rng(38)
+    q = jnp.asarray(rng.normal(size=(2, heads, groups, 128)), jnp.bfloat16)
+    pages = jnp.asarray(rng.normal(size=(7, 16, 2 * heads, 128)), jnp.bfloat16)
+    args = _PagedCase(
+        q,
+        pages,
+        jnp.array([37, 18], jnp.int32),
+        jnp.array([[4, 2, 6], [3, 1, 0]], jnp.int32),
+        jnp.array([0, 1, 2], jnp.int32),
+        jnp.array(2, jnp.int32),
+    )
+    actual = jax.jit(
+        partial(ragged_paged_attention, sm_scale=128**-0.5, sliding_window=17, implementation="tpu_fp32_tiles")
+    )(*args)
+    expected = _dense_oracle(args, 17, None, 128**-0.5).astype(np.asarray(q).dtype)
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
