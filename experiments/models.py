@@ -67,6 +67,20 @@ smollm2_1_7b_instruct = download_model(
 )
 
 # Note(Will): I don't think we actually support Qwen models in Levanter?
+qwen2_5_0_5b = download_model(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-0.5B",
+        hf_revision="060db6499f32faf8b98477b0a26969ef7d8b9987",
+    )
+)
+
+qwen2_5_0_5b_instruct = download_model(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-0.5B-Instruct",
+        hf_revision="7ae557604adf67be50417f59c2c2f167def9a775",
+    )
+)
+
 qwen2_5_7b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-7B",

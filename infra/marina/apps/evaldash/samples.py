@@ -30,13 +30,14 @@ from finestore.eval import (
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     EvalSample,
+    Grading,
     sample_from_archive_row,
 )
 from finestore.layout import FormatVersionError
 from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
-from marin.evaluation.metric_selection import declared_metric, primary_filter
+from marin.evaluation.metric_selection import base_metric, declared_sample_metric, primary_filter
 from marin.evaluation.records import EvalRunRecord
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
@@ -342,7 +343,7 @@ def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | No
 
 def _sample_primary_metric(metric_columns: tuple[str, ...], declared: str | None) -> str | None:
     metrics = dict.fromkeys(metric_columns, 0.0)
-    picked = declared_metric(metrics, declared)
+    picked = declared_sample_metric(metrics, declared)
     return picked[0] if picked is not None else None
 
 
@@ -381,12 +382,16 @@ def fetch_samples(
     filtered = _select_extraction_filter(table, extraction_filter)
     table = filtered.rows
     columns = set(table.column_names)
-    correct_values = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
+    stored_correct = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
     metric_maps = (
         table.column("metrics").to_pylist(maps_as_pydicts="strict") if "metrics" in columns else [None] * table.num_rows
     )
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     primary = _sample_primary_metric(metric_columns, primary_metric_name)
+    correct_values = [
+        value if value is not None or primary is None or not row or row.get(primary) is None else row[primary] >= 1.0
+        for value, row in zip(stored_correct, metric_maps, strict=True)
+    ]
     n_correct = sum(1 for value in correct_values if value is True)
     n_ungraded = sum(1 for value in correct_values if value is None)
     counts = SampleCounts(
@@ -405,7 +410,27 @@ def fetch_samples(
         indices = list(range(table.num_rows))
     page_indices = indices[offset : offset + limit]
     page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist(maps_as_pydicts="strict")
-    page = tuple(sample_from_archive_row(row) for row in page_rows)
+    page = []
+    for row in page_rows:
+        sample = sample_from_archive_row(row)
+        if sample.correct is None and primary is not None and primary in sample.metrics:
+            score = sample.metrics[primary]
+            sample = sample.model_copy(
+                update={
+                    "correct": score >= 1.0,
+                    "grading": (
+                        sample.grading
+                        or Grading(
+                            method=f"lm-eval:{base_metric(primary)}",
+                            metric=primary,
+                            filter=filtered.selected,
+                            score=score,
+                            passed=score >= 1.0,
+                        )
+                    ),
+                }
+            )
+        page.append(sample)
     return SamplesResponse(
         available=True,
         error=None,
@@ -418,7 +443,7 @@ def fetch_samples(
         offset=offset,
         limit=limit,
         counts=counts,
-        rows=page,
+        rows=tuple(page),
     )
 
 

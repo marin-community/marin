@@ -19,9 +19,8 @@ Plan or run::
 The default preset runs on 40 GPUs: 128 prompts per update with four answers each,
 192 concurrent prompt groups, staleness 4, and an 8192-token request window with a
 4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
-each advantage is computed over. The loop settings, telemetry gates and ``marin_tokenizer`` chat
-template need a MarinSkyRL revision that supports them. An older revision rejects the loop and
-telemetry keys when the launch config is composed, before the job takes a GPU.
+each advantage is computed over. Rollouts use the tokenizer's built-in chat template and preserve
+sampled completion token IDs for the behavior-policy loss.
 """
 
 from __future__ import annotations
@@ -86,18 +85,6 @@ ANSWERS_PER_PROMPT = 4
 # Keep two resumable checkpoints in the temporary bucket, which deletes objects after 14 days. The
 # terminal export does not expire.
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
-
-
-@dataclass(frozen=True)
-class ChatTemplate:
-    """The chat template the rollout runner renders conversations with."""
-
-    source: str
-    name_or_path: str
-
-
-# The marin tokenizer's chat template, which MarinSkyRL registers under this name.
-CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 
 
 @dataclass(frozen=True)
@@ -378,8 +365,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             # No KL term against the reference, in the loss or in the reward.
             "use_kl_loss": False,
             "use_kl_in_reward": False,
-            # No truncated importance sampling on top of the clip.
-            "use_tis": False,
+            # The policy loss uses unit correction weights.
+            "off_policy_correction": "none",
             # Symmetric PPO clip.
             "eps_clip_low": 0.2,
             "eps_clip_high": 0.2,
@@ -442,11 +429,9 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "enable_chunked_prefill": True,
         # Capture CUDA graphs for decode.
         "enforce_eager": False,
-        # Rollout groups use the OpenAI-compatible chat route.
         "enable_http_endpoint": True,
-        # Each turn re-renders the conversation through the chat template; the entrypoint requires it.
         "use_conversation_multi_turn": True,
-        "chat_template": asdict(CHAT_TEMPLATE),
+        "chat_template": {"source": "name", "name_or_path": None},
         "engine_init_kwargs": dict(recipe.engine_init_kwargs),
         "sampling_params": {
             # Full-distribution sampling; the ratio diagnostics assume no truncation.
