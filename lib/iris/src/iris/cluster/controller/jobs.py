@@ -39,6 +39,7 @@ from iris.cluster.controller.schema import jobs_table, tasks_table
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
+from iris.cluster.health import HEALTH_PORT_NAME, validate_task_health_check
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
@@ -461,6 +462,15 @@ def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest
             Code.INVALID_ARGUMENT,
             "coscheduling requires a non-empty group_by (the topology level to gang on)",
         )
+    if len(request.ports) != len(set(request.ports)):
+        raise ConnectError(Code.INVALID_ARGUMENT, "port names must be unique")
+    if request.HasField("health_check"):
+        if HEALTH_PORT_NAME in request.ports:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"port name {HEALTH_PORT_NAME!r} is reserved for task health")
+        try:
+            validate_task_health_check(request.health_check)
+        except ValueError as error:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
     return JobName.from_wire(request.name)
 
 

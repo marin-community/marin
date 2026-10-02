@@ -34,6 +34,7 @@ from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.lru_cache import LRUCache
 from iris.cluster.controller.projections.base import LazyFillGuard, Projection
 from iris.cluster.controller.schema import job_config_table, job_workdir_files_table
+from iris.cluster.health import HEALTH_PORT_NAME
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -48,6 +49,7 @@ def build_run_request_fields(
     entrypoint_json: str,
     workdir_files: dict[str, bytes],
     environment_json: str,
+    health_check_json: str | None,
     bundle_id: str,
     resources: job_pb2.ResourceSpecProto,
     ports_json: list,
@@ -87,6 +89,9 @@ def build_run_request_fields(
     )
     for filename, data in workdir_files.items():
         request.entrypoint.workdir_files[filename] = data
+    if health_check_json is not None:
+        request.health_check.CopyFrom(proto_from_json(health_check_json, job_pb2.TaskHealthCheck))
+        request.ports.append(HEALTH_PORT_NAME)
     return request
 
 
@@ -146,6 +151,7 @@ class RunTemplatesProjection(Projection):
             entrypoint_json=job.entrypoint_json,
             workdir_files=reads.get_workdir_files(tx, job_id),
             environment_json=job.environment_json,
+            health_check_json=job.health_check_json,
             bundle_id=job.bundle_id,
             resources=resources,
             ports_json=job.ports_json,

@@ -15,16 +15,18 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from google.protobuf import json_format
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.health import HEALTH_PORT_ENV, HEALTH_PORT_NAME
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
@@ -57,7 +59,8 @@ from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
 from iris.rpc.job_pb2 import TaskState, WorkerMetadata
 from iris.rpc.proto_display import signal_name
-from iris.time_proto import timestamp_to_proto
+from iris.runtime.health_probe import probe_http_health
+from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +109,51 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
 
 
 _DISK_CHECK_INTERVAL_SECONDS = 60.0
+_HEALTH_LIVE_MARKER = ".iris_health_live"
+
+
+@dataclass
+class _HealthMonitor:
+    task_id: JobName
+    policy: job_pb2.TaskHealthCheck
+    port: int | None
+    startup_deadline: Deadline
+    live_marker: Path
+    live: bool = field(init=False)
+    failures: int = 0
+    next_probe: Deadline = field(default_factory=lambda: Deadline.from_ms(0))
+
+    def __post_init__(self) -> None:
+        self.live = self.live_marker.exists()
+
+    def error(self) -> str | None:
+        self.next_probe = Deadline.from_now(duration_from_proto(self.policy.period))
+        if self.port is None:
+            return f"Task health port {HEALTH_PORT_NAME!r} was not allocated"
+
+        result = probe_http_health(self.port, self.policy.request_timeout.milliseconds / 1000)
+        if result.healthy:
+            self.failures = 0
+            if not self.live:
+                self.live_marker.touch()
+                self.live = True
+            return None
+        if not self.live:
+            if self.startup_deadline.expired():
+                return f"Task health did not start before its deadline: {result.detail}"
+            return None
+
+        self.failures += 1
+        logger.warning(
+            "Task %s health check failed (%d/%d): %s",
+            self.task_id,
+            self.failures,
+            self.policy.failure_threshold,
+            result.detail,
+        )
+        if self.failures >= self.policy.failure_threshold:
+            return f"Task health check failed {self.failures} consecutive times: {result.detail}"
+        return None
 
 
 class TaskCancelled(Exception):
@@ -312,6 +360,7 @@ class TaskAttempt:
         self.cleanup_done: bool = False
         self.should_stop: bool = False
         self._output_stop = threading.Event()
+        self._health_startup_deadline: Deadline | None = None
 
     @classmethod
     def adopt(
@@ -339,6 +388,8 @@ class TaskAttempt:
             task_id=discovered.task_id,
             attempt_id=attempt_id,
         )
+        if discovered.health_check_json:
+            json_format.Parse(discovered.health_check_json, request.health_check)
         config = TaskAttemptConfig(
             task_attempt=identity,
             num_tasks=1,
@@ -368,6 +419,14 @@ class TaskAttempt:
         instance.status_message = "adopted"
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
         instance.output_dir = instance.workdir / _OUTPUT_HOST_DIRNAME if instance.workdir is not None else None
+        if request.HasField("health_check"):
+            started_at = discovered.started_at
+            if started_at is None or started_at.epoch_ms() <= 0:
+                raise RuntimeError(f"Cannot adopt health-checked task {task_id}: container start time is unavailable")
+            instance._health_startup_deadline = Deadline.after(
+                started_at,
+                duration_from_proto(request.health_check.startup_timeout),
+            )
         # Restore host-port reservations and re-mark them taken so the worker
         # never re-allocates an in-use port to a new task after restart.
         instance.ports = dict(discovered.ports)
@@ -743,6 +802,8 @@ class TaskAttempt:
 
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
+        if self.request.HasField("health_check"):
+            env[HEALTH_PORT_ENV] = iris_env[HEALTH_PORT_ENV]
         # CPU tasks on TPU hosts also need to share the cache's package files.
         if self._worker_metadata.device.HasField("tpu"):
             env[UV_LINK_MODE_ENV] = "symlink"
@@ -785,6 +846,15 @@ class TaskAttempt:
             worker_id=self._worker_id,
             worker_metadata=self._worker_metadata,
             ports=self.ports,
+            health_check_json=(
+                json_format.MessageToJson(
+                    self.request.health_check,
+                    preserving_proto_field_name=True,
+                    indent=None,
+                )
+                if self.request.HasField("health_check")
+                else ""
+            ),
         )
 
         chaos_raise("worker.create_container")
@@ -848,6 +918,10 @@ class TaskAttempt:
         assert self._container_handle is not None
 
         self._container_handle.run()
+        if self.request.HasField("health_check"):
+            self._health_startup_deadline = Deadline.from_now(
+                duration_from_proto(self.request.health_check.startup_timeout)
+            )
         logger.info(
             "Container started for task %s (container_id=%s, ports=%s)",
             self.task_id,
@@ -879,6 +953,17 @@ class TaskAttempt:
         log_reader: RuntimeLogReader,
     ) -> _TaskOutcome:
         last_disk_check = 0.0
+        health_monitor = None
+        if self.request.HasField("health_check"):
+            assert self._health_startup_deadline is not None
+            assert self.workdir is not None
+            health_monitor = _HealthMonitor(
+                self.task_id,
+                self.request.health_check,
+                self.ports.get(HEALTH_PORT_NAME),
+                self._health_startup_deadline,
+                self.workdir / _HEALTH_LIVE_MARKER,
+            )
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
@@ -967,6 +1052,18 @@ class TaskAttempt:
                             error=error,
                             exit_code=status.exit_code or -1,
                         )
+
+            if (
+                health_monitor is not None
+                and status.phase == ContainerPhase.RUNNING
+                and health_monitor.next_probe.expired()
+            ):
+                health_error = health_monitor.error()
+                if health_error is not None:
+                    if handle.status().phase == ContainerPhase.STOPPED:
+                        continue
+                    handle.stop(force=True)
+                    return _TaskOutcome(job_pb2.TASK_STATE_FAILED, error=health_error, exit_code=-1)
 
             # Stream logs incrementally
             self._stream_logs(log_reader)

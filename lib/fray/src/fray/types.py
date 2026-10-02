@@ -692,6 +692,16 @@ class Entrypoint:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class TaskHealthCheck:
+    """Application health policy for each task attempt."""
+
+    startup_timeout: Duration
+    period: Duration
+    request_timeout: Duration
+    failure_threshold: int
+
+
 @dataclass
 class JobRequest:
     """Complete job specification for submission.
@@ -712,6 +722,7 @@ class JobRequest:
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
         timeout: Backend-enforced execution deadline, if supported.
+        health_check: Optional application health policy for each task attempt.
     """
 
     name: str
@@ -725,6 +736,7 @@ class JobRequest:
     max_task_failures: int = 0
     priority: int = 0
     timeout: Duration | None = None
+    health_check: TaskHealthCheck | None = None
 
     def __post_init__(self):
         if " " in self.name:

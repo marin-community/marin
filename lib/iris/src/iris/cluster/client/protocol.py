@@ -8,6 +8,7 @@ from typing import Protocol
 from finelog.rpc import logging_pb2
 from rigging.timing import Deadline, Duration
 
+from iris.cluster.health import NOOP_IRIS_TASK_HEALTH_CHECK, IrisTaskHealthCheck
 from iris.cluster.types import EndpointAccess, Entrypoint, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 
@@ -40,6 +41,7 @@ class ClusterClient(Protocol):
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
+        health_check: IrisTaskHealthCheck = NOOP_IRIS_TASK_HEALTH_CHECK,
     ) -> JobName: ...
 
     def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus: ...
