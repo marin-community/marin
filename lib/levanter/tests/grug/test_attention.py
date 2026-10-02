@@ -219,3 +219,12 @@ def test_xla_flash_attention_handles_lengths_that_do_not_divide_the_default_bloc
     expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
     actual = xla_flash_attention(q, k, v, mask)
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+
+
+def test_xla_flash_attention_broadcasts_shared_segment_ids_across_the_batch():
+    q, k, v, _ = _flash_inputs()
+    shared = jnp.where(jnp.arange(q.shape[1]) < 40, 0, 1)[None, :]  # one row of segment ids for a batch of 2
+    mask = AttentionMask.causal(sliding_window=20).with_segment_ids(shared)
+    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    actual = xla_flash_attention(q, k, v, mask, block_size=16)
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)

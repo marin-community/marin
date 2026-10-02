@@ -322,6 +322,10 @@ def _levanter_mask(
     )
     if mask.segment_ids is not None:
         q_seg, k_seg = mask.segment_ids
+        if q_seg.ndim == 2:
+            # A size-1 batch of segment ids is shared across the real batch, as the reference path broadcasts it.
+            q_seg = jnp.broadcast_to(q_seg, (Batch.size, q_seg.shape[1]))
+            k_seg = jnp.broadcast_to(k_seg, (Batch.size, k_seg.shape[1]))
         q_axes = (QPos,) if q_seg.ndim == 1 else (Batch, QPos)
         k_axes = (KPos,) if k_seg.ndim == 1 else (Batch, KPos)
         out = out.with_segment_ids(hax.named(q_seg, q_axes), hax.named(k_seg, k_axes))
