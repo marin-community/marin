@@ -12,6 +12,8 @@ import time
 from functools import partial
 from importlib import metadata
 from typing import NamedTuple
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import jax
 import jax.numpy as jnp
@@ -49,6 +51,48 @@ def _measure_jax(fn, inputs, repeats):
         compiled(*inputs).block_until_ready()
         times.append(time.perf_counter() - start)
     return _JaxMeasurements(output, compile_time, first_run_time, statistics.median(times))
+
+
+def _profile_tpu(fn, inputs, repeats):
+    # Use the XPlane reader also used by bench_ce_hero_shape. Module events
+    # measure device execution without summing nested per-operation events.
+    with TemporaryDirectory(prefix="grug-tpu-profile-") as directory:
+        with jax.profiler.trace(directory):
+            for step in range(repeats):
+                with jax.profiler.StepTraceAnnotation("paged_decode", step_num=step):
+                    jax.block_until_ready(fn(*inputs))
+        paths = sorted(Path(directory).rglob("*.xplane.pb"))
+        if not paths:
+            raise RuntimeError("TPU profiler did not produce an XPlane trace")
+        lines = []
+        module_times = []
+        for path in paths:
+            data = jax.profiler.ProfileData.from_file(str(path))
+            for plane in data.planes:
+                if "tpu" not in plane.name.lower():
+                    continue
+                for line in plane.lines:
+                    durations = [event.duration_ns / 1e9 for event in line.events]
+                    if not durations:
+                        continue
+                    median = statistics.median(durations)
+                    lines.append(
+                        {
+                            "plane": plane.name,
+                            "line": line.name,
+                            "events": len(durations),
+                            "median_time": median,
+                            "total_time": sum(durations),
+                        }
+                    )
+                    if line.name == "XLA Modules" and len(durations) == repeats:
+                        module_times.append(median)
+        return {
+            "timing_boundary": "tpu_xplane_xla_module_duration",
+            "median_time": max(module_times) if module_times else None,
+            "availability": "measured" if module_times else "no_matching_module_line",
+            "device_lines": lines,
+        }
 
 
 def _error_metrics(actual, expected):
@@ -185,7 +229,9 @@ def main():
             error["vs_ieee"] = _error_metrics(actual, ieee)
         error["mismatch_float64_oracle"] = _mismatch_oracle(inputs, args, list(error.values()), actual, reference)
     device_profile = None
-    if args.profile_device:
+    if args.profile_device and jax.default_backend() == "tpu":
+        device_profile = _profile_tpu(fn, inputs, args.repeats)
+    elif args.profile_device:
         profiler = importlib.import_module("jax.experimental.mosaic.gpu.profiler")
 
         _, kernel_runs = profiler.measure(fn, aggregate=False, iterations=args.repeats)(*inputs)
