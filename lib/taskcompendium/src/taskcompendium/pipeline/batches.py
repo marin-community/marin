@@ -4,7 +4,7 @@
 """Persist requests, acknowledged submissions, and raw outputs for resumable batches."""
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,6 +22,46 @@ class BatchToolArguments:
     status: ReviewStatus
     arguments: dict[str, JsonValue] | None
     detail: str
+
+
+class TypedBatchValue(Protocol):
+    @property
+    def task_id(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class TypedBatchRecord[T: TypedBatchValue]:
+    task_id: str
+    status: ReviewStatus
+    value: T | None
+    detail: str
+
+
+def typed_batch_records[T: TypedBatchValue](
+    output: str,
+    task_ids: Sequence[str],
+    *,
+    tool_name: str,
+    validate: Callable[[str], T],
+    identity_error: str,
+) -> list[TypedBatchRecord[T]]:
+    """Validate structured values and identities while retaining protocol failures."""
+    records = []
+    for response in batch_tool_arguments(output, task_ids, tool_name=tool_name):
+        task_id = response.task_id
+        if response.status != ReviewStatus.REVIEWED:
+            records.append(TypedBatchRecord(task_id, response.status, None, response.detail))
+            continue
+        try:
+            assert response.arguments is not None
+            value = validate(json.dumps(response.arguments))
+            if value.task_id != task_id:
+                raise ValueError(identity_error)
+        except (KeyError, TypeError, ValueError) as error:
+            records.append(TypedBatchRecord(task_id, ReviewStatus.INVALID, None, str(error)))
+            continue
+        records.append(TypedBatchRecord(task_id, ReviewStatus.REVIEWED, value, ""))
+    return records
 
 
 def batch_tool_arguments(output: str, task_ids: Sequence[str], *, tool_name: str) -> list[BatchToolArguments]:

@@ -24,7 +24,7 @@ def encoded_file(value):
     return base64.b64encode(json.dumps(value).encode()).decode()
 
 
-def answer_reward(task, answer):
+def answer_grade(task, answer):
     return resolve_verifier(task.verifier).grade(
         GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
     )
@@ -46,8 +46,8 @@ def test_puzzle_ingestion_preserves_order_and_symbolic_coordinates(row_source):
         )
     )
     assert isinstance(ordered, TaskSpec)
-    assert answer_reward(ordered, "Defect\nSalt\nchair\ndonate").reward == 1.0
-    assert answer_reward(ordered, "chair, Defect, donate, Salt").reward == 0.0
+    assert answer_grade(ordered, "Defect\nSalt\nchair\ndonate").reward == 1.0
+    assert answer_grade(ordered, "chair, Defect, donate, Salt").reward == 0.0
     coordinates = reasoning_tasks.normalize_puzzle(
         RawRow(
             "coords",
@@ -59,8 +59,8 @@ def test_puzzle_ingestion_preserves_order_and_symbolic_coordinates(row_source):
         )
     )
     assert isinstance(coordinates, TaskSpec)
-    assert answer_reward(coordinates, "(2.0, 3.0)").reward == 1.0
-    assert answer_reward(coordinates, "(3, 2)").reward == 0.0
+    assert answer_grade(coordinates, "(2.0, 3.0)").reward == 1.0
+    assert answer_grade(coordinates, "(3, 2)").reward == 0.0
 
 
 def test_reasoning_ingestion_preserves_upstream_partial_credit(row_source):
@@ -75,9 +75,9 @@ def test_reasoning_ingestion_preserves_upstream_partial_credit(row_source):
         )
     )
     assert isinstance(task, TaskSpec)
-    assert answer_reward(task, "42").reward == 1.0
-    assert 0.0 < answer_reward(task, "x = 42").reward < 1.0
-    assert answer_reward(task, "41").reward == 0.0
+    assert answer_grade(task, "42").reward == 1.0
+    assert 0.0 < answer_grade(task, "x = 42").reward < 1.0
+    assert answer_grade(task, "41").reward == 0.0
     assert all(check.status == CheckStatus.PASS for check in reasoning_tasks.reasoning_checks(task).checks)
 
 
@@ -112,9 +112,9 @@ def test_calendar_ingestion_accepts_alternatives_rejects_overlap_and_keeps_missi
     assert all(check.status == CheckStatus.PASS for check in calendar_tasks.verification_report(task).checks)
     witness[0]["start_time"] = "10:15"
     witness[1]["start_time"] = "12:00"
-    assert answer_reward(task, json.dumps(witness)).reward == 1.0
+    assert answer_grade(task, json.dumps(witness)).reward == 1.0
     witness[1]["start_time"] = "10:30"
-    grade = answer_reward(task, json.dumps(witness))
+    grade = answer_grade(task, json.dumps(witness))
     assert grade.status == Outcome.GRADED and grade.reward == 0.0
     missing_witness = calendar_tasks.normalize(replace(row, data={**row.data, "files": {}}))
     assert isinstance(missing_witness, TaskSpec)

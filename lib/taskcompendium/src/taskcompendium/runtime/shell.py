@@ -15,6 +15,7 @@ from taskcompendium.models import FunctionCall, ResourceVisibility, TaskSpec
 from taskcompendium.runtime.models import RuntimeEvidence
 
 INTERFACE = "shell:v1"
+MISSING_CAPTURE_EXIT_CODE = 44
 
 
 @dataclass
@@ -55,7 +56,7 @@ class ShellEnvironment:
                     (
                         "/bin/bash",
                         "-c",
-                        'if test -f "$1"; then head -c "$2" -- "$1"; else exit 44; fi',
+                        f'if test -f "$1"; then head -c "$2" -- "$1"; else exit {MISSING_CAPTURE_EXIT_CODE}; fi',
                         "capture",
                         path,
                         str(self.output_limit_bytes + 1),
@@ -64,7 +65,7 @@ class ShellEnvironment:
                     output_limit_bytes=self.output_limit_bytes + 1,
                 )
             )
-            if result.exit_code == 44:
+            if result.exit_code == MISSING_CAPTURE_EXIT_CODE:
                 continue
             if result.exit_code != 0 or result.stdout_truncated or len(result.stdout) > self.output_limit_bytes:
                 raise RuntimeError(f"Capture unavailable or exceeds budget: {path}")

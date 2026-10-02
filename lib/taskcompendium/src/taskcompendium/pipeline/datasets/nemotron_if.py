@@ -15,28 +15,7 @@ SPLIT = "instruction_following"
 RUBRIC = ReviewRubric(
     id="nemotron_if-answerability",
     version="1",
-    criteria=(
-        (
-            "Identify every public content request and requirement across the complete conversation; do not "
-            "discard earlier requests."
-        ),
-        (
-            "Check the private canonical constraint configuration against the public wording and identify "
-            "missing, additional, or contradictory constraints."
-        ),
-        (
-            "Formal constraint rewards do not establish factual correctness or useful content; judge the "
-            "underlying request separately."
-        ),
-        (
-            "The canonical source rewards the fraction of constraints satisfied; TaskTrove similarly named "
-            "checks can differ in counting and punctuation semantics."
-        ),
-        (
-            "Missing requested documents or inputs are defects; an unbound canonical evaluator alone is not a "
-            "content defect."
-        ),
-    ),
+    criteria=direct_instruction.CRITERIA,
 )
 
 

@@ -13,7 +13,7 @@ import pyarrow as pa
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
-from taskcompendium.pipeline.batches import BatchClient, batch_output, batch_tool_arguments
+from taskcompendium.pipeline.batches import BatchClient, batch_output, typed_batch_records
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -101,22 +101,16 @@ def write_rewrite_audit(
 
 def rewrite_records(output: str, task_ids: Sequence[str]) -> list[RewriteRecord]:
     """Validate typed proposals and task identities after batch protocol checks."""
-    records = []
-    for response in batch_tool_arguments(output, task_ids, tool_name=TOOL_NAME):
-        task_id = response.task_id
-        if response.status != ReviewStatus.REVIEWED:
-            records.append(RewriteRecord(task_id=task_id, status=response.status, proposal=None, detail=response.detail))
-            continue
-        try:
-            assert response.arguments is not None
-            proposal = RewriteProposal.model_validate_json(json.dumps(response.arguments))
-            if proposal.task_id != task_id:
-                raise ValueError("Rewrite task ID does not match request")
-        except (KeyError, TypeError, ValueError) as error:
-            records.append(RewriteRecord(task_id=task_id, status=ReviewStatus.INVALID, proposal=None, detail=str(error)))
-            continue
-        records.append(RewriteRecord(task_id=task_id, status=ReviewStatus.REVIEWED, proposal=proposal, detail=""))
-    return records
+    return [
+        RewriteRecord(task_id=response.task_id, status=response.status, proposal=response.value, detail=response.detail)
+        for response in typed_batch_records(
+            output,
+            task_ids,
+            tool_name=TOOL_NAME,
+            validate=RewriteProposal.model_validate_json,
+            identity_error="Rewrite task ID does not match request",
+        )
+    ]
 
 
 def rewrite_candidate(task: TaskSpec, record: RewriteRecord) -> TaskSpec | None:

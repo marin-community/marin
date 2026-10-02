@@ -82,6 +82,9 @@ class SnapshotRecipeModule(Protocol):
     def recipe(self, snapshot: Path) -> DatasetRecipe: ...
 
 
+SANDBOX_TIMEOUT = 120.0
+SANDBOX_MEMORY_MB = 512
+
 ADDITIONAL_SOURCE_NAMES = (
     *NEMOTRON_SOURCES,
     "aime_1983_2024",
@@ -199,17 +202,17 @@ def source_recipe(name: str, snapshot: Path, image: str | None) -> DatasetRecipe
     elif image is None or re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-fA-F]{64}", image) is None:
         raise ValueError(f"Executable source {name} requires an immutable grader image")
     elif name == "competitive_coding":
-        recipe = competitive_coding.recipe(snapshot, image, timeout=120.0, memory_mb=512)
+        recipe = competitive_coding.recipe(snapshot, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
         converter = convert_competitive_coding
     elif name in PYTHON_SOURCES:
-        recipe = PYTHON_SOURCES[name].recipe(snapshot, image, timeout=120.0, memory_mb=512)
+        recipe = PYTHON_SOURCES[name].recipe(snapshot, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
         converter = convert_python
     elif name in atlas_code.CONFIGS:
         factory = {"code_contests": code_contests.recipe, "codenet": codenet.recipe}[name]
-        recipe = factory(snapshot, image, timeout=120.0, memory_mb=512)
+        recipe = factory(snapshot, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
         converter = NEXT_CODE_CONVERTERS[name]
     else:
-        recipe = executable_tasks.recipe(name, snapshot, image, timeout=120.0, memory_mb=512)
+        recipe = executable_tasks.recipe(name, snapshot, image, timeout=SANDBOX_TIMEOUT, memory_mb=SANDBOX_MEMORY_MB)
         converter = None
     normalize = recipe.normalize
 
