@@ -576,6 +576,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
 
 
 @pytest.mark.parametrize("sliding_window", [2, 4])
+@jax.default_matmul_precision("highest")
 def test_snowball_paged_decode_matches_full_forward(sliding_window):
     """Mixed chunked prefill/decode preserves per-request positions and June attention."""
     cfg = _tiny_config(sliding_window=sliding_window)
