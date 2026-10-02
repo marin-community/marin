@@ -8,6 +8,7 @@ attention bound for sliding windows. This backend is forward-only.
 """
 
 from functools import partial
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -15,6 +16,20 @@ from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plgpu
 
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
+
+GpuPagedAvPrecision = Literal["ieee", "bf16_3x"]
+
+
+def _attention_values(probabilities, values, precision):
+    if precision == "bf16_3x" and values.dtype == jnp.bfloat16:
+        # Reconstruct FP32 weights from three BF16 components. Values already have
+        # BF16 precision, so three tensor-core dots replace the FP32 IEEE dot.
+        high = probabilities.astype(jnp.bfloat16)
+        residual = probabilities - high.astype(jnp.float32)
+        middle = residual.astype(jnp.bfloat16)
+        low = (residual - middle.astype(jnp.float32)).astype(jnp.bfloat16)
+        return (plgpu.dot(low, values) + plgpu.dot(middle, values)) + plgpu.dot(high, values)
+    return plgpu.dot(probabilities, values.astype(jnp.float32), precision=jax.lax.Precision.HIGHEST)
 
 
 def _page_kernel(
@@ -30,6 +45,7 @@ def _page_kernel(
     page_size,
     pages_per_split,
     soft_cap,
+    av_precision,
 ):
     split = pl.program_id(0)
     head = pl.program_id(2)
@@ -60,9 +76,7 @@ def _page_kernel(
         correction = jnp.exp(maximum - next_maximum)
         probabilities = jnp.exp(logits - next_maximum[:, None])
         v = jnp.where(allowed[:, None], v, 0)
-        output = correction[:, None] * output + plgpu.dot(
-            probabilities, v.astype(jnp.float32), precision=jax.lax.Precision.HIGHEST
-        )
+        output = correction[:, None] * output + _attention_values(probabilities, v, av_precision)
         return output, correction * denominator + probabilities.sum(axis=-1), next_maximum
 
     output, denominator, maximum = jax.lax.fori_loop(first_page, last_page, body, initial)
@@ -71,7 +85,18 @@ def _page_kernel(
     max_ref[...] = maximum
 
 
-def gpu_paged_attention(q, kv_pages, token_pages, bounds, sm_scale, *, soft_cap=None, kv_splits=8, interpret=False):
+def gpu_paged_attention(
+    q,
+    kv_pages,
+    token_pages,
+    bounds,
+    sm_scale,
+    *,
+    soft_cap=None,
+    kv_splits=8,
+    av_precision: GpuPagedAvPrecision = "ieee",
+    interpret=False,
+):
     """Compute local paged attention; call within a KV-head shard_map.
 
     q is [tokens, kv_heads, groups, head_dim], token_pages is [tokens, pages],
@@ -84,6 +109,8 @@ def gpu_paged_attention(q, kv_pages, token_pages, bounds, sm_scale, *, soft_cap=
         raise ValueError("GPU paged attention needs power-of-two page_size and head_dim, both at least 16")
     if not interpret and jax.default_backend() != "gpu":
         raise ValueError("GPU paged attention requires a GPU")
+    if av_precision not in ("ieee", "bf16_3x"):
+        raise ValueError(f"Unknown AV precision: {av_precision}")
     padded_groups = max(16, pl.next_power_of_2(groups))
     q = jnp.pad(q, ((0, 0), (0, 0), (0, padded_groups - groups), (0, 0)))
     if kv_splits not in (8, 16):
@@ -120,7 +147,13 @@ def gpu_paged_attention(q, kv_pages, token_pages, bounds, sm_scale, *, soft_cap=
         body_cost, kernel_inputs_specs=(q, kv_pages, token_pages, bounds, sm_scale), kernel_outputs_specs=out_shape
     )
     output, denominator, maximum = pl.pallas_call(
-        partial(_page_kernel, page_size=page_size, pages_per_split=pages_per_split, soft_cap=soft_cap),
+        partial(
+            _page_kernel,
+            page_size=page_size,
+            pages_per_split=pages_per_split,
+            soft_cap=soft_cap,
+            av_precision=av_precision,
+        ),
         grid=(num_splits, tokens, heads),
         in_specs=(
             pl.BlockSpec((None, None, padded_groups, dim), lambda s, t, h: (t, h, 0, 0)),
