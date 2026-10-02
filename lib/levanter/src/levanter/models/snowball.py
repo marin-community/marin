@@ -997,6 +997,20 @@ def _get(state_dict: StateDict, prefix: Optional[str], name: str) -> jax.Array:
     return jnp.asarray(state_dict[_with_prefix(prefix, name)])
 
 
+def _get_expert_bank(
+    state_dict: StateDict, prefix: str | None, layer: str, projection: str, num_experts: int
+) -> jax.Array:
+    name = f"{layer}.mlp.experts.{projection}.weight"
+    if _with_prefix(prefix, name) in state_dict:
+        return _get(state_dict, prefix, name)
+    return jnp.stack(
+        [
+            _get(state_dict, prefix, f"{layer}.mlp.experts.{expert}.{projection}.weight")
+            for expert in range(num_experts)
+        ]
+    )
+
+
 def snowball_embeddings_from_state_dict(
     template: SnowballTransformer, state_dict: StateDict, prefix: Optional[str] = None
 ) -> SnowballTransformer:
@@ -1071,17 +1085,19 @@ def snowball_block_from_state_dict(
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_gate,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(
+            _T(_get_expert_bank(state_dict, prefix, p, "gate_proj", m.mlp.cfg.num_experts)), _EXPERT_GATE_UP_SPEC
+        ),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_up,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+        _reshard(_T(_get_expert_bank(state_dict, prefix, p, "up_proj", m.mlp.cfg.num_experts)), _EXPERT_GATE_UP_SPEC),
     )
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_down,
         m,
-        _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
+        _reshard(_T(_get_expert_bank(state_dict, prefix, p, "down_proj", m.mlp.cfg.num_experts)), _EXPERT_DOWN_SPEC),
     )
     m = eqx.tree_at(
         lambda t: t.shared.w_gate,
