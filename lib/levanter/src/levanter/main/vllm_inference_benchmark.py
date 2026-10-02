@@ -4,6 +4,7 @@
 """Benchmark the same token workload in a separately provisioned vLLM environment."""
 
 import argparse
+import asyncio
 import dataclasses
 import importlib.metadata
 import json
@@ -12,8 +13,9 @@ import time
 from pathlib import Path
 
 import torch
-from vllm import EngineArgs, LLMEngine, SamplingParams
+from vllm import AsyncEngineArgs, SamplingParams
 from vllm.sampling_params import RequestOutputKind
+from vllm.v1.engine.async_llm import AsyncLLM
 
 from levanter.inference.benchmark import BatchMeasurement, TokenWorkload, measure_batches
 
@@ -39,11 +41,11 @@ def main():
         raise ValueError("Disable prefix caching so repeated warmup prompts do not bypass prefill")
     engine_args["enable_prefix_caching"] = False
     setup_start = time.perf_counter()
-    engine = LLMEngine.from_engine_args(EngineArgs(**engine_args))
+    engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**engine_args))
     setup_elapsed = time.perf_counter() - setup_start
     batch_index = 0
 
-    def generate(tokens: TokenWorkload) -> BatchMeasurement:
+    async def generate(tokens: TokenWorkload) -> BatchMeasurement:
         nonlocal batch_index
         params = SamplingParams(
             temperature=0,
@@ -56,22 +58,32 @@ def main():
         first = {}
         outputs = {}
         start = time.perf_counter()
-        for request_id, prompt in zip(request_ids, tokens.prompts, strict=True):
-            engine.add_request(request_id, {"prompt_token_ids": prompt}, params)
-        while engine.has_unfinished_requests():
-            for output in engine.step():
+
+        async def request(request_id: str, prompt: list[int]) -> None:
+            async for output in engine.generate({"prompt_token_ids": prompt}, params, request_id):
                 generated = list(output.outputs[0].token_ids)
                 if generated:
-                    first.setdefault(output.request_id, time.perf_counter() - start)
+                    first.setdefault(request_id, time.perf_counter() - start)
                 if output.finished:
-                    outputs[output.request_id] = generated
+                    outputs[request_id] = generated
+
+        async with asyncio.TaskGroup() as tasks:
+            for request_id, prompt in zip(request_ids, tokens.prompts, strict=True):
+                tasks.create_task(request(request_id, prompt))
         elapsed = time.perf_counter() - start
         batch_index += 1
         return BatchMeasurement(elapsed, [first[rid] for rid in request_ids], [outputs[rid] for rid in request_ids])
 
-    result = measure_batches(
-        workload, generate, warmup_batches=args.warmup_batches, measured_batches=args.measured_batches
-    )
+    with asyncio.Runner() as runner:
+        try:
+            result = measure_batches(
+                workload,
+                lambda tokens: runner.run(generate(tokens)),
+                warmup_batches=args.warmup_batches,
+                measured_batches=args.measured_batches,
+            )
+        finally:
+            engine.shutdown()
     result = dataclasses.asdict(result)
     vllm_distribution = importlib.metadata.distribution("vllm")
     direct_url = vllm_distribution.read_text("direct_url.json")

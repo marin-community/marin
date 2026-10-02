@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import draccus
@@ -141,12 +142,11 @@ def run_native(root: Path, hardware_label: str) -> None:
     print(output.read_text(), flush=True)
 
 
-def run_vllm(root: Path, hardware_label: str) -> None:
+def run_vllm(root: Path, hardware_label: str, execution_mode: str) -> None:
     """Measure the exported checkpoint using the promoted Marin CUDA fork."""
     manifest = json.loads((root / "manifest.json").read_text())
     manifest["hardware_label"] = hardware_label
     provenance = root / "vllm-provenance.json"
-    provenance.write_text(json.dumps(manifest, indent=2) + "\n")
     engine_args = root / "vllm-engine.json"
     engine_args.write_text(
         json.dumps(
@@ -158,7 +158,7 @@ def run_vllm(root: Path, hardware_label: str) -> None:
                 "max_num_seqs": 2,
                 "max_num_batched_tokens": 256,
                 "enable_prefix_caching": False,
-                "enforce_eager": True,
+                "enforce_eager": execution_mode == "eager",
                 "gpu_memory_utilization": 0.3,
             },
             indent=2,
@@ -187,7 +187,16 @@ def run_vllm(root: Path, hardware_label: str) -> None:
     paths = [str(repo / "lib/levanter/src"), str(repo / "lib/rigging/src")]
     environment = {**os.environ, **launcher.env()}
     environment["PYTHONPATH"] = os.pathsep.join([*paths, environment.get("PYTHONPATH", "")])
-    subprocess.run(launcher.python_command(args), env=environment, check=True)
+    # Isolate Triton from cache overrides inherited from the parent JAX process.
+    with tempfile.TemporaryDirectory(prefix="matched-vllm-triton-") as cache:
+        manifest["triton_cache"] = {
+            "policy": "fresh_per_invocation",
+            "inherited_directory": environment.get("TRITON_CACHE_DIR"),
+            "effective_directory": cache,
+        }
+        environment["TRITON_CACHE_DIR"] = cache
+        provenance.write_text(json.dumps(manifest, indent=2) + "\n")
+        subprocess.run(launcher.python_command(args), env=environment, check=True)
     print(output.read_text(), flush=True)
 
 
@@ -201,13 +210,15 @@ def main() -> None:
         run = commands.add_parser(backend)
         run.add_argument("--fixture", type=Path, required=True)
         run.add_argument("--hardware-label", required=True)
+        if backend == "vllm":
+            run.add_argument("--execution-mode", choices=["eager", "cuda-graph"], default="eager")
     args = parser.parse_args()
     if args.command == "export":
         export_fixture(args.output.resolve(), args.recipe)
     elif args.command == "native":
         run_native(args.fixture.resolve(), args.hardware_label)
     else:
-        run_vllm(args.fixture.resolve(), args.hardware_label)
+        run_vllm(args.fixture.resolve(), args.hardware_label, args.execution_mode)
 
 
 if __name__ == "__main__":
