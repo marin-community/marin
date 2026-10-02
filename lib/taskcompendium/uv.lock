@@ -1990,6 +1990,7 @@ dependencies = [
 [package.optional-dependencies]
 harbor = [
     { name = "harbor" },
+    { name = "httpx" },
 ]
 
 [package.dev-dependencies]
@@ -2002,6 +2003,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
+    { name = "httpx", marker = "extra == 'harbor'", specifier = ">=0.27" },
     { name = "marin-rigging", editable = "../rigging" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tasktrove-verify", editable = "../tasktrove-verify" },

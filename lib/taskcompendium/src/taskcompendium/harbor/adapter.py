@@ -36,7 +36,7 @@ from taskcompendium.lowering import (
     read_submission_convention,
 )
 from taskcompendium.models import ConversationTrace
-from taskcompendium.submission import GradingAttempt
+from taskcompendium.submission import GradingAttempt, JsonFile, TextFile, WorkspaceReader
 
 SUBMISSION_FILE = "submission.json"
 CHAT_RESPONSE_FILE = "chat-response.json"
@@ -183,9 +183,18 @@ class SemanticVerifier(BaseVerifier):
             root = self.task.paths.task_dir
             specification = read_specification(root / SPECIFICATION_FILE)
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
-            conversation_path = self.trial_paths.agent_dir / SUBMISSION_FILE
-            conversation = ConversationTrace.model_validate_json(conversation_path.read_text())
-            result = await grade_answer(specification, convention, GradingAttempt(conversation, self.environment))
+            conversation = None
+            workspace = None
+            if isinstance(convention, (TextFile, JsonFile)):
+                if not isinstance(self.environment, WorkspaceReader):
+                    raise TypeError("File submission requires a workspace reader")
+                workspace = self.environment
+            else:
+                conversation_path = self.trial_paths.agent_dir / SUBMISSION_FILE
+                conversation = ConversationTrace.model_validate_json(conversation_path.read_text())
+            result = await grade_answer(
+                specification, convention, GradingAttempt(conversation=conversation, workspace=workspace)
+            )
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)

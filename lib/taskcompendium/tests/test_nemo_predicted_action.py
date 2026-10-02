@@ -13,7 +13,7 @@ import pytest
 
 from taskcompendium.grading import grade_answer, validate_verifier
 from taskcompendium.harbor.protocol import assistant_message
-from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, chat_agent_config, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import (
@@ -80,7 +80,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
         "convention = read_submission_convention(root / 'submission_convention.json'); "
         "conversation = chat_conversation([*chat_request(specification, convention)['messages'], "
         "json.loads(sys.argv[2])]); "
-        "result = asyncio.run(grade_answer(specification, convention, GradingAttempt(conversation, object()))); "
+        "result = asyncio.run(grade_answer(specification, convention, GradingAttempt(conversation))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -242,7 +242,9 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     result = await run_trial(
         task,
         environment_config,
-        ChatLaunch(model="model", api_base="https://example.invalid", api_key_env="NEMO_TEST_API_KEY"),
+        chat_agent_config(
+            task, ChatLaunch(model="model", api_base="https://example.invalid", api_key_env="NEMO_TEST_API_KEY")
+        ),
         tmp_path / "trials",
         "run",
     )
@@ -289,7 +291,9 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
         await run_trial(
             task,
             environment_config,
-            ChatLaunch(model="model", api_base="https://example.invalid", parallel_tool_calls=True),
+            chat_agent_config(
+                task, ChatLaunch(model="model", api_base="https://example.invalid", parallel_tool_calls=True)
+            ),
             tmp_path / "trials",
             "conflicting-launch",
         )
@@ -310,7 +314,7 @@ async def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = await grade_answer(specification, convention, GradingAttempt(conversation, object()))
+    result = await grade_answer(specification, convention, GradingAttempt(conversation))
 
     assert (result.status, result.reward) == ("graded", 1.0)
 
@@ -335,7 +339,7 @@ async def test_chat_protocol_failure_is_ungraded_and_retains_raw_response(tmp_pa
     result = await run_trial(
         task,
         environment_config,
-        ChatLaunch(model="model", api_base="https://example.invalid"),
+        chat_agent_config(task, ChatLaunch(model="model", api_base="https://example.invalid")),
         tmp_path / "trials",
         "run",
     )
@@ -352,7 +356,7 @@ async def test_imported_final_call_constraints_distinguish_invalid_submission(re
     row["responses_create_params"]["tool_choice"] = "required" if require_call else "auto"
     specification, convention = import_row(row, canonical_sha256(row))
     final = assistant_message({"role": "assistant", "content": "No action"})
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
     result = await grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("submission_failure" if require_call else "graded", 0.0)
     request = chat_request(specification, convention)
@@ -368,7 +372,7 @@ async def test_imported_parallel_actions_accept_multiple_final_calls():
     specification, convention = import_row(row, canonical_sha256(row))
     single = _action(original_call["name"], original_call["arguments"])["tool_calls"][0]
     final = assistant_message({"role": "assistant", "tool_calls": [single, {**single, "id": "second"}]})
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
     result = await grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == ("graded", 1.0)
     assert "parallel_tool_calls" not in chat_request(specification, convention)
@@ -389,6 +393,6 @@ async def test_final_action_max_two_preserves_the_submission_limit_before_scorin
             for index in range(call_count)
         )
     )
-    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
     result = await grade_answer(specification, FinalAction(id="max-two", require_call=True, max_calls=2), attempt)
     assert (result.status, result.reward) == (status, reward)
