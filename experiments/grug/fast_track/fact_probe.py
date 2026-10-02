@@ -52,6 +52,7 @@ class FactProbeInput:
     span_row: np.ndarray  # [K]
     span_start: np.ndarray  # [K]
     span_end: np.ndarray  # [K]
+    attn_queries: np.ndarray  # [Q, 2] (row, position) whose MLA attention is recorded; Q may be 0
 
     def __post_init__(self):
         if np.any(self.span_start < 1) or np.any(self.span_end <= self.span_start):
@@ -68,6 +69,7 @@ class FactProbeInput:
                 span_row=data["span_row"].astype(np.int64),
                 span_start=data["span_start"].astype(np.int64),
                 span_end=data["span_end"].astype(np.int64),
+                attn_queries=(data["attn_queries"] if "attn_queries" in data else np.zeros((0, 2))).astype(np.int64),
             )
 
     def positions(self) -> np.ndarray:
@@ -93,18 +95,20 @@ def write_fact_probe_input(path: str, probe: FactProbeInput) -> None:
             span_row=probe.span_row,
             span_start=probe.span_start,
             span_end=probe.span_end,
+            attn_queries=probe.attn_queries,
         )
 
 
 class FactProbeWriter:
     """Buffers per-step probe results and writes them in chunks of ``chunk_size`` steps per weight kind:
     ``<directory>/fact_probe_<kind>_<index>.npz`` with ``steps`` [C], ``loss`` [C, T], ``top_ids`` [C, T, TOP_K],
-    ``top_probs`` [C, T, TOP_K] (float16) and ``row_loss`` [C, N]."""
+    ``top_probs`` [C, T, TOP_K] (float16), ``row_loss`` [C, N] and, with attention queries, ``attn/<layer stat>``
+    [C, Q, H, ATTN_PROBE_KEYS] (float16)."""
 
     def __init__(self, directory: str, chunk_size: int):
         self.directory = directory.rstrip("/")
         self.chunk_size = chunk_size
-        self.buffers: dict[str, list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]] = {RAW: [], EMA: []}
+        self.buffers: dict[str, list[tuple]] = {RAW: [], EMA: []}
         self.chunks_written = {RAW: 0, EMA: 0}
 
     def add(
@@ -115,8 +119,9 @@ class FactProbeWriter:
         top_ids: np.ndarray,
         top_probs: np.ndarray,
         row_loss: np.ndarray,
+        attention: dict[str, np.ndarray],
     ) -> None:
-        self.buffers[kind].append((step, loss, top_ids, top_probs, row_loss))
+        self.buffers[kind].append((step, loss, top_ids, top_probs, row_loss, attention))
         if len(self.buffers[kind]) >= self.chunk_size:
             self.flush(kind)
 
@@ -124,7 +129,7 @@ class FactProbeWriter:
         records = self.buffers[kind]
         if not records:
             return
-        steps, loss, top_ids, top_probs, row_loss = zip(*records, strict=True)
+        steps, loss, top_ids, top_probs, row_loss, attention = zip(*records, strict=True)
         path = f"{self.directory}/{FACT_PROBE_CHUNK_FILE.format(kind=kind, index=self.chunks_written[kind])}"
         with fsspec.open(path, "wb") as f:
             np.savez(
@@ -134,6 +139,7 @@ class FactProbeWriter:
                 top_ids=np.stack(top_ids).astype(np.int32),
                 top_probs=np.stack(top_probs).astype(np.float16),
                 row_loss=np.stack(row_loss).astype(np.float32),
+                **{f"attn/{name}": np.stack([a[name] for a in attention]).astype(np.float16) for name in attention[0]},
             )
         self.chunks_written[kind] += 1
         self.buffers[kind] = []

@@ -89,6 +89,7 @@ from experiments.grug.fast_track.model import (
     HeadReplay,
     MtpMode,
     Transformer,
+    attention_probe,
     ngram_stat_table_add,
     tie_routers,
     write_ngram_stats,
@@ -1084,6 +1085,7 @@ def _fact_probe_hook(
     probe = FactProbeInput.load(trainer_cfg.fact_probe_input)
     host_example = probe.example(config.data.the_tokenizer.eos_token_id)
     weights = np.asarray(host_example.loss_weight)
+    attn_queries = tuple((int(row), int(position)) for row, position in probe.attn_queries)
     writer = FactProbeWriter(trainer_cfg.fact_probe_dir, chunk_size=100)
     if mesh.shape["expert"] > 1:
         probe_mesh = compact_grug_mesh(
@@ -1106,11 +1108,14 @@ def _fact_probe_hook(
     def score(kind: str, params: Transformer, count: int) -> None:
         # A local: the expert-collapsed copy is larger than the train-mesh params and must die before the next step.
         model = _reshard_tree_to_mesh(_router_tie_view(params, count), probe_mesh)
-        with _pgle_disabled():
-            # One process per GPU: gather the global values instead of fetching non-addressable shards.
-            loss, (span_loss, top_ids, top_probs) = multihost_utils.process_allgather(scores(model, batch), tiled=True)
+        # Inside ``attention_probe`` so the first trace (the only one) records the MLA attention of ``attn_queries``.
+        with _pgle_disabled(), attention_probe(attn_queries):
+            outputs = scores(model, batch)
+        # One process per GPU: gather the global values instead of fetching non-addressable shards.
+        loss, (span_loss, top_ids, top_probs, attention) = multihost_utils.process_allgather(outputs, tiled=True)
         if jax.process_index() == 0:
-            writer.add(kind, count, span_loss, top_ids, top_probs, row_mean_loss(np.asarray(loss), weights))
+            attention = {name: np.asarray(value) for name, value in attention.items()}
+            writer.add(kind, count, span_loss, top_ids, top_probs, row_mean_loss(np.asarray(loss), weights), attention)
 
     scored: set[int] = set()
 

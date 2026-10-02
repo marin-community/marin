@@ -14,7 +14,8 @@ import dataclasses
 import functools
 import itertools
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import NamedTuple
@@ -106,6 +107,11 @@ _MTP_KEY_SALT = 0x3F7
 # Per-layer product-key memory diagnostics, lifted out of the layer stats into ``train/attn_res/knob_mem_*``.
 # Per-layer stats with this prefix returned by a layer are exported as ``<name>_L<layer>``.
 _LAYER_KNOB_PREFIX = "attn_res_knob_"
+# Diagnostic attention probe (``attention_probe``): MLA layers report each probe query's softmax probabilities over
+# its ``ATTN_PROBE_KEYS`` most recent keys under this per-layer stat (``..._L<layer>``).
+ATTN_PROBE_STAT = f"{_LAYER_KNOB_PREFIX}attn_probe"
+ATTN_PROBE_KEYS = 2048
+_ATTENTION_PROBE_QUERIES: tuple[tuple[int, int], ...] | None = None
 _MEMORY_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}mem_"
 _KDA_ERASE_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}kda_erase_"
 # Bound on one chunk's gathered ``[tokens, rows, dim]`` memory rows in the product-key EmbeddingBag.
@@ -2031,6 +2037,10 @@ class CausalSelfAttention(eqx.Module):
         # The Inkling bias: a per-head content-dependent bias (from x) on the pre-softmax logits.
         rel_bias = self.rel_pos(x) if self.rel_pos is not None else None
         q, k = _transform_qk(q, k)
+        if _ATTENTION_PROBE_QUERIES is not None and self.cfg.mla:
+            if fox_key_bias is not None or rel_bias is not None or second_qk is not None:
+                raise ValueError("attention_probe supports plain MLA attention only")
+            stats[ATTN_PROBE_STAT] = jax.lax.stop_gradient(_probe_attention(q, k, mask, _ATTENTION_PROBE_QUERIES))
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
@@ -4790,6 +4800,43 @@ def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | N
     return cfg.logit_soft_cap
 
 
+@contextmanager
+def attention_probe(queries: tuple[tuple[int, int], ...]) -> Iterator[None]:
+    """Forwards traced inside this context make every MLA layer recompute, for each ``(row, position)`` query, its
+    softmax attention probabilities over the query's ``ATTN_PROBE_KEYS`` most recent keys (``ATTN_PROBE_STAT``). Read
+    at trace time, so a jitted function must be first traced inside it."""
+    global _ATTENTION_PROBE_QUERIES
+    previous, _ATTENTION_PROBE_QUERIES = _ATTENTION_PROBE_QUERIES, tuple(queries)
+    try:
+        yield
+    finally:
+        _ATTENTION_PROBE_QUERIES = previous
+
+
+def _probe_attention(
+    q: Float[Array, "B S H D"], k: Float[Array, "B S Hk D"], mask: AttentionMask | jax.Array, queries
+) -> Float[Array, "Q H K"]:
+    """Each query's softmax probabilities over keys ``position - ATTN_PROBE_KEYS + 1 .. position`` (zero outside its
+    document), from the kernel's inputs: scale ``1/sqrt(head_dim)``, causal, document-masked."""
+    if not isinstance(mask, AttentionMask):
+        raise ValueError("attention_probe needs an AttentionMask")
+    replicated = P(None, None, None, None)
+    q = reshard(q, replicated).astype(jnp.float32)
+    k = reshard(align_kv_heads(k, num_q_heads=q.shape[2]), replicated).astype(jnp.float32)
+    rows = jnp.asarray([row for row, _ in queries], jnp.int32)
+    positions = jnp.asarray([position for _, position in queries], jnp.int32)
+    key_positions = positions[:, None] - (ATTN_PROBE_KEYS - 1) + jnp.arange(ATTN_PROBE_KEYS)[None]
+    valid = key_positions >= 0
+    key_positions = jnp.maximum(key_positions, 0)
+    keys = k[rows[:, None], key_positions]  # [Q, K, H, D]
+    logits = jnp.einsum("qhd,qkhd->qhk", q[rows, positions], keys) / math.sqrt(q.shape[-1])
+    if mask.segment_ids is not None:
+        segments = reshard(mask.segment_ids[1], P(None, None))
+        valid &= segments[rows[:, None], key_positions] == segments[rows, positions][:, None]
+    logits = jnp.where(valid[:, None, :], logits, -jnp.inf)
+    return jax.nn.softmax(logits, axis=-1)
+
+
 def _soft_capped(logits: jax.Array, cap: float | tuple[float, float, float] | None) -> jax.Array:
     """The fused CE kernel's logit cap: ``c * tanh(z / c)``, or ``A * sigmoid((z + B) / C)`` for ``(A, B, C)``."""
     if cap is None:
@@ -6693,10 +6740,12 @@ class Transformer(eqx.Module):
         *,
         mask: AttentionMask | jax.Array | None = None,
         k: int,
-    ) -> tuple[Float[Array, " T"], Int[Array, "T k"], Float[Array, "T k"]]:
+    ) -> tuple[Float[Array, " T"], Int[Array, "T k"], Float[Array, "T k"], dict[str, Float[Array, "Q H K"]]]:
         """At each ``(row, position)``: the loss of the actual next token and the top-``k`` next-token ids and
-        probabilities, through the training head (bigram prior, bias and soft-cap included)."""
-        hidden, _ = self(token_ids, mask=mask)
+        probabilities, through the training head (bigram prior, bias and soft-cap included). The dict holds each MLA
+        layer's ``attention_probe`` probabilities when traced inside one (else empty)."""
+        hidden, metrics = self(token_ids, mask=mask)
+        attention = {name: value for name, value in metrics.items() if name.startswith(ATTN_PROBE_STAT)}
         head_in, lm_head = self._lm_head_operands(hidden, token_ids)
         head_in = reshard(head_in, P(None, None, None))
         picked = head_in[positions[:, 0], positions[:, 1]].astype(jnp.float32)
@@ -6707,7 +6756,7 @@ class Transformer(eqx.Module):
         targets = reshard(token_ids, P(None, None))[positions[:, 0], positions[:, 1] + 1]
         loss = -jnp.take_along_axis(logp, targets[:, None], axis=-1)[:, 0]
         top_logp, top_ids = jax.lax.top_k(logp, k)
-        return loss, top_ids, jnp.exp(top_logp)
+        return loss, top_ids, jnp.exp(top_logp), attention
 
     def _output_bigram_features(self, token_ids: Int[Array, "B S"], dtype: jnp.dtype) -> Float[Array, "B S R"]:
         assert self.output_bigram_u is not None
