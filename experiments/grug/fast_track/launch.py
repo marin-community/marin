@@ -56,7 +56,6 @@ from experiments.grug.fast_track.data_pipeline import (
     FastTrackDataSource,
     FastTrackDataStore,
     RegistryDataSource,
-    RepeatedDocumentDataSource,
     SampleDataSource,
     build_fast_track_data,
     store_mixture_for_step,
@@ -132,7 +131,6 @@ class SourceMode(StrEnum):
     CACHE = "cache"
     SAMPLE = "sample"
     REGISTRY = "registry"
-    REPEATED_DOCUMENT = "repeated_document"
 
 
 class Stage(StrEnum):
@@ -585,7 +583,6 @@ def _data_source_from_options(
     source_mode: SourceMode,
     sources: str | None,
     sample_prefix: str,
-    repeated_document_count: int,
 ) -> FastTrackDataSource | None:
     if source_mode is SourceMode.CACHE:
         if sources is not None:
@@ -603,13 +600,11 @@ def _data_source_from_options(
         if source_option == "all":
             return SampleDataSource(sample_prefix=sample_prefix, source_names=None)
         return SampleDataSource(sample_prefix=sample_prefix, source_names=source_names or tuple(SAMPLE_SOURCES))
-    if source_mode is SourceMode.REGISTRY:
-        if not source_names:
-            raise click.UsageError("--source-mode registry requires --sources")
-        return RegistryDataSource(source_names=source_names)
-    if sources is not None:
-        raise click.UsageError("--sources requires --source-mode sample or registry")
-    return RepeatedDocumentDataSource(count=repeated_document_count)
+    if source_mode is not SourceMode.REGISTRY:
+        raise AssertionError(f"unexpected source mode: {source_mode}")
+    if not source_names:
+        raise click.UsageError("--source-mode registry requires --sources")
+    return RegistryDataSource(source_names=source_names)
 
 
 def _submit_fast_track(
@@ -684,13 +679,6 @@ def _submit_fast_track(
 )
 @click.option("--sample-prefix", default=SAMPLE_PREFIX, show_default=True, help="Normalized sample root.")
 @click.option("--sources", help="Comma-separated source names. Use 'all' only with sample mode.")
-@click.option(
-    "--repeated-document-count",
-    type=click.IntRange(min=2),
-    default=1_000,
-    show_default=True,
-    help="Raw copy count for repeated-document mode.",
-)
 @click.option("--quality-model", default=quality_model_path, help="DataKit quality model directory.")
 @click.option(
     "--quality-model-version",
@@ -734,7 +722,6 @@ def main(
     source_mode: str,
     sample_prefix: str,
     sources: str | None,
-    repeated_document_count: int,
     quality_model: str,
     quality_model_version: str,
     weighting: str,
@@ -747,7 +734,6 @@ def main(
         source_mode=selected_source_mode,
         sources=sources,
         sample_prefix=sample_prefix,
-        repeated_document_count=repeated_document_count,
     )
     if data_source is None and selected_stage is Stage.DATAKIT:
         raise click.UsageError("--stop-after datakit requires a non-cache --source-mode")
@@ -770,7 +756,6 @@ def main(
             pool_workers=pool_workers,
             tokenizer=TokenizerSpec(V16384_TOKENIZER, tokenizer_content_hash(V16384_TOKENIZER)),
             tokenizer_vocab=V16384_VOCAB,
-            sequence_length=SEQ_LEN,
         )
         training_store = build_fast_track_data(data_config)
         if selected_stage is Stage.DATAKIT:
