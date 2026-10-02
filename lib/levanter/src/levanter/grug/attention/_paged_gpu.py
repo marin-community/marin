@@ -53,6 +53,7 @@ def _page_kernel(
     lower, upper = bounds_ref[0], bounds_ref[1]
     first_page = jnp.maximum(split * pages_per_split, lower // page_size)
     last_page = jnp.minimum((split + 1) * pages_per_split, pl.cdiv(upper, page_size))
+    last_page = jnp.where(upper > lower, last_page, first_page)
     slots = jnp.arange(page_size)
     dims = jnp.arange(q.shape[-1])
     initial = (
