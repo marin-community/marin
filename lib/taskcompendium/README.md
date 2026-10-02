@@ -113,17 +113,20 @@ Each `TaskResource` declares one mount with these fields:
 | --- | --- |
 | `path` | Normalized relative destination under each receiving role's runtime-owned workspace root. |
 | `source` | One discriminated content source from the table below. |
-| `format` | `file` installs source bytes at `path`; `tar_gz` extracts a gzip-compressed tar archive into the directory at `path`; `directory` mounts a dataset directory recursively at `path`. |
-| `executable` | Executable bit for an ordinary file. It must be false for archives and directory mounts. |
+| `format` | `copy` (default) installs literal bytes or copies a referenced file or directory at `path`; `tar_gz` explicitly extracts a gzip-compressed tar archive into the directory at `path`. |
+| `executable` | Controls an ordinary file's installed mode: `644` when false, `755` when true, regardless of its source mode. True requires a regular file; it must be false for archive extraction. Directory copies preserve member executable bits. |
 
 | Source `kind` | Fields |
 | --- | --- |
 | `inline_text` | `content`: literal UTF-8 text. |
 | `inline_binary` | `content_base64`: canonical base64 for binary bytes. |
-| `dataset_file` | `path`: normalized relative file path in `source.dataset` at `source.revision`; `sha256`: required lowercase SHA256 digest of its bytes. |
-| `dataset_directory` | `path`: normalized relative directory path in `source.dataset` at `source.revision`. Requires `format=directory`. |
+| `dataset_path` | `path`: normalized relative file or directory path in `source.dataset` at `source.revision`; `sha256`: optional lowercase SHA256 digest of regular-file bytes. |
 
-Dataset references inherit provenance from the task's `Source`. They cannot name an arbitrary URI or request a network fetch. A trusted dataset resolver must acquire exactly the immutable snapshot identified by `Source.dataset` and `Source.revision`, and check each `dataset_file` digest before materialization. A directory's identity is that dataset, immutable revision, and relative path; there is no separate directory hash. A directory mount includes the complete recursive subtree and preserves empty directories, so a task need not enumerate every source file. A resolver must reject moving or unresolved revisions before mounting content.
+Dataset references inherit provenance from the task's `Source`. They cannot name an arbitrary URI or request a network fetch. A trusted dataset resolver must acquire exactly the immutable snapshot identified by `Source.dataset` and `Source.revision`, then inspect the referenced path to determine whether it is a regular file or directory. Schema decoding performs no filesystem inspection or I/O. The path's identity is that dataset, immutable revision, and relative path. An optional `sha256` adds a regular-file byte integrity check; when supplied, a materializer must require a regular file and verify its digest. There is no directory hash.
+
+`tar_gz` requires regular archive-file bytes and explicit extraction; it never accepts a directory or extracts an archive merely because its filename has an archive extension. The resolved source type determines `copy` behavior.
+
+Copying a directory includes the complete recursive subtree, preserving empty directories and source executable bits. A task need not enumerate every source file or declare the path's type. Before writing any resource, a materializer must reject moving or unresolved revisions, unsupported or unsafe entry types, and digest mismatches.
 
 For a task whose Source names a pinned dataset snapshot, grouped resources can contain:
 
@@ -134,19 +137,19 @@ For a task whose Source names a pinned dataset snapshot, grouped resources can c
       {"path": "README.txt", "source": {"kind": "inline_text", "content": "Use the supplied project."}}
     ],
     "worker": [
-      {"path": "project", "source": {"kind": "dataset_directory", "path": "tasks/example/project"}, "format": "directory"}
+      {"path": "project", "source": {"kind": "dataset_path", "path": "tasks/example/project"}}
     ],
     "oracle": [
       {"path": "answer.txt", "source": {"kind": "inline_text", "content": "private reference"}}
     ],
     "verifier": [
-      {"path": "checks", "source": {"kind": "dataset_directory", "path": "tasks/example/checks"}, "format": "directory"}
+      {"path": "checks", "source": {"kind": "dataset_path", "path": "tasks/example/checks"}}
     ]
   }
 }
 ```
 
-Archive and directory runtimes must reject traversal, absolute paths, links, special files, and collisions, enforce byte limits, and normalize file modes to `644` or `755` according to the source executable bits. The schema represents mounts and archive extraction, but no directory resolver, archive extractor, or resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
+Archive and directory runtimes must reject traversal, absolute paths, links, special files, and collisions, enforce byte limits, and normalize member file modes to `644` or `755` according to the source executable bits. The schema represents mounts and archive extraction, but no dataset resolver, archive extractor, or resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
 
 ## What can we import?
 

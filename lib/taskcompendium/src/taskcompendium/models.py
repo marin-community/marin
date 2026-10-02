@@ -289,14 +289,14 @@ class InlineBinary(BaseModel):
         return value
 
 
-class DatasetFile(BaseModel):
-    """A file relative to the task's pinned Source dataset and revision."""
+class DatasetPath(BaseModel):
+    """A file or directory path in the task's pinned Source snapshot."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    kind: Literal["dataset_file"] = "dataset_file"
+    kind: Literal["dataset_path"] = "dataset_path"
     path: str
-    sha256: str = Field(pattern=SHA256_PATTERN)
+    sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
 
     @field_validator("path")
     @classmethod
@@ -305,47 +305,29 @@ class DatasetFile(BaseModel):
         return value
 
 
-class DatasetDirectory(BaseModel):
-    """A recursive directory subtree from the task's pinned Source snapshot."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["dataset_directory"] = "dataset_directory"
-    path: str
-
-    @field_validator("path")
-    @classmethod
-    def validate_path(cls, value: str) -> str:
-        validate_relative_file_path(value)
-        return value
-
-
-ResourceSource = Annotated[InlineText | InlineBinary | DatasetFile | DatasetDirectory, Field(discriminator="kind")]
+ResourceSource = Annotated[InlineText | InlineBinary | DatasetPath, Field(discriminator="kind")]
 
 
 class ResourceFormat(StrEnum):
-    FILE = "file"
+    COPY = "copy"
     TAR_GZ = "tar_gz"
-    DIRECTORY = "directory"
 
 
 class TaskResource(BaseModel):
-    """One file, archive extraction, or directory mount in a role's workspace."""
+    """One copied source or archive extraction in a role's workspace."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: str
     source: ResourceSource
-    format: ResourceFormat = ResourceFormat.FILE
+    format: ResourceFormat = ResourceFormat.COPY
     executable: bool = False
 
     @model_validator(mode="after")
     def validate_resource(self) -> "TaskResource":
         validate_relative_file_path(self.path)
-        if (self.format == ResourceFormat.DIRECTORY) != isinstance(self.source, DatasetDirectory):
-            raise ValueError("Directory mounts require a dataset-directory source and directory format")
-        if self.format != ResourceFormat.FILE and self.executable:
-            raise ValueError("Directory mounts cannot have a file executable flag")
+        if self.format == ResourceFormat.TAR_GZ and self.executable:
+            raise ValueError("Archive directories cannot have a file executable flag")
         return self
 
 

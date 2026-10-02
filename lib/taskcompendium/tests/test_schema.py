@@ -55,13 +55,17 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
                 {"path": "input.txt", "source": {"kind": "inline_text", "content": "café\n"}},
                 {
                     "path": "project",
-                    "source": {"kind": "dataset_file", "path": "archives/project.tar.gz", "sha256": "c" * 64},
+                    "source": {"kind": "dataset_path", "path": "archives/project.tar.gz", "sha256": "c" * 64},
                     "format": "tar_gz",
                 },
                 {
                     "path": "fixtures",
-                    "source": {"kind": "dataset_directory", "path": "projects/example/fixtures"},
-                    "format": "directory",
+                    "source": {"kind": "dataset_path", "path": "projects/example/fixtures"},
+                },
+                {
+                    "path": "run.py",
+                    "source": {"kind": "dataset_path", "path": "projects/example/run.py", "sha256": "d" * 64},
+                    "executable": True,
                 },
             ],
             "oracle": [{"path": "input.txt", "source": {"kind": "inline_binary", "content_base64": "AP8="}}],
@@ -98,9 +102,15 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
     assert persisted["resources"]["worker"][1]["format"] == "tar_gz"
     assert persisted["resources"]["worker"][2] == {
         "path": "fixtures",
-        "source": {"kind": "dataset_directory", "path": "projects/example/fixtures"},
-        "format": "directory",
+        "source": {"kind": "dataset_path", "path": "projects/example/fixtures", "sha256": None},
+        "format": "copy",
         "executable": False,
+    }
+    assert persisted["resources"]["worker"][3] == {
+        "path": "run.py",
+        "source": {"kind": "dataset_path", "path": "projects/example/run.py", "sha256": "d" * 64},
+        "format": "copy",
+        "executable": True,
     }
     assert set(persisted["resources"]) == {"all", "worker", "oracle", "verifier"}
     path.write_text(loaded.model_dump_json())
@@ -135,8 +145,7 @@ def test_complete_private_schema_round_trips_without_execution(tmp_path, specifi
                 "worker": [
                     {
                         "path": "project",
-                        "source": {"kind": "dataset_directory", "path": "tasks/example/project"},
-                        "format": "directory",
+                        "source": {"kind": "dataset_path", "path": "tasks/example/project"},
                     }
                 ]
             }
@@ -160,18 +169,15 @@ def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path
 
 
 @pytest.mark.parametrize("path", ["../private.txt", "/private.txt", "https://example.com/private.txt", "a/../b"])
-@pytest.mark.parametrize("source_kind", ["dataset_file", "dataset_directory"])
-def test_dataset_resource_references_cannot_escape_the_pinned_dataset(specification, path, source_kind):
+@pytest.mark.parametrize("digest", [None, "a" * 64])
+def test_dataset_resource_references_cannot_escape_the_pinned_dataset(specification, path, digest):
     wire = specification.model_dump()
-    source = {"kind": source_kind, "path": path}
-    if source_kind == "dataset_file":
-        source["sha256"] = "a" * 64
+    source = {"kind": "dataset_path", "path": path, "sha256": digest}
     wire["resources"] = {
         "worker": [
             {
                 "path": "input",
                 "source": source,
-                "format": "directory" if source_kind == "dataset_directory" else "file",
             }
         ]
     }
