@@ -152,6 +152,25 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
         assert budgets[0].peak_bytes == 2 * max(shard_payloads)
 
 
+def test_hf_export_preserves_scalar_and_singleton_shapes(tmp_path):
+    weights = {"scalar": jnp.asarray(0.5, dtype=jnp.bfloat16), "singleton": jnp.asarray([0.5], dtype=jnp.bfloat16)}
+    with use_test_mesh():
+        hf_export.save_hf_shards(
+            {"model.safetensors": weights},
+            lambda keys: weights,
+            str(tmp_path),
+            export_host_budget_bytes=8,
+            max_concurrent_shards=1,
+        )
+
+    with safetensors.safe_open(tmp_path / "model.safetensors", framework="np") as shard:
+        for key, value in weights.items():
+            exported = shard.get_tensor(key)
+            assert exported.shape == value.shape
+            assert exported.dtype == value.dtype
+            assert exported.tobytes() == jax.device_get(value).tobytes()
+
+
 def test_hf_shard_writer_failure_keeps_two_cpu_ranks_matched(tmp_path):
     script = textwrap.dedent(
         """

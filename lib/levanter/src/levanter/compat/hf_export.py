@@ -199,7 +199,7 @@ def save_hf_shards(
                 weights = load_shard(tuple(shapes))
                 for key in shapes:
                     replicated = jax.sharding.reshard(weights[key], P())
-                    host = np.ascontiguousarray(np.asarray(multihost_utils.process_allgather(replicated, tiled=True)))
+                    host = np.asarray(multihost_utils.process_allgather(replicated, tiled=True), order="C")
                     del replicated
                     if jax.process_index() == 0:
                         outputs = tensor_names[key] if tensor_names is not None else (key,)
