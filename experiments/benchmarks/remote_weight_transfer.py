@@ -99,8 +99,8 @@ async def run(args):
         with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
             server = InferenceServer.create(config, model, tokenizer)
         weights = {
-            name: np.zeros_like(np.asarray(value))
-            for name, value in to_state_dict(flatten_modules_for_export(model)).items()
+            name: np.full_like(np.asarray(value), (index + 1) / 128)
+            for index, (name, value) in enumerate(to_state_dict(flatten_modules_for_export(model)).items())
         }
         ready = asyncio.Event()
         http_server = ReadyServer(server.app, ready)
@@ -177,9 +177,13 @@ async def run(args):
                 assert all(not np.any(np.asarray(value)) for value in cache_arrays())
                 for leaf in jax.tree.leaves(eqx.filter(server.inference_context.model, eqx.is_array)):
                     assert leaf.devices() == {jax.devices()[0]}
+                installed_weights = to_state_dict(flatten_modules_for_export(server.inference_context.model))
+                assert installed_weights.keys() == weights.keys()
+                for name, expected in weights.items():
+                    np.testing.assert_array_equal(np.asarray(installed_weights[name]), expected)
                 new = await client.generate(request)
                 assert new["response_ids"] == [[0, 0]] and new["response_ids"] != old["response_ids"]
-                # Zero parameters give uniform logits, independent of the prior cache contents.
+                # A token-independent output projection gives uniform logits, independent of the prior cache contents.
                 np.testing.assert_allclose(new["response_logprobs"], -np.log(16), rtol=0, atol=1e-6)
                 await client.teardown()
                 report = {

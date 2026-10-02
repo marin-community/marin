@@ -97,16 +97,24 @@ def test_http_broadcast_installs_only_complete_weights_and_preserves_failed_vers
     )
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         server = InferenceServer.create(config, model, local_gpt2_marin_tokenizer)
-    with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
-        weights = {}
-        for name, value in to_state_dict(flatten_modules_for_export(model)).items():
-            array = np.asarray(value)
-            if ".experts." in name:
-                prefix, parameter = name.split(".experts.")
-                for expert, part in enumerate(array):
-                    weights[f"{prefix}.experts.{expert}.{parameter}"] = part
-            else:
-                weights[name] = array
+
+    def exported_weights(current):
+        with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
+            weights = {}
+            for name, value in to_state_dict(flatten_modules_for_export(current)).items():
+                array = np.asarray(value)
+                if ".experts." in name:
+                    prefix, parameter = name.split(".experts.")
+                    for expert, part in enumerate(array):
+                        weights[f"{prefix}.experts.{expert}.{parameter}"] = part
+                else:
+                    weights[name] = array
+        return weights
+
+    weights = {
+        name: np.full_like(value, (index + 1) / 128)
+        for index, (name, value) in enumerate(exported_weights(model).items())
+    }
     body = {
         "model": "gpt2",
         "prompt": [1, 2],
@@ -141,7 +149,7 @@ def test_http_broadcast_installs_only_complete_weights_and_preserves_failed_vers
                 return response.json()["choices"][0]
 
             def transfer(publication, name):
-                weight = np.zeros_like(weights[name])
+                weight = weights[name]
                 pending = pool.submit(
                     client.post,
                     "/update_weights",
@@ -212,6 +220,10 @@ def test_http_broadcast_installs_only_complete_weights_and_preserves_failed_vers
             assert installed.status_code == 200, installed.text
             assert installed.json()["model_version"] == 2
             assert all(not np.any(np.asarray(value)) for value in cache_arrays())
+            installed_weights = exported_weights(server.inference_context.model)
+            assert installed_weights.keys() == weights.keys()
+            for name, expected in weights.items():
+                np.testing.assert_array_equal(installed_weights[name], expected)
             new = generate()
             assert new["token_ids"] == [0, 0]
             assert new["token_ids"] != old["token_ids"]
