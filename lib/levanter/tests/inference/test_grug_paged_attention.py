@@ -147,3 +147,16 @@ def test_grug_gpu_paged_attention_decode_matches_dense(window, dtype):
     prefill = compiled(*prefill_args)
     expected_prefill = jnp.asarray(_dense_oracle(prefill_args, window, None, 0.17), dtype).astype(jnp.float32)
     np.testing.assert_allclose(prefill.astype(jnp.float32), expected_prefill, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.parametrize("kv_splits", [8, 16])
+def test_grug_gpu_split_reduction_matches_dense(kv_splits):
+    rng = np.random.default_rng(41)
+    q = jnp.asarray(rng.normal(size=(1, 2, 3, 32)), jnp.float32)
+    pages = jnp.asarray(rng.normal(size=(19, 16, 4, 32)), jnp.float32)
+    table = jnp.arange(18, -1, -1, dtype=jnp.int32)[None]
+    args = _PagedCase(q, pages, jnp.array([291]), table, jnp.array([0, 1]), jnp.array(1))
+    actual = jax.jit(partial(gpu_paged_attention, kv_splits=kv_splits, interpret=True))(
+        q, pages, table, jnp.array([[28, 291]]), 0.17
+    )
+    np.testing.assert_allclose(actual, _dense_oracle(args, 263, None, 0.17), atol=1e-5, rtol=1e-5)

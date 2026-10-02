@@ -29,6 +29,7 @@ def ragged_paged_attention(
     sliding_window: int | None = None,
     soft_cap: float | None = None,
     implementation: PagedAttentionImplementation | None = None,
+    gpu_kv_splits: int = 8,
 ) -> jax.Array:
     """Attend to cached prefixes and new tokens in a mixed prefill/decode batch.
 
@@ -42,6 +43,7 @@ def ragged_paged_attention(
         sm_scale: Query/key logit multiplier.
         sliding_window: Number of visible tokens, including the query itself.
         soft_cap: Optional tanh logit cap, applied before masking.
+        gpu_kv_splits: Maximum split-K partitions for GPU decode (8 or 16).
         implementation: TPU Pallas, opt-in GPU Pallas decode, or portable reference.
             Defaults to TPU on TPU and reference elsewhere.
 
@@ -69,6 +71,8 @@ def ragged_paged_attention(
         sliding_window=sliding_window,
         soft_cap=soft_cap,
     )
+    if implementation == "gpu_pallas":
+        fn = partial(fn, kv_splits=gpu_kv_splits)
     q_sharding = named_sharding_of(q)
     if q_sharding is not None and not q_sharding.mesh.empty:
         q_spec = tuple(q_sharding.spec) + (None,) * (q.ndim - len(q_sharding.spec))
@@ -178,7 +182,9 @@ def _tpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
     return jnp.where(valid[:, None, None, None], output, 0)
 
 
-def _gpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap):
+def _gpu_attention(
+    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, sm_scale, sliding_window, soft_cap, kv_splits
+):
     metadata = _query_metadata(q, kv_lens, cu_q_lens, num_seqs)
     upper = jnp.where(metadata.valid, metadata.position + 1, 0)
     lower = jnp.zeros_like(upper) if sliding_window is None else jnp.maximum(0, upper - sliding_window)
@@ -188,7 +194,9 @@ def _gpu_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, *, s
     decode_only = jnp.all(jnp.where(active, jnp.diff(cu_q_lens) <= 1, True))
     return jax.lax.cond(
         decode_only,
-        lambda: gpu_paged_attention(q, kv_pages, token_pages, bounds, sm_scale, soft_cap=soft_cap),
+        lambda: gpu_paged_attention(
+            q, kv_pages, token_pages, bounds, sm_scale, soft_cap=soft_cap, kv_splits=kv_splits
+        ),
         lambda: _reference_attention(
             q,
             kv_pages,

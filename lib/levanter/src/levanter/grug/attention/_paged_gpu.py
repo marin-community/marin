@@ -71,7 +71,7 @@ def _page_kernel(
     max_ref[...] = maximum
 
 
-def gpu_paged_attention(q, kv_pages, token_pages, bounds, sm_scale, *, soft_cap=None, interpret=False):
+def gpu_paged_attention(q, kv_pages, token_pages, bounds, sm_scale, *, soft_cap=None, kv_splits=8, interpret=False):
     """Compute local paged attention; call within a KV-head shard_map.
 
     q is [tokens, kv_heads, groups, head_dim], token_pages is [tokens, pages],
@@ -86,7 +86,9 @@ def gpu_paged_attention(q, kv_pages, token_pages, bounds, sm_scale, *, soft_cap=
         raise ValueError("GPU paged attention requires a GPU")
     padded_groups = max(16, pl.next_power_of_2(groups))
     q = jnp.pad(q, ((0, 0), (0, 0), (0, padded_groups - groups), (0, 0)))
-    num_splits = min(8, token_pages.shape[1])
+    if kv_splits not in (8, 16):
+        raise ValueError("GPU paged attention supports 8 or 16 KV splits")
+    num_splits = min(kv_splits, token_pages.shape[1])
     pages_per_split = pl.cdiv(token_pages.shape[1], num_splits)
     padded_pages = num_splits * pages_per_split
     token_pages = jnp.pad(token_pages, ((0, 0), (0, padded_pages - token_pages.shape[1])))
