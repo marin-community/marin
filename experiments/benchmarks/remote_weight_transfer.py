@@ -22,6 +22,7 @@ import aiohttp
 import equinox as eqx
 import haliax as hax
 import jax
+import jax.dlpack
 import jax.numpy as jnp
 import numpy as np
 import torch
@@ -88,9 +89,14 @@ async def run(args):
     )
     receiver = {"jax_device": str(jax.devices()[0]), "torch": torch.__version__, "jax": jax.__version__}
     if args.backend == "nccl":
-        assert torch.cuda.device_count() == 1 and jax.devices()[0].local_hardware_id == 0
+        assert torch.cuda.device_count() == 1
+        probe = torch.ones(1, device="cuda:0")
+        assert jax.dlpack.from_dlpack(probe, copy=False).devices() == {jax.devices()[0]}
         receiver.update(
-            uuid=str(torch.cuda.get_device_properties(0).uuid), cuda=torch.version.cuda, nccl=torch.cuda.nccl.version()
+            uuid=str(torch.cuda.get_device_properties(0).uuid),
+            jax_local_hardware_id=jax.devices()[0].local_hardware_id,
+            cuda=torch.version.cuda,
+            nccl=torch.cuda.nccl.version(),
         )
     with tempfile.TemporaryDirectory(prefix="native-weight-gate-") as scratch:
         scratch = Path(scratch)
