@@ -730,7 +730,9 @@ def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(
         del incomplete["fc.weight"]
         save_file(incomplete, tmp_path / "model.safetensors")
         with pytest.raises(ValueError, match="tensor mismatch"):
-            context.reload_draft(lambda current: current.with_trainable_checkpoint(tmp_path), expected_version=0)
+            context.reload_draft(
+                lambda current: current.with_trainable_checkpoint(tmp_path / "model.safetensors"), expected_version=0
+            )
         assert context.model_version == 0
         assert not context.pause_event.is_set()
         assert engine.draft is draft
@@ -743,7 +745,9 @@ def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(
         np.testing.assert_array_equal(unchanged.logprobs, old.logprobs)
 
         save_file(candidate, tmp_path / "model.safetensors")
-        context.reload_draft(lambda current: current.with_trainable_checkpoint(tmp_path), expected_version=0)
+        context.reload_draft(
+            lambda current: current.with_trainable_checkpoint(tmp_path / "model.safetensors"), expected_version=0
+        )
         installed = engine.draft
         assert installed is not None
         assert context.model_version == 0
@@ -782,7 +786,7 @@ def test_resident_eagle_stages_draft_overlay_and_refreshes_target_owned_weights(
         np.testing.assert_array_equal(new.logprobs, fresh.logprobs)
 
         def stage_across_target_publication(current):
-            staged = current.with_trainable_checkpoint(tmp_path)
+            staged = current.with_trainable_checkpoint(tmp_path / "model.safetensors")
             context.reload(lambda model: model, expected_version=1)
             return staged
 

@@ -258,9 +258,9 @@ class Eagle3Draft(eqx.Module):
         weights["t2d"] = jnp.zeros((self.config.vocab_size,), jnp.bool_).at[self.draft_to_target].set(True)
         return type(self).from_state_dict(self.config, weights, target_embedding=self.embedding)
 
-    def with_trainable_checkpoint(self, directory: Path) -> "Eagle3Draft":
+    def with_trainable_checkpoint(self, path: Path) -> "Eagle3Draft":
         """Stage a local single-file checkpoint emitted by the online draft trainer."""
-        return self.with_trainable_state_dict(load_safetensors_state_dict(str(directory / "model.safetensors")))
+        return self.with_trainable_state_dict(load_safetensors_state_dict(str(path)))
 
     def with_target_weights(self, embedding: jax.Array, output_projection: jax.Array) -> "Eagle3Draft":
         """Refresh target embeddings and mapped target-head rows after policy publication."""

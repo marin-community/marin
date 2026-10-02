@@ -674,7 +674,7 @@ retain ordinary decoding without draft buffers.
 Set `InferenceServerConfig.eagle3_checkpoint` to a local initial Speculators
 checkpoint when serving resident EAGLE. `InferenceServer.reload_draft(weights_path,
 expected_version=...)` stages the online trainer's complete trainable-only
-`model.safetensors` overlay. It preserves the installed draft head, target embedding,
+safetensors file at the exact local `weights_path`. It preserves the installed draft head, target embedding,
 and vocabulary maps. Missing, extra, nonfinite, or mismatched tensors fail before
 pausing generation. A successful install clears target and draft caches while
 retaining the target model version.
