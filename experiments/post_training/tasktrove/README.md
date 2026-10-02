@@ -36,7 +36,7 @@ uv run python -m experiments.post_training.tasktrove.pipeline --run
 uv run python -m experiments.post_training.tasktrove.pipeline --stage templates --run
 ```
 
-Update `PIPELINE_VERSION` for a new conversion release. Update `VERIFYIT_REVISION` and
+Update `PIPELINE_VERSION` for a new conversion release. Update `TASKTROVE_REVISION` and
 `RAW_VERSION` together when the input revision changes. The generated Dockerfiles and release
 manifest record the clean launch commit used to build the pipeline.
 

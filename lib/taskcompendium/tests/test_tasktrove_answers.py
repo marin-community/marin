@@ -25,24 +25,24 @@ from taskcompendium.verifier_registry import grade_answer
 from .harbor_replay import run_replay_trial
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
-VERIFYIT_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
+TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 
 
-VERIFYIT_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
+TASKTROVE_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
 RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"
 
 RELEASE_REVISION = "2026.09.10.9"
 
 
 def _archive(release_revision: str = RELEASE_REVISION):
-    return read_archive(FIXTURE.read_bytes(), VERIFYIT_SOURCE, VERIFYIT_PATH, RELEASE_URI, release_revision)
+    return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, release_revision)
 
 
 def test_import_preserves_release_identity():
     specification = import_task(_archive())
     assert specification.source.dataset == RELEASE_URI
     assert specification.source.revision == RELEASE_REVISION
-    assert specification.source.row == f"{VERIFYIT_SOURCE}:{VERIFYIT_PATH}"
+    assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
     later_release = import_task(_archive("2026.09.10.10"))
     assert later_release.id != specification.id
 
@@ -137,7 +137,7 @@ def test_import_accepts_plain_source_answer_line_template():
 
 def test_archive_rejects_caller_identity_that_disagrees_with_metadata():
     with pytest.raises(ValueError, match="source identity"):
-        read_archive(FIXTURE.read_bytes(), "other_source", VERIFYIT_PATH, RELEASE_URI, RELEASE_REVISION)
+        read_archive(FIXTURE.read_bytes(), "other_source", TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
 
 
 def test_archive_rejects_excessive_empty_members():
@@ -147,7 +147,7 @@ def test_archive_rejects_excessive_empty_members():
             archive.addfile(tarfile.TarInfo(f"empty-{index}"), io.BytesIO())
 
     with pytest.raises(ValueError, match="member limit"):
-        read_archive(data.getvalue(), VERIFYIT_SOURCE, VERIFYIT_PATH, RELEASE_URI, RELEASE_REVISION)
+        read_archive(data.getvalue(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
 
 
 async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):

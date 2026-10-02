@@ -48,8 +48,8 @@ from experiments.post_training.tasktrove.convert import CONVERTED_SCHEMA
 from experiments.post_training.tasktrove.converters.converted_task import ConvertStatus
 from experiments.post_training.tasktrove.dataset import (
     APPROX_SHARD_BYTES,
-    VERIFYIT_HF_ID,
-    VERIFYIT_REVISION,
+    TASKTROVE_HF_ID,
+    TASKTROVE_REVISION,
     WORKER_RESOURCES,
     load_source_verdicts,
 )
@@ -118,7 +118,7 @@ configs:
 
 """
 
-_VERIFYIT_CODE_URL = "https://github.com/marin-community/marin/tree/main/experiments/post_training/tasktrove"
+_TASKTROVE_CODE_URL = "https://github.com/marin-community/marin/tree/main/experiments/post_training/tasktrove"
 _VERIFIER_CODE_URL = "https://github.com/marin-community/marin/tree/main/lib/verifyit"
 
 
@@ -266,7 +266,7 @@ def build_manifest(filtered: pa.Table, tool_ref: str, dockerfiles: dict[str, str
             entry["converters"][converter] += 1
             entry["sources"][source] += 1
     return {
-        "tasktrove": {"hf_id": VERIFYIT_HF_ID, "revision": VERIFYIT_REVISION},
+        "tasktrove": {"hf_id": TASKTROVE_HF_ID, "revision": TASKTROVE_REVISION},
         "verify_tool_ref": tool_ref,
         "input_tasks": filtered.num_rows,
         "clean_tasks": by_status[ConvertStatus.CONVERTED],
@@ -328,7 +328,7 @@ TaskTrove Clean is a normalized release of
 
 ## How it was made
 
-The [conversion pipeline]({_VERIFYIT_CODE_URL}) applies these stages:
+The [conversion pipeline]({_TASKTROVE_CODE_URL}) applies these stages:
 
 1. Pin the upstream Hugging Face revision and inventory each source's task templates.
 2. Keep sources with recoverable task contracts and record every source decision.

@@ -143,9 +143,9 @@ def _python_command(conda_lines: tuple[str, ...]) -> tuple[str, str]:
     wrapper = "/tmp/tasktrove-python"
     body = "\n".join(conda_lines)
     heredoc = (
-        f"cat > {wrapper} << 'VERIFYIT_PYTHON_EOF'\n"
+        f"cat > {wrapper} << 'TASKTROVE_PYTHON_EOF'\n"
         f'#!/bin/bash\n{body}\nexec python "$@"\n'
-        f"VERIFYIT_PYTHON_EOF\n"
+        f"TASKTROVE_PYTHON_EOF\n"
         f"chmod +x {wrapper}\n"
     )
     return wrapper, heredoc
