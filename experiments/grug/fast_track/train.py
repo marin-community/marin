@@ -1072,13 +1072,19 @@ def _make_probe_loss(mp: jmp.Policy):
 _captured_params = jax.jit(capture_matrices)
 
 
+# Each process autotunes the probe program alone. With sharded autotuning (XLA's default for multi-process GPU jobs)
+# all 8 processes of lc1-fact20g deadlocked in the first probe compile, each waiting in
+# ConfigAssigner::AssignConfigs for autotune results the others never published.
+_FACT_PROBE_COMPILER_OPTIONS = {"xla_gpu_shard_autotuning": False}
+
+
 def _make_fact_probe_scores(
     mp: jmp.Policy, model_transform: Callable[[Transformer], Transformer], positions: np.ndarray
 ):
     """``scores(params, batch)``: per-token loss [B, S] and, at ``positions`` ([T, 2] host array, baked into the
     program as a constant so no process-equality check runs on it), the next-token loss and top-k."""
 
-    @jax.jit
+    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
     def scores(params: Transformer, batch):
         compute_params = _cast_to_compute(mp, model_transform(params))
         loss = compute_params.next_token_loss(batch.tokens, batch.loss_weight, mask=batch.attn_mask, reduction="none")
