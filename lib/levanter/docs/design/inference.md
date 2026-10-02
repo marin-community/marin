@@ -90,3 +90,99 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **Configuration**: Uses `draccus` for configuration management, consistent with other Levanter components
 - **Error Handling**: Comprehensive error reporting with proper HTTP status codes
 - **Logging**: Structured logging with configurable verbosity levels
+
+## Reproducible batch benchmarks
+
+`levanter.main.inference_benchmark` measures the native batch engine with fixed
+prompt token IDs, greedy sampling, and a fixed number of generated tokens. The
+checked-in small Snowball workload exercises both short and long attention
+layers with random weights:
+
+```bash
+RAGGED_DOT_IMPL=xla uv run --package marin-levanter python -m levanter.main.inference_benchmark \
+  --model-config lib/levanter/config/inference/snowball_tiny.json \
+  --workload lib/levanter/config/inference/tiny_workload.json \
+  --dtype bfloat16 --hardware-label v5p-8 --output /tmp/snowball-v5p.json
+```
+
+Use the hardware label for the actual provisioned slice. The driver supports a
+single host and records every visible device, mesh dimensions, engine settings,
+model configuration, seed, dtype, code revision, and selected XLA environment
+flags. `--model-axis-size` defaults to 1; the remaining local devices occupy the
+Grug data axis. Before changing tensor parallelism, check head divisibility:
+production Snowball has 20 query heads and 5 KV heads, so an 8-way head partition
+is invalid. The native driver requires Snowball's paged `decode` implementation.
+
+The output retains raw samples and hashes the complete token workload. Model
+initialization and cache setup are timed separately. The first batch includes
+compilation and execution; subsequent warmup batches are separate from measured
+batches. `compile_only` is null because the harness does not isolate compiler
+time. Persistent compiler caches can change first-batch latency.
+
+All prompts must fit in one prefill. Native first-token time is observed after
+prefill and host extraction, immediately before the first decode callback. The
+JSON records batch output throughput and mean time from first token to batch
+completion per remaining output token. This amortized measure includes host
+scheduling, synchronization, and extraction; it is not a distribution of device
+kernel or per-token latencies. Incomplete generations fail instead of producing
+a throughput number. The OpenAI server currently renders streaming events from
+a finished response, so its HTTP first event cannot measure native prefill time.
+
+### vLLM baseline
+
+Run `levanter.main.vllm_inference_benchmark` in the vLLM serving environment with
+three JSON files:
+
+- `--workload`: the identical prompt token IDs and output count used by Levanter.
+- `--engine-args`: keyword arguments for vLLM `EngineArgs`, including `model`, an
+  immutable `revision` when loading from the Hub, `dtype`, tensor parallelism,
+  context and batch capacity. Prefix caching must be disabled.
+- `--provenance`: `checkpoint` (immutable revision or weight digest), the complete
+  `model_config`, `dtype`, and `hardware_label` including accelerator count and
+  topology. These fields are supplied by the operator and retained alongside
+  actual runtime versions, visible CUDA devices, and engine arguments.
+
+```bash
+python -m levanter.main.vllm_inference_benchmark \
+  --engine-args vllm-engine.json --provenance checkpoint-manifest.json \
+  --workload lib/levanter/config/inference/tiny_workload.json \
+  --output /tmp/vllm-result.json
+```
+
+This uses the public [LLMEngine step interface](https://docs.vllm.ai/en/v0.10.2/api/vllm/engine/llm_engine.html)
+and cumulative output token IDs. First-token observations include admission and
+scheduling. If vLLM admits requests across multiple prefills, its first-token
+and decode overlap differs from Levanter's single-prefill measurement. Compare
+end-to-end throughput with that scheduling difference recorded. The adapter
+requires validation against the deployed vLLM version, including the Marin
+GrugMoE model registration. It has not been validated on a TPU vLLM runtime.
+
+### Coverage and remaining model work
+
+No accelerator measurements are checked in with this harness. Random-weight
+Snowball measurements characterize execution only. They cannot establish a
+speedup over the checkpoint-backed vLLM baseline. A matched model comparison
+also requires a Levanter checkpoint-loading driver, identical weight/config
+identities, tokenizer provenance for the token workload, dtype, prompt/output
+lengths, concurrency, accelerator count, topology, and parallelism. Compare
+output hashes or token arrays and investigate differences before reporting a
+speed ratio. Full checkpoint loading and real serving latency remain separate
+validation steps.
+
+| Target | Native Snowball benchmark | Native Hero benchmark | vLLM comparison |
+| --- | --- | --- | --- |
+| H100 | Driver available; unmeasured | Unsupported | Baseline adapter; unmeasured |
+| GB200 | Driver available; unmeasured | Unsupported | Baseline adapter; unmeasured |
+| TPU v4 | Driver available; unmeasured | Unsupported | Backend validation required |
+| TPU v5p | Driver available; unmeasured | Unsupported | Backend validation required |
+| TPU v6e | Driver available; unmeasured | Unsupported | Backend validation required |
+
+Hero's `experiments/grug/moe_hero_ep/heuristic.py:HERO_MODEL` uses 48 layers,
+width 6144, 384 experts with top-8 routing, two shared experts, latent dimension
+3072, short convolutions, and 12 local / 6 global KV heads. Snowball pins the
+June recipe with 26 layers, width 2560, 256 experts with top-4 routing, one shared
+expert, and 5 KV heads. Both export `model_type=grug_moe`; that name does not
+establish architectural equivalence. Native Hero needs a separate model adapter
+with checkpoint fidelity, convolution decode state, latent MoE projections,
+local/global KV cache layouts, and incremental routing semantics verified
+against its full-sequence forward path.

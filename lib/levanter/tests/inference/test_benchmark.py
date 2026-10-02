@@ -1,0 +1,28 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+
+from levanter.inference.benchmark import BatchMeasurement, TokenWorkload, measure_batches, summarize_batch
+
+
+def test_benchmark_excludes_compile_and_warmup_from_steady_state():
+    workload = TokenWorkload(prompts=[[1, 2], [3]], output_tokens=3)
+    # Independent recorded measurements: cold=60 seconds, warmup=10, then 2 and 3.
+    measurements = iter(
+        BatchMeasurement(elapsed=elapsed, first_token=[0.5, 1.0], tokens=[[4, 5, 6], [7, 8, 9]])
+        for elapsed in [60, 10, 2, 3]
+    )
+    result = measure_batches(workload, lambda _: next(measurements), warmup_batches=1, measured_batches=2)
+    assert result["first_batch_including_compile"]["elapsed"] == 60
+    assert result["warmup"][0]["elapsed"] == 10
+    # Six generated tokens in 2 and 3 seconds; prompts must not enter the numerator.
+    assert result["median_output_tokens_per_second"] == 2.5
+    assert result["samples"][0]["mean_time_after_first_token_per_output_token"] == 0.625
+
+
+def test_benchmark_rejects_dropped_requests_and_truncated_generations():
+    workload = TokenWorkload(prompts=[[1, 2], [3]], output_tokens=3)
+    for outputs in [[[4, 5, 6]], [[4, 5, 6], [7]]]:
+        with pytest.raises(ValueError, match="Incomplete generation"):
+            summarize_batch(workload, BatchMeasurement(elapsed=2, first_token=[1, 1], tokens=outputs))
