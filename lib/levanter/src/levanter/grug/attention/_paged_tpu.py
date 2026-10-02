@@ -3,6 +3,7 @@
 
 """Forward-only TPU paged decode with FP32 tile math and accurate softmax."""
 
+from functools import partial
 from math import log
 from typing import NamedTuple
 
@@ -43,10 +44,12 @@ def _exp_nonpositive(x):
     return jnp.where(x >= _MIN_NORMAL_LOG, polynomial * power, 0.0)
 
 
-def _decode_kernel(table_ref, bounds_ref, q_ref, cache_ref, scale_ref, output_ref, page_buffer, semaphore):
+def _decode_kernel(
+    table_ref, bounds_ref, q_ref, cache_ref, scale_ref, output_ref, page_buffers, semaphores, *, dma_buffers
+):
     token, head = pl.program_id(0), pl.program_id(1)
     lower, upper = bounds_ref[token, 0], bounds_ref[token, 1]
-    page_size = page_buffer.shape[0]
+    page_size = page_buffers.shape[1]
     query = q_ref[...].astype(jnp.float32)
     initial = _AttentionState(
         jnp.zeros(query.shape, jnp.float32),
@@ -54,13 +57,32 @@ def _decode_kernel(table_ref, bounds_ref, q_ref, cache_ref, scale_ref, output_re
         jnp.full((query.shape[0], 1), -jnp.inf, jnp.float32),
     )
 
-    def attend_page(page, state):
+    def page_copy(page):
         physical = table_ref[token, page]
-        copy = pltpu.make_async_copy(cache_ref.at[physical, :, head], page_buffer, semaphore)
-        copy.start()
+        buffer = page % dma_buffers
+        return pltpu.make_async_copy(cache_ref.at[physical, :, head], page_buffers.at[buffer], semaphores.at[buffer])
+
+    first_page = lower // page_size
+    last_page = jnp.where(upper > lower, pl.cdiv(upper, page_size), first_page)
+    if dma_buffers == 2:
+
+        @pl.when(first_page < last_page)
+        def prefetch_first():
+            page_copy(first_page).start()
+
+    def attend_page(page, state):
+        copy = page_copy(page)
+        if dma_buffers == 1:
+            copy.start()
         copy.wait()
+        if dma_buffers == 2:
+
+            @pl.when(page + 1 < last_page)
+            def prefetch_next():
+                page_copy(page + 1).start()
+
         # Converting first gives Mosaic unpacked FP32 rows for the K/V slice.
-        loaded = page_buffer[...].astype(jnp.float32)
+        loaded = page_buffers[page % dma_buffers].astype(jnp.float32)
         key, value = loaded[:, 0], loaded[:, 1]
         scores = jnp.dot(query, key.T, preferred_element_type=jnp.float32) * scale_ref[0]
         # Construct each mask in its consumer's layout. Mosaic cannot reshape
@@ -76,22 +98,23 @@ def _decode_kernel(table_ref, bounds_ref, q_ref, cache_ref, scale_ref, output_re
         denominator = state.denominator * correction + jnp.sum(weights, axis=1, keepdims=True)
         return _AttentionState(numerator, denominator, maximum)
 
-    first_page = lower // page_size
-    last_page = jnp.where(upper > lower, pl.cdiv(upper, page_size), first_page)
     state = jax.lax.fori_loop(first_page, last_page, attend_page, initial)
     output_ref[...] = (state.numerator / jnp.where(state.denominator > 0, state.denominator, 1)).astype(
         output_ref.dtype
     )
 
 
-def tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale, *, interpret=False):
+def tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale, *, dma_buffers=1, interpret=False):
     """Attend to local cache pages inside the caller's KV-head shard_map.
 
     Queries are [tokens, heads, groups, dim], cache pages are interleaved K/V,
     and bounds are inclusive lower/exclusive upper token positions. Empty
     bounds return zero. This forward-only kernel requires positive page sizes
-    divisible by 16 and head dimensions divisible by 128.
+    divisible by 16 and head dimensions divisible by 128. Two DMA buffers
+    overlap the next page load with current-page math; one preserves serial DMA.
     """
+    if dma_buffers not in (1, 2):
+        raise ValueError("TPU decode supports one or two DMA buffers")
     tokens, heads, groups, dim = q.shape
     page_size = kv_pages.shape[1]
     if page_size < TPU_PAGE_ALIGNMENT or page_size % TPU_PAGE_ALIGNMENT or dim % TPU_HEAD_ALIGNMENT:
@@ -123,14 +146,17 @@ def tpu_paged_decode(q, kv_pages, token_pages, bounds, sm_scale, *, interpret=Fa
     query_spec = pl.BlockSpec((None, None, padded_groups, dim), lambda token, head, *_: (token, head, 0, 0))
     with jax.default_matmul_precision("highest"):
         result = pl.pallas_call(
-            _decode_kernel,
+            partial(_decode_kernel, dma_buffers=dma_buffers),
             out_shape=output_shape,
             grid_spec=pltpu.PrefetchScalarGridSpec(
                 num_scalar_prefetch=2,
                 grid=(tokens, heads),
                 in_specs=(query_spec, pl.BlockSpec(memory_space=pl.ANY), pl.BlockSpec(memory_space=pltpu.VMEM)),
                 out_specs=query_spec,
-                scratch_shapes=(pltpu.VMEM((page_size, 2, dim), kv_pages.dtype), pltpu.SemaphoreType.DMA),
+                scratch_shapes=(
+                    pltpu.VMEM((dma_buffers, page_size, 2, dim), kv_pages.dtype),
+                    pltpu.SemaphoreType.DMA((dma_buffers,)),
+                ),
             ),
             compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "parallel")),
             cost_estimate=cost,
