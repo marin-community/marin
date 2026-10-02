@@ -13,7 +13,8 @@ it works on Kubernetes pod logs and GCP/TPU worker-daemon logs alike.
 """
 
 import re
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Iterable
 
 _DEFAULT_MAX_LINES = 20
 
@@ -90,7 +91,7 @@ def _is_noise(line: str) -> bool:
     return is_progress_bar_line(line) or any(pattern.search(line) for pattern in _NOISE_PATTERNS)
 
 
-def extract_failure_highlights(lines: Sequence[str], max_lines: int = _DEFAULT_MAX_LINES) -> list[str]:
+def extract_failure_highlights(lines: Iterable[str], max_lines: int = _DEFAULT_MAX_LINES) -> list[str]:
     """Return the most diagnostically useful lines from a batch of task logs.
 
     Drops known-noisy lines (tqdm bars, HTTP access logs, CPython's
@@ -98,14 +99,19 @@ def extract_failure_highlights(lines: Sequence[str], max_lines: int = _DEFAULT_M
     a barrier-timeout error commonly repeats once per straggler — then keeps
     lines matching common failure vocabulary (tracebacks, fatal errors,
     OOM/eviction/timeout signals). Falls back to the de-noised tail when no
-    line matches, so the result is never empty for a non-empty input.
+    line matches.
 
     Matching ignores a leading multi-GPU rank tag; the returned lines keep it,
     so the reader still sees which rank produced each one.
 
-    Returns at most ``max_lines`` lines, keeping the most recent ones.
+    Returns at most ``max_lines`` lines, keeping the most recent ones. A
+    nonpositive ``max_lines`` returns an empty list.
     """
-    kept: list[tuple[str, str]] = []
+    if max_lines <= 0:
+        return []
+
+    tail: deque[str] = deque(maxlen=max_lines)
+    signal_lines: deque[str] = deque(maxlen=max_lines)
     previous: str | None = None
     for line in lines:
         body = strip_rank_log_tag(line)
@@ -113,9 +119,9 @@ def extract_failure_highlights(lines: Sequence[str], max_lines: int = _DEFAULT_M
             continue
         if line == previous:
             continue
-        kept.append((line, body))
+        tail.append(line)
+        if any(pattern.search(body) for pattern in _SIGNAL_PATTERNS):
+            signal_lines.append(line)
         previous = line
 
-    signal_lines = [line for line, body in kept if any(pattern.search(body) for pattern in _SIGNAL_PATTERNS)]
-    result = signal_lines or [line for line, _ in kept]
-    return result[-max_lines:]
+    return list(signal_lines or tail)
