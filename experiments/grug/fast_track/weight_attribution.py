@@ -8,8 +8,11 @@ parameter tensor and per layer of a stacked tensor:
 
 - ``Gd``: ``G . (theta_t - theta_{t-1})``, ``G`` the gradient of log p(target) at ``theta_t``. Summed over all
   tensors it is the first-order change in log p(target) over the step; per tensor it attributes that change.
-- ``Gdp``, ``ddp``, ``dd``: ``G`` against the previous update, and the current update against the previous one
-  (``ddp < 0`` with ``|d|`` steady is a tensor stepping back and forth).
+- ``Gdp``, ``ddp``, ``ddpp``, ``dd``: ``G`` against the previous update, and the current update against the
+  previous one and the one before (a period-2 component makes ``cos(d_t, d_{t-2})`` exceed ``cos(d_t, d_{t-1})``).
+- ``vd``, ``vt``, ``gt``: the update and the parameters projected onto two directions frozen early in the window:
+  ``v``, the second difference of the updates, and ``gref``, that step's ``G``. A tensor zigzagging around a point
+  shows ``vd`` alternating in sign and ``vt`` / ``gt`` zigzagging on a flat baseline.
 - For MuonH tensors with Bi-Maxwell rails, ``G`` against the fast rail, the previous fast rail and the slow rail.
   The fresh gradient fed to the rails is ``g_t = fast_{t-1} + (fast_t - fast_{t-1}) / fast_rate``, and the
   pre-Newton-Schulz direction is ``g + m (M - g)`` with ``M = (1 - w) fast + w slow``. Without Bi-Maxwell the
@@ -33,8 +36,8 @@ from experiments.grug.fast_track.grugmuon_stacked import ScaleByMuonState
 from experiments.grug.fast_track.optimizer import MuonMomentumState
 
 ATTRIBUTION_FILE = "weight_attribution_{index:04d}.npz"
-DOT_NAMES = ("Gd", "Gdp", "ddp", "dd", "GG", "Gf", "Gfp", "Gs")
-_STACKED = re.compile(r"(^|\.)(stacked_blocks|stacked_blocks_tail|kda_blocks)\.stacked\.")
+DOT_NAMES = ("Gd", "Gdp", "ddp", "ddpp", "dd", "GG", "vd", "vt", "gt", "Gf", "Gfp", "Gs")
+_STACKED = re.compile(r"(^|\.)(stacked_blocks|kda_blocks)(_tail)?\.stacked\.")
 
 
 def leaf_name(path) -> str:

@@ -10,7 +10,13 @@ from jax.sharding import reshard
 
 import experiments.grug.fast_track.test_ngram_stat as t
 from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
-from experiments.grug.fast_track.weight_attribution import AttributionWriter, leaf_name, per_layer_sum, rails_by_name
+from experiments.grug.fast_track.weight_attribution import (
+    DOT_NAMES,
+    AttributionWriter,
+    leaf_name,
+    per_layer_sum,
+    rails_by_name,
+)
 
 
 def test_per_layer_sum_splits_stacked_tensors_by_layer():
@@ -45,7 +51,7 @@ def test_rails_are_found_by_parameter_path_after_the_switch():
 
 def test_writer_writes_chunks_with_logp(tmp_path):
     writer = AttributionWriter(str(tmp_path), chunk_size=2)
-    dots = {"a": {k: np.ones(1) for k in ("Gd", "Gdp", "ddp", "dd", "GG", "Gf", "Gfp", "Gs")}}
+    dots = {"a": {k: np.ones(1) for k in DOT_NAMES}}
     writer.add(5, -0.5, dots)
     writer.add(6, -0.4, dots)
     out = np.load(tmp_path / "weight_attribution_0000.npz")

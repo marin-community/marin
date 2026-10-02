@@ -1231,8 +1231,11 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
             and not exclude.search(leaf_name(path))
         }
 
-    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
-    def attribute(params, prev, dprev, fast, fast_prev, slow, batch):
+    @functools.partial(jax.jit, static_argnames=("set_refs",), compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
+    def attribute(params, mem, fast, slow, batch, set_refs: bool):
+        """``mem``: previous parameters, the last two updates, the previous fast rail, and the fixed reference
+        directions ``v`` (an update's second difference) and ``gref`` (G), both frozen at the ``set_refs`` call."""
+
         def logp(p):
             compute_params = _cast_to_compute(mp, p)
             loss, _, _, _ = compute_params.position_predictions(
@@ -1243,57 +1246,71 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
         value, grads = jax.value_and_grad(logp)(params)
         g_all, p_all = selected(grads), selected(params)
         dots = {}
-        new_prev, new_dprev, new_fast_prev = {}, {}, {}
+        new = {key: {} for key in mem}
         for name, theta in p_all.items():
             g = g_all[name].astype(jnp.float32)
-            d = theta.astype(jnp.float32) - prev[name]
+            theta = theta.astype(jnp.float32)
+            d = theta - mem["prev"][name]
+            dprev, dprev2 = mem["dprev"][name], mem["dprev2"][name]
+            v = d - dprev if set_refs else mem["v"][name]
+            gref = g if set_refs else mem["gref"][name]
             rec = {
                 "Gd": per_layer_sum(name, g * d),
-                "Gdp": per_layer_sum(name, g * dprev[name]),
-                "ddp": per_layer_sum(name, d * dprev[name]),
+                "Gdp": per_layer_sum(name, g * dprev),
+                "ddp": per_layer_sum(name, d * dprev),
+                "ddpp": per_layer_sum(name, d * dprev2),
                 "dd": per_layer_sum(name, d * d),
                 "GG": per_layer_sum(name, g * g),
+                "vd": per_layer_sum(name, v * d),
+                "vt": per_layer_sum(name, v * theta),
+                "gt": per_layer_sum(name, gref * theta),
             }
             zero = jnp.zeros_like(rec["Gd"])
             if name in fast:
                 rec["Gf"] = per_layer_sum(name, g * fast[name].astype(jnp.float32))
-                rec["Gfp"] = per_layer_sum(name, g * fast_prev[name])
+                rec["Gfp"] = per_layer_sum(name, g * mem["fast_prev"][name])
                 rec["Gs"] = per_layer_sum(name, g * slow[name].astype(jnp.float32)) if name in slow else zero
-                new_fast_prev[name] = fast[name].astype(jnp.float32) + 0.0
+                new["fast_prev"][name] = fast[name].astype(jnp.float32) + 0.0
             else:
                 rec["Gf"] = rec["Gfp"] = rec["Gs"] = zero
             dots[name] = rec
-            new_prev[name] = theta.astype(jnp.float32) + 0.0
-            new_dprev[name] = d
-        return value, dots, new_prev, new_dprev, new_fast_prev
+            new["prev"][name] = theta + 0.0
+            new["dprev"][name] = d
+            new["dprev2"][name] = dprev + 0.0
+            new["v"][name] = v + 0.0
+            new["gref"][name] = gref + 0.0
+        return value, dots, new
 
     @jax.jit
     def initial(params, fast):
-        p_all = selected(params)
-        prev = {n: x.astype(jnp.float32) + 0.0 for n, x in p_all.items()}
-        return (
-            prev,
-            {n: jnp.zeros_like(x) for n, x in prev.items()},
-            {n: x.astype(jnp.float32) + 0.0 for n, x in fast.items()},
-        )
+        prev = {n: x.astype(jnp.float32) + 0.0 for n, x in selected(params).items()}
+        zeros = {n: jnp.zeros_like(x) for n, x in prev.items()}
+        return {
+            "prev": prev,
+            "dprev": zeros,
+            "dprev2": {n: jnp.zeros_like(x) for n, x in prev.items()},
+            "v": {n: jnp.zeros_like(x) for n, x in prev.items()},
+            "gref": {n: jnp.zeros_like(x) for n, x in prev.items()},
+            "fast_prev": {n: x.astype(jnp.float32) + 0.0 for n, x in fast.items()},
+        }
 
-    carry: dict[str, dict] = {}
+    carry: dict = {"seen": set(), "calls": 0}
 
     def hook(info, force: bool = False) -> None:
         count = info.next_step
-        if info.model is None or not start <= count <= end or count in carry.get("seen", set()):
+        if info.model is None or not start <= count <= end or count in carry["seen"]:
             return
-        carry.setdefault("seen", set()).add(count)
+        carry["seen"].add(count)
         fast, slow = rails_by_name(info.opt_state)
         fast = {n: x for n, x in fast.items() if not exclude.search(n)}
         slow = {n: x for n, x in slow.items() if not exclude.search(n)}
         with set_mesh(mesh), _pgle_disabled():
-            if "prev" not in carry:
-                carry["prev"], carry["dprev"], carry["fast_prev"] = initial(info.model, fast)
+            if "mem" not in carry:
+                carry["mem"] = initial(info.model, fast)
                 return
-            value, dots, carry["prev"], carry["dprev"], carry["fast_prev"] = attribute(
-                info.model, carry["prev"], carry["dprev"], fast, carry["fast_prev"], slow, batch
-            )
+            carry["calls"] += 1
+            # The second update is the first with a real previous update, so its second difference is the reference.
+            value, dots, carry["mem"] = attribute(info.model, carry["mem"], fast, slow, batch, carry["calls"] == 2)
         host = multihost_utils.process_allgather({"value": value, "dots": dots}, tiled=True)
         if jax.process_index() == 0:
             writer.add(
