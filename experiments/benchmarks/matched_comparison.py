@@ -9,7 +9,7 @@ import math
 import statistics
 from pathlib import Path
 
-from levanter.inference.benchmark import TokenWorkload
+from levanter.inference.benchmark import BATCH_TIMING_BOUNDARY, TokenWorkload
 
 _EXECUTION_CONFIG_FIELDS = {"inference_attention_implementation"}
 _HF_METADATA_FIELDS = {"_name_or_path", "transformers_version", "torch_dtype", "dtype"}
@@ -72,7 +72,7 @@ def compare_reports(manifest: dict, workload: TokenWorkload, reports: dict[str, 
     for backend, report in reports.items():
         if report["schema_version"] != 2:
             raise ValueError("Rerun both runtimes to capture the separate validation batch")
-        if report["timing_boundary"] != "offline_batch_host_submission_to_host_tokens":
+        if report["timing_boundary"] != BATCH_TIMING_BOUNDARY:
             raise ValueError("Timing boundaries differ")
         actual_workload = TokenWorkload(**report["workload"])
         if actual_workload != workload or report["workload_sha256"] != workload.sha256:
