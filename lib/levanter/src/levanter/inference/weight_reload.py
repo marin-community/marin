@@ -168,7 +168,7 @@ class WeightReloadSession:
             return self.context.reload(lambda _: candidate, expected_version=publication.model_version)
 
     def reset_transport(self, reset_receiver: Callable[[], None]) -> None:
-        """Discard staged weights and reset their transport under one publication lock."""
+        """Discard staged weights and reset their transport atomically."""
         with self.lock:
             self.staged = None
             reset_receiver()

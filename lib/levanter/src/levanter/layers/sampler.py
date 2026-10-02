@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import equinox as eqx
 import jax
@@ -12,6 +12,13 @@ import haliax as hax
 from haliax import AxisSelector, NamedArray
 
 LogprobsMode = Literal["raw_logprobs", "processed_logprobs"]
+
+
+class SampledTokens(NamedTuple):
+    token_ids: NamedArray
+    logprobs: NamedArray
+    top_token_ids: NamedArray | None
+    top_logprobs: NamedArray | None
 
 
 class Sampler(eqx.Module):
@@ -74,8 +81,8 @@ class Sampler(eqx.Module):
                 Log-probabilities for each sampled token (same shape as *tokens*).
         """
 
-        tokens, log_probs, _, _ = self.sample_with_candidates(logits, temperatures, top_ps=top_ps, key=key)
-        return tokens, log_probs
+        sampled = self.sample_with_candidates(logits, temperatures, top_ps=top_ps, key=key)
+        return sampled.token_ids, sampled.logprobs
 
     def sample_with_candidates(
         self,
@@ -84,7 +91,7 @@ class Sampler(eqx.Module):
         *,
         top_ps: NamedArray | float | jnp.ndarray | None = None,
         key: PRNGKeyArray,
-    ) -> tuple[NamedArray, NamedArray, NamedArray | None, NamedArray | None]:
+    ) -> SampledTokens:
         """Sample and report chosen/top-K scores from the same forward pass.
 
         Raw scores precede temperature and nucleus filtering. Processed scores
@@ -121,10 +128,10 @@ class Sampler(eqx.Module):
         log_prob_tokens = hax.named(selected_logits - log_z, tokens.axes)
 
         if self.max_logprobs == 0:
-            return tokens, log_prob_tokens, None, None
+            return SampledTokens(tokens, log_prob_tokens, None, None)
         top_logits, top_ids = jax.lax.top_k(reporting_logits_array, self.max_logprobs)
         candidate_axes = (*tokens.axes, hax.Axis("candidate", self.max_logprobs))
-        return (
+        return SampledTokens(
             tokens,
             log_prob_tokens,
             hax.named(top_ids, candidate_axes),
