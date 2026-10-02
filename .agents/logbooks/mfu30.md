@@ -820,3 +820,23 @@ skew 0.28, exposed copies 0.64.
 - Iris resurrected two finished coordinators during the campaign (gcab-freeze, m30-conf-seq-s0; #8276 family).
 
 All campaign rack jobs are finished or cancelled; the rack poller is stopped.
+
+## M30-047 PR build (mcwitt/hero-mfu30) per-commit arms and the pipelining + PGLE test (2026-10-01)
+
+Per-commit single-rack arms (seed 0, restore step-180000, 180000 -> 180100, profiled 180021-23, code defaults,
+production wheel; median duration over 180011-180099 minus profiled; gain vs previous): base 13.899 (28.24);
+c1 13.737 +1.18; c2 13.728 +0.06; c3 13.542 +1.38; c4 13.130 +3.14 (peak 125.1); c5 13.059 +0.55; c6 12.943 +0.89
+(30.33); c7 13.087 -1.10 (carry stall 123.8 ms: lost stream draw). c4-c7 ran pre-fold SHAs. Loss: c5 and the
+value-identical pipelined arm both took a late +1e-3 excursion (from ~180052/180060); all others inside the band.
+Pipelining + PGLE (frozen file profiles built from each arm's own trace, plain, no D2H patch; all four c7-based
+programs lost the stream draw, c6 won it):
+| arm | s/step | carry stall ms | collective busy / exposed |
+| c6 `m30pr-c6-01` | 12.943 | 3.7 | 3.879 / 1.341 |
+| c7 sequential `m30pr-c7-01` | 13.087 | 123.8 | 3.472 / 1.493 |
+| c7 sequential + PGLE `m30pr-c7-pgle-01` | 12.976 | 151.6 | 4.458 / 1.740 |
+| c7 pipelined (+fwd-order bwd) `m30pr-c7pipe-trace-01` | 13.146 | 116.6 | 3.346 / 1.548 |
+| c7 pipelined + PGLE `m30pr-c7pipe-pgle-01` | 12.909 | 145.1 | 4.694 / 1.481 |
+Pipelining loses without PGLE (-0.45% vs c7) and wins with it (pipelined+PGLE beats sequential+PGLE by 0.52% at
+similar stalls; +0.26% vs c6 raw, ~+1.3% if the ~0.14 s stall is subtracted). PGLE application inferred from the
+collective-busy jump (XLA does not log it at default verbosity). Loss pipelined+PGLE vs c6: max 6.5e-4, mean -9e-5.
+Decision pending: A's q8 (#9636, explicit ties on sequential chunks without PGLE) targets the same exposure.
