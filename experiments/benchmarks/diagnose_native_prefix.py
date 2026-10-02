@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from typing import NamedTuple
 
 import equinox as eqx
 import haliax as hax
@@ -22,6 +23,12 @@ from levanter.models.snowball import SnowballConfig
 from experiments.benchmarks.snowball_trace import decode_with_trace
 
 DIAGNOSTIC_PAGE_SIZE = 128
+
+
+class PrefixBatch(NamedTuple):
+    tokens: hax.NamedArray
+    metadata: PageBatchInfo
+    positions: hax.NamedArray
 
 
 def _prefix_batch(sequences: list[list[int]], start: int, count: int):
@@ -46,7 +53,7 @@ def _prefix_batch(sequences: list[list[int]], start: int, count: int):
         new_token_dests=hax.named(jnp.asarray(destinations), "position"),
         page_size=page_size,
     )
-    return hax.named(jnp.asarray(tokens), "position"), info, hax.named(jnp.asarray(positions), "position")
+    return PrefixBatch(hax.named(jnp.asarray(tokens), "position"), info, hax.named(jnp.asarray(positions), "position"))
 
 
 def prefix_logits(model, sequences: list[list[int]], prefill_length: int) -> np.ndarray:

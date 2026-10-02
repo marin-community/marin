@@ -38,6 +38,7 @@ _MEASURED_BATCHES = 3
 _INITIALIZATION_SEED = 17
 _AUXILIARY_SEED = 23
 _FIXTURE_MAX_SEQ_LEN = 128
+_FIXTURE_MAX_BATCHED_TOKENS = 256
 _TINY_KV_CACHE_BYTES = 64 * 1024**2
 
 
@@ -181,7 +182,7 @@ def run_vllm(
                 "enable_expert_parallel": expert_axis_size > 1,
                 "max_model_len": _FIXTURE_MAX_SEQ_LEN,
                 "max_num_seqs": 2,
-                "max_num_batched_tokens": 256,
+                "max_num_batched_tokens": _FIXTURE_MAX_BATCHED_TOKENS,
                 "enable_prefix_caching": False,
                 "enforce_eager": execution_mode == "eager",
                 "kv_cache_memory_bytes": kv_cache_memory_bytes,
@@ -305,7 +306,7 @@ def run_tpu_vllm(
         "enable_expert_parallel": False,
         "max_model_len": _FIXTURE_MAX_SEQ_LEN,
         "max_num_seqs": max(2, data_parallel_size),
-        "max_num_batched_tokens": 256,
+        "max_num_batched_tokens": _FIXTURE_MAX_BATCHED_TOKENS,
         "enable_prefix_caching": False,
         "enforce_eager": True,
         "kv_cache_memory_bytes": kv_cache_memory_bytes,

@@ -359,7 +359,7 @@ These passes are numerical diagnostics and do not produce throughput claims.
 
 The native trace returns embedding, attention, routed and shared expert outputs,
 residuals, router choices and combine weights, final normalization, and actual
-logits together from one paged layer scan. It retains the serving decoder's
+logits together from the same paged layer scan. It retains the serving decoder's
 attention and expert implementations. Auxiliary JIT outputs can change fusion,
 so the report includes the maximum logit difference and top-token agreement
 against the ordinary decoder. This replaces separate identity-head probes.
@@ -367,10 +367,10 @@ against the ordinary decoder. This replaces separate identity-head probes.
 The vLLM diagnostic installs hooks after startup and records the same stages
 and actual router outputs without modifying them. It removes the hooks after
 the probe. A named worker extension saves rank-tagged captures from every local
-DP worker while preserving the concurrent request workload. The RPC uses method
+DP worker using the same concurrent requests. The RPC uses method
 names and plain results; callable serialization is not needed. Capture requires
 eager execution and TP1. Token IDs and positions align the data-parallel rows.
-Both sides record a canonical head-weight digest and a host FP64 projection
+Both sides digest the output-head weights in a common layout and record a host FP64 projection
 using the exact BF16 head weights. These are untimed diagnostic passes; the FP64
 projection does not change serving precision.
 

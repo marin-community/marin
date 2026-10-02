@@ -4,6 +4,7 @@
 """Bounded diagnostic copy of Snowball paged decode with auxiliary JIT outputs."""
 
 import dataclasses
+from typing import NamedTuple
 
 import equinox as eqx
 import haliax as hax
@@ -20,6 +21,19 @@ from levanter.models.snowball import (
     _activation_spec,
     _long_attention_schedule,
 )
+
+
+class RoutedTrace(NamedTuple):
+    output: jax.Array
+    router_logits: jax.Array
+    expert_ids: jax.Array
+    expert_weights: jax.Array
+
+
+class DecodedTrace(NamedTuple):
+    logits: hax.NamedArray
+    cache: ListCache[KvPageCache]
+    stages: dict[str, jax.Array]
 
 
 def _moe_with_trace(mlp, hidden, token_valid):
@@ -40,7 +54,7 @@ def _moe_with_trace(mlp, hidden, token_valid):
         mesh=get_abstract_mesh(),
         report_capacity_overflow=False,
     )
-    return _activation_reshard(output.reshape(hidden.shape)), logits, selected, weights
+    return RoutedTrace(_activation_reshard(output.reshape(hidden.shape)), logits, selected, weights)
 
 
 def decode_with_trace(model, input_ids, kv_cache, batch_info, pos_ids):
@@ -103,4 +117,4 @@ def decode_with_trace(model, input_ids, kv_cache, batch_info, pos_ids):
     trace["post_final_gate"] = hidden[:, 0]
     logits = jnp.einsum("bsd,dv->bsv", hidden, model.transformer.output_proj, out_sharding=_activation_spec("model"))
     caches = ListCache(tuple(KvPageCache(hax.named(pages[i], cache_axes)) for i in range(len(kv_cache))))
-    return hax.named(logits[:, 0], (input_ids.axes[0], model.Vocab)), caches, trace
+    return DecodedTrace(hax.named(logits[:, 0], (input_ids.axes[0], model.Vocab)), caches, trace)
