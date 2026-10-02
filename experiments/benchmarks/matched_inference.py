@@ -30,6 +30,9 @@ from transformers import PreTrainedTokenizerFast
 
 from experiments.benchmarks.matched_comparison import MANIFEST_FILENAME, WORKLOAD_FILENAME, compare_fixture
 
+_VLLM_ENGINE_FILENAME = "vllm-engine.json"
+_VLLM_PROVENANCE_FILENAME = "vllm-provenance.json"
+_VLLM_RESULT_FILENAME = "vllm-result.json"
 _WARMUP_BATCHES = 2
 _MEASURED_BATCHES = 3
 _INITIALIZATION_SEED = 17
@@ -165,8 +168,8 @@ def run_vllm(
         raise ValueError("compile_workers must be positive")
     manifest = json.loads((root / MANIFEST_FILENAME).read_text())
     manifest["hardware_label"] = hardware_label
-    provenance = root / "vllm-provenance.json"
-    engine_args = root / "vllm-engine.json"
+    provenance = root / _VLLM_PROVENANCE_FILENAME
+    engine_args = root / _VLLM_ENGINE_FILENAME
     engine_args.write_text(
         json.dumps(
             {
@@ -187,7 +190,7 @@ def run_vllm(
         )
         + "\n"
     )
-    output = root / "vllm-result.json"
+    output = root / _VLLM_RESULT_FILENAME
     launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
     command = launcher.python_command(_vllm_benchmark_args(root))
     if flashinfer_jit_cache_wheel is not None:
@@ -223,13 +226,13 @@ def _vllm_benchmark_args(root: Path) -> tuple[str, ...]:
         "-m",
         "levanter.main.vllm_inference_benchmark",
         "--engine-args",
-        str(root / "vllm-engine.json"),
+        str(root / _VLLM_ENGINE_FILENAME),
         "--provenance",
-        str(root / "vllm-provenance.json"),
+        str(root / _VLLM_PROVENANCE_FILENAME),
         "--workload",
         str(root / WORKLOAD_FILENAME),
         "--output",
-        str(root / "vllm-result.json"),
+        str(root / _VLLM_RESULT_FILENAME),
         "--warmup-batches",
         str(_WARMUP_BATCHES),
         "--measured-batches",
@@ -237,12 +240,14 @@ def _vllm_benchmark_args(root: Path) -> tuple[str, ...]:
     )
 
 
-def run_tpu_vllm(root: Path, hardware_label: str, data_parallel_size: int, kv_cache_memory_bytes: int) -> None:
+def run_tpu_vllm(
+    root: Path, hardware_label: str, data_parallel_size: int, kv_cache_memory_bytes: int, tpu_inference_ref: str
+) -> None:
     """Run the pinned Torchax Snowball path with single-process SPMD data parallelism."""
     manifest = json.loads((root / MANIFEST_FILENAME).read_text())
     if manifest["model_config"].get("sconv", False):
         raise ValueError("Pinned TPU runtime has no Torchax grug_moe_short_conv implementation; Hero is unsupported")
-    launcher = IsolatedTpuVllm(VLLM_FORK_REQUIREMENT, TPU_INFERENCE_FORK_REQUIREMENT)
+    launcher = IsolatedTpuVllm(VLLM_FORK_REQUIREMENT, tpu_inference_ref)
     repo = Path(__file__).resolve().parents[2]
     environment = {
         **os.environ,
@@ -290,7 +295,7 @@ def run_tpu_vllm(root: Path, hardware_label: str, data_parallel_size: int, kv_ca
             },
         }
     )
-    (root / "vllm-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (root / _VLLM_PROVENANCE_FILENAME).write_text(json.dumps(manifest, indent=2) + "\n")
     engine_args = {
         "model": str(root / "checkpoint"),
         "dtype": manifest["dtype"],
@@ -305,9 +310,9 @@ def run_tpu_vllm(root: Path, hardware_label: str, data_parallel_size: int, kv_ca
         "enforce_eager": True,
         "kv_cache_memory_bytes": kv_cache_memory_bytes,
     }
-    (root / "vllm-engine.json").write_text(json.dumps(engine_args, indent=2) + "\n")
+    (root / _VLLM_ENGINE_FILENAME).write_text(json.dumps(engine_args, indent=2) + "\n")
     subprocess.run(command, env=environment, check=True)
-    print((root / "vllm-result.json").read_text(), flush=True)
+    print((root / _VLLM_RESULT_FILENAME).read_text(), flush=True)
 
 
 def main() -> None:
@@ -333,6 +338,11 @@ def main() -> None:
     tpu.add_argument("--fixture", type=Path, required=True)
     tpu.add_argument("--hardware-label", required=True)
     tpu.add_argument("--data-parallel-size", type=int, required=True)
+    tpu.add_argument(
+        "--tpu-inference-ref",
+        default=TPU_INFERENCE_FORK_REQUIREMENT,
+        help="Explicit TPU runtime requirement for a separately validated fork revision",
+    )
     tpu.add_argument("--kv-cache-memory-bytes", type=int, default=_TINY_KV_CACHE_BYTES)
     compare = commands.add_parser("compare")
     compare.add_argument("--fixture", type=Path, required=True)
@@ -344,7 +354,13 @@ def main() -> None:
     elif args.command == "native":
         run_native(args.fixture.resolve(), args.hardware_label, args.expert_axis_size)
     elif args.command == "vllm-tpu":
-        run_tpu_vllm(args.fixture.resolve(), args.hardware_label, args.data_parallel_size, args.kv_cache_memory_bytes)
+        run_tpu_vllm(
+            args.fixture.resolve(),
+            args.hardware_label,
+            args.data_parallel_size,
+            args.kv_cache_memory_bytes,
+            args.tpu_inference_ref,
+        )
     else:
         run_vllm(
             args.fixture.resolve(),
