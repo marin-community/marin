@@ -136,7 +136,7 @@ Replace `--model-config` with `--checkpoint` to load the same Snowball HF export
 used by vLLM. Supply `--revision` for a Hub revision and `--checkpoint-identity`
 with the immutable export identity or weight digest from the baseline manifest.
 The existing HF converter reads the checkpoint's model config and tokenizer;
-Hero schema-v2 exports are rejected by the Snowball recipe check. The result
+Schema-v1 Snowball and schema-v2 Hero exports select their respective native model. The result
 records the checkpoint location, identity, requested revision, full HF config,
 and tokenizer vocabulary hash. Export identities for object-storage paths are
 operator-supplied; the driver does not rehash multi-gigabyte weight files.
@@ -200,21 +200,21 @@ validation steps.
 
 | Target | Native Snowball benchmark | Native Hero benchmark | vLLM comparison |
 | --- | --- | --- | --- |
-| H100 | Driver available; unmeasured | Unsupported | Baseline adapter; unmeasured |
-| GB200 | Driver available; unmeasured | Unsupported | Baseline adapter; unmeasured |
-| TPU v4 | Driver available; unmeasured | Unsupported | Backend validation required |
-| TPU v5p | Driver available; unmeasured | Unsupported | Backend validation required |
-| TPU v6e | Driver available; unmeasured | Unsupported | Backend validation required |
+| H100 | Driver available; unmeasured | Driver available; unmeasured | Baseline adapter; unmeasured |
+| GB200 | Driver available; unmeasured | Driver available; unmeasured | Baseline adapter; unmeasured |
+| TPU v4 | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
+| TPU v5p | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
+| TPU v6e | Driver available; unmeasured | Driver available; unmeasured | Backend validation required |
 
 Hero's `experiments/grug/moe_hero_ep/heuristic.py:HERO_MODEL` uses 48 layers,
 width 6144, 384 experts with top-8 routing, two shared experts, latent dimension
 3072, short convolutions, and 12 local / 6 global KV heads. Snowball pins the
 June recipe with 26 layers, width 2560, 256 experts with top-4 routing, one shared
 expert, and 5 KV heads. Both export `model_type=grug_moe`; that name does not
-establish architectural equivalence. Native Hero needs a separate model adapter
-with checkpoint fidelity, convolution decode state, latent MoE projections,
-local/global KV cache layouts, and incremental routing semantics verified
-against its full-sequence forward path.
+establish architectural equivalence. The native adapters preserve their distinct schema versions and architectures.
+For a random-weight Hero smoke benchmark, use `config/inference/hero_tiny.json`
+with the same token workload and driver arguments as Snowball. Synthetic results
+measure the tiny configuration, not the production Hero model.
 ## Paged short-convolution history
 
 `levanter.layers.paged_short_conv` provides the causal history needed by Hero's
