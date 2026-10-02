@@ -124,6 +124,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expert-axis", type=int, default=1, help="Mesh expert-parallel axis size.")
     parser.add_argument("--context-axis", type=int, default=1, help="Mesh context-parallel axis size.")
     parser.add_argument("--moe-impl", help="MoE backend override, e.g. scatter (default: ring).")
+    parser.add_argument(
+        "--attention",
+        choices=["reference", "xla_flash"],
+        default="reference",
+        help="Attention implementation; both run on any backend.",
+    )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")
     parser.add_argument("--log-dir", type=Path, default=Path("logs/snowball-synthetic"))
@@ -206,7 +212,9 @@ def log_throughput_summary(
 def main() -> None:
     args = parse_args()
     preset = PRESETS[args.size]
-    model_cfg = dataclasses.replace(preset.model, attention_implementation="reference", moe_implementation=args.moe_impl)
+    model_cfg = dataclasses.replace(
+        preset.model, attention_implementation=args.attention, moe_implementation=args.moe_impl
+    )
     if args.layers is not None:
         model_cfg = dataclasses.replace(model_cfg, num_layers=args.layers)
     seq_len = preset.seq_len if args.seq_len is None else args.seq_len

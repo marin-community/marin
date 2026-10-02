@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import equinox as eqx
+import haliax as hax
 import jax
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
@@ -17,6 +18,8 @@ from jax.sharding import NamedSharding, auto_axes
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
+from levanter.layers.attention_mask import AttentionMask as LevanterAttentionMask
+from levanter.layers.flash_attention import flash_attention
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
     SplashAttentionMaskSpec,
@@ -28,6 +31,7 @@ from levanter.kernels.pallas.splash_attention import (
 
 GrugAttentionImplementation = Literal[
     "reference",
+    "xla_flash",  # Levanter's pure-JAX flash attention; runs on any backend.
     "tpu_splash",
     "gpu_fa4_cute",
     "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
@@ -272,6 +276,84 @@ def _reference_attention_math(
     return ctx.astype(v.dtype)
 
 
+def _levanter_mask(
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    Batch: hax.Axis,
+    QPos: hax.Axis,
+    KPos: hax.Axis,
+) -> LevanterAttentionMask | hax.NamedArray | None:
+    """Translate a Grug mask into Levanter's mask type for ``levanter.layers.flash_attention``."""
+    if mask is None:
+        return None
+    if isinstance(mask, jax.Array):
+        if mask.dtype != jnp.bool_:
+            raise NotImplementedError("xla_flash attention supports boolean dense masks only, not additive biases")
+        if mask.ndim == 2 or (mask.ndim == 3 and mask.shape[0] == 1):
+            return hax.named(mask.reshape(mask.shape[-2:]), (QPos, KPos))
+        return hax.named(mask, (Batch, QPos, KPos))
+    if mask.sliding_window is not None and not mask.is_causal:
+        raise NotImplementedError("xla_flash attention supports a sliding window only together with causal masking")
+    out = (
+        LevanterAttentionMask.causal(sliding_window=mask.sliding_window) if mask.is_causal else LevanterAttentionMask()
+    )
+    if mask.segment_ids is not None:
+        q_seg, k_seg = mask.segment_ids
+        q_axes = (QPos,) if q_seg.ndim == 1 else (Batch, QPos)
+        k_axes = (KPos,) if k_seg.ndim == 1 else (Batch, KPos)
+        out = out.with_segment_ids(hax.named(q_seg, q_axes), hax.named(k_seg, k_axes))
+    return out
+
+
+def _xla_flash_attention_math(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    block_size: int | None,
+) -> Float[Array, "B Q Hq D"]:
+    batch, q_len, num_q_heads, head_dim = q.shape
+    k = align_kv_heads(k, num_q_heads=num_q_heads)
+    v = align_kv_heads(v, num_q_heads=num_q_heads)
+    Batch = hax.Axis("batch", batch)
+    QPos = hax.Axis("position", q_len)
+    KPos = hax.Axis("key_position", k.shape[1])
+    Heads = hax.Axis("heads", num_q_heads)
+    Key = hax.Axis("head_dim", head_dim)
+    out = flash_attention(
+        QPos,
+        KPos,
+        Key,
+        hax.named(q, (Batch, QPos, Heads, Key)),
+        hax.named(k, (Batch, KPos, Heads, Key)),
+        hax.named(v, (Batch, KPos, Heads, Key)),
+        _levanter_mask(mask, Batch, QPos, KPos),
+        inference=True,
+        block_size=block_size,
+    )
+    return out.rearrange((Batch, QPos, Heads, Key)).array.astype(v.dtype)
+
+
+def xla_flash_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    block_size: int | None = None,
+) -> Float[Array, "B Q Hq D"]:
+    """Levanter's pure-JAX flash attention (blockwise, custom backward) on Grug's raw arrays and mask.
+
+    Runs on any backend. The output sharding follows ``q``, as for ``reference_attention``.
+    """
+    out_sharding = named_sharding_of(q)
+    if out_sharding is None:
+        return _xla_flash_attention_math(q, k, v, mask, block_size=block_size)
+    # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
+    wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_xla_flash_attention_math, out_sharding=out_sharding)
+    return wrapped(q, k, v, mask, block_size=block_size)
+
+
 def reference_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -438,6 +520,8 @@ def attention(
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if implementation == "xla_flash":
+        return xla_flash_attention(q, k, v, mask)
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
@@ -468,5 +552,6 @@ __all__ = [
     "apply_rotary_embedding",
     "attention",
     "reference_attention",
+    "xla_flash_attention",
     "token_validity_from_attention_mask",
 ]

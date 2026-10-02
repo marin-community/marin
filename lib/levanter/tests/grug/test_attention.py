@@ -9,6 +9,7 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mes
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import (
+    xla_flash_attention,
     AttentionMask,
     attention,
     reference_attention,
@@ -158,3 +159,49 @@ def test_attention_rejects_unknown_implementation():
 
     with pytest.raises(ValueError, match="Unknown Grug attention implementation"):
         attention(q, k, v, AttentionMask.causal(), implementation="nope")  # type: ignore[arg-type]
+
+
+def _flash_inputs():
+    key = jax.random.key(3)
+    kq, kk, kv = jax.random.split(key, 3)
+    batch, seq, q_heads, kv_heads, head_dim = 2, 64, 4, 2, 8
+    q = jax.random.normal(kq, (batch, seq, q_heads, head_dim), jnp.float32)
+    k = jax.random.normal(kk, (batch, seq, kv_heads, head_dim), jnp.float32)
+    v = jax.random.normal(kv, (batch, seq, kv_heads, head_dim), jnp.float32)
+    # Two packed segments per row with different boundaries, under a causal sliding window.
+    seg = jnp.stack([jnp.where(jnp.arange(seq) < 40, 0, 1), jnp.where(jnp.arange(seq) < 24, 0, 1)])
+    mask = AttentionMask.causal(sliding_window=20).with_segment_ids(seg)
+    return q, k, v, mask
+
+
+def test_xla_flash_attention_matches_reference_with_window_and_segments():
+    q, k, v, mask = _flash_inputs()
+    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    actual = xla_flash_attention(q, k, v, mask, block_size=16)
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+
+
+def test_xla_flash_attention_gradients_match_reference():
+    q, k, v, mask = _flash_inputs()
+    cot = jax.random.normal(jax.random.key(9), q.shape, jnp.float32)
+
+    def loss(impl, q, k, v):
+        out = impl(q, k, v, mask)
+        return jnp.sum(out * cot)
+
+    ref_grads = jax.grad(
+        lambda q, k, v: loss(lambda *a: reference_attention(*a, logits_dtype=jnp.float32), q, k, v), argnums=(0, 1, 2)
+    )(q, k, v)
+    blk_grads = jax.grad(
+        lambda q, k, v: loss(lambda *a: xla_flash_attention(*a, block_size=16), q, k, v), argnums=(0, 1, 2)
+    )(q, k, v)
+    for ref, blk in zip(ref_grads, blk_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(blk), np.asarray(ref), rtol=1e-4, atol=1e-5)
+
+
+def test_xla_flash_attention_accepts_dense_boolean_mask():
+    q, k, v, mask = _flash_inputs()
+    dense = mask.materialize_mask(q.shape[1], k.shape[1])
+    expected = reference_attention(q, k, v, dense, logits_dtype=jnp.float32)
+    actual = xla_flash_attention(q, k, v, dense, block_size=16)
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
