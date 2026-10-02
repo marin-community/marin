@@ -17,7 +17,7 @@ from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
 from marin.evaluation.eval_measurements import task_item_count
-from marin.evaluation.eval_stats import UNGRADED_ERROR
+from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
@@ -108,6 +108,7 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
+    debug: bool = False
     # None passes no generation cap to Evalchemy, which then sizes each benchmark's responses from the
     # served context window minus its stored longest prompt (evalchemy#132).
     max_gen_toks: int | None = None
@@ -116,6 +117,7 @@ class EvalchemyRunConfig:
     batch_size: str | None = None
     seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | None] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeConfig | None = None
@@ -157,7 +159,7 @@ def _coverage_with_aggregate_counts(
     """Use a harness-reported total when custom tasks omit per-sample score fields.
 
     Some Evalchemy custom tasks compute their scores outside lm-eval and emit only provenance in
-    ``samples_*.jsonl``. The aggregate ``total_examples`` still proves how many items were scored.
+    ``samples_*.jsonl``. An aggregate item count still proves how many items were scored.
     It may replace an all-ungraded sample summary only when it exactly matches the attempted extent;
     partial or contradictory evidence remains ungraded.
     """
@@ -166,6 +168,11 @@ def _coverage_with_aggregate_counts(
         if entry.n_scored != 0 or entry.n_attempted is None or entry.errors != {UNGRADED_ERROR: entry.n_attempted}:
             continue
         task_metrics = metrics.get(task, {})
+        if (
+            SCORED_COUNT_METRIC in task_metrics
+            and task_item_count({SCORED_COUNT_METRIC: task_metrics[SCORED_COUNT_METRIC]}) != entry.n_attempted
+        ):
+            continue
         reported = task_item_count(task_metrics)
         if reported is None or reported != entry.n_attempted:
             continue
@@ -238,8 +245,10 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             ],
             "out_path": output_dir,
             "apply_chat_template": config.apply_chat_template,
+            "debug": config.debug,
             "max_gen_toks": config.max_gen_toks,
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
+            "chat_template_kwargs": dict(config.chat_template_kwargs),
             "max_eval_instances": config.max_eval_instances,
             "num_concurrent": config.num_concurrent,
             "batch_size": config.batch_size,

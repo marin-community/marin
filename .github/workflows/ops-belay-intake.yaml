@@ -8,8 +8,11 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+# The job's own GITHUB_TOKEN only checks out the repo. Comments and reactions use the marin-belay-bot account's
+# token (a classic token with only public_repo, from a Write collaborator on this repo): the main issue is locked,
+# and only users with write access can comment on a locked issue. Bot tokens (the Actions bot, GitHub Apps) cannot.
 permissions:
-  issues: write
+  contents: read
 
 concurrency:
   group: belay-intake
@@ -23,7 +26,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Transfer approved intake comments
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.BELAY_INTAKE_TOKEN }}
           # Numeric GitHub user ids of the marin-devs team (ids never change or get reused; logins can be renamed and
           # re-claimed). Changing who can approve goes through a reviewed PR. `gh api users/<login> --jq .id` finds an id.
           #   42926649 ClassicLarry, 9633 dlwh, 9847335 Helw150, 15233 hammer, 607207 rjpower,

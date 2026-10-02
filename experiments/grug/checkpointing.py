@@ -13,6 +13,7 @@ import fsspec
 import jax
 from fsspec import AbstractFileSystem
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.checkpoint_manifest import read_manifest
 from levanter.utils.jax_utils import barrier_sync_named
 
 logger = logging.getLogger(__name__)
@@ -141,12 +142,12 @@ def restore_grug_state_from_checkpoint(
 
     for candidate in candidates:
         try:
-            loaded = _load_candidate_state(
+            loaded = load_grug_checkpoint(
                 state=state if template_for_candidate is None else template_for_candidate(candidate),
                 candidate=candidate,
                 mesh=mesh,
                 allow_partial=allow_partial,
-                load_fn=_load_fn,
+                _load_fn=_load_fn,
             )
             barrier_sync_named(RESTORE_COMPLETE_BARRIER, timeout=RESTORE_BARRIER_TIMEOUT)
             if candidate not in checkpoint_search_paths:
@@ -211,16 +212,26 @@ def init_weights_only_from_checkpoint(
     return cast(GrugStateT, dataclasses.replace(state, **updates))
 
 
-def _load_candidate_state(
+def checkpoint_stores_master(candidate: str) -> bool:
+    """Read master-parameter presence from a manifest; refuse manifest-less checkpoints."""
+    manifest = read_manifest(candidate)
+    if manifest is None:
+        raise FileNotFoundError(f"{candidate} has no manifest.json, so its layout cannot be read")
+    markers = (MASTER_PARAMS_KEY, f"{LEGACY_STATE_KEY}/{MASTER_PARAMS_KEY}")
+    return any(path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers)
+
+
+def load_grug_checkpoint(
     *,
     state: StateT,
     candidate: str,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
-    load_fn: Callable[..., StateT],
+    _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
+    """Load only the exemplar's leaves from one concrete Grug checkpoint, including legacy wrapping."""
     try:
-        return load_fn(
+        return _load_fn(
             state,
             candidate,
             axis_mapping=None,
@@ -228,7 +239,7 @@ def _load_candidate_state(
             allow_partial=allow_partial,
         )
     except FileNotFoundError:
-        wrapped = load_fn(
+        wrapped = _load_fn(
             {LEGACY_STATE_KEY: state},
             candidate,
             axis_mapping=None,

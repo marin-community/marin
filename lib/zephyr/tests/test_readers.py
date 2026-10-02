@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 import zstandard as zstd
 from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr
-from zephyr.input_file import InputFileSpec
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 from zephyr.readers import (
     SUPPORTED_EXTENSIONS,
     compute_parquet_splits,
@@ -23,6 +23,7 @@ from zephyr.readers import (
     load_parquet,
     load_parquet_batch,
 )
+from zephyr.writers import write_vortex_file
 
 
 def _write_test_parquet(path: str, records: list[dict], row_group_size: int = 2) -> None:
@@ -252,3 +253,43 @@ def test_load_file_batch_honors_explicit_parquet_format(tmp_path):
     assert [row for b in load_file_batch(spec) for row in b.to_pylist()] == RECORDS
     with pytest.raises(RuntimeError, match="only supports Parquet"):
         list(load_file_batch(path))
+
+
+@pytest.mark.parametrize("file_format", ["parquet", "jsonl", "vortex"])
+def test_load_file_project_only_injected_path(tmp_path, file_format):
+    path = str(tmp_path / f"data.{file_format}")
+    records = [{"id": 1, "payload": "first"}, {"id": 2, "payload": "second"}]
+    if file_format == "parquet":
+        _write_test_parquet(path, records)
+    elif file_format == "vortex":
+        write_vortex_file(records, path)
+    else:
+        with open(path, "wb") as f:
+            for record in records:
+                f.write(msgspec.json.encode(record) + b"\n")
+
+    spec = InputFileSpec(path=path, columns=[DEFAULT_FILE_PATH_COLUMN])
+    assert list(load_file(spec, include_file_paths=True)) == [{DEFAULT_FILE_PATH_COLUMN: path}] * len(records)
+
+
+def test_load_file_batch_project_only_injected_path(tmp_path):
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS, row_group_size=3)
+
+    spec = InputFileSpec(path=path, columns=[DEFAULT_FILE_PATH_COLUMN], row_start=2, row_end=7)
+    rows = [row for batch in load_file_batch(spec, include_file_paths=True) for row in batch.to_pylist()]
+    assert rows == [{DEFAULT_FILE_PATH_COLUMN: path}] * 5
+
+
+def test_load_file_vortex_project_only_injected_path_with_range_and_filter(tmp_path):
+    path = str(tmp_path / "data.vortex")
+    write_vortex_file(RECORDS, path)
+
+    spec = InputFileSpec(
+        path=path,
+        columns=[DEFAULT_FILE_PATH_COLUMN],
+        row_start=2,
+        row_end=8,
+        filter_expr=CompareExpr(op="ge", left=ColumnExpr(name="score"), right=LiteralExpr(value=50.0)),
+    )
+    assert list(load_file(spec, include_file_paths=True)) == [{DEFAULT_FILE_PATH_COLUMN: path}] * 3
