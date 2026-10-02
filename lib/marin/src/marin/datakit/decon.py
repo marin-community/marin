@@ -222,7 +222,7 @@ def _has_alpha(ngram: str) -> bool:
     contamination, which is acceptable — a bare number run is never a leak we can
     attribute anyway.
     """
-    return any(c.isalpha() for c in ngram)
+    return any(map(str.isalpha, ngram))
 
 
 def _extract_token_ngrams(tokens: list[str], n: int, stride: int) -> Iterator[str]:
@@ -354,12 +354,16 @@ def _paragraph_overlap_matches_and_presence(
     has_ngram_features = False
     feature_count = 0
     matched: list[int] = []
-    short_exact = _short_exact_feature(paragraph, ngram.ngram_length)
     features: Iterator[str]
+    if len(paragraph) < LARGE_TEXT_STREAMING_THRESHOLD:
+        tokens = paragraph.split()
+        short_exact = _short_exact_feature_from_tokens(tokens, ngram.ngram_length)
+        features = _extract_token_ngrams(tokens, ngram.ngram_length, ngram.stride)
+    else:
+        short_exact = _short_exact_feature(paragraph, ngram.ngram_length)
+        features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
     if short_exact is not None:
         features = iter((short_exact,))
-    else:
-        features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
     for feature in features:
         has_ngram_features = short_exact is None
         hash_value = _bloom_hash(feature)
@@ -723,7 +727,7 @@ def _make_marker(
 
             def rows_for(p: str) -> Iterator[dict[str, Any]]:
                 nonlocal n_flagged
-                for record in load_file(p):
+                for record in load_file(InputFileSpec(path=p, columns=["id", text_field])):
                     text = str(record.get(text_field, "") or "")
                     max_score, matched = _document_overlap_and_matches(text, bf, ngram, drop_hashes)
                     contaminated = bool(matched)
