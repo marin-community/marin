@@ -50,13 +50,22 @@ from experiments.june_tpu_67b_a2b.moe.train import (
 logger = logging.getLogger("june_synthetic_benchmark")
 
 SNOWBALL_HIDDEN_DIM = 2560
+# The production window (half of the 4096-token training context), which Levanter's SnowballConfig pins as well.
+# The width heuristic would otherwise derive seq_len // 2 and give the medium preset a shorter window than Snowball's.
+SNOWBALL_SLIDING_WINDOW = 2048
 
 
 def snowball_model(seq_len: int) -> GrugModelConfig:
     """The June 67B-A2B production model at ``seq_len``, as the cooldown launch builds it, minus its
-    long-context YaRN temperature scaling."""
+    long-context YaRN temperature scaling and with the production sliding window at every ``seq_len``."""
     base = MoeMuonHHeuristic().build_model_config(SNOWBALL_HIDDEN_DIM, seq_len=seq_len)
-    return dataclasses.replace(base, disable_pko=True, disable_long_rope=True, use_array_stacked_blocks=True)
+    return dataclasses.replace(
+        base,
+        sliding_window=SNOWBALL_SLIDING_WINDOW,
+        disable_pko=True,
+        disable_long_rope=True,
+        use_array_stacked_blocks=True,
+    )
 
 
 def preset(size: str, seq_len: int | None) -> tuple[GrugModelConfig, str]:
