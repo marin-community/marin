@@ -38,7 +38,7 @@ def _value_jacobian(kernel, token: int, head: int, source_head: int) -> np.ndarr
     beta = jax.nn.sigmoid(jax.random.normal(keys[3], shape[:3]))
 
     def out(v):
-        return kernel(q, k, v, g, beta, {}, save_chunk_states=False)[0, token, head].sum()
+        return kernel(q, k, v, g, beta, {}, save_chunk_states=False, chunk_size=KDA_CHUNK_SIZE)[0, token, head].sum()
 
     return np.abs(np.asarray(jax.grad(out)(v)[0, :, source_head])).sum(axis=-1)
 

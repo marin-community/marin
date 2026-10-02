@@ -135,8 +135,11 @@ ROUTING_WEIGHTS_KEY = "routing_weights_per_layer"
 _KDA_GATE_RANK = 128
 KDA_MIN_LOG_DECAY = 5.0
 # 16-token chunks keep the kernels' intra-chunk rescaling exact for the -5 per-token log-decay
-# floor (cumulative >= -80 = -DEFLATE_EXP_CAP; see kda_prep_pallas).
+# floor (cumulative >= -80 = -DEFLATE_EXP_CAP; see kda_prep_pallas). The CPU (XLA) path always uses it.
 KDA_CHUNK_SIZE = 16
+# GPU chunk size (``kda_chunk_size``) -> decay tile of the fused kernels: longer chunks stay exact at the
+# -5 floor with tiles referenced at their middle token, <= 32 tokens (``kda_fused``'s ``sub_chunk_size``).
+KDA_CHUNK_TILES: dict[int, int | None] = {16: None, 32: 32, 64: 32}
 # kda_dd_rope: per-pair base angular frequencies (rad/token) are log-spaced over this range, periods ~6 to
 # ~800 tokens, spanning the KDA decay's memory lengths (|g| init in kda_dt_range).
 _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
@@ -628,6 +631,9 @@ class GrugModelConfig:
     kda_save_chunk_states: bool = False
     """Keep the fused KDA state pass's per-chunk states for backward instead of re-running the pass
     (same values; ~0.7 GB per KDA layer at d512's per-GPU batch)."""
+    kda_chunk_size: int = 16
+    """Chunk length of the fused (GPU) KDA kernels, one of ``KDA_CHUNK_TILES``: 32 runs the same exact
+    math ~20% faster per layer on H100 (fwd+bwd 4.25 vs 5.36 ms at d512) via mid-referenced decay tiles."""
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a per-token softmax
     # attention over the residual-block history (the embedding, completed block sums and the running
     # partial), scored by a learned per-sublayer pseudo-query against the RMS-normalized sources.
@@ -1303,6 +1309,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.kda_chunk_size not in KDA_CHUNK_TILES:
+            raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.attn_res_key_rank is not None:
             if not self.attn_res or not 0 < self.attn_res_key_rank < self.hidden_dim:
                 raise ValueError("attn_res_key_rank needs attn_res and 0 < attn_res_key_rank < hidden_dim")
@@ -2309,16 +2317,17 @@ def _kda_rotate_qk(q, k, rate, segment_ids):
     return rotate(q), rotate(k)
 
 
-def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool):
+def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool, chunk_size: int):
     """``_kda_kernel`` after rotating q and k by ``extras["rot_rate"]`` (``kda_dd_rope``)."""
     extras = dict(extras)
     q, k = _kda_rotate_qk(q, k, extras.pop("rot_rate"), extras.get("segment_ids"))
-    return _kda_kernel(q, k, v, g, beta, extras, save_chunk_states=save_chunk_states)
+    return _kda_kernel(q, k, v, g, beta, extras, save_chunk_states=save_chunk_states, chunk_size=chunk_size)
 
 
-def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool):
-    """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU, else the XLA
-    ``chunk_kda`` (heads-first layout). ``extras`` optionally holds ``segment_ids`` and ``erase``."""
+def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool, chunk_size: int):
+    """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU (``chunk_size`` tokens per
+    chunk, see ``KDA_CHUNK_TILES``), else the XLA ``chunk_kda`` (heads-first layout, ``KDA_CHUNK_SIZE``).
+    ``extras`` optionally holds ``segment_ids`` and ``erase``."""
     segment_ids, erase = extras.get("segment_ids"), extras.get("erase")
     if jax.default_backend() == "gpu":
         return kda_fused(
@@ -2329,7 +2338,8 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_st
             beta,
             segment_ids=segment_ids,
             erase=erase,
-            chunk_size=KDA_CHUNK_SIZE,
+            chunk_size=chunk_size,
+            sub_chunk_size=KDA_CHUNK_TILES[chunk_size],
             save_chunk_states=save_chunk_states,
         )
     q, k, v, g, beta = (jnp.swapaxes(x, 1, 2) for x in (q, k, v, g, beta))
@@ -2353,7 +2363,7 @@ def _unpair_heads(t: jax.Array) -> jax.Array:
     return t.reshape(b, s2 // 2, 2 * half, *rest)
 
 
-def _kda_kernel_paired(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool):
+def _kda_kernel_paired(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool, chunk_size: int):
     """``_kda_kernel`` with adjacent (shard-local) heads sharing one state (``KdaHeadPairing``)."""
     if q.shape[2] % 2:
         raise ValueError(f"kda_head_pairing needs an even number of heads per shard, got {q.shape[2]}")
@@ -2362,7 +2372,8 @@ def _kda_kernel_paired(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_c
         paired_extras["segment_ids"] = jnp.repeat(extras["segment_ids"], 2, axis=1)
     if "erase" in extras:
         paired_extras["erase"] = _pair_heads(extras["erase"])
-    out = _kda_kernel(*(_pair_heads(t) for t in (q, k, v, g, beta)), paired_extras, save_chunk_states=save_chunk_states)
+    paired = (_pair_heads(t) for t in (q, k, v, g, beta))
+    out = _kda_kernel(*paired, paired_extras, save_chunk_states=save_chunk_states, chunk_size=chunk_size)
     return _unpair_heads(out)
 
 
@@ -2626,7 +2637,7 @@ class KimiDeltaAttention(eqx.Module):
             kernel_fn = _kda_kernel_paired
         else:
             kernel_fn = _kda_kernel
-        run = functools.partial(kernel_fn, save_chunk_states=cfg.kda_save_chunk_states)
+        run = functools.partial(kernel_fn, save_chunk_states=cfg.kda_save_chunk_states, chunk_size=cfg.kda_chunk_size)
         args = (q, k, v, g, beta, extras)
         in_specs = (spec4,) * 4 + (spec3, extra_specs)
         # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.

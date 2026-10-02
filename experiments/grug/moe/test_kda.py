@@ -288,11 +288,13 @@ def test_kda_fused_saved_chunk_states_give_identical_gradients():
         np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
 
 
+@pytest.mark.parametrize("sub_chunk_size", [None, 32])
 @pytest.mark.parametrize("packed", [False, True])
-def test_kda_fused_gate_and_grouped_kv_match_unfused(packed):
+def test_kda_fused_gate_and_grouped_kv_match_unfused(packed, sub_chunk_size):
     """The on-chip gate (g = rate * softplus(a + bias)) and in-place grouped-query k/v give
     the same values and gradients -- including for rate, bias and the kv heads -- as
-    computing g and expanding k/v in JAX first, with and without packed documents."""
+    computing g and expanding k/v in JAX first, with and without packed documents, on the
+    legacy and the mid-referenced (``sub_chunk_size``) kernels."""
 
     rng = np.random.RandomState(16)
     b, length, heads, kv_heads, d = 2, 64, 4, 2, 16
@@ -305,7 +307,7 @@ def test_kda_fused_gate_and_grouped_kv_match_unfused(packed):
     bias = jnp.asarray(rng.randn(heads, d) * 0.5, jnp.float32)
     w = jnp.asarray(rng.randn(b, length, heads, d), jnp.float32)
     seg = jnp.asarray(np.repeat(np.arange(4), [7, 30, 1, 26])[None].repeat(b, 0), jnp.int32) if packed else None
-    kw = dict(chunk_size=32, matmul_dtype=jnp.float32, interpret=True, segment_ids=seg)
+    kw = dict(chunk_size=32, matmul_dtype=jnp.float32, interpret=True, segment_ids=seg, sub_chunk_size=sub_chunk_size)
 
     def fused(q, k, v, a, beta, rate, bias):
         return jnp.sum(w * kda_fused(q, k, v, a, beta, gate=(rate, bias), **kw))
@@ -587,3 +589,84 @@ def test_kda_fused_erase_gate_with_packed_documents(grouped):
     want = jax.grad(lambda *a: jnp.sum(w * reference(*a)), argnums=argnums)(*args)
     for x, y in zip(got, want, strict=True):
         np.testing.assert_allclose(np.asarray(x), np.asarray(y), rtol=2e-4, atol=2e-4)
+
+
+def _floor_decay_inputs(length, heads, d, *, seed):
+    """Model-layout inputs with the per-channel decay spread of a trained K3 gate near its -5 floor:
+    half the channels barely decay, a quarter at -0.5 and a quarter at -4.9 per token (jittered)."""
+    rng = np.random.RandomState(seed)
+    q, k, v = (jnp.asarray(rng.randn(1, length, heads, d), jnp.float32) for _ in range(3))
+    rates = np.concatenate([np.full(d // 2, -0.02), np.full(d // 4, -0.5), np.full(d // 4, -4.9)])
+    g = jnp.asarray(np.maximum(rates * rng.uniform(0.8, 1.2, (1, length, heads, d)), -4.999), jnp.float32)
+    beta = jnp.asarray(rng.uniform(0.1, 0.9, (1, length, heads)), jnp.float32)
+    erase = jnp.asarray(2.0 * rng.rand(1, length, heads, d), jnp.float32)
+    w = jnp.asarray(rng.randn(1, length, heads, d), jnp.float32)
+    return (q, k, v, g, beta, erase), w
+
+
+# Packed layout with a document longer than a 64-token chunk, documents starting mid-tile and one
+# that ends before a tile's middle token (the carried-document reference of _sub_tile).
+_FLOOR_DOCS = [37, 100, 3, 52]
+
+
+@pytest.mark.parametrize(("chunk_size", "sub_chunk_size", "d"), [(32, 32, 32), (64, 32, 32), (64, 16, 64)])
+@pytest.mark.parametrize("packed", [False, True])
+def test_mid_referenced_long_chunks_are_exact_at_the_decay_floor(chunk_size, sub_chunk_size, d, packed):
+    """With the -5 per-token log-decay floor, the legacy chunk-start reference under-counts
+    exp(G_r - G_i) past 16 tokens; mid-referenced tiles of <= 32 tokens keep 32- and 64-token
+    chunks exact: values and the gradients of q, k, v, g, beta and the erase gate match the
+    recurrence run per document."""
+    length, heads = sum(_FLOOR_DOCS), 2
+    args, w = _floor_decay_inputs(length, heads, d, seed=chunk_size + d)
+    seg = jnp.asarray(np.repeat(np.arange(len(_FLOOR_DOCS)), _FLOOR_DOCS)[None], jnp.int32) if packed else None
+    docs = _FLOOR_DOCS if packed else [length]
+
+    def fused(sub, q, k, v, g, beta, erase):
+        return kda_fused(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            erase=erase,
+            segment_ids=seg,
+            chunk_size=chunk_size,
+            sub_chunk_size=sub,
+            matmul_dtype=jnp.float32,
+            interpret=True,
+        )
+
+    def reference(q, k, v, g, beta, erase):
+        heads_first = [jnp.swapaxes(x, 1, 2) for x in (q, k, v, g, beta, erase)]
+
+        def run(q, k, v, g, beta, erase):
+            return recurrent_kda(q, k, v, g, beta, erase=erase)[0]
+
+        return jnp.swapaxes(_per_document(run, heads_first, docs), 1, 2)
+
+    want = reference(*args)
+    scale = float(jnp.max(jnp.abs(want)))
+    legacy_err = float(jnp.max(jnp.abs(fused(None, *args) - want)))
+    assert legacy_err > 0.05 * scale  # the decay spread really defeats the chunk-start reference
+    np.testing.assert_allclose(np.asarray(fused(sub_chunk_size, *args)), np.asarray(want), atol=1e-5 * scale)
+
+    argnums = tuple(range(1, 7))
+    got = jax.grad(lambda *a: jnp.sum(w * fused(*a)), argnums=argnums)(sub_chunk_size, *args)
+    ref = jax.grad(lambda *a: jnp.sum(w * reference(*a[1:])), argnums=argnums)(None, *args)
+    for x, y in zip(got, ref, strict=True):
+        np.testing.assert_allclose(np.asarray(x), np.asarray(y), atol=1e-5 * float(jnp.max(jnp.abs(y))))
+
+
+def test_mid_referenced_chunks_with_bf16_matmuls_track_the_recurrence():
+    """The default bf16 GEMM operands on the mid-referenced 32-token chunks stay within bf16
+    accuracy of the recurrence at the decay floor, like 16-token chunks."""
+    length, heads, d = sum(_FLOOR_DOCS), 2, 32
+    args, _ = _floor_decay_inputs(length, heads, d, seed=3)
+    seg = jnp.asarray(np.repeat(np.arange(len(_FLOOR_DOCS)), _FLOOR_DOCS)[None], jnp.int32)
+    out = kda_fused(*args[:5], erase=args[5], segment_ids=seg, chunk_size=32, sub_chunk_size=32, interpret=True)
+
+    def run(q, k, v, g, beta, erase):
+        return recurrent_kda(q, k, v, g, beta, erase=erase)[0]
+
+    want = jnp.swapaxes(_per_document(run, [jnp.swapaxes(x, 1, 2) for x in args], _FLOOR_DOCS), 1, 2)
+    np.testing.assert_allclose(np.asarray(out), np.asarray(want), atol=1e-2 * float(jnp.max(jnp.abs(want))))

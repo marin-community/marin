@@ -60,6 +60,7 @@ class ChunkPrep(NamedTuple):
 
 class PrepConfig(NamedTuple):
     chunk_size: int
+    sub_chunk: int  # rows per mid-referenced decay tile (_sub_tile); 0: one reference at the chunk start
     mm_dtype: str
     l2norm: bool
     num_warps: int
@@ -246,6 +247,201 @@ def _prep_fwd_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm,
     qi_ref[...] = qi.astype(qi_ref.dtype)
 
 
+class _SubTile(NamedTuple):
+    """Row sub-tile of a chunk with its decay reference (see ``_sub_tiles``)."""
+
+    col: jax.Array  # (C, w) exp(min(R - G, cap)): every token's column factor
+    row: jax.Array  # (sub, w) exp(min(G - R, cap)) on the sub-tile's own rows
+
+
+def _row_point(x, t: int):
+    """Row ``t`` of a (C, w) value as (w,) (Triton has no value slicing)."""
+    return jnp.sum(jnp.where(_iota2_rows(*x.shape) == t, x, 0.0), axis=0)
+
+
+def _idx_rows(starts_ref, c: int, sub: int):
+    """The within-chunk document index (``_doc_index``) of each row sub-tile, ``(sub,)`` each."""
+    if starts_ref is None:
+        return None
+    starts = starts_ref[...].astype(f32)
+    out = []
+    for j in range(c // sub):
+        before = jnp.sum(jnp.where(lax.broadcasted_iota(jnp.int32, (c,), 0) < j * sub, starts, 0.0))
+        out.append(before + jnp.cumsum(starts_ref[pl.ds(j * sub, sub)].astype(f32), axis=0))
+    return out
+
+
+def _sub_tile(gcum, g_rows_j, idx, idx_rows, j: int, sub: int) -> _SubTile:
+    """Row sub-tile ``j`` (``sub`` rows) and its decay reference ``R_j``, per document: the
+    cumulative log-decay G at the sub-tile's middle token for that token's document; for the
+    document carried in from before the sub-tile (if it ends before the middle), G at the token
+    just before the sub-tile; else 0 (a document that starts inside the sub-tile, where G
+    restarts). Every pair (r in sub-tile j, i <= r) in one document then has
+    ``exp(G_r - G_i) = exp(G_r - R_j) exp(R_j - G_i)``, both exponents at most the decay over
+    ``sub / 2`` tokens (the column one is <= 0 for i before the sub-tile): with a per-token
+    log-decay floor ``-f`` the products are exact while ``f * sub / 2 <= DEFLATE_EXP_CAP``, for
+    any chunk length (32-token tiles for the -5 floor). ``idx`` / ``idx_rows`` are the within-chunk
+    document index of the chunk and of each sub-tile's rows (``None``: one document);
+    ``g_rows_j`` is G on the sub-tile's rows."""
+    c = gcum.shape[0]
+    mid = j * sub + sub // 2 - 1
+    point = _row_point(gcum, mid)
+    ref = jnp.broadcast_to(point[None, :], gcum.shape)
+    ref_rows = jnp.broadcast_to(point[None, :], g_rows_j.shape)
+    if idx is not None and idx_rows is not None:
+        tokens = lax.broadcasted_iota(jnp.int32, (c,), 0)
+        mid_doc = jnp.sum(jnp.where(tokens == mid, idx, 0.0))
+        ref = jnp.where((idx == mid_doc)[:, None], ref, 0.0)
+        ref_rows = jnp.where((idx_rows[j] == mid_doc)[:, None], ref_rows, 0.0)
+        if j > 0:  # the document carried into the sub-tile, when it ends before the middle
+            start = _row_point(gcum, j * sub - 1)
+            carried = jnp.sum(jnp.where(tokens == j * sub - 1, idx, 0.0))
+            ref = jnp.where(((idx == carried) & (idx != mid_doc))[:, None], start[None, :], ref)
+            ref_rows = jnp.where(
+                ((idx_rows[j] == carried) & (idx_rows[j] != mid_doc))[:, None], start[None, :], ref_rows
+            )
+    return _SubTile(
+        jnp.exp(jnp.minimum(ref - gcum, DEFLATE_EXP_CAP)), jnp.exp(jnp.minimum(g_rows_j - ref_rows, DEFLATE_EXP_CAP))
+    )
+
+
+def _doc_index(starts_ref):
+    return None if starts_ref is None else jnp.cumsum(starts_ref[...].astype(f32), axis=0)
+
+
+def _place_rows(x, j: int, c: int, mm_dtype):
+    """The (sub, n) block ``x`` placed at rows ``j*sub..`` of a (c, n) zero matrix, via a 0/1
+    matmul (Triton has no row concatenation); exact for ``mm_dtype``-rounded ``x``."""
+    sub = x.shape[0]
+    place = (_iota2_rows(c, sub) == lax.broadcasted_iota(jnp.int32, (c, sub), 1) + j * sub).astype(mm_dtype)
+    return dot_f32(place, x.astype(mm_dtype))
+
+
+def _row_masks(c: int, sub: int, j: int, idx, idx_rows):
+    """(sub, C) strict-lower / lower masks of sub-tile ``j``'s rows (within one document)."""
+    row = lax.broadcasted_iota(jnp.int32, (sub, c), 0) + j * sub
+    col = lax.broadcasted_iota(jnp.int32, (sub, c), 1)
+    strict, lower = col < row, col <= row
+    if idx is not None and idx_rows is not None:
+        same = idx_rows[j][:, None] == idx[None, :]
+        strict, lower = strict & same, lower & same
+    return strict, lower
+
+
+def _prep_fwd_sub_kernel(
+    q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm, save_t, gated, segmented, erased, sub
+):
+    """``_prep_fwd_kernel`` with the intra-chunk pairwise products (``A`` and ``attn``) computed
+    per ``sub``-row sub-tile against that sub-tile's own decay reference (``_sub_tiles``), so long
+    chunks stay exact under strong decay (no exponent past ``DEFLATE_EXP_CAP``). Same outputs."""
+    gate_refs, starts_ref, erase_ref, out_refs = _split_refs(refs, gated, segmented, erased)
+    qi_ref, kcd_ref, vp_ref, attn_ref, kw_ref, decay_ref = out_refs[:6]
+    c, dk = q_ref.shape
+    docs = _doc_masks(starts_ref)
+    idx = _doc_index(starts_ref)
+    k, _ = _norm_qk(k_ref[...].astype(f32), l2norm, 1.0)
+    beta = b_ref[...].astype(f32)[:, None]
+
+    gcum, gt, eg, _, w = _gates(_cum_log_decay(g_ref, gate_refs, docs), docs)
+    kw = k * w
+    decay = jnp.exp(gt)
+    if docs is not None:
+        kw = kw * docs.last_doc[:, None]
+        decay = decay * docs.carry_through
+    kw_ref[...] = kw.astype(kw_ref.dtype)
+    decay_ref[...] = decay
+
+    xa = _erase_key(k, erase_ref) * beta
+    q, _ = _norm_qk(q_ref[...].astype(f32), l2norm, dk**-0.5)
+    n_sub = c // sub
+    g_rows, xa_rows, q_rows = (jnp.split(x, n_sub, axis=0) for x in (gcum, xa, q))
+    idx_rows = _idx_rows(starts_ref, c, sub)
+    a = jnp.zeros((c, c), f32)
+    for j in range(n_sub):
+        tile = _sub_tile(gcum, g_rows[j], idx, idx_rows, j, sub)
+        h = k * tile.col
+        strict, lower = _row_masks(c, sub, j, idx, idx_rows)
+        a_j = jnp.where(strict, -_mm(xa_rows[j] * tile.row, h, mm_dtype, trans_b=True), 0.0)
+        a = a_j if n_sub == 1 else a + _place_rows(a_j, j, c, mm_dtype)
+        attn_j = jnp.where(lower, _mm(q_rows[j] * tile.row, h, mm_dtype, trans_b=True), 0.0)
+        attn_ref[pl.ds(j * sub, sub), :] = attn_j.astype(attn_ref.dtype)
+    t = _block_inverse(a, mm_dtype)
+    if save_t:
+        out_refs[6][...] = t.astype(out_refs[6].dtype)
+    kbe_state = xa * eg
+    if docs is not None:
+        kbe_state = kbe_state * docs.carry_in[:, None]
+    kcd_ref[...] = _mm(t, kbe_state, mm_dtype).astype(kcd_ref.dtype)
+    vp_ref[...] = _mm(t, v_ref[...].astype(f32) * beta, mm_dtype)
+    qi = q * eg
+    if docs is not None:
+        qi = qi * docs.carry_in[:, None]
+    qi_ref[...] = qi.astype(qi_ref.dtype)
+
+
+def _wy_bwd_sub_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm, gated, segmented, erased, sub):
+    """Backward of ``_prep_fwd_sub_kernel``'s GEMMs (the role of ``_wy_bwd_kernel``).
+
+    The cotangents come out in the decay-free frame (``_tail_bwd_kernel`` with ``raw_frame``):
+    ``deb`` of ``e * beta``, ``dkc`` of ``k`` (its column-operand uses) and ``dqs`` of the
+    normalized, scaled ``q``, each with its decay factors applied, so the tail never rebuilds a
+    tile reference. ``R_j`` cancels in every pair, so it is a constant here (exact while the cap
+    never binds on a pair inside one document)."""
+    gate_refs, starts_ref, erase_ref, refs = _split_refs(refs, gated, segmented, erased)
+    t_ref, dkcd_ref, dvp_ref, dqi_in_ref, dattn_ref, dv_ref, deb_ref, dkc_ref, dqs_ref, dbv_ref = refs
+    c, dk = k_ref.shape
+    docs = _doc_masks(starts_ref)
+    idx = _doc_index(starts_ref)
+    idx_rows = _idx_rows(starts_ref, c, sub)
+    beta = b_ref[...].astype(f32)[:, None]
+    t = t_ref[...]
+    row, col = _iota2(c, 0), _iota2(c, 1)
+
+    dvp = dvp_ref[...].astype(f32)
+    v = v_ref[...].astype(f32)
+    dvb = _mm(t, dvp, mm_dtype, trans_a=True)
+    dv_ref[...] = (dvb * beta).astype(dv_ref.dtype)
+    dbv_ref[...] = jnp.sum(dvb * v, axis=1)
+    dt = _mm(dvp, v * beta, mm_dtype, trans_b=True)
+
+    k, _ = _norm_qk(k_ref[...].astype(f32), l2norm, 1.0)
+    gcum = _cum_log_decay(g_ref, gate_refs, docs)
+    eg = jnp.exp(gcum)
+    xa = _erase_key(k, erase_ref) * beta
+    kbe_state = xa * eg
+    if docs is not None:
+        kbe_state = kbe_state * docs.carry_in[:, None]
+    dkcd = dkcd_ref[...].astype(f32)
+    dt = dt + _mm(dkcd, kbe_state, mm_dtype, trans_b=True)
+    deb_state = _mm(t, dkcd, mm_dtype, trans_a=True) * eg
+    dqs_state = dqi_in_ref[...].astype(f32) * eg
+    strict, lower = col < row, col <= row
+    if docs is not None:
+        deb_state = deb_state * docs.carry_in[:, None]
+        dqs_state = dqs_state * docs.carry_in[:, None]
+        strict, lower = strict & docs.same, lower & docs.same
+    da = _mm(_mm(t, dt, mm_dtype, trans_a=True), t, mm_dtype, trans_b=True)
+    n_sub = c // sub
+    dp_rows = jnp.split(jnp.where(strict, -da, 0.0), n_sub, axis=0)
+    ds_rows = jnp.split(jnp.where(lower, dattn_ref[...].astype(f32), 0.0), n_sub, axis=0)
+    g_rows = jnp.split(gcum, n_sub, axis=0)
+    deb_rows = jnp.split(deb_state, n_sub, axis=0)
+    dqs_rows = jnp.split(dqs_state, n_sub, axis=0)
+    q, _ = _norm_qk(q_ref[...].astype(f32), l2norm, dk**-0.5)
+    xa_rows, q_rows = jnp.split(xa, n_sub, axis=0), jnp.split(q, n_sub, axis=0)
+    dkc = jnp.zeros((c, dk), f32)
+    for j in range(n_sub):
+        tile = _sub_tile(gcum, g_rows[j], idx, idx_rows, j, sub)
+        rows = pl.ds(j * sub, sub)
+        h = k * tile.col
+        deb_ref[rows, :] = deb_rows[j] + _mm(dp_rows[j], h, mm_dtype) * tile.row
+        dqs_ref[rows, :] = dqs_rows[j] + _mm(ds_rows[j], h, mm_dtype) * tile.row
+        dh = _mm(dp_rows[j], xa_rows[j] * tile.row, mm_dtype, trans_a=True)
+        dh = dh + _mm(ds_rows[j], q_rows[j] * tile.row, mm_dtype, trans_a=True)
+        dkc = dkc + dh * tile.col
+    dkc_ref[...] = dkc
+
+
 def _wy_bwd_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm, gated, segmented, erased):
     """Backward through every GEMM of the prep: Vp = T Vb, Kcd = T Kbe, T = (I - A)^-1,
     A = -tril(Kbe Kd^T), and attn = tril(Qi Kd^T).
@@ -298,7 +494,7 @@ def _wy_bwd_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm, g
     dqi_ref[...] = dqi_in + _mm(ds, kd, mm_dtype)
 
 
-def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, segmented, erased):
+def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, segmented, erased, raw_frame):
     """Elementwise backward through the gating chain, the gate cumsum and the q/k L2-norm.
 
     Everything here is separable over d_k columns except the L2-norm row statistics, so it
@@ -307,7 +503,10 @@ def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, 
 
     With a fused gate it recomputes ``g = rate * softplus(g_raw + bias)`` but still emits
     d/d(g) (fp32); the caller back-propagates the cheap elementwise gate in XLA -- doing
-    that in-kernel as well pushed this kernel over its register budget (2.6x slower)."""
+    that in-kernel as well pushed this kernel over its register budget (2.6x slower).
+
+    With ``raw_frame`` (``_wy_bwd_sub_kernel``) the three GEMM cotangents arrive with their decay
+    factors applied: those of ``e * beta``, of ``k`` and of the normalized, scaled ``q``."""
     gate_refs, starts_ref, erase_ref, refs = _split_refs(refs, gated, segmented, erased)
     dqi_ref, dkw_ref, ddecay_ref, dkbe_ref, dkd_ref, dbv_ref, dq_ref, dk_ref, dg_ref, db_ref, *derase_ref = refs
     c, dk = q_ref.shape
@@ -333,29 +532,39 @@ def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, 
         q_raw = q_ref[:, blk].astype(f32)
         k = k_raw * rk[:, None]
 
-        # Qi = q Eg
-        dqi = dqi_ref[:, blk]
-        dqn = dqi * eg * q_scale  # cotangent of the L2-normalized, unscaled q
-        q_dot = q_dot + jnp.sum(q_raw * dqn, axis=1)
-        dqn_blocks.append(dqn)
-
-        # Kbe = beta e Eg (e = b k) ;  Kd = k Eng (no gradient where the deflation cap binds) ;
-        # Kw = k exp(gt - G) ;  decay = exp(gt)
-        dkbe = dkbe_ref[:, blk]
         e = _erase_key(k, erase_ref, blk)
-        dkd = dkd_ref[:, blk]
         dkw = dkw_ref[:, blk].astype(f32)
         if docs is not None:  # Kw = last_doc * k * exp(gt - G)
             dkw = dkw * docs.last_doc[:, None]
         kw_grad = dkw * k * w
-        qi = q_raw * (rq * q_scale)[:, None] * eg
-        dgc = dqi * qi + dkbe * (e * beta * eg) - dkd * k * eng * (-gcum < DEFLATE_EXP_CAP).astype(f32) - kw_grad
-        dbeta = dbeta + jnp.sum(dkbe * e * eg, axis=1)
-        de = dkbe * beta * eg
+        if raw_frame:  # cotangents of q_scaled, e * beta and k, decay factors applied
+            dqs = dqi_ref[:, blk]
+            dqn = dqs * q_scale
+            deb = dkbe_ref[:, blk]
+            dkc = dkd_ref[:, blk]
+            dgc = dqs * (q_raw * (rq * q_scale)[:, None]) + deb * (e * beta) - dkc * k - kw_grad
+            dbeta = dbeta + jnp.sum(deb * e, axis=1)
+            de = deb * beta
+            dk_cols = dkc
+        else:
+            # Qi = q Eg
+            dqi = dqi_ref[:, blk]
+            dqn = dqi * eg * q_scale  # cotangent of the L2-normalized, unscaled q
+            # Kbe = beta e Eg (e = b k) ;  Kd = k Eng (no gradient where the deflation cap binds) ;
+            # Kw = k exp(gt - G) ;  decay = exp(gt)
+            dkbe = dkbe_ref[:, blk]
+            dkd = dkd_ref[:, blk]
+            qi = q_raw * (rq * q_scale)[:, None] * eg
+            dgc = dqi * qi + dkbe * (e * beta * eg) - dkd * k * eng * (-gcum < DEFLATE_EXP_CAP).astype(f32) - kw_grad
+            dbeta = dbeta + jnp.sum(dkbe * e * eg, axis=1)
+            de = dkbe * beta * eg
+            dk_cols = dkd * eng
+        q_dot = q_dot + jnp.sum(q_raw * dqn, axis=1)
+        dqn_blocks.append(dqn)
         if erase_ref is not None:
             derase_ref[0][:, blk] = (de * k).astype(derase_ref[0].dtype)
             de = de * erase_ref[:, blk].astype(f32)
-        dkn = de + dkd * eng + dkw * w
+        dkn = de + dk_cols + dkw * w
         k_dot = k_dot + jnp.sum(k_raw * dkn, axis=1)
         dkn_blocks.append(dkn)
 
@@ -510,9 +719,13 @@ def _prep_fwd_call(q, k, v, g, beta, gate, starts, erase, cfg: PrepConfig, save_
         out_shape.append(sds(c, c, dtype=mmd))
         out_specs += _specs(c, c)
     gated, segmented, erased = gate is not None, starts is not None, erase is not None
+    if cfg.sub_chunk:
+        kernel = functools.partial(_prep_fwd_sub_kernel, sub=cfg.sub_chunk)
+    else:
+        kernel = _prep_fwd_kernel
     return pl.pallas_call(
         functools.partial(
-            _prep_fwd_kernel,
+            kernel,
             mm_dtype=mmd,
             l2norm=cfg.l2norm,
             save_t=save_t,
@@ -570,9 +783,14 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
     def internal(*shape):
         return jax.ShapeDtypeStruct((gb, n, *shape), f32)
 
+    raw_frame = cfg.sub_chunk > 0
+    if raw_frame:  # (dkbe, dkd, dqi) slots carry the cotangents of (e * beta, k, scaled q)
+        wy_kernel = functools.partial(_wy_bwd_sub_kernel, sub=cfg.sub_chunk)
+    else:
+        wy_kernel = _wy_bwd_kernel
     dv, dkbe, dkd, dqi, dbeta_v = pl.pallas_call(
         functools.partial(
-            _wy_bwd_kernel,
+            wy_kernel,
             mm_dtype=mmd,
             l2norm=cfg.l2norm,
             **flags,
@@ -603,6 +821,7 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
             _tail_bwd_kernel,
             l2norm=cfg.l2norm,
             block_d=min(cfg.tail_block_d, dk),
+            raw_frame=raw_frame,
             **flags,
         ),
         grid=(gb, n),
@@ -679,6 +898,7 @@ def fused_chunk_prep(
     *,
     chunk_size: int,
     mm_dtype: jnp.dtype,
+    sub_chunk_size: int | None = None,
     gate: tuple[jax.Array, jax.Array] | None = None,
     doc_starts: jax.Array | None = None,
     erase: jax.Array | None = None,
@@ -711,6 +931,12 @@ def fused_chunk_prep(
         Inputs may be bf16 or fp32 (all math is fp32 on-chip; cotangents come back
         in the input dtypes). ``L`` must be a multiple of ``chunk_size``.
         mm_dtype: operand dtype of the intra-chunk GEMMs (fp32 accumulate).
+        sub_chunk_size: rows per decay tile of the intra-chunk pairwise products, each referenced
+            to the cumulative log-decay at its middle token (``_sub_tile``; ``None``: one
+            reference at the chunk start, the legacy kernels). Exact while the log-decay over
+            ``sub_chunk_size / 2`` tokens stays above ``-DEFLATE_EXP_CAP``: up to 32 for a -5
+            per-token floor, so ``chunk_size=32, sub_chunk_size=32`` (one tile, no extra work) or
+            ``chunk_size=64, sub_chunk_size=32`` are as exact as a 16-token chunk.
         num_warps, bwd_num_warps: Triton warps per program (forward / backward kernels).
         tail_block_d, tail_num_warps: d_k column block / warps of the backward's
             elementwise tail kernel.
@@ -728,8 +954,12 @@ def fused_chunk_prep(
             raise ValueError(f"fused_chunk_prep needs {name} a power of two >= 16, got {dim}")
     if q.shape[1] % chunk_size:
         raise ValueError(f"sequence length {q.shape[1]} must be a multiple of chunk_size={chunk_size}")
+    sub = sub_chunk_size or 0
+    if sub_chunk_size is not None and (sub < 16 or sub & (sub - 1) or chunk_size % sub):
+        raise ValueError(f"sub_chunk_size must be a power of two >= 16 dividing chunk_size, got {sub}")
     cfg = PrepConfig(
         chunk_size,
+        sub,
         jnp.dtype(mm_dtype).name,
         use_qk_l2norm,
         num_warps,

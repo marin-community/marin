@@ -48,6 +48,9 @@ from experiments.grug.moe.kda_prep_pallas import (
 from experiments.grug.moe.kda_state_pallas import chunk_state_pass
 
 _L2NORM_EPS = L2NORM_EPS
+# Triton warps of the mid-referenced (sub_chunk_size) prep kernels, tuned on H100 at C=32, d=128
+# (fwd+bwd 4.25 vs 4.68 ms at the default 8 warps; B=16, L=4096, H=4).
+_SUB_TILED_WARPS = dict(num_warps=4, bwd_num_warps=4, tail_num_warps=4)
 # Cap the (single-sided) deflation exponent exp(-cumdecay) so extreme per-channel decay
 # cannot overflow; see DEFLATE_EXP_CAP for when the chunked form stays exact.
 _DEFLATE_EXP_CAP = DEFLATE_EXP_CAP
@@ -487,7 +490,20 @@ def _heads_first_to_model_layout(x: jax.Array, trailing: int) -> jax.Array:
 
 
 def _fused_prep(
-    q, k, v, g, beta, c, mm_dtype, *, use_qk_l2norm: bool, interpret: bool, gate=None, starts=None, erase=None
+    q,
+    k,
+    v,
+    g,
+    beta,
+    c,
+    mm_dtype,
+    *,
+    use_qk_l2norm: bool,
+    interpret: bool,
+    gate=None,
+    starts=None,
+    erase=None,
+    sub_chunk_size: int | None = None,
 ) -> ChunkPrep:
     """Fused Pallas prep on model-layout ``(B, L, H, d)`` inputs; per-chunk outputs ``(G, n, ...)``."""
     return fused_chunk_prep(
@@ -498,11 +514,13 @@ def _fused_prep(
         beta,
         chunk_size=c,
         mm_dtype=jnp.float32 if mm_dtype is None else mm_dtype,
+        sub_chunk_size=sub_chunk_size,
         gate=gate,
         doc_starts=starts,
         erase=erase,
         use_qk_l2norm=use_qk_l2norm,
         interpret=interpret,
+        **(_SUB_TILED_WARPS if sub_chunk_size else {}),
     )
 
 
@@ -609,6 +627,7 @@ def kda_fused(
     segment_ids: Int[Array, "B L"] | None = None,
     erase: Float[Array, "B L H Dk"] | None = None,
     chunk_size: int = 64,
+    sub_chunk_size: int | None = None,
     use_qk_l2norm: bool = True,
     matmul_dtype: jnp.dtype = jnp.bfloat16,
     interpret: bool = False,
@@ -630,6 +649,11 @@ def kda_fused(
     document start (see :func:`recurrent_kda`). ``erase`` (``(B, L, H, d_k)``) is the channel-wise
     erase gate of :func:`recurrent_kda`, applied on-chip. ``save_chunk_states`` keeps the state pass's
     per-chunk states for the backward (see :func:`chunk_state_pass`).
+
+    ``sub_chunk_size`` (see :func:`fused_chunk_prep`) references the intra-chunk decay of every tile of
+    that many rows at the tile's middle token, which keeps long chunks exact under strong decay: with
+    the -5 per-token log-decay floor, ``chunk_size=32, sub_chunk_size=32`` (the fastest exact setting
+    on H100) and ``chunk_size=64, sub_chunk_size=32`` are as exact as ``chunk_size=16``.
     """
     b, length, heads, _ = q.shape
     pad = (-length) % chunk_size
@@ -655,6 +679,7 @@ def kda_fused(
         gate=gate,
         starts=starts,
         erase=erase,
+        sub_chunk_size=sub_chunk_size,
     )
     state = jnp.zeros((b * heads, q.shape[-1], v.shape[-1]), jnp.float32)
     out, _ = chunk_state_pass(
