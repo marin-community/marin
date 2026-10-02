@@ -507,53 +507,60 @@ class InferenceContext:
             if req.future.cancelled():
                 completed.add(index)
                 return
-            for choice in choices if req.on_delta is not None else []:
-                count, previous_text, reason = published.get((index, choice.choice), (0, "", FinishReason.RUNNING))
-                if count == len(choice.token_list) and reason == choice.finish_reason:
-                    continue
-                text = self.tokenizer.decode(choice.token_list, skip_special_tokens=True)
-                # Byte-level tokenizers may end an unfinished Unicode character with U+FFFD.
-                stable_text = text if choice.done else text.rstrip("\ufffd")
-                if not stable_text.startswith(previous_text):
-                    raise ValueError("Tokenizer changed already-emitted text during incremental decoding")
-                delta = InferenceDelta(
-                    choice.choice,
-                    stable_text[len(previous_text) :],
-                    choice.token_list[count:].copy(),
-                    choice.logprobs[count:].copy(),
-                    choice.finish_reason,
-                    self.model_version,
-                    req.prompt_tokens,
-                )
-                req.future.get_loop().call_soon_threadsafe(req.on_delta, delta)
-                published[index, choice.choice] = (len(choice.token_list), stable_text, choice.finish_reason)
-            if not all(choice.done for choice in choices):
-                return
-            responses = []
-            for choice in choices:
-                tokens = choice.token_list.copy()
-                echo_tokens = req.prompt_tokens + tokens if req.echo_logprobs_top_k is not None else None
-                echo_logprobs = (
-                    self.engine.score_token_logprobs(echo_tokens, req.echo_logprobs_top_k)
-                    if echo_tokens is not None
-                    else None
-                )
-                responses.append(
-                    InferenceResponse(
-                        request_id=req.request_id,
-                        text=self.tokenizer.decode(tokens, skip_special_tokens=True),
-                        tokens=tokens,
-                        logprobs=choice.logprobs.copy(),
-                        prompt_tokens=len(req.prompt_tokens),
-                        completion_tokens=len(tokens),
-                        finish_reason=choice.finish_reason,
-                        model_version=self.model_version,
-                        echo_token_ids=echo_tokens,
-                        echo_logprobs=echo_logprobs,
+            try:
+                for choice in choices if req.on_delta is not None else []:
+                    count, previous_text, reason = published.get((index, choice.choice), (0, "", FinishReason.RUNNING))
+                    if count == len(choice.token_list) and reason == choice.finish_reason:
+                        continue
+                    text = self.tokenizer.decode(choice.token_list, skip_special_tokens=True)
+                    # Byte-level tokenizers may end an unfinished Unicode character with U+FFFD.
+                    stable_text = text if choice.done else text.rstrip("\ufffd")
+                    if not stable_text.startswith(previous_text):
+                        raise ValueError("Tokenizer changed already-emitted text during incremental decoding")
+                    delta = InferenceDelta(
+                        choice.choice,
+                        stable_text[len(previous_text) :],
+                        choice.token_list[count:].copy(),
+                        choice.logprobs[count:].copy(),
+                        choice.finish_reason,
+                        self.model_version,
+                        req.prompt_tokens,
                     )
-                )
-            completed.add(index)
-            req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, responses)
+                    req.future.get_loop().call_soon_threadsafe(req.on_delta, delta)
+                    published[index, choice.choice] = (len(choice.token_list), stable_text, choice.finish_reason)
+                if not all(choice.done for choice in choices):
+                    return
+                responses = []
+                for choice in choices:
+                    tokens = choice.token_list.copy()
+                    echo_tokens = req.prompt_tokens + tokens if req.echo_logprobs_top_k is not None else None
+                    echo_logprobs = (
+                        self.engine.score_token_logprobs(echo_tokens, req.echo_logprobs_top_k)
+                        if echo_tokens is not None
+                        else None
+                    )
+                    responses.append(
+                        InferenceResponse(
+                            request_id=req.request_id,
+                            text=self.tokenizer.decode(tokens, skip_special_tokens=True),
+                            tokens=tokens,
+                            logprobs=choice.logprobs.copy(),
+                            prompt_tokens=len(req.prompt_tokens),
+                            completion_tokens=len(tokens),
+                            finish_reason=choice.finish_reason,
+                            model_version=self.model_version,
+                            echo_token_ids=echo_tokens,
+                            echo_logprobs=echo_logprobs,
+                        )
+                    )
+                completed.add(index)
+                req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, responses)
+            except Exception as error:
+                completed.add(index)
+                if req.cancel_event is not None:
+                    req.cancel_event.set()
+                logger.exception("Error publishing output for request %s", req.request_id)
+                req.future.get_loop().call_soon_threadsafe(_complete_future, req.future, error)
 
         result = self.engine.generate(service_requests, should_abort=should_abort, output_callback=publish)
         duration = time.time() - start_time
@@ -570,10 +577,7 @@ def _sse_event(payload: str) -> str:
 
 
 def _completion_events(completion: Completion) -> collections.abc.Iterator[str]:
-    """Render a finished text completion as an OpenAI server-sent-event stream.
-
-    Echo requests use this path because their logprobs rescore the complete sequence.
-    """
+    """Render a finished text completion as OpenAI server-sent events."""
     for choice in completion.choices:
         chunk = Completion(
             id=completion.id,
@@ -887,6 +891,28 @@ async def _fetch_tokens(ctx: InferenceContext, request: TokensRequest) -> Tokens
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _chat_token_logprobs(
+    tokenizer: MarinTokenizer,
+    tokens: list[int],
+    logprobs: list[float],
+    return_tokens_as_token_ids: bool,
+) -> list[ChatCompletionTokenLogprob]:
+    content = []
+    for token_id, logprob in zip(tokens, logprobs, strict=True):
+        token = (
+            f"{TOKEN_ID_PREFIX}{token_id}" if return_tokens_as_token_ids else tokenizer.convert_ids_to_tokens(token_id)
+        )
+        content.append(
+            ChatCompletionTokenLogprob(
+                token=token,
+                logprob=float(logprob),
+                bytes=list(token.encode("utf-8")),
+                top_logprobs=[],
+            )
+        )
+    return content
+
+
 async def _create_chat_completion(
     ctx: InferenceContext,
     request: ChatCompletionRequest,
@@ -940,27 +966,15 @@ async def _create_chat_completion(
             # Format logprobs if available
             logprobs = None
             if request.logprobs:
-                generated_tokens = generation.tokens
-
-                # Create content logprobs in OpenAI format
-                content_logprobs = []
                 assert generation.logprobs is not None, "Logprobs requested but missing in generation result"
-                for token_id, lp in zip(generated_tokens, generation.logprobs, strict=True):
-                    token_str = (
-                        f"{TOKEN_ID_PREFIX}{token_id}"
-                        if request.return_tokens_as_token_ids
-                        else ctx.tokenizer.convert_ids_to_tokens(token_id)
+                logprobs = ChoiceLogprobs(
+                    content=_chat_token_logprobs(
+                        ctx.tokenizer,
+                        generation.tokens,
+                        generation.logprobs,
+                        request.return_tokens_as_token_ids,
                     )
-                    content_logprobs.append(
-                        ChatCompletionTokenLogprob(
-                            token=token_str,
-                            logprob=float(lp),
-                            bytes=list(token_str.encode("utf-8")),
-                            top_logprobs=[],
-                        )
-                    )
-
-                logprobs = ChoiceLogprobs(content=content_logprobs)
+                )
 
             choices.append(
                 ChatCompletionChoice(
@@ -1008,10 +1022,6 @@ def _delta_events(
     created: int,
     first: bool,
 ) -> collections.abc.Iterator[str]:
-    token_text = [
-        f"{TOKEN_ID_PREFIX}{token}" if request.return_tokens_as_token_ids else tokenizer.convert_ids_to_tokens(token)
-        for token in delta.tokens
-    ]
     finish_reason = {
         FinishReason.RUNNING: None,
         FinishReason.STOP: "stop",
@@ -1019,18 +1029,18 @@ def _delta_events(
         FinishReason.ABORT: "abort",
     }[delta.finish_reason]
     extra: dict[str, Any] = {"model_version": delta.model_version}
-    if request.return_token_ids:
+    if request.return_token_ids and first:
         extra["prompt_token_ids"] = delta.prompt_tokens
     if isinstance(request, ChatCompletionRequest):
         logprobs = None
         if request.logprobs:
             logprobs = ChunkChoiceLogprobs(
-                content=[
-                    ChatCompletionTokenLogprob(
-                        token=text, logprob=lp, bytes=list(text.encode("utf-8")), top_logprobs=[]
-                    )
-                    for text, lp in zip(token_text, delta.logprobs, strict=True)
-                ]
+                content=_chat_token_logprobs(
+                    tokenizer,
+                    delta.tokens,
+                    delta.logprobs,
+                    request.return_tokens_as_token_ids,
+                )
             )
         content = ChatCompletionChunkChoice(
             index=delta.index,
@@ -1058,6 +1068,14 @@ def _delta_events(
     else:
         logprobs = None
         if request.logprobs is not None:
+            token_text = [
+                (
+                    f"{TOKEN_ID_PREFIX}{token}"
+                    if request.return_tokens_as_token_ids
+                    else tokenizer.convert_ids_to_tokens(token)
+                )
+                for token in delta.tokens
+            ]
             logprobs = Logprobs(tokens=token_text, token_logprobs=delta.logprobs, text_offset=None, top_logprobs=None)
         content = CompletionChoice(index=delta.index, text=delta.text, finish_reason="length", logprobs=logprobs)
         choice_extra: dict[str, Any] = {**extra, "finish_reason": finish_reason}
