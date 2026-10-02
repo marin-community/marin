@@ -681,7 +681,7 @@ class _ObservedSnowball(eqx.Module):
     def decode(self, tokens, cache, batch_info, positions):
         logits, cache = self.model.decode(tokens, cache, batch_info, positions)
         # Observe the actual logits passed to the sampler, without a second model forward.
-        jax.debug.callback(self.observe, positions.array, logits.array, ordered=True)
+        jax.debug.callback(self.observe, positions.array, logits.array)
         return logits, cache
 
 
