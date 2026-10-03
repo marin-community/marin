@@ -424,7 +424,7 @@ wheels = [
 [[package]]
 name = "evalchemy"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/evalchemy.git?branch=codex%2Fgraphwalks#4f9cef5db98811eac790527252a857d0635442ea" }
+source = { git = "https://github.com/marin-community/evalchemy.git?branch=codex%2Fgraphwalks#18a63bd0d9c314b91bbf19154678e3c64e0b6110" }
 dependencies = [
     { name = "bespokelabs-curator" },
     { name = "datasets" },
