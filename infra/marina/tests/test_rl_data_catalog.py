@@ -7,6 +7,7 @@ import json
 import logging
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -29,6 +30,7 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
     Snapshot,
     count_metadata,
     dataset_metadata,
+    hf_snapshot,
     registry_sources,
     skyrl_snapshot,
     source_row,
@@ -37,6 +39,7 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
 )
 from infra.marina.applets.rl_data_catalog.server.composition import canonical_rows, component_rows
 from infra.marina.applets.rl_data_catalog.server.hf_auth import HuggingFaceAuth
+from infra.marina.applets.rl_data_catalog.server.hf_sources import HF_ORIGIN, HF_SOURCES
 
 
 @pytest.fixture
@@ -145,6 +148,55 @@ def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(cata
     assert status["Task Trove"]["revision"] == "release2"
     assert status["Task Trove"]["error"] is None
     assert result["results"][1]["changed"]
+    registered = payloads["Hugging Face:open-athena/pdbthink-coordinate-tasks"]
+    assert (registered["quality"], registered["difficulty"], registered["review_id"]) == (None, None, None)
+
+
+def test_registered_release_keeps_tool_free_contract_and_invalidates_old_review(
+    catalog_connection: Connection,
+) -> None:
+    source = replace(
+        HF_SOURCES[0], revision="first-release", splits=(("train", 7), ("test", 3)), type="RLVR", turns="Single-turn"
+    )
+    snapshot = hf_snapshot((source,))
+    save_snapshot(catalog_connection, snapshot)
+    source_id = snapshot.rows[0]["id"]
+    catalog_connection.execute(
+        text(
+            "UPDATE catalog_sources SET quality = 'good', difficulty = '1/3', review_id = 'historical', "
+            "review_source_revision = :revision, review_verifier_revision = :revision WHERE id = :id"
+        ),
+        {"id": source_id, "revision": source.revision},
+    )
+    revised = hf_snapshot((replace(source, revision="new-pinned-release"),))
+    save_snapshot(catalog_connection, revised)
+    migrate(catalog_connection)
+    stored = dict(
+        catalog_connection.execute(text("SELECT * FROM catalog_sources WHERE id = :id"), {"id": source_id})
+        .mappings()
+        .one()
+    )
+    published = source_with_review(stored | {"verifier_issues": []})
+    assert (published["environment"], published["type"], published["turns"]) == ("Harbor", "RLVR", "Single-turn")
+    assert published["dataset_revision"] == published["verifier_revision"] == "new-pinned-release"
+    assert published["task_count"] == 10
+    assert published["review_id"] == "historical"
+    assert published["review_stale"]
+    assert published["quality"] is None and published["difficulty"] is None
+    assert stored["quality"] == "good" and stored["difficulty"] == "1/3"
+
+    # Removing the final registration must retire its row without deleting its review history.
+    save_snapshot(catalog_connection, hf_snapshot(()))
+    active = catalog_connection.execute(
+        text("SELECT COUNT(*) FROM catalog_sources WHERE origin = :origin AND active"), {"origin": HF_ORIGIN}
+    ).scalar_one()
+    assert active == 0
+    assert (
+        catalog_connection.execute(
+            text("SELECT review_id FROM catalog_sources WHERE id = :id"), {"id": source_id}
+        ).scalar_one()
+        == "historical"
+    )
 
 
 def test_snapshot_replacement_retires_removed_rows_without_affecting_other_origin(
