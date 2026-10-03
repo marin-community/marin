@@ -366,8 +366,8 @@ SELECT run_id AS run,
        COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
        MAX(value) FILTER (WHERE name = 'policy_step') AS step,
        COUNT(DISTINCT execution_uid) FILTER (WHERE name = 'policy_step') AS attempts,
-       MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS} AS window_from_ms,
-       MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS} AS window_to_ms,
+       GREATEST({start_ms}, MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS}) AS window_from_ms,
+       LEAST({end_ms}, MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS}) AS window_to_ms,
        MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') AS last_seen,
        MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
 FROM "telemetry_v1.marinskyrl"

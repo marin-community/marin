@@ -693,16 +693,22 @@ def _recent_runs_panel() -> dict:
     return panel
 
 
-def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
+@pytest.mark.parametrize("home_minutes", [60, 7 * 24 * 60])
+def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store, home_minutes) -> None:
+    home_end_ms = _WINDOW_START_MS + home_minutes * 60000
     rows = []
     for run, kind, minutes, step, name in [
         (ASYNC_RUN_ID, "async", 0, 0, "policy_step"),
         (ASYNC_RUN_ID, "async", 5, 1, "policy_step"),
         (UNSTAMPED_RUN_ID, None, 0, 0, "policy_step"),
+        (UNSTAMPED_RUN_ID, "async", -1, 0, "lifecycle"),
         ("mixed-run", None, 0, 0, "policy_step"),
         ("mixed-run", "async", 1, 0, "lifecycle"),
         ("early-stamp-run", "async", 1, 0, "lifecycle"),
         ("early-stamp-run", None, 5, 0, "policy_step"),
+        ("end-boundary-run", None, 0, 0, "lifecycle"),
+        ("end-boundary-run", None, home_minutes - 0.5, 0, "policy_step"),
+        ("end-boundary-run", "async", home_minutes, 0, "lifecycle"),
         (ASYNC_RUN_ID, None, 2, 0, "rollout_call"),
     ]:
         rows.append(
@@ -727,20 +733,21 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
             "cluster": CLUSTER,
             "step": step,
             "attempts": 1,
-            "window_from_ms": _WINDOW_START_MS + first * 60000 - 60000,
-            "window_to_ms": _WINDOW_START_MS + last * 60000 + 60000,
+            "window_from_ms": _WINDOW_START_MS + first * 60000,
+            "window_to_ms": _WINDOW_START_MS + last * 60000,
             "last seen": _WINDOW_START_MS + minutes * 60000,
             "type": kind,
         }
         for run, step, minutes, first, last, kind in [
-            (RUN_ID, 5, 25, 0, 25, "sync"),
-            (ASYNC_RUN_ID, 1, 5, 0, 5, "async"),
-            (UNSTAMPED_RUN_ID, 0, 0, 0, 0, "sync"),
-            ("mixed-run", 0, 0, 0, 1, "async"),
-            ("early-stamp-run", 0, 5, 1, 5, "async"),
+            (RUN_ID, 5, 25, 0, 26, "sync"),
+            (ASYNC_RUN_ID, 1, 5, 0, 6, "async"),
+            (UNSTAMPED_RUN_ID, 0, 0, 0, 1, "sync"),
+            ("mixed-run", 0, 0, 0, 2, "async"),
+            ("early-stamp-run", 0, 5, 0, 6, "async"),
+            ("end-boundary-run", 0, home_minutes - 0.5, 0, home_minutes, "sync"),
         ]
     ]
-    actual = _request_rows(store, "/v1/rl/recent", {"from": _WINDOW_START_MS, "to": _NOW_MS, "view": "recent"})
+    actual = _request_rows(store, "/v1/rl/recent", {"from": _WINDOW_START_MS, "to": home_end_ms, "view": "recent"})
     assert sorted(actual, key=lambda row: row["run"]) == sorted(expected, key=lambda row: row["run"])
     (links,) = [
         prop["value"]
@@ -753,11 +760,12 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
     run_variable = next(v for v in _dashboard()["templating"]["list"] if v["name"] == "run")
     query = run_variable["query"]["infinityQuery"]
     linked_options = {
-        RUN_ID: [RUN_ID, UNSTAMPED_RUN_ID],
+        RUN_ID: [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"],
         ASYNC_RUN_ID: [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
-        UNSTAMPED_RUN_ID: [RUN_ID, UNSTAMPED_RUN_ID, "mixed-run"],
+        UNSTAMPED_RUN_ID: [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run", "mixed-run"],
         "mixed-run": [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
         "early-stamp-run": [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
+        "end-boundary-run": [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"],
     }
     for row in actual:
         concrete = re.sub(r"\$\{__data.fields.([^}]+)\}", lambda match, row=row: str(row[match[1]]), template)
@@ -785,8 +793,24 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
         assert sorted(offered, key=lambda item: item["value"]) == [
             {"value": run} for run in sorted(linked_options[row["run"]])
         ]
+        if row["run"] == "end-boundary-run":
+            assert (
+                _request_rows(
+                    store,
+                    "/v1/rl/overview",
+                    {
+                        "clusters": CLUSTER,
+                        "run": linked["var-run"][0],
+                        "from": linked["from"][0],
+                        "to": linked["to"][0],
+                        "bucket_ms": 60000,
+                        "view": "critical_path",
+                    },
+                )
+                == []
+            )
     for kind, wanted in (
-        ("sync", [RUN_ID, UNSTAMPED_RUN_ID]),
+        ("sync", [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"]),
         ("async", [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"]),
     ):
         params = {
@@ -795,7 +819,7 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
                 .replace("${cluster:sqlstring}", f"'{CLUSTER}'")
                 .replace("${training_type:sqlstring}", f"'{kind}'")
                 .replace("${__from}", str(_WINDOW_START_MS))
-                .replace("${__to}", str(_NOW_MS))
+                .replace("${__to}", str(home_end_ms))
             )
             for param in query["url_options"]["params"]
         }
