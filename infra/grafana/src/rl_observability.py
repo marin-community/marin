@@ -23,16 +23,12 @@ RL_MAX_GPU_ROWS = 50_000
 RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
-ASYNC_RL_DASHBOARD_UID = "marin-async-rl"
-SYNC_RL_DASHBOARD_UID = "marin-rl-runs"
 
 _CORE_NAMES = (
     "phase_duration_seconds",
-    "policy_step",
     "ray_object_store_available_memory",
     "ray_object_store_used_memory",
     "ray_spill_manager_objects_bytes",
-    "work_completed",
 )
 
 
@@ -259,25 +255,6 @@ HAVING SUM(CASE WHEN name IN ({sql_values(_DCGM_COUNTERS)}) THEN increase END) >
 ORDER BY 4 DESC, node, gpu
 """.strip()
         ),
-        "policy_step": (
-            """
-SELECT t, 'trainer step · ' || execution_uid AS series, MAX(max_value) AS value
-FROM core WHERE name = 'policy_step' GROUP BY 1, 2
-UNION ALL
-SELECT t, 'producing policy · ' || execution_uid AS series, MAX(weights_step) AS value
-FROM core WHERE name = 'work_completed' AND weights_step IS NOT NULL GROUP BY 1, 2
-ORDER BY 1
-""".strip()
-        ),
-        "rollout_progress": (
-            """
-SELECT t,
-       SUM(CASE WHEN work_kind = 'rollout' THEN sum_value END) AS rollouts,
-       SUM(CASE WHEN work_kind = 'sample' THEN sum_value END) AS samples,
-       SUM(CASE WHEN work_kind = 'generated_token' THEN sum_value END) AS generated_tokens
-FROM core WHERE name = 'work_completed' GROUP BY 1 ORDER BY 1
-""".strip()
-        ),
         "critical_path": (
             """
 SELECT t, phase || ' · ' || outcome AS series,
@@ -382,9 +359,7 @@ GROUP BY 1, 2 ORDER BY 1
 
 
 def recent_rl_runs_dataset(start_ms: int, end_ms: int) -> DashboardDataset:
-    """Build a bounded table of recent RL runs, their dashboard link windows, and the dashboard
-    whose run picker offers each run: the async view for a run whose trainer stamps
-    training_type 'async', the sync view for every other run."""
+    """List recent RL runs with their training type and policy-step observation windows."""
     validate_time_window(
         start_ms,
         end_ms,
@@ -394,16 +369,16 @@ def recent_rl_runs_dataset(start_ms: int, end_ms: int) -> DashboardDataset:
     sql = f"""
 SELECT run_id AS run,
        COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-       MAX(value) AS step,
-       COUNT(DISTINCT execution_uid) AS attempts,
-       MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS} AS window_from_ms,
-       MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS} AS window_to_ms,
-       MAX(timestamp_ms) AS last_seen,
+       MAX(value) FILTER (WHERE name = 'policy_step') AS step,
+       COUNT(DISTINCT execution_uid) FILTER (WHERE name = 'policy_step') AS attempts,
+       MIN(timestamp_ms) FILTER (WHERE name = 'policy_step') - {RL_RECENT_WINDOW_PADDING_MS} AS window_from_ms,
+       MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') + {RL_RECENT_WINDOW_PADDING_MS} AS window_to_ms,
+       MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') AS last_seen,
        MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
 FROM "telemetry_v1.marinskyrl"
-WHERE service = 'marinskyrl' AND name = 'policy_step' AND run_id IS NOT NULL
+WHERE service = 'marinskyrl' AND name IN ('lifecycle', 'policy_step', 'rollout_call') AND run_id IS NOT NULL
   AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
-GROUP BY 1, 2 ORDER BY last_seen DESC
+GROUP BY 1, 2 HAVING COUNT(*) FILTER (WHERE name = 'policy_step') > 0 ORDER BY last_seen DESC
 LIMIT {RL_RECENT_MAX_ROWS}
 """.strip()
     return DashboardDataset(
@@ -413,11 +388,10 @@ LIMIT {RL_RECENT_MAX_ROWS}
         setup_sql=(),
         views={
             "recent": (
-                f"""
+                """
 SELECT run, origin_cluster AS cluster, step, attempts,
        window_from_ms, window_to_ms, last_seen AS "last seen",
-       CASE WHEN is_async = 1 THEN {sql_string(ASYNC_RL_DASHBOARD_UID)}
-            ELSE {sql_string(SYNC_RL_DASHBOARD_UID)} END AS dashboard
+       CASE WHEN is_async = 1 THEN 'async' ELSE 'sync' END AS type
 FROM recent ORDER BY last_seen DESC
 """.strip()
             )

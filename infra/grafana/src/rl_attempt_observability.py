@@ -692,8 +692,7 @@ GROUP BY 1, 2 ORDER BY 1
             """
 SELECT t,
        SUM(CASE WHEN work_kind = 'rollout' THEN sum_value END) AS rollouts,
-       SUM(CASE WHEN work_kind = 'sample' THEN sum_value END) AS samples,
-       SUM(CASE WHEN work_kind = 'generated_token' THEN sum_value END) AS generated_tokens
+       SUM(CASE WHEN work_kind = 'sample' THEN sum_value END) AS samples
 FROM core WHERE statistic = 'aggregate' AND name = 'work_completed'
 GROUP BY 1 ORDER BY 1
 """.strip()
