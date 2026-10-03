@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from marin.execution.artifact import Artifact
+from marin.execution.fingerprint import register_fingerprint
 from marin.execution.lazy import ArtifactStep
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -77,6 +78,9 @@ class DatasetPrefix(BaseModel):
         if self.max_rows < 1 or self.max_overshoot_tokens < 0 or self.requested_token_cap < 1:
             raise ValueError("prefix row and token limits are invalid")
         return self
+
+
+register_fingerprint(DatasetPrefix, lambda value: value.model_dump(mode="json"))
 
 
 class PreparedAddDatasetCache(Artifact):
