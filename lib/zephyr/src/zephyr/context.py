@@ -78,14 +78,20 @@ def _generate_execution_id() -> str:
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 
+class ZephyrContextClosed(RuntimeError):
+    """The context was shut down before or during the call."""
+
+
 # Application errors that should never be retried by the execute() retry loop.
 # These are deterministic errors (bad plan, invalid config, programming bugs)
 # that would fail identically on every attempt. Infrastructure errors (OSError,
 # RuntimeError from dead actors, backend actor errors) are NOT listed here so they
 # remain retryable. TransferBudgetExceeded is deterministic: the cross-region
 # budget is global and persists for the life of the process, so every retry hits
-# the same wall while re-transferring data across regions.
+# the same wall while re-transferring data across regions. ZephyrContextClosed
+# is terminal by definition: the context that would retry has been shut down.
 _NON_RETRYABLE_ERRORS = (
+    ZephyrContextClosed,
     ZephyrWorkerError,
     ValueError,
     TypeError,
@@ -190,6 +196,7 @@ class _IdleWorkerPolicy(enum.StrEnum):
 class _OwnedPool:
     """Actor groups that one context owns."""
 
+    pool_id: str
     coordinator_group: ActorGroup
     coordinator: ActorHandle
     worker_count: int
@@ -239,6 +246,10 @@ class ZephyrContext:
     Shared calls do not recreate a failed pool. Each thread has its own shared-data
     view. A caller that starts a thread must copy or initialize the required view.
 
+    shutdown() is terminal and may be called from any thread: it stops the shared
+    pool and every dedicated pool an in-flight execute() or start() is using or
+    still waiting on, and those calls raise ZephyrContextClosed instead of retrying.
+
     Args:
         client: Fray client. Zephyr selects the current client when this is not set.
         max_workers: Worker limit for a dedicated or owned shared pool. Distributed
@@ -283,6 +294,13 @@ class ZephyrContext:
     _pool: _OwnedPool | None = field(init=False, default=None, repr=False)
     _coordinator: ActorHandle | None = field(init=False, default=None, repr=False)
     _state_lock: threading.Lock = field(init=False, repr=False)
+    # Dedicated pools that an execute() or start() call is starting or running,
+    # keyed by pool id, so shutdown() can stop them from another thread. Guarded
+    # by _live_lock rather than _state_lock because start() holds the latter
+    # across its own pool start.
+    _live_pools: dict[str, _OwnedPool | ActorGroup] = field(init=False, default_factory=dict, repr=False)
+    _live_lock: threading.Lock = field(init=False, repr=False)
+    _closing: threading.Event = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.client is None:
@@ -313,6 +331,8 @@ class ZephyrContext:
         self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
         self._shared_data = ContextVar(f"zephyr_shared_data_{self.name}", default=None)
         self._state_lock = threading.Lock()
+        self._live_lock = threading.Lock()
+        self._closing = threading.Event()
 
     def __getstate__(self) -> dict[str, Any]:
         """Serialize execution access without pool ownership."""
@@ -320,8 +340,11 @@ class ZephyrContext:
         state["_serialized_shared_data"] = dict(self._shared_data.get() or {})
         state.pop("_shared_data", None)
         state.pop("_state_lock", None)
+        state.pop("_live_lock", None)
+        state.pop("_closing", None)
         state["client"] = None
         state["_pool"] = None
+        state["_live_pools"] = {}
         if self._state is _ContextState.OWNER:
             state["_state"] = _ContextState.BORROWED
         return state
@@ -334,6 +357,8 @@ class ZephyrContext:
         self._shared_data = ContextVar(f"zephyr_shared_data_{self.name}", default=None)
         self._shared_data.set(dict(shared_data))
         self._state_lock = threading.Lock()
+        self._live_lock = threading.Lock()
+        self._closing = threading.Event()
 
     def put(self, name: str, obj: Any) -> None:
         """Add one value to the current logical shared-data view."""
@@ -489,12 +514,36 @@ class ZephyrContext:
             )
         return limit
 
+    def _register_live(self, pool_id: str, live: _OwnedPool | ActorGroup) -> None:
+        """Expose a starting or running dedicated pool to shutdown()."""
+        with self._live_lock:
+            if not self._closing.is_set():
+                self._live_pools[pool_id] = live
+                return
+        live.shutdown()
+        raise ZephyrContextClosed("ZephyrContext was shut down while starting a worker pool")
+
+    def _release_live(self, pool_id: str) -> _OwnedPool | ActorGroup | None:
+        with self._live_lock:
+            return self._live_pools.pop(pool_id, None)
+
+    def _end_live(self, pool_id: str) -> None:
+        """Stop a dedicated pool unless shutdown() already did."""
+        live = self._release_live(pool_id)
+        if live is not None:
+            live.shutdown()
+
     def _start_pool(
         self,
         worker_count: int,
         idle_policy: _IdleWorkerPolicy,
     ) -> _OwnedPool:
-        """Start one coordinator job and its worker group."""
+        """Start one coordinator job and its worker group.
+
+        A concurrent shutdown() cancels the start while the coordinator or its
+        workers are still scheduling; the call then raises instead of waiting out
+        the scheduling timeouts.
+        """
         assert self.client is not None
         assert self.resources is not None
         assert self.stage_runner_factory is not None
@@ -522,15 +571,11 @@ class ZephyrContext:
             resources=self.coordinator_resources,
             actor_config=ActorConfig(max_concurrency=100),
         )
+        self._register_live(pool_id, coordinator_group)
         try:
             coordinator = coordinator_group.wait_ready(count=1)[0]
-        except Exception:
-            with suppress(Exception):
-                coordinator_group.shutdown()
-            raise
-
-        pool = _OwnedPool(coordinator_group, coordinator, worker_count)
-        try:
+            pool = _OwnedPool(pool_id, coordinator_group, coordinator, worker_count)
+            self._register_live(pool_id, pool)
             # The coordinator creates the workers so they land in a child job of its
             # own and Iris cascading termination retires them with it.
             coordinator.start_workers.remote(
@@ -545,15 +590,29 @@ class ZephyrContext:
             coordinator.worker_handles.remote(1, ready_wait).result(timeout=ready_wait)
             return pool
         except Exception:
-            pool.shutdown()
+            self._end_live(pool_id)
             raise
+
+    def _raise_if_closing(self, error: Exception, during: str) -> None:
+        if self._closing.is_set():
+            raise ZephyrContextClosed(f"ZephyrContext was shut down during {during}") from error
 
     def start(self) -> "ZephyrContext":
         """Start a shared pool and retain idle workers."""
         with self._state_lock:
             if self._state is not _ContextState.NEW:
                 raise RuntimeError(f"Cannot start ZephyrContext in state {self._state}")
-            pool = self._start_pool(self._worker_limit(), _IdleWorkerPolicy.RETAIN)
+            try:
+                pool = self._start_pool(self._worker_limit(), _IdleWorkerPolicy.RETAIN)
+            except Exception as error:
+                self._raise_if_closing(error, "start()")
+                raise
+            # The shared pool is owned through _pool from here; shutdown() reaches
+            # it through the state machine rather than the live registry.
+            self._release_live(pool.pool_id)
+            if self._closing.is_set():
+                pool.shutdown()
+                raise ZephyrContextClosed("ZephyrContext was shut down during start()")
             self._pool = pool
             self._coordinator = pool.coordinator
             self._state = _ContextState.OWNER
@@ -616,7 +675,7 @@ class ZephyrContext:
 
         with self._state_lock:
             if self._state is _ContextState.CLOSED:
-                raise RuntimeError("Cannot execute with a closed ZephyrContext")
+                raise ZephyrContextClosed("Cannot execute with a closed ZephyrContext")
             state = self._state
             coordinator = self._coordinator
 
@@ -633,6 +692,9 @@ class ZephyrContext:
                     resolved_map,
                     resolved_reduce,
                 )
+            except Exception as error:
+                self._raise_if_closing(error, "execute()")
+                raise
             finally:
                 with suppress(Exception):
                     coordinator.release_execution.remote(execution_id).result(timeout=10.0)
@@ -665,6 +727,7 @@ class ZephyrContext:
             except _NON_RETRYABLE_ERRORS:
                 raise
             except Exception as error:
+                self._raise_if_closing(error, "execute()")
                 payload = _try_read_coordinator_result(_execution_result_path(self.chunk_storage_prefix, execution_id))
                 if isinstance(payload, _NON_RETRYABLE_ERRORS):
                     raise payload from None
@@ -682,26 +745,37 @@ class ZephyrContext:
                 time.sleep(delay)
             finally:
                 if pool is not None:
-                    pool.shutdown()
+                    self._end_live(pool.pool_id)
                 _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
         raise last_exception  # type: ignore[misc]
 
     def shutdown(self) -> None:
-        """Stop an owned shared pool."""
+        """Stop the owned shared pool and cancel in-flight execute() and start() calls."""
+        # BORROWED is assigned only when a context is unpickled and never changes,
+        # so it is safe to read without the lock.
+        if self._state is _ContextState.BORROWED:
+            raise RuntimeError("A borrowed ZephyrContext cannot stop its shared pool")
+
+        # Stop live pools before taking _state_lock: a blocked start() holds that
+        # lock until its pool start fails, and stopping the pool is what fails it.
+        with self._live_lock:
+            self._closing.set()
+            live = list(self._live_pools.values())
+            self._live_pools.clear()
+        for item in live:
+            item.shutdown()
+
         with self._state_lock:
-            if self._state is _ContextState.BORROWED:
-                raise RuntimeError("A borrowed ZephyrContext cannot stop its shared pool")
-            if self._state in {_ContextState.NEW, _ContextState.CLOSED}:
+            if self._state is _ContextState.CLOSED:
                 return
-            assert self._state is _ContextState.OWNER
-            assert self._pool is not None
             pool = self._pool
             self._pool = None
             self._coordinator = None
             self._state = _ContextState.CLOSED
 
-        pool.shutdown()
+        if pool is not None:
+            pool.shutdown()
 
     def __enter__(self) -> "ZephyrContext":
         return self.start()
