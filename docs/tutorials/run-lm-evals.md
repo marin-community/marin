@@ -502,7 +502,7 @@ immutable configuration before accepting a recovered result. A sample row count 
 trials when an evaluator writes multiple extraction filters or repeats. If FineStore is sealed and the
 evaluator outcome is complete but Iris is retrying, compare `iris task describe` and `iris task events`
 for the evaluator child. A `Completed` container event followed by `PodDeleted` can make Iris retry a
-finished evaluator; see [Iris task operations](../../lib/iris/OPS.md#task-operations). Do not mark a
+finished evaluator; see [Iris task operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#task-operations). Do not mark a
 running child complete merely because some samples exist. Confirm that the exact archive contains
 the full, valid result and that the parent can consume it before recovering the canonical record.
 
