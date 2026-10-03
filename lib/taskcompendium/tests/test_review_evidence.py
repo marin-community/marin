@@ -60,6 +60,15 @@ def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
     assert previews["solution/solve.sh"] == "Private oracle"
     assert payload["resource_manifest"]["omitted_count"] > 0
     assert task.resources == resources
+    changed_resources = resources.model_copy(
+        update={"verifier": (*resources.verifier[:-1], inline_resource("tests/case-299.txt", b"edit"))}
+    )
+    changed_task = task.model_copy(update={"resources": changed_resources})
+    changed_body = completion_body(changed_task, SVAMP_RECIPE.rubric, "reviewer", 100)
+    changed_payload = json.loads(changed_body["messages"][1]["content"])
+    assert changed_payload["resources"] == payload["resources"]
+    assert changed_payload["resource_manifest"]["sha256"] != payload["resource_manifest"]["sha256"]
+    assert changed_body != body
 
 
 def test_review_exposes_late_small_cases_that_can_violate_the_public_domain():
