@@ -93,36 +93,37 @@ export async function requestCompletion(
   signal: AbortSignal,
   onData: (data: any) => void,
   baseUrl?: string,
-): Promise<void> {
+): Promise<string | null> {
   const response = await postJson(path, body, signal, baseUrl)
   if (!response.ok || !response.body) {
     throw new Error(`${response.status} — ${await response.text()}`)
   }
   if (!streaming) {
-    onData(await response.json())
-    return
+    const data = await response.json()
+    onData(data)
+    return data.choices?.[0]?.finish_reason ?? null
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let finishReason: string | null = null
   while (true) {
     const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+    buffer += done ? decoder.decode() + '\n' : decoder.decode(value, { stream: true })
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed.startsWith('data:')) continue
       const payload = trimmed.slice(5).trim()
-      if (payload === '[DONE]') return
-      try {
-        onData(JSON.parse(payload))
-      } catch {
-        // Skip keepalives and partial frames.
-      }
+      if (payload === '[DONE]') return finishReason
+      const data = JSON.parse(payload)
+      finishReason = data.choices?.[0]?.finish_reason ?? finishReason
+      onData(data)
     }
+    if (done) break
   }
+  return finishReason
 }
 
 function postJson(path: string, body: object, signal: AbortSignal | undefined, baseUrl?: string): Promise<Response> {

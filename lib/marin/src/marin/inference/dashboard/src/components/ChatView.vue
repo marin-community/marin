@@ -301,7 +301,7 @@ async function complete(
     // The response handling below also accepts structured calls when a server emits them.
     body.tool_choice = null
   }
-  await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
+  reply.finishReason = await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
     if (debugEnabled) requestDebug = requestDebugData(data) ?? requestDebug
     const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
     if (!delta) return

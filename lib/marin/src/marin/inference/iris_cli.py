@@ -41,6 +41,7 @@ import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import quote
 
 import click
 import requests
@@ -255,7 +256,7 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
 
 def _mint_and_print_capability_url(
     client: IrisClient, endpoint: str, dashboard_url: str | None, ttl_hours: float
-) -> None:
+) -> str:
     """Mint a scoped endpoint token and print the off-cluster capability URL.
 
     Runs CLI-side under the launching user's identity, so the controller's owner
@@ -283,10 +284,12 @@ def _mint_and_print_capability_url(
         click.echo(f"    path       {capability_path(endpoint, resp.token)}/v1  (front the controller /proxy/t route)")
         click.echo(f"    expires    in {hours_left:.1f}h")
     click.echo("")
+    return origin_url
 
 
 @click.command(context_settings={"show_default": True})
 @click.argument("model")
+@click.option("--compare-model", default=None, help="Launch a second model and print one shared comparison URL.")
 @click.option(
     "--backend",
     type=click.Choice(["vllm", "levanter"]),
@@ -413,6 +416,7 @@ def _mint_and_print_capability_url(
 )
 def main(
     model: str,
+    compare_model: str | None,
     backend: str,
     cluster: str | None,
     controller: str | None,
@@ -601,21 +605,41 @@ def main(
         dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
         with IrisClient.remote(controller_url, workspace=workspace_dir, credentials=endpoint_info.credentials) as client:
-            job = client.submit(
-                entrypoint=Entrypoint.from_callable(run_iris_service, service),
-                name=job_name,
-                resources=convert_resources(submission_resources),
-                environment=environment,
-                ports=["http"],
-                constraints=constraints or None,
-                max_retries_failure=0,
-                max_retries_preemption=max_retries_preemption,
-                task_image=None if brokered else task_image,
-            )
+            services = [(service, job_name)]
+            if compare_model:
+                services.append(
+                    (
+                        replace(
+                            service,
+                            model=replace(service.model, weights=compare_model),
+                            endpoint_name=endpoint + "-right",
+                        ),
+                        job_name + "-right",
+                    )
+                )
+            jobs = []
+            for serving_service, serving_name in services:
+                jobs.append(
+                    client.submit(
+                        entrypoint=Entrypoint.from_callable(run_iris_service, serving_service),
+                        name=serving_name,
+                        resources=convert_resources(submission_resources),
+                        environment=environment,
+                        ports=["http"],
+                        constraints=constraints or None,
+                        max_retries_failure=0,
+                        max_retries_preemption=max_retries_preemption,
+                        task_image=None if brokered else task_image,
+                    )
+                )
+            job = jobs[0]
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
             click.echo(f"  job          {job}")
             click.echo(f"  model        {model}")
+            if compare_model:
+                click.echo(f"  compare      {compare_model}")
+                click.echo(f"  second job   {jobs[1]}")
             click.echo(f"  backend      {backend}")
             click.echo(f"  mode         {'brokered' if brokered else 'direct'}")
             click.echo(f"  instances    {instances}")
@@ -634,9 +658,11 @@ def main(
             click.echo(f"  timeout      {timeout_hours:g}h")
             click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
             if controller is None and cluster:
-                click.echo(f"  cancel with  iris --cluster {cluster} job cancel {job}")
+                for submitted_job in jobs:
+                    click.echo(f"  cancel with  iris --cluster {cluster} job cancel {submitted_job}")
             else:
-                click.echo(f"  cancel with  iris --controller-url {controller_url} job cancel {job}")
+                for submitted_job in jobs:
+                    click.echo(f"  cancel with  iris --controller-url {controller_url} job cancel {submitted_job}")
             click.echo("")
 
             if not wait:
@@ -645,6 +671,8 @@ def main(
 
             click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
             _wait_for_endpoint(client, job, endpoint, wait_timeout)
+            if compare_model:
+                _wait_for_endpoint(client, jobs[1], services[1][0].endpoint_name, wait_timeout)
             click.echo("")
             click.echo(f"READY — dashboard: {proxy_url}/")
             click.echo(f"        OpenAI:    {proxy_url}/v1")
@@ -653,7 +681,16 @@ def main(
             click.echo("")
             # Mint after the endpoint registers (the controller resolves the row for owner authz),
             # so the token is bound to a live endpoint.
-            _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
+            left_url = _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
+            if compare_model:
+                right_url = _mint_and_print_capability_url(
+                    client, services[1][0].endpoint_name, dashboard_url, timeout_hours
+                )
+                if not left_url or not right_url:
+                    raise click.ClickException("Comparison links require a controller with a public dashboard origin.")
+                click.echo(
+                    f"  Comparison URL (access to both models): {left_url}/#compare={quote(right_url + '/', safe='')}"
+                )
             click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
             with contextlib.suppress(KeyboardInterrupt):
                 while True:
