@@ -24,10 +24,9 @@ def mini_swe_capture_step(task: str, images: tuple[str, str, str]) -> ArtifactSt
     harbor["name"] = "mini-swe-agent"
     harbor["version"] = "2.1.0"
     harbor.pop("thinking_format")
-    # This operation has no policy loss. Validate exact evidence from its retained
-    # result before declaring Mini-SWE's training capability.
+    # Generation-only; retain the same exact context required by the training loss.
     recipe["trainer"]["algorithm"]["off_policy_correction"] = "none"
-    recipe["trainer"]["algorithm"]["tito_full"] = False
+    recipe["trainer"]["algorithm"]["tito_full"] = True
     name = user_owned_name(f"rollouts/bfcl-rl-mini-swe-capture-{task}")
     spec = replace(
         spec, name=name, version=resolve_version(name, None), config_yaml=yaml.safe_dump(recipe, sort_keys=False)
