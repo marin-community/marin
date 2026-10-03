@@ -42,9 +42,13 @@ _PARQUET_MAX_ROWS_PER_PAGE = 256
 # a single concatenated table.
 DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
 
-# Number of records converted to PyArrow at a time. Small enough that
-# ``pa.Table.from_pylist`` is fast; large enough to amortise per-call overhead.
-_MICRO_BATCH_SIZE = 8
+# Records converted to PyArrow per ``pa.Table.from_pylist`` call. With an explicit
+# schema the per-call overhead dominates at small sizes (4.5 us/row at 8 rows vs
+# 0.5 us/row at 1024 on 300k five-column rows). Inferred schemas keep the small
+# batch: inference reads only the first record's keys and widening happens per
+# batch, so the grouping decides which keys and types reach the file.
+_MICRO_BATCH_SIZE = 1024
+_INFERRED_SCHEMA_MICRO_BATCH_SIZE = 8
 
 # Number of items per intermediate pickle chunk between non-scatter stages.
 # Used by ``_write_pickle_chunks`` in stage_io.py.
@@ -118,7 +122,8 @@ def _accumulate_row_tables(
 ) -> Iterable[pa.Table]:
     """Yield PyArrow tables of approximately ``target_bytes`` each.
 
-    Converts records to PyArrow in micro-batches of ``_MICRO_BATCH_SIZE``,
+    Converts records to PyArrow in micro-batches (``_MICRO_BATCH_SIZE`` with an
+    explicit schema, ``_INFERRED_SCHEMA_MICRO_BATCH_SIZE`` otherwise),
     tracks byte size incrementally, and yields a single ``concat_tables``
     result each time the threshold is reached.
 
@@ -143,7 +148,7 @@ def _accumulate_row_tables(
     def _raise_schema_mismatch(e: Exception, dicts: list[dict[str, Any]]) -> None:
         actual_schema = pa.Table.from_pylist(dicts).schema
         origin = (
-            f"inferred from first {_MICRO_BATCH_SIZE} records (no explicit schema passed)"
+            f"inferred from first {_INFERRED_SCHEMA_MICRO_BATCH_SIZE} records (no explicit schema passed)"
             if schema_inferred
             else "explicitly provided by caller"
         )
@@ -186,14 +191,15 @@ def _accumulate_row_tables(
             _raise_schema_mismatch(mismatch_error, dicts)
         return pa.Table.from_pylist(dicts, schema=widened), widened
 
-    for micro_batch in batchify(records, n=_MICRO_BATCH_SIZE):
+    micro_batch_size = _INFERRED_SCHEMA_MICRO_BATCH_SIZE if schema_inferred else _MICRO_BATCH_SIZE
+    for micro_batch in batchify(records, n=micro_batch_size):
         if any(isinstance(record, pa.RecordBatch) for record in micro_batch):
             raise TypeError("A writer input stream cannot mix row records and pyarrow.RecordBatch objects")
         if convert is None:
             convert = asdict if is_dataclass(micro_batch[0]) else (lambda x: x)
         dicts = [convert(r) for r in micro_batch]
         if schema is None:
-            # NOTE: _MICRO_BATCH_SIZE is small; if the initial schema turns
+            # NOTE: the inferred-schema micro-batch is small; if the initial schema turns
             # out to be narrower than the stream's true schema, we widen
             # below on the first mismatching batch.
             schema = infer_arrow_schema(dicts)
