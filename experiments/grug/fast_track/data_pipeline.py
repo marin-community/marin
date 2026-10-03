@@ -42,7 +42,8 @@ class FastTrackDataStore(Artifact):
 
 
 DATA_POOL_WORKERS = 1
-DATA_POOL_RESOURCES = ResourceConfig(cpu=120, ram="1t", disk="1t")
+# Leave capacity for system services on a 128-CPU, 2-TiB H100 node.
+DATA_POOL_RESOURCES = ResourceConfig(cpu=120, ram="1900g", disk="25t")
 # Most shard tasks request two CPUs. Keep enough steps active to fill the worker
 # when each source has only one shard.
 DATA_PIPELINE_CONCURRENCY = 64
