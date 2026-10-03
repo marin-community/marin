@@ -274,8 +274,10 @@ The default is the existing 16k-tokenizer reference cache at `hero_tok/v16384_sh
 The checkout does not link this cache to the current production mixture or phase.
 Before a production comparison, verify that link or supply a verified `FrozenBaselineManifest` through the Python API.
 
-The source requires an immutable Hugging Face revision, subset, split, and text field.
-It also requires the production token budget `T` and available unique dataset tokens `N` in the same tokenizer.
+The source requires an immutable Hugging Face revision, split, and text field.
+Add `--subset <name>` when the repository has a named dataset configuration. Without this flag, the loader uses the repository default.
+The CLI uses `hero-bpe-v16384` for preparation and training. It has no tokenizer override.
+Measure the production token budget `T` and available unique dataset tokens `N` with that tokenizer.
 For a fast-track budget `B`, it uses at most `min(p*B, N*B/T, N)` unique tokens.
 Scaling unique data by `B/T` preserves the production exposure of `p*T/N` epochs when the new dataset repeats.
 The loader limit rounds down to a whole global batch. A zero-batch limit rejects the experiment.
@@ -314,10 +316,13 @@ It must be at least each rung's calculated cap. Each rung still applies its own 
 
 Run the control with `fast-track --source-mode cache --dense --size d512 --seed 0 --data-seed 0` and a separate `--run-id`.
 Use identical model settings, token budgets, and evaluation data for both runs.
+Use the [data-track comparison gate](#compare-data-track-runs) before a larger run.
 
 ## Improve a quality classifier
 
 The quality track fits a candidate head on frozen embeddings and GLM labels.
+It ranks documents by candidate score, highest first.
+Equal scores use SHA-256 of the tie seed, source, and document ID for a deterministic order.
 It selects whole documents until their token count reaches the requested fraction of a separate frozen pool.
 The selected cache supplies all training tokens for the experiment.
 The CLI uses a ridge head and a 10% fraction by default. The downstream model is dense d512.
@@ -340,6 +345,17 @@ Supply a JSON `QualityBundle` with these fields:
 | `labels`, `pool` | Lists of `{ "path": "...", "sha256": "..." }` entries for Parquet files. |
 | `quality_bin_edges` | Increasing incumbent-score boundaries, with one more boundary than the named quality bins. |
 | `requirements` | Declared source token shares, permitted share error, quality bins, minimum bin counts, minimum duplicate groups, and maximum duplicate-group token share. |
+
+Set these fields within `requirements` before candidate evaluation:
+
+| Field | Unit and calculation |
+| --- | --- |
+| `source_token_shares` | Source name to token fraction. Each fraction is source tokens divided by total pool tokens. Fractions must sum to one. |
+| `source_share_tolerance` | Maximum absolute difference from each declared source fraction, on a 0-to-1 scale. |
+| `quality_bins` | Ordered bin names that correspond to `quality_bin_edges`. Each interval includes its lower edge. Only the last interval includes its upper edge. |
+| `min_documents_per_quality_bin` | Minimum document count in each named score bin. |
+| `min_duplicate_groups` | Minimum distinct duplicate-group count across the pool. |
+| `max_duplicate_token_share` | Maximum tokens in one duplicate group divided by total pool tokens, on a 0-to-1 scale. |
 
 Label rows contain `source`, `id`, `duplicate_group`, `embedding`, and `label`.
 Use an immutable model commit for `embedding_revision` and a label-artifact fingerprint for `label_revision`.
@@ -386,9 +402,16 @@ This is an arithmetic lower bound. Keep more tokens for document boundaries and 
 The training source rejects a capacity-short rung. It does not increase repetition to fill the budget.
 A large pool does not prove useful score variation. The declared coverage checks also reject a pool that contains only one quality range.
 
-The CLI runs one rung at a time. Select the next rung only after the matched comparison passes its declared gate.
+## Compare data-track runs
+
+Each data-track CLI runs one rung at a time. Select the next rung only after the matched comparison passes its declared gate.
 For comparisons, use final Paloma macro BPB as the primary metric and Uncheatable macro BPB plus domain results as guardrails.
 Measure matched-seed noise at d512 before selecting a non-inferiority margin.
-Confirm promising results with additional matched seeds, then d768 and d1024.
+Record that margin in BPB, domain-regression limits, and the confidence-interval method before candidate runs.
+Use at least three matched model/data seeds to calculate candidate-minus-control differences.
+A rung passes when the upper one-sided 95% confidence bound is below the declared margin and all declared guardrails pass.
+Use a zero margin when the gate requires an improvement.
+After a pass, keep the same declared gate for d768 and then d1024.
 Record unresolved results as inconclusive. A nonsignificant regression does not prove non-inferiority.
-Use a second, independently sampled pool for the final confirmation. Repeated selection on one pool can overfit that pool.
+For quality-head comparisons, use a second, independently sampled pool for final confirmation.
+Repeated selection on one pool can overfit that pool.
