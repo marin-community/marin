@@ -2,17 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
+from uuid import UUID
 
 import yaml
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.rl.skyrl import SkyRLRun
+from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import async_rl, iceball_micro, snowball_online_eagle
 from experiments.post_training.cat_count_canary import launcher as canary
@@ -21,7 +26,6 @@ from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.tasktrove import rl_smoke as tasktrove
 
 VERSION = "2026.10.03"
-ARTIFACT_ROOT = Path("/tmp/skyrl-launch-census")
 
 
 @dataclass(frozen=True)
@@ -65,23 +69,28 @@ def _iceball_step() -> ArtifactStep[SkyRLRun]:
     return iceball_micro.build_workflow(version=VERSION).rl
 
 
-def _tasktrove_step() -> ArtifactStep[SkyRLRun]:
-    release = ArtifactStep.adopt("documents/launch-census-tasktrove", VERSION, str(ARTIFACT_ROOT / "tasktrove"))
+def _tasktrove_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
+    release_path = artifact_root / "tasktrove"
+    release_path.mkdir(parents=True, exist_ok=True)
+    (release_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit==0.1.0"}))
+    release = ArtifactStep.adopt("documents/launch-census-tasktrove", VERSION, str(release_path))
     return tasktrove.smoke_step(release)
 
 
-def _probe_step(settings: mismatch.ProbeSettings) -> ArtifactStep[SkyRLRun]:
+def _probe_step(artifact_root: Path, settings: mismatch.ProbeSettings) -> ArtifactStep[SkyRLRun]:
     # The build-options wrapper displays/runs a graph. Its wrapped Click build body returns that graph.
     builder = inspect.unwrap(mismatch.main.callback)
     return builder(
-        model_uri=str(ARTIFACT_ROOT / "iceball-sft"),
-        data_uri=str(ARTIFACT_ROOT / "gsm8k"),
+        model_uri=str(artifact_root / "iceball-sft"),
+        data_uri=str(artifact_root / "gsm8k"),
         input_version=VERSION,
         **asdict(settings),
     )
 
 
-def launch_builders() -> tuple[dict[str, Callable[[], ArtifactStep[SkyRLRun]]], tuple[UnsupportedCase, ...]]:
+def launch_builders(
+    artifact_root: Path,
+) -> tuple[dict[str, Callable[[], ArtifactStep[SkyRLRun]]], tuple[UnsupportedCase, ...]]:
     """Enumerate current public presets and representative document-changing CLI options."""
     builders = {}
     unsupported = []
@@ -119,7 +128,7 @@ def launch_builders() -> tuple[dict[str, Callable[[], ArtifactStep[SkyRLRun]]], 
     )
     builders["canary/seed-identity"] = partial(canary.build_run, preset="dry", version=VERSION, seed=18)
     builders["iceball/workflow"] = _iceball_step
-    builders["tasktrove/smoke"] = _tasktrove_step
+    builders["tasktrove/smoke"] = partial(_tasktrove_step, artifact_root)
     for label, preset in snowball_online_eagle.PRESETS.items():
         builders[f"eagle/{label}"] = partial(snowball_online_eagle.online_eagle_step, preset)
     replay_choices = ((), *((mode,) for mode in mismatch.REPLAY_MODES), mismatch.REPLAY_MODES)
@@ -133,25 +142,42 @@ def launch_builders() -> tuple[dict[str, Callable[[], ArtifactStep[SkyRLRun]]], 
             updates=updates,
             keep_fraction=0.5,
             cache_mode=cache,
-            reuse_probe=str(ARTIFACT_ROOT / "probe-archive") if reuse else None,
-            resume_path=str(ARTIFACT_ROOT / "checkpoints") if resume else None,
+            reuse_probe=str(artifact_root / "probe-archive") if reuse else None,
+            resume_path=str(artifact_root / "checkpoints") if resume else None,
             extra_trainer_modes=replay,
         )
         key = f"mismatch/cache={cache}/replay={','.join(replay)}/updates={updates}/resume={resume}/reuse={reuse}"
-        builders[key] = partial(_probe_step, settings)
+        builders[key] = partial(_probe_step, artifact_root, settings)
     return builders, tuple(unsupported)
 
 
-def render_launch_census() -> LaunchCensus:
-    """Render every case without running steps or reading model/data artifacts."""
-    builders, unsupported = launch_builders()
+def _write_model_metadata(step: ArtifactStep[SkyRLRun], artifact_root: Path) -> None:
+    for dependency in step.deps:
+        if not issubclass(dependency.artifact_type, LevanterCheckpoint):
+            continue
+        location = StoragePath(dependency.path(str(artifact_root)))
+        if location.is_remote:
+            continue
+        checkpoint = Path(str(location)) / "hf"
+        checkpoint.mkdir(parents=True, exist_ok=True)
+        (checkpoint / "config.json").write_text("{}")
+        (checkpoint / "tokenizer_config.json").write_text("{}")
+
+
+def render_launch_census(artifact_root: Path) -> LaunchCensus:
+    """Render runtime documents using local metadata without running steps."""
+    builders, unsupported = launch_builders(artifact_root)
     documents = []
     failures = []
-    with build_context(BuildContext(versions=VersionCodex(default=VERSION))):
+    with (
+        build_context(BuildContext(versions=VersionCodex(default=VERSION))),
+        patch("uuid.uuid4", return_value=UUID(int=17)),
+    ):
         for name, build in builders.items():
             try:
                 step = build()
-                config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+                _write_model_metadata(step, artifact_root)
+                config = materialized_config(step, str(artifact_root))
                 documents.append(
                     LaunchDocument(
                         name, yaml.safe_load(config.launch_config_yaml), step.fingerprint(), config.launcher_requirement

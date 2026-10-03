@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def test_rl_launch_documents_load_with_the_installed_launcher(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     assert Path(external_dependencies.__file__).resolve() == root / "lib/marin/src/marin/external_dependencies.py"
-    census = render_launch_census()
+    census = render_launch_census(tmp_path / "artifacts")
     (tmp_path / "manifest.json").write_text(json.dumps(asdict(census)))
     assert not census.failures, census.failures
     assert census.documents
