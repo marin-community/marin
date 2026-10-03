@@ -4,7 +4,7 @@
 """Concise multi-controller federation journeys."""
 
 import pytest
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.testing.journeys.federation import PEER_ID, FederationJourney
 
 
@@ -106,3 +106,62 @@ def test_execution_peer_submits_a_child_and_syncs_the_subtree_to_authority_once(
 
     assert [task.task_id for task in federation.peer_tasks(root)] == [root[0].wire_id]
     assert {task.task_id for task in federation.parent_tasks(child)} == {child[0].wire_id, child[1].wire_id}
+
+
+@pytest.mark.parametrize("target_kind", ["task", "attempt", "job"])
+def test_parent_kick_retries_child_on_execution_peer(federation: FederationJourney, target_kind) -> None:
+    root = federation.submit("kick-tree")
+    federation.promote()
+    federation.sync()
+    child = federation.peer.submit_child(root, "train", preemption_retries=2)
+    federation.run_peer()
+    # The child has not been mirrored yet; the peer owns target resolution.
+    target = child.wire_id if target_kind == "job" else child[0].wire_id
+    if target_kind == "attempt":
+        target += ":0"
+    response = federation.parent.controller.kick_tasks(
+        controller_pb2.Controller.KickTasksRequest(
+            targets=[target], desired_state=job_pb2.TASK_STATE_PREEMPTED, reason="operator recovery"
+        )
+    )
+    assert response.results[0].queued
+    federation.peer.settle()
+    federation.sync()
+    task = federation.parent_tasks(child)[0]
+    assert task.current_attempt_id == 1
+    assert task.state == job_pb2.TASK_STATE_RUNNING
+    attempt = federation.peer.task(child[0]).attempts[0]
+    assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
+    assert attempt.error == "operator recovery"
+    assert any(
+        event.kind == "stopped" and event.task_id == child[0].wire_id and event.attempt_id == 0
+        for event in federation.peer.backend.events
+    )
+
+
+def test_parent_kick_rejects_stale_attempt_on_peer(federation: FederationJourney) -> None:
+    root = federation.submit("stale-kick")
+    federation.promote()
+    federation.sync()
+    child = federation.peer.submit_child(root, "train", preemption_retries=2)
+    federation.run_peer()
+    federation.sync()
+    assert federation.peer.kick(child[0], attempt_id=0).queued
+    federation.peer.settle()
+    # Parent still reports attempt 0, but execution has advanced to attempt 1.
+    response = federation.parent.kick(child[0], attempt_id=0)
+    assert not response.queued
+    federation.peer.settle()
+    assert federation.peer_tasks(child)[0].current_attempt_id == 1
+
+
+def test_parent_kick_unreachable_peer_does_not_acknowledge_success(federation: FederationJourney) -> None:
+    job = federation.submit("unreachable-kick")
+    federation.promote()
+    federation.sync()
+    federation.run_peer()
+    federation.sync()
+    federation.set_peer_reachable(False)
+    with pytest.raises(ConnectionError):
+        federation.parent.kick(job[0])
+    assert federation.peer_tasks(job)[0].state == job_pb2.TASK_STATE_RUNNING
