@@ -281,6 +281,7 @@ Measure the production token budget `T` and available unique dataset tokens `N` 
 For a fast-track budget `B`, it uses at most `min(p*B, N*B/T, N)` unique tokens.
 Scaling unique data by `B/T` preserves the production exposure of `p*T/N` epochs when the new dataset repeats.
 The loader limit rounds down to a whole global batch. A zero-batch limit rejects the experiment.
+This rounding can increase repetition. For a rounded cap `C`, expected exposure is `p*B/C` epochs.
 The prepared cache records the requested cap and actual document and token counts.
 Whole-document preparation can exceed the cap. The loader applies the cap once and clears its global simulated-budget fields.
 
