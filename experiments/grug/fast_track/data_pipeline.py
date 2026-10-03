@@ -19,6 +19,7 @@ from zephyr.runners import SubprocessRunner
 from experiments.datakit.execution import run_steps_in_pool
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
+    DriverPlacement,
     TokenizerSpec,
     reference_datakit_steps,
 )
@@ -45,7 +46,7 @@ DATA_POOL_RESOURCES = ResourceConfig(cpu=120, ram="1t", disk="1t")
 # Most shard tasks request two CPUs. Keep enough steps active to fill the worker
 # when each source has only one shard.
 DATA_PIPELINE_CONCURRENCY = 64
-FAST_TRACK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_2026_10_02"
+FAST_TRACK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_25b_2026_10_02"
 
 
 def data_pool(name: str) -> ZephyrContext:
@@ -75,6 +76,7 @@ def build_fast_track_data(
         quality_model=quality_model,
         quality_model_version=quality_model_version,
         scale=SMOKE_SCALE,
+        driver_placement=DriverPlacement.COORDINATOR,
         tokenizer=tokenizer,
     )
 

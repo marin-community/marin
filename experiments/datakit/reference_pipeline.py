@@ -108,8 +108,11 @@ eval corpus a version tag.
 import argparse
 import logging
 import posixpath
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
+from typing import Any
 
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
@@ -282,10 +285,22 @@ class ClusterConfig:
             )
 
 
-# Remote stage-driver jobs (embed / quality / assign / centroid-sample) submit a
-# pipeline to their own dedicated coordinator and block, so they need almost
-# nothing themselves.
+# Lightweight stage drivers submit shard work to Zephyr and wait for completion.
 DRIVER_RESOURCES = ResourceConfig(cpu=1, ram="2g")
+
+
+class DriverPlacement(StrEnum):
+    """Execution location for lightweight Zephyr stage drivers."""
+
+    COORDINATOR = "coordinator"
+    REMOTE = "remote"
+
+
+def stage_driver(fn: Callable[[str], Any], placement: DriverPlacement) -> Callable[[str], Any]:
+    """Select driver placement without changing its artifact identity."""
+    if placement is DriverPlacement.COORDINATOR:
+        return fn
+    return remote(fn, resources=DRIVER_RESOURCES, pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS))
 
 
 @dataclass(frozen=True)
@@ -456,7 +471,13 @@ def default_sources() -> dict[str, StepSpec]:
     return select_sources(None)
 
 
-def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale, output_prefix: str | None) -> StepSpec:
+def _build_embed_step(
+    name: str,
+    normalize_step: StepSpec,
+    scale: PipelineScale,
+    output_prefix: str | None,
+    driver_placement: DriverPlacement,
+) -> StepSpec:
     return StepSpec(
         name=f"datakit/embed/{name}",
         output_path_prefix=output_prefix,
@@ -471,7 +492,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale,
             "doc_sample_chars": EMBED_DOC_SAMPLE_CHARS,
             "v": EMBEDDING_ATTR_DATA_VERSION,
         },
-        fn=remote(
+        fn=stage_driver(
             lambda output_path, np=normalize_step.output_path: embed_source(
                 output_path=output_path,
                 normalized=read_artifact(np, NormalizedData),
@@ -481,14 +502,17 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale,
                 worker_resources=scale.pool.worker,
                 max_workers=scale.pool.n_workers,
             ),
-            resources=DRIVER_RESOURCES,
-            pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
+            placement=driver_placement,
         ),
     )
 
 
 def build_per_source_embed_steps(
-    sources: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE, output_prefix: str | None = None
+    sources: dict[str, StepSpec],
+    scale: PipelineScale = DEFAULT_SCALE,
+    output_prefix: str | None = None,
+    *,
+    driver_placement: DriverPlacement = DriverPlacement.REMOTE,
 ) -> dict[str, StepSpec]:
     """Build the Luxical embed StepSpec for each source.
 
@@ -497,11 +521,15 @@ def build_per_source_embed_steps(
     the domain training subgraph (via :func:`build_train_centroids_step`) can
     share the same embeds across both wirings.
     """
-    return {name: _build_embed_step(name, step, scale, output_prefix) for name, step in sources.items()}
+    return {name: _build_embed_step(name, step, scale, output_prefix, driver_placement) for name, step in sources.items()}
 
 
 def build_train_centroids_step(
-    embed_steps: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE, output_prefix: str | None = None
+    embed_steps: dict[str, StepSpec],
+    scale: PipelineScale = DEFAULT_SCALE,
+    output_prefix: str | None = None,
+    *,
+    driver_placement: DriverPlacement = DriverPlacement.REMOTE,
 ) -> StepSpec:
     """Build the K-means training StepSpec for the domain centroids.
 
@@ -521,7 +549,7 @@ def build_train_centroids_step(
             "format": "parquet",
             "v": 1,
         },
-        fn=remote(
+        fn=stage_driver(
             lambda output_path, es={n: s.output_path for n, s in embed_steps.items()}: sample_centroid_inputs(
                 output_path=output_path,
                 embeddings={n: read_artifact(p, EmbeddingAttrData) for n, p in es.items()},
@@ -531,8 +559,7 @@ def build_train_centroids_step(
                 max_workers=scale.pool.n_workers,
                 parallel_sources=scale.sample_parallel_sources,
             ),
-            resources=DRIVER_RESOURCES,
-            pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
+            placement=driver_placement,
         ),
     )
     # Pin the K-means/BLAS thread count to the allocated CPUs so centroid training
@@ -878,6 +905,7 @@ def reference_datakit_steps(
     zephyr_context: ZephyrContext | None = None,
     output_prefix: str | None = None,
     tokenizer: TokenizerSpec | None = None,
+    driver_placement: DriverPlacement = DriverPlacement.REMOTE,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
 
@@ -917,6 +945,7 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
         output_prefix: Root for every step output, for example a temporary
             prefix below ``MARIN_PREFIX``. ``None`` uses ``MARIN_PREFIX``.
+        driver_placement: Location of lightweight stage drivers. Centroid training remains remote.
         tokenizer: Tokenizer location and stable content identity. Uses the
             pinned reference tokenizer by default.
     """
@@ -938,9 +967,11 @@ def reference_datakit_steps(
         tokenizer=tokenizer,
     )
     exact_dedup = zephyr_steps.exact_dedup
-    embed_steps = build_per_source_embed_steps(sources, scale, output_prefix)
+    embed_steps = build_per_source_embed_steps(sources, scale, output_prefix, driver_placement=driver_placement)
     if domain_centroids is None:
-        domain_centroids = build_train_centroids_step(embed_steps, scale, output_prefix)
+        domain_centroids = build_train_centroids_step(
+            embed_steps, scale, output_prefix, driver_placement=driver_placement
+        )
 
     centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(
         domain_centroids, cluster, centroids_version
@@ -965,7 +996,7 @@ def reference_datakit_steps(
             output_path_prefix=output_prefix,
             deps=[embed, *centroids_deps],
             hash_attrs=assign_hash_attrs(centroids_hash, cluster.k_train, cluster.k_views, scale.assign_batch_size),
-            fn=remote(
+            fn=stage_driver(
                 lambda output_path, ep=embed.output_path: _assign_embedding(
                     output_path=output_path,
                     embed_path=ep,
@@ -973,8 +1004,7 @@ def reference_datakit_steps(
                     lookup_uris=lookup_uris,
                     scale=scale,
                 ),
-                resources=DRIVER_RESOURCES,
-                pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
+                placement=driver_placement,
             ),
         )
 
@@ -983,7 +1013,7 @@ def reference_datakit_steps(
             output_path_prefix=output_prefix,
             deps=[normalize_step, tokenize],
             hash_attrs={"model_version": quality_model_hash, "v": 2},
-            fn=remote(
+            fn=stage_driver(
                 lambda output_path, np=normalize_step.output_path, tp=tokenize.output_path, src=name: score_normalized(
                     output_path=output_path,
                     normalized=read_artifact(np, NormalizedData),
@@ -994,7 +1024,7 @@ def reference_datakit_steps(
                     max_workers=scale.pool.n_workers,
                     worker_resources=scale.pool.worker,
                 ),
-                resources=DRIVER_RESOURCES,
+                placement=driver_placement,
             ),
         )
 

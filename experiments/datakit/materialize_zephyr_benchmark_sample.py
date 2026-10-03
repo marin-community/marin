@@ -12,12 +12,15 @@ and cost caveats.
 """
 
 import argparse
+import json
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from enum import StrEnum
+from pathlib import Path
 
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.sources import all_sources
+from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -73,9 +76,9 @@ def _sample_main_output_step(
     )
 
 
-def copy_sample_steps(source_prefix: str, destination_prefix: str) -> list[StepSpec]:
-    """Build one copy step for every source in an existing benchmark sample."""
-    sources = sample_sources(source_prefix)
+def copy_sample_steps(source_prefix: str, destination_prefix: str, names: list[str] | None = None) -> list[StepSpec]:
+    """Build copy steps for selected sources in an existing benchmark sample."""
+    sources = sample_sources(source_prefix, names=names)
     if not sources:
         raise ValueError(f"no normalized source artifacts found under {source_prefix}")
     return [
@@ -85,23 +88,18 @@ def copy_sample_steps(source_prefix: str, destination_prefix: str) -> list[StepS
 
 
 def regenerate_sample_steps(
-    source_prefix: str | None,
+    sources: Sequence[DatakitSource],
     destination_prefix: str,
     target_total_tokens_b: float,
+    source_weights: Mapping[str, float] | None = None,
 ) -> list[StepSpec]:
     """Build the source download, normalization, and sampling steps for a fresh benchmark sample."""
-    registry = all_sources()
-    source_names = set(sample_sources(source_prefix)) if source_prefix is not None else set(registry)
-    if not source_names:
-        raise ValueError(f"no normalized source artifacts found under {source_prefix}")
-    missing = sorted(source_names - set(registry))
-    if missing:
-        raise ValueError(f"source registry no longer defines {missing}")
-    sources = {name: registry[name] for name in source_names}
-    fractions = proportional_sample_fractions(tuple(sources.values()), target_total_tokens_b)
+    if not sources:
+        raise ValueError("Select at least one source")
+    fractions = proportional_sample_fractions(sources, target_total_tokens_b, source_weights)
     return [
-        _sample_main_output_step(name, source.normalized, destination_prefix, fractions[name])
-        for name, source in sorted(sources.items())
+        _sample_main_output_step(source.name, source.normalized, destination_prefix, fractions[source.name])
+        for source in sorted(sources, key=lambda source: source.name)
     ]
 
 
@@ -137,6 +135,9 @@ def main() -> None:
     )
     parser.add_argument("--target-total-tokens-b", type=float, default=DEFAULT_TARGET_TOTAL_TOKENS_B)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--sources", help="Comma-separated source names.")
+    selection.add_argument("--source-mixture", type=Path, help="JSON file of source names and relative token weights.")
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
@@ -144,23 +145,46 @@ def main() -> None:
         raise ValueError(f"max concurrent must be positive: {args.max_concurrent}")
     if args.target_total_tokens_b <= 0:
         raise ValueError(f"target total tokens must be positive: {args.target_total_tokens_b}")
+    weights = json.loads(args.source_mixture.read_text()) if args.source_mixture is not None else None
+    names = [name.strip() for name in args.sources.split(",") if name.strip()] if args.sources is not None else None
+    if weights is not None:
+        names = list(weights)
+    if names == []:
+        raise ValueError("Select at least one source")
     if args.destination_prefix.startswith("s3://") or (args.source_prefix or "").startswith("s3://"):
         configure_coreweave_s3()
 
     if args.mode is SampleMode.COPY:
+        if weights is not None:
+            raise ValueError("--source-mixture applies only to --mode regenerate")
         if args.source_prefix is None:
             raise ValueError("--source-prefix is required for copy mode")
         if args.data_prefix is not None:
             raise ValueError("--data-prefix applies only to --mode regenerate")
         if StoragePath(args.source_prefix) == StoragePath(args.destination_prefix):
             raise ValueError("source and destination prefixes must differ")
-        steps = copy_sample_steps(args.source_prefix, args.destination_prefix)
+        steps = copy_sample_steps(args.source_prefix, args.destination_prefix, names)
     else:
         if args.data_prefix is None:
             raise ValueError("--data-prefix is required for --mode regenerate")
         _validate_data_prefix(args.data_prefix, args.destination_prefix)
         with use_data_config(replace(data_config(), root=args.data_prefix)):
-            steps = regenerate_sample_steps(args.source_prefix, args.destination_prefix, args.target_total_tokens_b)
+            registry = all_sources()
+            if args.source_prefix is not None:
+                available = sample_sources(args.source_prefix, names=names)
+                names = list(available)
+            selected = list(registry) if names is None else names
+            missing = sorted(set(selected) - set(registry))
+            if missing:
+                raise ValueError(f"source registry no longer defines {missing}")
+            if weights is None:
+                weights = {name: registry[name].rough_token_count_b for name in selected}
+            steps = regenerate_sample_steps(
+                [registry[name] for name in selected],
+                args.destination_prefix,
+                args.target_total_tokens_b,
+                weights,
+            )
             StepRunner().run(steps, max_concurrent=args.max_concurrent)
     if args.mode is SampleMode.COPY:
         StepRunner().run(steps, max_concurrent=args.max_concurrent)
@@ -174,6 +198,7 @@ def main() -> None:
                 step.name.removeprefix(f"{MATERIALIZE_STEP_PREFIX}/"): step.deps[0].output_path for step in steps
             },
             target_total_tokens_b=args.target_total_tokens_b if args.mode is SampleMode.REGENERATE else None,
+            source_weights=weights,
         ),
     )
     logger.info("Created %d benchmark sources at %s with %s", len(steps), args.destination_prefix, args.mode)
