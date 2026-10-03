@@ -48,6 +48,7 @@ const props = defineProps<{
   hasChatTemplate: boolean
   chatTemplateProtocol: ChatTemplateProtocol | null
   streaming: boolean
+  contextLength?: number | null
   baseUrl?: string
   composerMode?: 'embedded' | 'external'
 }>()
@@ -328,7 +329,7 @@ async function complete(
     if (thinkingStartedAt !== null && reply.thinkingSeconds === null && (reply.content || reply.toolCalls.length)) {
       reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
     }
-  }, props.baseUrl)
+  }, props.baseUrl, props.contextLength)
   if (debugEnabled && !signal.aborted) reply.requestDebug = requestDebug ?? { metrics: null, usage: null }
 
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {

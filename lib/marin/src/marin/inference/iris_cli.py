@@ -632,6 +632,11 @@ def main(
                         task_image=None if brokered else task_image,
                     )
                 )
+                click.echo(f"  submitted    {jobs[-1]}")
+                if controller is None and cluster:
+                    click.echo(f"  cancel with  iris --cluster {cluster} job cancel {jobs[-1]}")
+                else:
+                    click.echo(f"  cancel with  iris --controller-url {controller_url} job cancel {jobs[-1]}")
             job = jobs[0]
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
@@ -657,12 +662,6 @@ def main(
                 click.echo(f"  proxy path   {proxy_path(endpoint)}/")
             click.echo(f"  timeout      {timeout_hours:g}h")
             click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
-            if controller is None and cluster:
-                for submitted_job in jobs:
-                    click.echo(f"  cancel with  iris --cluster {cluster} job cancel {submitted_job}")
-            else:
-                for submitted_job in jobs:
-                    click.echo(f"  cancel with  iris --controller-url {controller_url} job cancel {submitted_job}")
             click.echo("")
 
             if not wait:

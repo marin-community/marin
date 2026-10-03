@@ -172,6 +172,7 @@ function onKeydown(event: KeyboardEvent) {
         <ChatView
           ref="leftView"
           :conversation="left"
+          :context-length="info?.backend === 'vllm' ? info.max_model_len : null"
           :params="params"
           :model="model"
           :has-chat-template="info?.has_chat_template ?? true"
@@ -189,6 +190,7 @@ function onKeydown(event: KeyboardEvent) {
           v-if="rightInfo"
           ref="rightView"
           :conversation="right"
+          :context-length="rightInfo.backend === 'vllm' ? rightInfo.max_model_len : null"
           :params="params"
           :model="rightInfo.model"
           :has-chat-template="rightInfo.has_chat_template"

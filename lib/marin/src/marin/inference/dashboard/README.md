@@ -51,7 +51,9 @@ connection. It does not include messages or preference votes. Share it only with
 people who should have access to both servers. No selection is sent to a server.
 
 The output limit is 16,384 tokens when no sampling settings have been saved.
-Thinking consumes the same budget as the final answer. Saved settings retain
+For vLLM, each request counts its prompt tokens and caps the output budget at
+the remaining context space. Thinking consumes the same budget as the final
+answer. Saved settings retain
 their existing limit. When a server reports that generation
 reached the limit, the reply displays a cutoff notice. Increase **Max tokens**
 or disable thinking in **More settings**, when the model supports it, to leave

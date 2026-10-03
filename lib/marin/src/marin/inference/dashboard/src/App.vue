@@ -236,6 +236,7 @@ function clearHistory() {
         <ChatView
           v-if="mode === 'chat'"
           :conversation="active"
+          :context-length="info?.backend === 'vllm' ? info.max_model_len : null"
           :params="params"
           :model="model"
           :has-chat-template="info ? info.has_chat_template : true"
@@ -253,7 +254,7 @@ function clearHistory() {
           :thinking-mode="compareSettings.thinkingMode"
           :custom-instructions="compareSettings.customInstructions"
         />
-        <CompletionView v-if="mode === 'completion'" :params="params" :model="model" :streaming="info ? info.streaming : true" />
+        <CompletionView :context-length="info?.backend === 'vllm' ? info.max_model_len : null" v-if="mode === 'completion'" :params="params" :model="model" :streaming="info ? info.streaming : true" />
       </main>
     </div>
   </div>

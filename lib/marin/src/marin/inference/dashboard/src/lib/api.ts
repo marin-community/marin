@@ -93,7 +93,26 @@ export async function requestCompletion(
   signal: AbortSignal,
   onData: (data: any) => void,
   baseUrl?: string,
+  contextLength?: number | null,
 ): Promise<string | null> {
+  if (contextLength != null) {
+    const tokenization: Record<string, unknown> = { model: body.model }
+    if (body.messages) {
+      tokenization.messages = body.messages
+      tokenization.add_generation_prompt = true
+      tokenization.chat_template_kwargs = body.chat_template_kwargs
+      tokenization.tools = body.tools
+    } else {
+      tokenization.prompt = body.prompt
+      tokenization.add_special_tokens = body.add_special_tokens ?? true
+    }
+    const { count } = await postJsonResult<{ count: number }>(
+      'tokenize', tokenization, signal, 'tokenization', baseUrl,
+    )
+    const available = contextLength - count
+    if (available <= 0) throw new Error('Prompt fills the model context. Shorten it before generating.')
+    body = { ...body, max_tokens: Math.min(Number(body.max_tokens), available) }
+  }
   const response = await postJson(path, body, signal, baseUrl)
   if (!response.ok || !response.body) {
     throw new Error(`${response.status} — ${await response.text()}`)
