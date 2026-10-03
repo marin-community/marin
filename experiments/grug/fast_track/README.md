@@ -9,6 +9,8 @@ below from 9.4e16 to 4.3e19 FLOPs.
 |------|----------|
 | [`launch.py`](launch.py) | ladder rungs, budget resolution (`--match`), Iris/W&B wiring |
 | [`data_pipeline.py`](data_pipeline.py) | raw sources, DataKit artifact, and store mixture |
+| [`add_dataset.py`](add_dataset.py) | Bounded Hugging Face prefix and simulated exposure |
+| [`quality_pipeline.py`](quality_pipeline.py) | Frozen embedding head, pool audit, and selected training cache |
 | [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
 | [`train.py`](train.py) | trainer/eval/loss wiring and runtime (XLA) defaults |
 | [`optimizer.py`](optimizer.py) | MuonH optimizer config: LR groups + hyperball step |
@@ -20,7 +22,7 @@ below from 9.4e16 to 4.3e19 FLOPs.
 ## Results
 
 These recorded runs use the existing training cache (`--source-mode cache`).
-They do not measure the default testbed sample introduced here.
+They do not measure the optional DataKit testbed sample.
 
 | size | variant | TPP | batch | active | total | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
 |------|---------|----:|------:|-------:|------:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
@@ -128,6 +130,7 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 | `--match` | `data` (default) tokens-match or `compute` FLOP-match the variant baseline |
 | `--batch-size` | override the rung's baseline batch (steps rescale to hold the match) |
 | `--num-steps N` | set the step budget explicitly (ignores `--match`) |
+| `--seed` / `--data-seed` | Model initialization and data-order seeds. `fast-track` derives data order from `--seed` unless specified. |
 | `--no-eval` | skip eval (clean MFU probes) |
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
 | `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |
@@ -159,7 +162,7 @@ uv run fast-track --submit --run-id data-uniform --size d512 --dense --source-mo
     --num-steps 20 --batch-size 8 --weighting uniform --version 2026.09.23
 ```
 
-Fast-track defaults to sample mode and all sources in
+Fast-track defaults to the frozen Hero cache. Explicit sample mode reads sources in
 `s3://marin-us-east-02a/marin/datakit/sample_25b_2026_10_02`.
 This sample has a 25B-token input target across all registered sources.
 Each source receives a share proportional to its estimated corpus size.
@@ -205,7 +208,7 @@ upstream source recipes, tokenizer identity, or cluster configuration change
 its fingerprint. A changed recipe at a fixed version produces a drift warning
 and retains the cached result. Set a new `fast-track --version` to build the changed recipe.
 
-The following command defines the default sample from all registered sources:
+The following command defines the DataKit sample from all registered sources:
 
 ```bash
 uv run iris --cluster marin job run --no-wait \
@@ -256,3 +259,116 @@ saves its final checkpoint. Compare final Paloma and uncheatable bits per byte
 (BPB) with a baseline of the same size, variant, training seed, and token budget.
 Higher BPB means worse prediction of the evaluation data.
 Use `--stop-after datakit` to build only the shuffled store.
+
+## Add a dataset
+
+The add-dataset track tokenizes a Hugging Face prefix, limited by the calculated token cap and `--max-rows`.
+It combines that prefix with the frozen Hero cache.
+It preserves the relative baseline weights. A fraction `p` assigns `p` of the training tokens to the new dataset.
+The frozen Hero cache receives `1-p`. Preparation does not run clustering, quality scoring, or the DataKit graph.
+
+The default is the existing 16k-tokenizer reference cache at `hero_tok/v16384_shuf/train`.
+The checkout does not link this cache to the current production mixture or phase.
+Before a production comparison, verify that link or supply a verified `FrozenBaselineManifest` through the Python API.
+
+The source requires an immutable Hugging Face revision, subset, split, and text field.
+It also requires the production token budget `T` and available unique dataset tokens `N` in the same tokenizer.
+For a fast-track budget `B`, it uses at most `min(p*B, N*B/T, N)` unique tokens.
+Scaling unique data by `B/T` preserves the production exposure of `p*T/N` epochs when the new dataset repeats.
+The loader limit rounds down to a whole global batch. A zero-batch limit rejects the experiment.
+The prepared cache records the requested cap and actual document and token counts.
+Whole-document preparation can exceed the cap. The loader applies the cap once and clears its global simulated-budget fields.
+
+The count `N` must come from a measured count or an explicitly recorded estimate.
+A first-row prefix supports a result about that prefix. Sorted data can make the prefix unrepresentative of the full dataset.
+The baseline keeps its existing exposure policy. This track simulates production exposure only for the new dataset.
+
+```bash
+uv run python -m experiments.grug.fast_track.add_dataset \
+  --run-id new-data-d512 --size d512 --dense \
+  --repository org/dataset --revision <immutable-commit-hash> \
+  --split train --text-field text --fraction 0.1 \
+  --target-production-tokens 10000000000000 --available-unique-tokens 100000000000 \
+  --max-rows 100000 --seed 0 --data-seed 0 --version 2026.10.03
+```
+
+The command prints a plan without network reads. Add `--run` inside an Iris CPU coordinator to prepare the cache and submit training.
+The coordinator requires the CPU and DataKit dependencies. The training stage requests eight H100 GPUs.
+Increase `--max-rows` only when the selected prefix cannot supply the calculated cap.
+Use the same `--prepare-token-cap` for several rungs to reuse one larger prepared prefix.
+It must be at least each rung's calculated cap. Each rung still applies its own exposure limit.
+
+Run the control with `fast-track --source-mode cache --dense --size d512 --seed 0 --data-seed 0` and a separate `--run-id`.
+Use identical model settings, token budgets, and evaluation data for both runs.
+
+## Improve a quality classifier
+
+The quality track fits a ridge head on frozen embeddings and GLM labels.
+It selects whole documents until their token count reaches the requested fraction of a separate frozen pool.
+The selected cache supplies all training tokens for the experiment.
+The default fraction is 10%. The default downstream model is dense d512.
+
+The label split depends on the duplicate-group ID and a fixed split seed.
+SHA-256 of the seed and group ID assigns the entire group to one partition.
+Training, development, and audit groups receive approximately 80%, 10%, and 10% of groups.
+Candidate changes cannot change this split. Training and development metrics exclude audit labels.
+Keep the audit labels for a separate final assessment after candidate selection; this command does not score them.
+The pool must exclude all labelled duplicate groups, including duplicates from other sources.
+
+Supply a JSON `QualityBundle` with these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `tokenizer`, `embedding_revision`, `embedding_scale`, `label_revision` | Pinned feature and label identities. Scale converts stored embedding coordinates to floats. |
+| `incumbent_revision` | Fingerprint of the incumbent classifier and its score calibration. |
+| `baseline_recipe`, `sampling_method`, `pool_seed`, `split_seed` | Frozen production recipe, `production-weighted-hash` sampling declaration, and fixed seeds. |
+| `labels`, `pool` | Lists of `{ "path": "...", "sha256": "..." }` entries for Parquet files. |
+| `quality_bin_edges` | Increasing incumbent-score boundaries, with one more boundary than the named quality bins. |
+| `requirements` | Declared source token shares, permitted share error, quality bins, minimum bin counts, minimum duplicate groups, and maximum duplicate-group token share. |
+
+Label rows contain `source`, `id`, `duplicate_group`, `embedding`, and `label`.
+Use an immutable model commit for `embedding_revision` and a label-artifact fingerprint for `label_revision`.
+Pool rows contain `source`, `id`, `duplicate_group`, `embedding`, `token_count`, `content_type`, and `language`.
+They also contain `incumbent_score`, `cache_path`, `cache_row`, and `token_sha256`.
+Higher labels and scores must mean higher quality.
+The token checksum is SHA-256 of the document's little-endian int32 token bytes.
+The input join must preserve source/document keys and use duplicate groups shared across sources.
+
+The bundle declares the sampling procedure. The program verifies checksums, source shares, score-bin coverage, duplicate concentration, and label separation.
+These checks cannot prove the sampling procedure from metadata alone. Inspect documents and the upstream sample manifest before a production comparison.
+Define quality-bin boundaries before candidate evaluation. The program calculates bin membership from the incumbent scores.
+Include the low and high ranges present in the production distribution.
+Keep an additional diagnostic panel when rare sources or content types require greater coverage.
+Do not silently add oversampled diagnostic rows to the production-weighted training pool.
+
+```bash
+uv run python -m experiments.grug.fast_track.quality_pipeline \
+  --bundle <frozen-bundle.json> --bundle-sha256 <sha256> \
+  --run-id quality-ridge-d512 --size d512 --fraction 0.1 \
+  --regularization 0.01 --seed 0 --data-seed 0 --version 2026.10.03
+```
+
+Add `--prepare-only --run` for the CPU selection stage. Add `--run` without `--prepare-only` to include training.
+The stage verifies each pinned file in local scratch storage before it reads embedding batches.
+The largest input file must fit on local disk. Document metadata stays in coordinator memory.
+Production-scale memory use and runtime have not been measured.
+It writes a selected cache, `selected_ids.jsonl`, and `selection.json`.
+Selected documents are shuffled before the cache is written, because the training loader shuffles blocks.
+The report contains development errors by source, pool composition, duplicate concentration, cutoff ties, and token overlap with the incumbent selection.
+Selection identity includes the bundle, method, fraction, regularization, and tie seed. The same selection can serve several model rungs.
+
+Use `--selection-method incumbent` for the fixed incumbent scores and `--selection-method random` for a random-selection control.
+Use the same pool, token fraction, training budget, model seed, and data seed for matched comparisons.
+An unchanged selected set supplies no new treatment. Its downstream result can reuse the matched incumbent run.
+
+For training budget `B` and selection fraction `f`, the pool requires at least `B/f` tokens.
+This is an arithmetic lower bound. Keep more tokens for document boundaries and other losses.
+The training source rejects a capacity-short rung. It does not increase repetition to fill the budget.
+A large pool does not prove useful score variation. The declared coverage checks also reject a pool that contains only one quality range.
+
+The CLI runs one rung at a time. Select the next rung only after the matched comparison passes its declared gate.
+For comparisons, use final Paloma macro BPB as the primary metric and Uncheatable macro BPB plus domain results as guardrails.
+Measure matched-seed noise at d512 before selecting a non-inferiority margin.
+Confirm promising results with additional matched seeds, then d768 and d1024.
+Record unresolved results as inconclusive. A nonsignificant regression does not prove non-inferiority.
+Use a second, independently sampled pool for the final confirmation. Repeated selection on one pool can overfit that pool.
