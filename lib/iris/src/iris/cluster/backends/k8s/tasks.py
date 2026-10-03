@@ -830,7 +830,11 @@ def _build_pod_manifest(
     task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
     service_account = config.service_account
-    host_network = config.host_network
+    # gVisor netstack needs the CNI-created pod interface and routes. Inheriting
+    # the cluster's GPU host-network setting leaves CPU sandboxes without egress.
+    host_network = config.host_network and (
+        resolve_container_profile(run_req.container_profile) != job_pb2.CONTAINER_PROFILE_GVISOR
+    )
     managed_label = config.managed_label
 
     # User env vars as base, then iris system env vars override.

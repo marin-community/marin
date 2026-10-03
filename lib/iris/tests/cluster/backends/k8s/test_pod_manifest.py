@@ -1028,12 +1028,15 @@ def test_docker_access_pod_manifest_raises():
     assert "DOCKER_ACCESS is not supported" in update.error
 
 
-def test_gvisor_profile_sets_runtime_class_and_benign_context():
+@pytest.mark.parametrize("host_network", [False, True])
+def test_gvisor_profile_sets_runtime_class_and_benign_context(host_network):
     """GVISOR sets the pod runtimeClassName and a non-privileged securityContext."""
     req = make_run_req("/my-job/task-0")
     req.container_profile = job_pb2.CONTAINER_PROFILE_GVISOR
-    manifest = _build_pod_manifest(req, pod_config())
+    manifest = _build_pod_manifest(req, pod_config(host_network=host_network))
     assert manifest["spec"]["runtimeClassName"] == "gvisor"
+    assert "hostNetwork" not in manifest["spec"]
+    assert "dnsPolicy" not in manifest["spec"]
     ctx = manifest["spec"]["containers"][0]["securityContext"]
     assert "privileged" not in ctx
     assert ctx["capabilities"]["add"] == ["SYS_PTRACE"]
