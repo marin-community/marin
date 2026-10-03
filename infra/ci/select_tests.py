@@ -72,6 +72,17 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
 # Dependency and native-build changes can affect every local test environment.
 LOCAL_BROAD_TRIGGERS: frozenset[str] = frozenset({"uv.lock", "pyproject.toml", "scripts/rust_mode.py"})
 
+SKYRL_LAUNCH_DOCUMENT_TEST = "tests/rl/test_rl_launch_documents.py"
+SKYRL_LAUNCH_DOCUMENT_TRIGGERS: tuple[str, ...] = (
+    "experiments/post_training/",
+    "lib/marin/src/marin/rl/",
+    "config/external/MarinSkyRL/",
+    "lib/marin/src/marin/external_dependencies.py",
+    "config/update-external.py",
+    "scripts/ci/dependency_update",
+    ".github/workflows/ops-external-dependencies.yaml",
+)
+
 # Selector and workflow changes run the complete CI matrix to validate the
 # orchestration itself. Locally, their import-dependent tests are sufficient;
 # the exhaustive matrix still runs after the branch is pushed.
@@ -734,6 +745,10 @@ def classify(
             if filepath in (f"{package_root}/conftest.py", f"{package_root}/pyproject.toml"):
                 forced.add(scope)
                 break
+
+    if any(path.startswith(prefix) for path in changed_files for prefix in SKYRL_LAUNCH_DOCUMENT_TRIGGERS):
+        if SKYRL_LAUNCH_DOCUMENT_TEST not in direct_tests["marin"]:
+            direct_tests["marin"].append(SKYRL_LAUNCH_DOCUMENT_TEST)
 
     return ClassifyResult(
         broad=broad,

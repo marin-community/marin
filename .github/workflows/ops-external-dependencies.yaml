@@ -11,6 +11,10 @@ concurrency:
 
 jobs:
   update:
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [MarinSkyRL, evalchemy, harbor]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: external-runtime-updater
@@ -47,6 +51,7 @@ jobs:
         run: |
           python -m scripts.ci.dependency_update prepare \
             --kind external-runtime \
+            --project "${{ matrix.project }}" \
             --repository "$GITHUB_REPOSITORY" \
             --github-output "$GITHUB_OUTPUT"
 
@@ -54,14 +59,14 @@ jobs:
         id: update
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_BODY: ${{ runner.temp }}/external-dependencies.md
+          PR_BODY: ${{ runner.temp }}/external-dependencies-${{ matrix.project }}.md
           UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
         run: |
           set -euo pipefail
-          uv run config/update-external.py --summary-file "$PR_BODY"
+          uv run config/update-external.py "${{ matrix.project }}" --summary-file "$PR_BODY"
           cat "$PR_BODY" >> "$GITHUB_STEP_SUMMARY"
 
-          changed=$(python -m scripts.ci.dependency_update changed-files --kind external-runtime)
+          changed=$(python -m scripts.ci.dependency_update changed-files --kind external-runtime --project "${{ matrix.project }}")
 
           if [[ -z "$changed" ]]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -75,10 +80,11 @@ jobs:
         if: steps.update.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_BODY: ${{ runner.temp }}/external-dependencies.md
+          PR_BODY: ${{ runner.temp }}/external-dependencies-${{ matrix.project }}.md
         run: |
           python -m scripts.ci.dependency_update publish \
             --kind external-runtime \
+            --project "${{ matrix.project }}" \
             --repository "$GITHUB_REPOSITORY" \
             --body-file "$PR_BODY" \
             --expected-remote-sha "${{ steps.prepare.outputs.expected_remote_sha }}" \
@@ -93,6 +99,7 @@ jobs:
         run: |
           python -m scripts.ci.dependency_update merge \
             --kind external-runtime \
+            --project "${{ matrix.project }}" \
             --pr "${{ steps.pull-request.outputs.pr_url }}" \
             --repository "$GITHUB_REPOSITORY" \
             --app-slug "${{ vars.DEPENDENCY_UPDATER_APP_SLUG }}" \

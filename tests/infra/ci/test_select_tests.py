@@ -124,6 +124,31 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     assert leg_paths(matrix, "marin") == ["tests/test_tokenizer_sweep.py"]
 
 
+@pytest.mark.parametrize(
+    "changed_file",
+    [
+        "experiments/post_training/curriculum_rl/policy.yaml",
+        "lib/marin/src/marin/rl/skyrl.py",
+        "lib/marin/src/marin/rl/recipe_schema/sections.py",
+        "config/external/MarinSkyRL/uv.lock",
+        "config/external/MarinSkyRL/pyproject.toml",
+        "lib/marin/src/marin/external_dependencies.py",
+        "config/update-external.py",
+        "scripts/ci/dependency_update_policy.py",
+        ".github/workflows/ops-external-dependencies.yaml",
+    ],
+)
+def test_launch_documents_run_for_config_and_bot_changes_without_import_edges(tmp_path: Path, changed_file: str) -> None:
+    write(tmp_path, changed_file)
+    write(tmp_path, "tests/rl/test_rl_launch_documents.py", "def test_launch_documents():\n    assert True\n")
+    write(tmp_path, "tests/test_unrelated.py", "def test_unrelated():\n    assert True\n")
+
+    selection = select_changed_tests([changed_file], tmp_path)
+
+    paths = leg_paths(selection.matrix, "marin")
+    assert "tests/rl/test_rl_launch_documents.py" in paths or "tests" in paths
+
+
 @pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
 @pytest.mark.parametrize(
     "changed_file",
