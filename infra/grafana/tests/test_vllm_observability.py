@@ -95,6 +95,8 @@ def _vllm_projection_database():
         "scalar_conflicting",
         "scalar_staggered",
         "scalar_bucket_reset",
+        "scalar_middle_bin_reset",
+        "structured_middle_bin_reset",
         "structured",
         "structured_unidentified",
         "structured_unidentified_fast",
@@ -135,6 +137,8 @@ def test_vllm_histogram_dashboard_format_parity(
         snapshots.insert(2, (15_000, 1, (2, 3, 0), 0.5))
     elif format_name == "scalar_bucket_reset":
         snapshots[-1] = (30_000, 2, (0, 5, 0), 0.8)
+    elif format_name.endswith("middle_bin_reset"):
+        snapshots[-1] = (30_000, 2, (3, 1, 1), 0.8)
     rows = []
     for timestamp, sequence, bins, total in snapshots:
         if format_name == "structured_unidentified_fast":
@@ -153,7 +157,14 @@ def test_vllm_histogram_dashboard_format_parity(
             or (format_name == "mixed" and sequence < 2)
         )
         structured = (
-            format_name in ("structured", "structured_unidentified", "structured_unidentified_fast", "dual")
+            format_name
+            in (
+                "structured",
+                "structured_unidentified",
+                "structured_unidentified_fast",
+                "structured_middle_bin_reset",
+                "dual",
+            )
             or (format_name in ("dual_missing", "dual_partial") and sequence != 1)
             or (format_name == "mixed" and sequence > 0)
         )
@@ -232,9 +243,10 @@ def test_vllm_histogram_dashboard_format_parity(
         for row in result
         if row["section"] == section and row["metric"] == metric and row["t"] is None
     }
-    expected_count = 3 if format_name == "scalar_bucket_reset" else 5
-    expected_mean = 0.1 if format_name == "scalar_bucket_reset" else 0.16
-    expected_p50 = 1.0 if format_name == "scalar_bucket_reset" else 0.1
+    invalid_interval = format_name == "scalar_bucket_reset" or format_name.endswith("middle_bin_reset")
+    expected_count = 3 if invalid_interval else 5
+    expected_mean = 0.1 if invalid_interval else 0.16
+    expected_p50 = 1.0 if invalid_interval else 0.1
     assert statistics["mean"] == pytest.approx((expected_mean * scale, expected_count))
     assert statistics["p50"] == pytest.approx((expected_p50 * scale, expected_count))
     assert statistics["p90"] == pytest.approx((1.0 * scale, expected_count))
@@ -242,7 +254,7 @@ def test_vllm_histogram_dashboard_format_parity(
     if metric == "output_tokens":
         distribution = {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"}
         assert distribution == {
-            str(bounds[0]): 1 if format_name == "scalar_bucket_reset" else 3,
+            str(bounds[0]): 1 if invalid_interval else 3,
             str(bounds[1]): 2,
             "+Inf": 0,
         }
@@ -255,7 +267,7 @@ def test_vllm_histogram_dashboard_format_parity(
         expected_samples = (
             3
             if format_name == "mixed"
-            else 1 if format_name in ("dual_partial", "scalar_conflicting", "scalar_bucket_reset") else 2
+            else 1 if format_name in ("dual_partial", "scalar_conflicting") or invalid_interval else 2
         )
         assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "ttft_observations"] == [
             (expected_count, expected_samples)

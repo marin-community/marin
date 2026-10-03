@@ -117,7 +117,7 @@ _HEALTH_METRIC_NAMES = (
     "metric_publication_dropped_records",
 )
 _METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
-_HISTOGRAM_BOUND_ORDER_SQL = "CASE WHEN upper_bound IN ('+Inf', 'Inf') THEN 1e308 ELSE CAST(upper_bound AS DOUBLE) END"
+_HISTOGRAM_BOUND_ORDER_SQL = "CAST(upper_bound AS DOUBLE)"
 _PUBLICATION_ID_JSON_FIELD_RE = r'"histogram_publication_id":"(?:\\.|[^"\\])*"'
 _SUMMARY_HISTOGRAM_NAMES = tuple(
     f"{family}_{component}"
@@ -388,6 +388,17 @@ histogram_component_counts AS (
                ELSE value - previous_value
            END AS delta
     FROM histogram_ordered
+), histogram_bucket_delta_samples AS (
+    SELECT *, SUM(integer_value - previous_integer_value) OVER (
+        PARTITION BY {publication_key}, component, upper_bound
+    ) AS bucket_delta
+    FROM histogram_delta_samples
+), histogram_checked_delta_samples AS (
+    SELECT *, component <> 'bucket' OR bucket_delta = MAX(bucket_delta) OVER (
+        PARTITION BY {publication_key}, component
+        ORDER BY {_HISTOGRAM_BOUND_ORDER_SQL}
+    ) AS valid_bucket_delta
+    FROM histogram_bucket_delta_samples
 ), coherent_histogram_increments AS (
     SELECT origin_cluster, service, resource_attributes_json, attributes_json,
            COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json) AS producer_identity,
@@ -395,11 +406,11 @@ histogram_component_counts AS (
            MAX(timestamp_ms) OVER publication AS timestamp_ms, delta,
            MAX(timestamp_ms) OVER publication - MAX(timestamp_ms) OVER publication % {VLLM_HISTOGRAM_COHERENCE_MS}
                AS sample_t
-    FROM histogram_delta_samples
+    FROM histogram_checked_delta_samples
     WINDOW publication AS (
         PARTITION BY {publication_key}
     )
-    QUALIFY BOOL_AND(delta IS NOT NULL) OVER publication
+    QUALIFY BOOL_AND(delta IS NOT NULL AND valid_bucket_delta) OVER publication
         AND CASE WHEN publication_id IS NULL AND is_structured = 0 THEN MIN(timestamp_ms) OVER publication
                  ELSE MAX(timestamp_ms) OVER publication END >= {start_ms}
 )""".strip()
