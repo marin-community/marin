@@ -4,7 +4,6 @@
 from math import prod
 
 import pytest
-
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext
 
