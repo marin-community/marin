@@ -64,8 +64,8 @@ def _run_nodes_cte(bucket: str, clusters_sql: str, run_sql: str, start_ms: int, 
                    PARTITION BY COALESCE(NULLIF(cluster, ''), 'marin'), {bucket}, node_name
                    ORDER BY COUNT(*) DESC, run_id
                ) AS rn
-        FROM "telemetry_v1.marinskyrl"
-        JOIN selected_nodes
+        FROM selected_nodes
+        JOIN "telemetry_v1.marinskyrl"
           ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
          AND node_name = selected_nodes.node
         WHERE service = 'marinskyrl' AND node_name <> ''
@@ -196,8 +196,8 @@ WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_
                PARTITION BY cluster, node_name, name, resource_attributes_json, attributes_json
                ORDER BY timestamp_ms, seq
            ) AS previous_value
-    FROM "telemetry_v1.node_agent"
-    JOIN selected_nodes
+    FROM selected_nodes
+    JOIN "telemetry_v1.node_agent"
       ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
      AND node_name = selected_nodes.node
     WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
@@ -209,8 +209,8 @@ WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_
            name,
            AVG(value) AS mean_value,
            MAX(value) AS max_value
-    FROM "telemetry_v1.node_agent"
-    JOIN selected_nodes
+    FROM selected_nodes
+    JOIN "telemetry_v1.node_agent"
       ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
      AND node_name = selected_nodes.node
     WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
@@ -221,7 +221,7 @@ WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_
     FROM counter_samples
     GROUP BY 1, 2, 3, 4, 5
 ), attributed AS (
-    SELECT gpu.* FROM gpu JOIN run_node USING (origin_cluster, t, node)
+    SELECT gpu.* FROM run_node JOIN gpu USING (origin_cluster, t, node)
     WHERE run_node.run = {sql_string(run)}
 )
 SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic,
