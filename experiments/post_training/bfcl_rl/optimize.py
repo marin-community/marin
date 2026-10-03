@@ -80,16 +80,16 @@ def recovery_optimizer_step(
             "replica": 1,
             "model": 1,
             "expert": optimization.expert_axis,
-            "context": optimization.context_axis,
         },
+        dcn_axes={"context": optimization.context_axis, "replica_dcn": -1},
         compute_mapping={
             "batch": ["replica_dcn", "data", "expert"],
             "vocab": "model",
             "position": "context",
         },
     )
-    ici, _ = mesh.axis_shapes(resources.chip_count(), 1)
-    data_parallel_size = ici["data"] * ici["expert"]
+    ici, dcn = mesh.axis_shapes(resources.chip_count(), optimization.num_nodes)
+    data_parallel_size = dcn["replica_dcn"] * ici["data"] * ici["expert"]
     if optimization.batch_size % data_parallel_size:
         raise ValueError("Recovery batch must be divisible by the data/expert mesh width")
     if RECOVERY_CONTEXT % optimization.context_axis:
