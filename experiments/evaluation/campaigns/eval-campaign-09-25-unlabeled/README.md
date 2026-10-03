@@ -22,9 +22,10 @@ The model limits and Harbor runtime pin are recorded in the launch snapshot;
 results from the previous adapter have a different policy digest and cannot be resumed under
 this configuration.
 
-Sotopia's episode runner currently ignores the declared `model_info.max_input_tokens` budget.
-Its results cannot establish conformance to the 32K context policy. The Sotopia harness needs
-separate request-boundary enforcement; the Mini-SWE guard applies only to SWE-bench.
+Harbor's native SOTOPIA agent enforces the declared `model_info.max_input_tokens` budget for
+the evaluated model at each request. It counts the rendered prompt with the serving endpoint's
+tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
+their independently configured models and are not subject to this evaluated-model budget.
 
 Pass `--version LABEL` only when a submitter-controlled cohort label is useful. The launcher forwards
 the label to Marin unchanged. It remains provenance metadata and does not alter the conformance
