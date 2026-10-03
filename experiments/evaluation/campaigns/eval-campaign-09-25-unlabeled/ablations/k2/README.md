@@ -42,3 +42,31 @@ the degraded TP2/DP4 topology. The two configs differ only in
 `serve.hf_overrides`; run each with the canonical full HumanEval+ config and
 the same launch options as the first pair. This tests whether position
 overrides interact with DP4/EP8 to account for the residual historical gap.
+
+The exact six-arm Terminal-Bench grid uses the same ten-task filter and one
+trial per task. Pair each model config with the indicated Harbor config; omit
+`--version` when launching:
+
+| Arm | Model config | Harbor config |
+| --- | --- | --- |
+| A | `model-grid-a-eager-dp1-65k-8k.yaml` | `tb2-ten-old-wins-output8k.yaml` |
+| B | `model-grid-b-eager-dp4-65k-8k.yaml` | `tb2-ten-old-wins-output8k.yaml` |
+| C | `model-tp2-dp1-high-65k-8k.yaml` | `tb2-ten-old-wins-output8k.yaml` |
+| D | `model-grid-d-eager-dp1-65k-8k-hf-overrides.yaml` | `tb2-ten-old-wins-output8k.yaml` |
+| E | `model-grid-e-eager-dp1-65k-16k.yaml` | `tb2-ten-old-wins.yaml` |
+| F | `model-tp2-dp4-high-65k-16k-hf-overrides.yaml` | `tb2-ten-old-wins.yaml` |
+
+These are unlabeled diagnostics. The eager arms require Marin's explicit
+slow-serving acknowledgement, which is pinned in their model configs.
+
+For example, launch A from the Marin checkout with:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/model-grid-a-eager-dp1-65k-8k.yaml \
+  --harbor-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/tb2-ten-old-wins-output8k.yaml \
+  --federated_cluster cw-rno2a --priority interactive --no-wait \
+  --description 'Unlabeled K2 ten-task grid arm A'
+```
+
+Replace only the two config paths and arm letter for B–F as mapped above.
