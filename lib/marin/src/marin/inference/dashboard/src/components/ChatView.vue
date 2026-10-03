@@ -188,6 +188,7 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
     )
   } catch (error) {
     if (isAbortError(error)) {
+      markReplyIncomplete(reply)
       appendMissingToolResults(conversation, reply, 'tool call cancelled')
     } else {
       reply ??= appendAssistantReply(conversation)
@@ -195,6 +196,10 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       reply.error = error instanceof Error ? error.message : String(error)
     }
   }
+}
+
+function markReplyIncomplete(reply: AssistantMessage | null) {
+  if (reply) reply.completed = false
 }
 
 function appendAssistantReply(conversation: Conversation): AssistantMessage {
@@ -206,6 +211,7 @@ function appendAssistantReply(conversation: Conversation): AssistantMessage {
     rawReasoning: '',
     thinkingSeconds: null,
     error: null,
+    completed: false,
     toolCalls: [],
   })
   // Return the reactive proxy so streaming deltas re-render.
@@ -334,6 +340,7 @@ async function complete(
     reply.content = inline.visible
     reply.toolCalls = structuredCalls.calls.size ? finalizeToolCalls(structuredCalls, newId) : inline.calls
   }
+  reply.completed = !signal.aborted
 }
 
 </script>

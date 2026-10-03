@@ -17,7 +17,9 @@ function turns(conversation: Conversation): { prompt: string; answered: boolean 
   const result: { prompt: string; answered: boolean }[] = []
   for (const message of conversation.messages) {
     if (message.role === 'user') result.push({ prompt: message.content, answered: false })
-    if (message.role === 'assistant' && result.length) result[result.length - 1].answered = true
+    if (message.role === 'assistant' && result.length) {
+      result[result.length - 1].answered = message.completed === true && message.error === null
+    }
   }
   return result
 }
