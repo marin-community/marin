@@ -12,15 +12,14 @@ from pathlib import Path
 
 import pytest
 from verifyit.grade import grade as source_grade
-from verifyit.spec import McqSpec
+from verifyit.spec import McqSpec, Mode
 
-from taskcompendium.grading import Outcome
+from taskcompendium.grading import Outcome, grade_answer
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
-from taskcompendium.models import AnswerType, ConversationTrace, TextMessage, VerifierKind
+from taskcompendium.models import AnswerType, ConversationTrace, TextMessage
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
-from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
 
@@ -61,8 +60,7 @@ def test_import_removes_source_submission_instructions():
 
 def test_imported_mcqa_matches_source_grading(tmp_path):
     specification = import_task(_archive())
-    assert specification.verifier.kind is VerifierKind.MCQ_ANSWER
-    assert json.loads(specification.verifier.parameters_json) == {"expected": "C", "options": 10}
+    assert specification.verifier.kind == Mode.MCQ
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
     for source_response, response, reward in (
@@ -76,7 +74,6 @@ def test_imported_mcqa_matches_source_grading(tmp_path):
             specification,
             convention,
             ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-            object(),
         )
         assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
@@ -90,13 +87,11 @@ def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
         ConversationTrace(
             events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
         ),
-        object(),
     )
     malformed = grade_answer(
         specification,
         convention,
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="Answer: C"))),
-        object(),
     )
     assert (json_result.status, json_result.reward) == (Outcome.GRADED, 1.0)
     assert (malformed.status, malformed.reward) == (Outcome.EXTRACTION_ERROR, None)
@@ -176,7 +171,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     )
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
@@ -184,7 +179,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
         "result = grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='C'))), object()); "
+        "TextMessage(role='assistant', content='C')))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 
