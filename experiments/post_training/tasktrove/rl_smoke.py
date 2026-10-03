@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke-train Qwen3-0.6B directly from a packed TaskTrove Clean release.
+"""Smoke-train Qwen3-0.6B from a packed TaskTrove Clean release.
 
-The run proves the release drives a Harbor RL loop end to end without an exploded staging
-artifact. Each Iris node caches the clean Parquet file, and MarinSkyRL extracts a task only when
-its rollout batch is about to construct the Harbor trial.
+The run uses a packed release as the input to the shared rollout engine.
+MarinSkyRL converts the selected tasks to TaskCompendium Parquet before training.
 
 Plan or run::
 
@@ -60,7 +59,7 @@ MAX_NEW_TOKENS_PER_TURN = 256
 MAX_TURNS = 4
 
 # One H100 node with colocated policy and inference actors. Qwen3-0.6B is the smallest mirrored
-# policy that exercises the real vLLM, Harbor, weight-sync, optimizer, checkpoint, and export path.
+# policy that exercises vLLM, Shellbox, weight sync, optimization, checkpoint, and export.
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=True,
     policy_num_nodes=1,
@@ -91,19 +90,10 @@ context_budget:
 
 terminal_bench:
   harbor:
-    name: terminus-2
-    enable_summarize: false
-    store_all_messages: true
-    strict_json_parser: true
-    interleaved_thinking: false
-    extra_body:
-      chat_template_kwargs:
-        enable_thinking: false
     override_timeout_sec: 600
     override_cpus: 1
     override_memory_mb: 2048
     override_storage_mb: 2048
-    auto_snapshot: true
     verifier_override_timeout_sec: 300
     max_retries: 2
     min_wait_sec: 30.0
@@ -116,11 +106,7 @@ terminal_bench:
       - RewardFileEmptyError
       - VerifierOutputParseError
     n_concurrent_trials: 16
-    log_level: INFO
     enable_reward_shaping: false
-    # Harbor's exact-token continuation asks the inference server for /tokenize, which the SkyRL
-    # HTTP endpoint does not serve; without rollout details Harbor counts tokens locally instead.
-    collect_rollout_details: false
     enable_error_classification: true
     mask_exceptions:
       - DaytonaError
@@ -135,12 +121,6 @@ terminal_bench:
     passthrough_exceptions:
       - AgentTimeoutError
     zero_exceptions: []
-  model_info:
-  archiving:
-    enabled: false
-  trace_upload:
-    enabled: false
-
 trainer:
   strategy: megatron
   flash_attn: true
@@ -165,6 +145,8 @@ trainer:
       lr: 2.0e-6
       max_grad_norm: 1.0
 generator:
+  chat_template_kwargs:
+    enable_thinking: false
   backend: vllm
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
@@ -172,7 +154,6 @@ generator:
   enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
-  enable_http_endpoint: true
   sampling_params:
     temperature: 1.0
     top_p: 1.0
