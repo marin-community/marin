@@ -4,27 +4,34 @@
 import glob
 import json
 import os
-import socket
 import subprocess
 import sys
 import tempfile
-import textwrap
 import threading
 import uuid
+from unittest.mock import patch
 
 import equinox as eqx
 import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import pytest
 import safetensors
 import transformers
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
+from iris.cluster.platforms.types import find_free_port
+from iris.cluster.types import Entrypoint
+from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV, MultiGpuHook
+from jax.experimental import multihost_utils
 from jax.random import PRNGKey
+from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
+from rigging.filesystem.storage_path import StoragePath
+from rigging.tunnel import terminate_process_group
 from transformers import GPT2Config as HfGpt2Config
 
 import levanter.compat.hf_export as hf_export
@@ -36,6 +43,7 @@ from levanter.compat.hf_checkpoints import (
     _convert_to_jnp,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.helpers import use_test_mesh
 from levanter.utils.byte_budget import HostByteBudget
 
@@ -171,83 +179,62 @@ def test_hf_export_preserves_scalar_and_singleton_shapes(tmp_path):
             assert exported.tobytes() == jax.device_get(value).tobytes()
 
 
-def test_hf_shard_writer_failure_keeps_two_cpu_ranks_matched(tmp_path):
-    script = textwrap.dedent(
-        """
-        import sys
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.experimental import multihost_utils
-        from jax.sharding import NamedSharding, PartitionSpec as P
-        from levanter.compat.hf_export import save_hf_shards
-        from levanter.grug.sharding import compact_grug_mesh
-        from rigging.filesystem.storage_path import StoragePath
-        from safetensors.numpy import load_file
-
-        rank, coordinator, destination = int(sys.argv[1]), sys.argv[2], sys.argv[3]
-        jax.distributed.initialize(coordinator_address=coordinator, num_processes=2,
-                                   process_id=rank, local_device_ids=[0])
-        expected = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
-        mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
-        with jax.set_mesh(mesh):
-            bank = jax.make_array_from_callback(expected.shape, NamedSharding(mesh, P('expert', None, None)),
-                                               lambda index: expected[index])
-            shards = {f'model-{i}.safetensors': {'bank': jax.ShapeDtypeStruct(bank.shape, bank.dtype)}
-                      for i in range(2)}
-            options = dict(export_host_budget_bytes=1, max_concurrent_shards=2,
-                           tensor_names={'bank': tuple(f'expert.{i}' for i in range(4))})
-            original_upload = StoragePath.upload_from
-            def failed_upload(_self, _local_path, **_kwargs):
-                raise OSError('upload interrupted')
-            StoragePath.upload_from = failed_upload
-            try:
-                save_hf_shards(shards, lambda _keys: {'bank': bank}, destination, **options)
-            except (OSError, RuntimeError):
-                pass
-            else:
-                raise AssertionError('writer failure did not propagate')
-            multihost_utils.sync_global_devices('after-failed-export')
-            StoragePath.upload_from = original_upload
-            save_hf_shards(shards, lambda _keys: {'bank': bank}, destination, **options)
-            if rank == 0:
-                for filename in shards:
-                    actual = load_file(f'{destination}/{filename}')
-                    assert set(actual) == {f'expert.{i}' for i in range(4)}
-                    for i in range(4):
-                        assert actual[f'expert.{i}'].tobytes() == expected[i].tobytes()
-            multihost_utils.sync_global_devices('after-recovered-export')
-        jax.distributed.shutdown()
-        """
+def _export_on_cpu_rank(coordinator, destination, expected):
+    jax.distributed.initialize(
+        coordinator_address=coordinator,
+        num_processes=2,
+        process_id=int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV]),
+        local_device_ids=[0],
     )
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        coordinator = f"127.0.0.1:{listener.getsockname()[1]}"
+    mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
+    with jax.set_mesh(mesh):
+        bank = jax.make_array_from_callback(
+            expected.shape, NamedSharding(mesh, P("expert", None, None)), lambda index: expected[index]
+        )
+        weights = {"bank": bank}
+        shards = {f"model-{i}.safetensors": weights for i in range(2)}
+        options = dict(
+            export_host_budget_bytes=1,
+            max_concurrent_shards=2,
+            tensor_names={"bank": tuple(f"expert.{i}" for i in range(4))},
+        )
+        with patch.object(StoragePath, "upload_from", side_effect=OSError("upload interrupted")):
+            with pytest.raises((OSError, RuntimeError)):
+                hf_export.save_hf_shards(shards, lambda _keys: weights, destination, **options)
+        multihost_utils.sync_global_devices("after-failed-export")
+        hf_export.save_hf_shards(shards, lambda _keys: weights, destination, **options)
+    jax.distributed.shutdown()
+
+
+def test_hf_shard_writer_failure_keeps_two_cpu_ranks_matched(tmp_path):
+    expected = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
+    entrypoint = Entrypoint.from_callable(
+        _export_on_cpu_rank, f"127.0.0.1:{find_free_port()}", str(tmp_path), expected
+    )
+    for name, contents in entrypoint.workdir_files.items():
+        (tmp_path / name).write_bytes(contents)
     env = {
         key: value
         for key, value in os.environ.items()
         if key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
     }
-    env.update(JAX_PLATFORMS="cpu", XLA_FLAGS="--xla_force_host_platform_device_count=1")
-    processes = [
-        subprocess.Popen(
-            [sys.executable, "-c", script, str(rank), coordinator, str(tmp_path)],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        for rank in range(2)
-    ]
-    try:
-        for process in processes:
-            output, _ = process.communicate(timeout=45)
-            assert process.returncode == 0, output
-    finally:
-        for process in processes:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
+    env.update(
+        JAX_PLATFORMS="cpu",
+        XLA_FLAGS="--xla_force_host_platform_device_count=1",
+        IRIS_PYTHON=sys.executable,
+        IRIS_WORKDIR=str(tmp_path),
+    )
+    command = MultiGpuHook(nproc=2).wrap(entrypoint.command)
+    with subprocess.Popen([sys.executable, *command[1:]], env=env, start_new_session=True) as process:
+        try:
+            assert process.wait(timeout=45) == 0
+        finally:
+            terminate_process_group(process)
+    for shard in range(2):
+        actual = safetensors.numpy.load_file(tmp_path / f"model-{shard}.safetensors")
+        assert set(actual) == {f"expert.{i}" for i in range(4)}
+        for i in range(4):
+            assert actual[f"expert.{i}"].tobytes() == expected[i].tobytes()
 
 
 # A simple wrapper to include diverse dtypes in a model

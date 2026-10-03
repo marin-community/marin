@@ -27,12 +27,10 @@ from levanter.utils.byte_budget import HostByteBudget
 
 
 def run_on_export_writer[T](action: Callable[[], T]) -> T | None:
-    """Run a rank-zero action and report its failure collectively.
+    """Run an action on process zero; propagate its failure to every rank.
 
-    Every initialized JAX process calls this on its main thread in the same order.
-    Worker threads never call it. Asynchronous errors propagate when the action
-    observes them, for example by reading a completed writer future.
-    Return the result on process zero and None elsewhere.
+    Call on each rank's main thread in matching order; the action must avoid collectives.
+    Return its result on process zero, None elsewhere.
     """
     error = None
     result = None
@@ -76,11 +74,10 @@ class HFShardRecord:
 
 @dataclass(frozen=True)
 class HFShardResume:
-    """Opt into verified shard reuse for one immutable request and one exporting gang.
+    """Verified shard reuse for one request and one exporting gang.
 
-    The caller checks its destination/request policy before exporting and publishes
-    completion metadata after exporting. Receipts commit only uploaded shards;
-    uncommitted uploads may be rewritten. Corrupt or mismatched receipts stop resume.
+    Commit receipts after upload; corrupt or mismatched receipts stop resume.
+    The caller owns destination policy and writes completion metadata last.
     """
 
     root: StoragePath
@@ -107,12 +104,10 @@ class HFShardResume:
 
 
 class _HFShardWriter:
-    """Own rank-zero write state for one export.
+    """Process-zero writer state; no collectives.
 
-    The main thread manages pending futures and returned receipts. Workers write
-    shards and release their bytes; these methods never enter collectives.
-    The caller owns reserved bytes until submit succeeds; the worker releases them
-    afterward. The surrounding executor context waits for workers on every exit.
+    The main thread owns futures and receipts. Successful submit transfers reserved
+    bytes to the worker, which releases them after writing.
     """
 
     def __init__(
@@ -134,7 +129,6 @@ class _HFShardWriter:
         self._records: list[HFShardRecord] = []
 
     def resume_shard(self, filename: str, tensor_names: list[str]) -> bool:
-        """Verify and retain an existing receipt, returning whether it can be reused."""
         if self._resume is None:
             return False
         record = self._resume.completed(filename, tensor_names)
@@ -144,13 +138,11 @@ class _HFShardWriter:
         return True
 
     def drain_one(self) -> None:
-        """Wait for one pending write and retain its receipt, propagating its failure."""
         record = self._pending.popleft().result()
         if record is not None:
             self._records.append(record)
 
     def reserve(self, num_bytes: int) -> None:
-        """Wait for capacity and observe completed writer failures before returning."""
         if len(self._pending) >= self._max_concurrent_shards:
             self.drain_one()
         fsspec_sync(get_loop(), self._budget.acquire, num_bytes)
@@ -173,13 +165,11 @@ class _HFShardWriter:
         tensor_names: list[str],
         reserved_bytes: int,
     ) -> None:
-        """Validate names and transfer the reservation to a worker on success."""
         if sorted(tensors) != tensor_names:
             raise ValueError(f"Incomplete tensor mapping for {filename}")
         self._pending.append(self._pool.submit(self._write_shard, filename, tensors, reserved_bytes))
 
     def finish(self) -> list[HFShardRecord]:
-        """Return receipts after observing all pending writes."""
         while self._pending:
             self.drain_one()
         return self._records
@@ -219,24 +209,18 @@ def save_hf_shards(
     tensor_names: Mapping[str, tuple[str, ...]] | None = None,
     upload_to_hf: Callable[[str, str], None] | None = None,
 ) -> list[HFShardRecord]:
-    """Gather and save a fixed HF shard layout on all initialized JAX processes.
+    """Gather a fixed shard layout on every rank; write only on process zero.
 
-    All ranks iterate shards and tensor keys in the same order and load matching
-    keys, shapes and dtypes.
-    Device staging requires space for one full tensor. tensor_names expands a
-    tensor's first axis into named outputs. Only process zero retains host shards or writes.
+    All ranks use matching shard/key order, shapes and dtypes. tensor_names names
+    slices along each tensor's first axis. Device staging needs one full tensor.
+    Reserve twice each shard's payload; oversized shards run alone. With one worker,
+    finish each shard before loading the next. upload_to_hf(directory, filename)
+    receives one locally staged shard on a worker and must avoid collectives. Writer errors propagate when
+    observed by a main thread; intervening gathers may finish first.
 
-    Reserve twice each shard's payload for host arrays and serialization buffers;
-    an oversized shard runs alone. One writer bounds staging to one shard plus
-    serialization buffers. One writer finishes before inspecting the next shard.
-    Asynchronous writer errors propagate when the main thread observes completed
-    futures at matched coordination points; intervening gathers can finish first.
-
-    Without resume, existing shard files are overwritten. With resume, verify
-    identity, names, size and freshly computed SHA-256 before skipping any gather.
-    Return ordered receipts on process zero when resume is enabled; return an empty list otherwise.
-    upload_to_hf receives a temporary directory containing exactly one shard and
-    its filename, on a process-zero worker thread, and must not enter collectives.
+    Resume verifies receipts before skipping gathers and returns ordered receipts
+    on process zero. Without resume, overwrite existing shards. Return [] elsewhere
+    or without resume.
     """
     with ThreadPoolExecutor(max_workers=max_concurrent_shards, thread_name_prefix="hf_export") as pool:
         writer = _HFShardWriter(pool, path, export_host_budget_bytes, max_concurrent_shards, resume, upload_to_hf)
