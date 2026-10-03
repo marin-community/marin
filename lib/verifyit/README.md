@@ -108,3 +108,27 @@ Run the package tests from the repository root:
 ```bash
 uv run --group test pytest lib/verifyit/tests
 ```
+
+## Candidate scoring
+
+Callers that already extracted an answer can use the candidate scorers in
+`verifyit.modes` without constructing a TaskSpec. ARC grids, indirect-injection
+actions, final schedules, calendar postconditions, reference/abstention gates,
+puzzle contracts, IFEval and JSON Schema share the same `Reward` and `Status`
+contract as file-based grading. Captured shell output uses `score_capture` in
+`grade_nl2bash`, which returns the source reward and diagnostic messages.
+
+For example:
+
+```python
+from verifyit.modes.grade_arc import grade_arc_grid
+
+result = grade_arc_grid("[[1, 2], [3, 4]]", [[1, 2], [3, 4]])
+assert result.reward == 1.0
+```
+
+Taskcompendium calls these scorers after extracting a submission or captured
+state. An exact reference mismatch can still require an unavailable semantic
+judge; that result remains an infrastructure error, not an incorrect answer.
+These Python entry points do not add TOML modes. A task using script grading can
+import them from its grader script.

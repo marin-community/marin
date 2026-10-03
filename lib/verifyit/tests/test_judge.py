@@ -148,6 +148,26 @@ def test_gate_ignores_articles_and_trailing_punctuation(tmp_path, unconfigured_j
     assert reward.reward == 1.0
 
 
+def test_source_reference_gate_leaves_paraphrases_ungraded():
+    references = ("Paris",)
+    exact = grade_judge.grade_reference_candidate(references, r"\boxed{The Paris.}")
+    paraphrase = grade_judge.grade_reference_candidate(references, "France's capital is Paris.")
+    blank = grade_judge.grade_reference_candidate(references, "  ")
+    assert (exact.status, exact.reward) == (Status.SCORED, 1.0)
+    assert paraphrase.status == Status.INFRA_ERROR
+    assert (blank.status, blank.reward) == (Status.SCORED, 0.0)
+
+
+def test_source_abstention_gate_checks_reference_before_refusal():
+    references = ("I don't know",)
+    exact = grade_judge.grade_abstention_candidate(references, None, r"\boxed{I don't know}")
+    rejected = grade_judge.grade_abstention_candidate(("Paris",), None, r"\boxed{[IDK]}")
+    unresolved = grade_judge.grade_abstention_candidate(("Paris",), None, "France's capital is Paris.")
+    assert (exact.status, exact.reward) == (Status.SCORED, 1.0)
+    assert (rejected.status, rejected.reward) == (Status.SCORED, 0.0)
+    assert unresolved.status == Status.INFRA_ERROR
+
+
 def test_paraphrase_falls_through_to_the_model(tmp_path, fake_judge):
     fake_judge.replies = ["The candidate omits the unwilling-or-unable condition.\nSCORE: 0.5"]
     response = "\\boxed{Only when the armed group's attack is attributable to the host state.}"

@@ -183,6 +183,15 @@ def test_every_constraint_must_hold_for_a_full_reward(tmp_path, workspace):
     assert reordered.detail["failed"] == ["length_constraints:nth_paragraph_first_word"]
 
 
+def test_chat_candidate_requires_every_constraint():
+    constraints = (
+        Constraint("keywords:existence", {"keywords": ["quantum"]}),
+        Constraint("punctuation:no_comma", {}),
+    )
+    assert grade_ifeval.grade_ifeval_chat_candidate(constraints, "A quantum system evolves.").reward == 1.0
+    assert grade_ifeval.grade_ifeval_chat_candidate(constraints, "A quantum system, evolves.").reward == 0.0
+
+
 def test_detail_records_a_verdict_for_every_constraint(tmp_path, workspace):
     constraints = (Constraint("punctuation:no_comma", {}), Constraint("keywords:word_once", {"keyword": "otter"}))
     reward = reward_for(workspace, tmp_path, constraints, "An otter swam past, twice.")

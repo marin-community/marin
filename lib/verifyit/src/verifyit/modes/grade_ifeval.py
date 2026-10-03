@@ -7,7 +7,8 @@ The reward is all-or-nothing, and the detail records each constraint's verdict. 
 constraint raises ``InvalidTask`` before the candidate is read.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from verifyit.grade import (
     Reward,
     aggregate_rewards,
     empty_output_policy,
+    infra_error,
     read_output,
     scored,
 )
@@ -40,6 +42,23 @@ def resolve_checks(
     return [(c, checks[c.name]) for c in constraints]
 
 
+@dataclass(frozen=True)
+class ConstraintVerdict:
+    name: str
+    passed: bool
+    detail: str
+    error: Exception | None = None
+
+
+def _evaluated_checks(checks: list[tuple[Constraint, Check]], text: str) -> Iterator[ConstraintVerdict]:
+    for constraint, check in checks:
+        try:
+            passed, detail = check(text, constraint.params)
+            yield ConstraintVerdict(constraint.name, passed, detail)
+        except Exception as error:
+            yield ConstraintVerdict(constraint.name, False, f"{type(error).__name__}: {error}", error)
+
+
 def grade(spec: IfevalSpec, tests_dir: Path, workspace: Path) -> Reward:
     checks = resolve_checks(spec.constraints)
     text = read_output(spec, workspace)
@@ -60,16 +79,24 @@ def grade_ifeval_candidate(spec: IfevalSpec, candidate: str, *, registry: Mappin
     return _grade_checks(checks, candidate)
 
 
+def grade_ifeval_chat_candidate(constraints: tuple[Constraint, ...], text: str) -> Reward:
+    """Keep direct-chat parameter failures separate from candidate constraint failures."""
+    results = []
+    for verdict in _evaluated_checks(resolve_checks(constraints), text):
+        if isinstance(verdict.error, (KeyError, TypeError, ValueError)):
+            return infra_error(f"Invalid constraint parameters: {verdict.error}")
+        if verdict.error is not None:
+            raise verdict.error
+        results.append(verdict.passed)
+    return scored(float(all(results)))
+
+
 def _grade_checks(checks: list[tuple[Constraint, Check]], text: str) -> Reward:
     results = []
-    for constraint, check in checks:
-        try:
-            passed, detail = check(text, constraint.params)
-        except Exception as error:
-            passed, detail = False, f"{type(error).__name__}: {error}"
-        if type(passed) is not bool or not isinstance(detail, str):
+    for verdict in _evaluated_checks(checks, text):
+        if type(verdict.passed) is not bool or not isinstance(verdict.detail, str):
             raise RuntimeError("ifeval check returned an invalid result")
-        results.append({"name": constraint.name, "passed": passed, "detail": detail})
+        results.append({"name": verdict.name, "passed": verdict.passed, "detail": verdict.detail})
     failed = [result["name"] for result in results if not result["passed"]]
     return scored(0.0 if failed else 1.0, constraints=results, failed=failed)
 

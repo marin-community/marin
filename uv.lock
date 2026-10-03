@@ -6126,6 +6126,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "taskcompendium", extra = ["pipeline"] },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
@@ -6158,6 +6159,7 @@ test = [
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "taskcompendium", extra = ["pipeline"] },
     { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
 ]
 
@@ -6261,6 +6263,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
+    { name = "taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
@@ -6293,6 +6296,7 @@ test = [
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
 ]
 
@@ -7371,6 +7375,29 @@ requires-dist = [
     { name = "watchdog" },
 ]
 provides-extras = ["pipeline"]
+
+[[package]]
+name = "marin-shellbox"
+version = "0.1.0"
+source = { editable = "lib/shellbox" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "daytona", marker = "extra == 'daytona'", specifier = "==0.200.2" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "marin-iris", marker = "extra == 'iris'", specifier = ">=0.2.0" },
+    { name = "marin-rigging", marker = "extra == 'daytona'", specifier = ">=0.2.0" },
+    { name = "marin-rigging", marker = "extra == 'shellsim'", specifier = ">=0.2.0" },
+    { name = "quicksand-qemu", marker = "extra == 'qemu'", specifier = ">=0.5.12,<0.6" },
+    { name = "shellsim", marker = "extra == 'shellsim'", specifier = ">=0.1.20,<0.2" },
+]
+provides-extras = ["qemu", "shellsim", "gvisor", "daytona", "iris"]
+
+[package.metadata.requires-dev]
+test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "marin-zephyr"
@@ -11391,6 +11418,46 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ec/fe/802052aecb21e3797b8f7902564ab6ea0d60ff8ca23952079064155d1ae1/tabulate-0.9.0.tar.gz", hash = "sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c", size = 81090, upload-time = "2022-10-06T17:21:48.54Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/40/44/4a5f08c96eb108af5cb50b41f76142f0afa346dfa99d5296fe7202a11854/tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f", size = 35252, upload-time = "2022-10-06T17:21:44.262Z" },
+]
+
+[[package]]
+name = "taskcompendium"
+version = "0.1.0"
+source = { editable = "lib/taskcompendium" }
+dependencies = [
+    { name = "marin-shellbox" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
+]
+
+[package.optional-dependencies]
+pipeline = [
+    { name = "datasets" },
+    { name = "marin-finestore" },
+    { name = "marin-zephyr" },
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
+    { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
+    { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "lib/finestore" },
+    { name = "marin-shellbox", editable = "lib/shellbox" },
+    { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "lib/zephyr" },
+    { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
+    { name = "pyarrow", specifier = ">=15.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "verifyit", extras = ["answer", "judge", "reasoning-gym", "schema"], editable = "lib/verifyit" },
+]
+provides-extras = ["harbor", "pipeline"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]

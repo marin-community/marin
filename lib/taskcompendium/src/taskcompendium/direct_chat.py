@@ -21,6 +21,10 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
         )
         if value
     ]
+    if specification.interaction_tools:
+        features.append("interaction_tools")
+    if specification.output_paths:
+        features.append("output_paths")
     if specification.verifier.environment_requirements != EnvironmentRequirements():
         features.append("verifier.environment_requirements")
     resources = specification.resources
