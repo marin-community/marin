@@ -1,0 +1,11 @@
+tasks: [HumanEvalPlus]
+task_options:
+  HumanEvalPlus:
+    num_fewshot: 0
+    task_alias: humanevalplus
+    generation: true
+    unsafe_code: true
+runtime_extras: [humanevalplus]
+chat_template_kwargs:
+  enable_thinking: false
+limit: 20

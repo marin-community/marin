@@ -1,0 +1,10 @@
+tasks: [MATH500]
+task_options:
+  MATH500:
+    num_fewshot: 0
+    task_alias: math500
+    generation: true
+runtime_extras: [math500]
+chat_template_kwargs:
+  enable_thinking: true
+limit: 20

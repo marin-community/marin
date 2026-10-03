@@ -1,0 +1,11 @@
+tasks: [MBPPPlus]
+task_options:
+  MBPPPlus:
+    num_fewshot: 0
+    task_alias: mbppplus
+    generation: true
+    unsafe_code: true
+runtime_extras: [mbppplus]
+chat_template_kwargs:
+  enable_thinking: false
+limit: 20
