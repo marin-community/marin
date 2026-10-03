@@ -3,14 +3,19 @@
 
 """Private semantics for one deterministic task and its final submission."""
 
-from dataclasses import dataclass
+import base64
+import binascii
+import json
 from enum import StrEnum
 from math import isfinite
-from typing import Annotated, Literal
+from pathlib import PurePosixPath
+from typing import Annotated, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 
-SCHEMA_VERSION = "0.9"
+SCHEMA_VERSION = "0.20"
+DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
 class AnswerType(StrEnum):
@@ -20,16 +25,8 @@ class AnswerType(StrEnum):
     NUMBER = "number"
     FILE = "file"
     STATE = "state"
+    WORKSPACE_STATE = "workspace_state"
     NATIVE_ACTION = "native_action"
-
-
-class VerifierKind(StrEnum):
-    """The registered grader used to check a submission."""
-
-    EXACT_ANSWER = "exact_answer"
-    PREDICTED_ACTION = "predicted_action"
-    NUMERIC_ANSWER = "numeric_answer"
-    MCQ_ANSWER = "mcq_answer"
 
 
 class Source(BaseModel):
@@ -49,17 +46,15 @@ class Source(BaseModel):
         return self
 
 
-class VerifierSpec(BaseModel):
-    """A private verifier selection and its pinned configuration.
+def _reject_json_constant(value: str) -> NoReturn:
+    raise ValueError(f"Verifier configuration contains a non-JSON numeric constant: {value}")
 
-    ``kind`` selects a verifier class. ``parameters_json`` is its private
-    JSON-encoded configuration.
-    """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: VerifierKind
-    parameters_json: str = Field(repr=False)
+def _finite_json_float(value: str) -> float:
+    result = float(value)
+    if not isfinite(result):
+        raise ValueError("Verifier configuration numbers must be finite")
+    return result
 
 
 class FunctionCall(BaseModel):
@@ -69,19 +64,6 @@ class FunctionCall(BaseModel):
 
     name: str = Field(min_length=1)
     arguments: dict[str, JsonValue]
-
-
-@dataclass(frozen=True)
-class ToolCallComparatorConfig:
-    numeric_tolerance: float | None = None
-
-    def __post_init__(self) -> None:
-        if self.numeric_tolerance is not None and (
-            isinstance(self.numeric_tolerance, bool)
-            or not isfinite(self.numeric_tolerance)
-            or self.numeric_tolerance < 0
-        ):
-            raise ValueError("Numeric tolerance must be finite and nonnegative")
 
 
 class FunctionDefinition(BaseModel):
@@ -225,51 +207,147 @@ class ConversationTrace(BaseModel):
         return self
 
 
-class FinalTools(BaseModel):
-    """Functions and call policy advertised at the task's decision point."""
+class InlineFile(BaseModel):
+    """File bytes encoded as canonical base64, including UTF-8 text files."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    functions: tuple[FunctionDefinition, ...] = ()
-    tool_choice: str | None = None
-    parallel_tool_calls: bool | None = None
+    kind: Literal["inline_file"] = "inline_file"
+    content_base64: str
+
+    @field_validator("content_base64")
+    @classmethod
+    def validate_base64(cls, value: str) -> str:
+        try:
+            payload = base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise ValueError("Invalid base64 resource content") from error
+        if base64.b64encode(payload).decode("ascii") != value:
+            raise ValueError("Base64 resource content must be canonical")
+        return value
+
+
+class TaskResource(BaseModel):
+    """One inline file copied into a role's workspace."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: str
+    source: InlineFile
+    mode: str | None = Field(default=None, pattern=r"^[0-7]{3,4}$")
+    mtime_ns: int | None = Field(default=None, strict=True)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        validate_relative_file_path(value)
+        return value
+
+
+class ResourceGroups(BaseModel):
+    """Shared inputs and role-specific mounts, with independent private roots."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    all: tuple[TaskResource, ...] = ()
+    worker: tuple[TaskResource, ...] = ()
+    oracle: tuple[TaskResource, ...] = ()
+    verifier: tuple[TaskResource, ...] = ()
 
     @model_validator(mode="after")
-    def validate_tools(self) -> "FinalTools":
-        if len({function.name for function in self.functions}) != len(self.functions):
-            raise ValueError("Advertised function names must be unique")
-        if self.tool_choice is not None and self.tool_choice not in {"auto", "none", "required"}:
-            raise ValueError("Unsupported native tool choice")
+    def validate_destinations(self) -> "ResourceGroups":
+        for resources in (self.worker, self.oracle, self.verifier):
+            validate_relative_file_paths(resource.path for resource in self.all + resources)
         return self
 
 
-class EnvironmentRequirements(BaseModel):
-    """Environment functionality required to run the task.
+class ProviderRequirement(BaseModel):
+    """One versioned action interface and literal JSON initial state."""
 
-    ``capabilities`` contains generic operations such as ``filesystem`` or
-    ``shell``. ``action_interfaces`` contains named stateful tool surfaces such
-    as ``workplace:v1``.
-    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action_interface: str = Field(min_length=1)
+    initial_state: JsonValue = Field(repr=False)
+
+    @field_validator("initial_state")
+    @classmethod
+    def validate_initial_state(cls, value: JsonValue) -> JsonValue:
+        json.dumps(value, allow_nan=False)
+        return value
+
+
+def validate_workspace_path(path: str) -> PurePosixPath:
+    """Require an absolute POSIX workspace path interpreted by the runtime."""
+    workspace = PurePosixPath(path)
+    if not workspace.is_absolute():
+        raise ValueError(f"Workspace path must be absolute: {path!r}")
+    return workspace
+
+
+class EnvironmentRequirements(BaseModel):
+    """Operations, pinned initial workspace, and named tool-provider contracts."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
-    action_interfaces: tuple[str, ...] = ()
+    docker_image: str | None = Field(default=None, pattern=DOCKER_IMAGE_PATTERN)
+    working_directory: str | None = None
+    setup_commands: tuple[str, ...] = ()
+    environment_variables: dict[str, str] = Field(default_factory=dict)
+    tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_environment(self) -> "EnvironmentRequirements":
+        if any(not capability for capability in self.capabilities):
+            raise ValueError("Capabilities must be nonempty names")
+        if len(set(self.capabilities)) != len(self.capabilities):
+            raise ValueError("Capabilities must be unique")
+        if any(not name for name in self.tool_providers):
+            raise ValueError("Provider requirement names must be nonempty")
+        if any(not command.strip() for command in self.setup_commands):
+            raise ValueError("Setup commands must be nonempty")
+        if self.working_directory is not None:
+            validate_workspace_path(self.working_directory)
+        return self
+
+
+class VerifierSpec(BaseModel):
+    """A private verifier selection and its pinned configuration.
+
+    ``parameters_json`` belongs to the scorer. Typed environment requirements
+    declare private harness capabilities independently of scoring configuration.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: str = Field(min_length=1)
+    parameters_json: str = Field(repr=False)
+    environment_requirements: EnvironmentRequirements = Field(default_factory=EnvironmentRequirements)
+
+    @field_validator("parameters_json")
+    @classmethod
+    def validate_parameters(cls, value: str) -> str:
+        parameters = json.loads(value, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
+        if not isinstance(parameters, dict):
+            raise ValueError("Verifier configuration must be a JSON object")
+        return value
 
 
 class TaskSpec(BaseModel):
-    """The private definition of one deterministic answer task."""
+    """The complete private semantic definition of one task and final result."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
-    final_tools: FinalTools = Field(default_factory=FinalTools)
+    final_tools: tuple[FunctionDefinition, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
     schema_version: str = SCHEMA_VERSION
+    resources: ResourceGroups = Field(default_factory=ResourceGroups)
+    tags: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
@@ -277,6 +355,8 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
-        if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools.functions:
+        if len({function.name for function in self.final_tools}) != len(self.final_tools):
+            raise ValueError("Advertised function names must be unique")
+        if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:
             raise ValueError("Native-action tasks require advertised functions")
         return self

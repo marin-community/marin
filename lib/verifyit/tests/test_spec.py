@@ -7,12 +7,14 @@ from verifyit.spec import (
     Constraint,
     EmptyOutputPolicy,
     ExactSpec,
+    FunctionCall,
     IfevalSpec,
     MathProfile,
     MathSpec,
     MathType,
     McqSpec,
     NumericSpec,
+    PredictedActionSpec,
     PytestSpec,
     ReasoningGymSpec,
     StdioSpec,
@@ -28,6 +30,10 @@ from verifyit.spec import (
 def test_round_trip_every_field_kind():
     specs = [
         McqSpec(expected="C", options=5),
+        PredictedActionSpec(
+            expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
+            numeric_tolerance=0.01,
+        ),
         MathSpec(expected="(1, 2)", math_type=MathType.TUPLE),
         MathSpec(expected="0.5", profile=MathProfile.BOXED),
         NumericSpec(expected=42.0, tolerance_abs=0.1, tolerance_rel=0.01),
@@ -56,6 +62,9 @@ def test_single_string_becomes_tuple_and_none_is_omitted():
         ('mode = "mcq"\nexpected = 3\n', "expects str"),
         ('mode = "nope"\n', "nope"),
         ('mode = "pytest"\nsetup_failure_is_infra = "true"\n', "expects bool"),
+        ('mode = "exact"\nexpected = [1]\n', "expects strings"),
+        ('mode = "mcq"\nexpected = "A"\noptions = true\n', "expects an integer"),
+        ('mode = "predicted_action"\nexpected_calls = 1\n', "expects a list of function calls"),
     ],
 )
 def test_malformed_specs_are_rejected(text, message):
@@ -85,6 +94,7 @@ def test_reasoning_gym_params_roundtrip_and_legacy_default():
 @pytest.mark.parametrize(
     "mode,fields",
     [
+        ("predicted_action", {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}]}),
         ("mcq", {"expected": "A"}),
         ("math", {"expected": "1"}),
         ("numeric", {"expected": 1.0}),

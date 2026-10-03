@@ -5,10 +5,11 @@
 
 import json
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -49,7 +50,7 @@ class AnswerFormat(StrEnum):
     FINAL_ACTION = "final_action"
 
 
-class SubmissionConvention(BaseModel):
+class _SubmissionConvention(BaseModel):
     """How a result is requested, delivered, and extracted."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -58,7 +59,7 @@ class SubmissionConvention(BaseModel):
     answer_format: AnswerFormat
 
     @model_validator(mode="after")
-    def validate_convention(self) -> "SubmissionConvention":
+    def validate_convention(self) -> "_SubmissionConvention":
         if not self.id:
             raise ValueError("A submission convention id is required")
         return self
@@ -70,19 +71,49 @@ class SubmissionConvention(BaseModel):
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
 
-def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> bool:
+class SubmissionConvention(_SubmissionConvention):
+    """Deliver a text or numeric answer through a selected chat envelope."""
+
+    answer_format: Literal[AnswerFormat.PLAIN, AnswerFormat.JSON, AnswerFormat.ANSWER_CALL]
+
+
+class FinalAction(_SubmissionConvention):
+    """Capture the final assistant turn with explicit function-call limits."""
+
+    answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
+    require_call: bool = False
+    max_calls: int | None = Field(default=None, gt=0)
+
+    def validate_final_message(self, response: ConversationEvent) -> None:
+        """Require the assistant's final message to honor the call contract."""
+        if not isinstance(response, (TextMessage, AssistantToolCalls)) or (
+            isinstance(response, TextMessage) and response.role != "assistant"
+        ):
+            raise ValueError("Final action requires an assistant message")
+        if self.require_call and not isinstance(response, AssistantToolCalls):
+            raise ValueError("Final action requires a function call")
+        if (
+            isinstance(response, AssistantToolCalls)
+            and self.max_calls is not None
+            and len(response.calls) > self.max_calls
+        ):
+            raise ValueError(f"Final action permits at most {self.max_calls} function calls")
+
+
+type Submission = SubmissionConvention | FinalAction
+
+
+def submission_compatible(specification: TaskSpec, convention: Submission) -> bool:
     if not convention.supports(specification.answer_type):
         return False
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return bool(specification.final_tools.functions) and specification.final_tools.tool_choice != "none"
+        return bool(specification.final_tools)
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        return specification.final_tools.tool_choice != "none" and all(
-            function.name != ANSWER_CALL_NAME for function in specification.final_tools.functions
-        )
-    return specification.final_tools.tool_choice != "required"
+        return all(function.name != ANSWER_CALL_NAME for function in specification.final_tools)
+    return True
 
 
-def submission_instruction(convention: SubmissionConvention) -> str:
+def submission_instruction(convention: Submission) -> str:
     """Return the instruction added after a conversation prefix."""
     if convention.answer_format == AnswerFormat.PLAIN:
         return "Give your answer as plain text."
@@ -95,7 +126,7 @@ def submission_instruction(convention: SubmissionConvention) -> str:
     raise ValueError(f"Unsupported answer format: {convention.answer_format}")
 
 
-def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
+def render_instruction(specification: TaskSpec, convention: Submission) -> str:
     """Return Harbor instruction text for the selected convention."""
     context = specification.context
     if not submission_compatible(specification, convention):
@@ -136,8 +167,11 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
     return messages
 
 
-def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
+def chat_request(specification: TaskSpec, convention: Submission) -> dict[str, Any]:
     """Prepare the conversation and tools for the selected submission convention."""
+    unsupported = unsupported_direct_chat_features(specification)
+    if unsupported:
+        raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
     if not submission_compatible(specification, convention):
         raise ValueError("Submission convention is incompatible with the task")
     messages = conversation_messages(specification.context)
@@ -147,22 +181,23 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     request: dict[str, Any] = {"messages": messages}
     tools: list[dict[str, object]] = [
         {"type": "function", "function": function.model_dump(exclude_none=True)}
-        for function in specification.final_tools.functions
+        for function in specification.final_tools
     ]
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         tools.append(answer_call_tool())
-        if not specification.final_tools.functions:
+        if not specification.final_tools:
             request.update(tool_choice="required", parallel_tool_calls=False)
     if tools:
         request["tools"] = tools
-    if specification.final_tools.tool_choice is not None:
-        request["tool_choice"] = specification.final_tools.tool_choice
-    if specification.final_tools.parallel_tool_calls is not None:
-        request["parallel_tool_calls"] = specification.final_tools.parallel_tool_calls
+    if isinstance(convention, FinalAction):
+        if convention.require_call:
+            request["tool_choice"] = "required"
+        if convention.max_calls == 1:
+            request["parallel_tool_calls"] = False
     return request
 
 
-def extract_answer(response: ConversationEvent, convention: SubmissionConvention) -> str:
+def extract_answer(response: ConversationEvent, convention: Submission) -> str:
     """Extract semantic answer content from a typed assistant turn."""
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         if (
