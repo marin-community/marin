@@ -13,7 +13,6 @@ from itertools import groupby
 from tempfile import TemporaryFile
 from typing import BinaryIO, Literal
 
-import click
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -21,19 +20,15 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.store.cache import SerialCacheWriter, TreeCache
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
+from marin.execution.fingerprint import register_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.fast_track.contracts import FrozenBaselineComponent, FrozenBaselineManifest, ResolvedTrainingBudget
-from experiments.grug.fast_track.launch import (
-    FlatCacheTrainingSource,
-    ThroughputResult,
-    build_h100_ladder_run,
-)
+from experiments.grug.fast_track.launch import FlatCacheTrainingSource
 from experiments.grug.fast_track.quality import (
     LabelledEmbedding,
     PoolDocument,
@@ -54,6 +49,9 @@ class PinnedFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     path: str
     sha256: str = Field(pattern="^[0-9a-f]{64}$")
+
+
+register_fingerprint(PinnedFile, lambda value: value.model_dump(mode="json"))
 
 
 class QualityBundle(BaseModel):
@@ -304,55 +302,3 @@ def build_quality_data(spec: QualitySpec, *, version: str | None = None) -> Arti
         run=prepare_quality_data,
         build_config=lambda ctx: QualityConfig(spec, ctx.output_path),
     )
-
-
-@click.command()
-@click.option("--bundle", required=True, help="Frozen quality bundle JSON path.")
-@click.option("--bundle-sha256", required=True, help="SHA-256 of the bundle JSON bytes.")
-@click.option("--run-id", required=True)
-@click.option("--size", type=click.Choice(["d512", "d768", "d1024"]), default="d512", show_default=True)
-@click.option(
-    "--selection-method", type=click.Choice([item.value for item in SelectionMethod]), default="ridge", show_default=True
-)
-@click.option("--fraction", type=click.FloatRange(min=0, max=1, min_open=True), default=0.1, show_default=True)
-@click.option("--regularization", type=click.FloatRange(min=0, min_open=True), default=0.01, show_default=True)
-@click.option("--tie-seed", type=click.IntRange(min=0), default=0)
-@click.option("--seed", type=click.IntRange(min=0), default=0)
-@click.option("--data-seed", type=click.IntRange(min=0), default=0)
-@click.option("--prepare-only", is_flag=True)
-@build_options
-def main(
-    bundle: str,
-    bundle_sha256: str,
-    run_id: str,
-    size: str,
-    selection_method: str,
-    fraction: float,
-    regularization: float,
-    tie_seed: int,
-    seed: int,
-    data_seed: int,
-    prepare_only: bool,
-) -> ArtifactStep[QualityData] | ArtifactStep[ThroughputResult]:
-    spec = QualitySpec(
-        PinnedFile(path=bundle, sha256=bundle_sha256),
-        SelectionMethod(selection_method),
-        fraction,
-        regularization,
-        tie_seed,
-    )
-    selection = build_quality_data(spec)
-    if prepare_only:
-        return selection
-    return build_h100_ladder_run(
-        run_id=run_id,
-        size=size,
-        dense=True,
-        training_source=QualityTrainingSource(selection),
-        seed=seed,
-        data_seed=data_seed,
-    )
-
-
-if __name__ == "__main__":
-    main()

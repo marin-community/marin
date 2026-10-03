@@ -11,6 +11,7 @@ below from 9.4e16 to 4.3e19 FLOPs.
 | [`data_pipeline.py`](data_pipeline.py) | raw sources, DataKit artifact, and store mixture |
 | [`add_dataset.py`](add_dataset.py) | Bounded Hugging Face prefix and simulated exposure |
 | [`quality_pipeline.py`](quality_pipeline.py) | Frozen embedding head, pool audit, and selected training cache |
+| [`quality_cli.py`](quality_cli.py) | Quality-track command |
 | [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
 | [`train.py`](train.py) | trainer/eval/loss wiring and runtime (XLA) defaults |
 | [`optimizer.py`](optimizer.py) | MuonH optimizer config: LR groups + hyperball step |
@@ -342,7 +343,7 @@ Keep an additional diagnostic panel when rare sources or content types require g
 Do not silently add oversampled diagnostic rows to the production-weighted training pool.
 
 ```bash
-uv run python -m experiments.grug.fast_track.quality_pipeline \
+uv run python -m experiments.grug.fast_track.quality_cli \
   --bundle <frozen-bundle.json> --bundle-sha256 <sha256> \
   --run-id quality-ridge-d512 --size d512 --fraction 0.1 \
   --regularization 0.01 --seed 0 --data-seed 0 --version 2026.10.03

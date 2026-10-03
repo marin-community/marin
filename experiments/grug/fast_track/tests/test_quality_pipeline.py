@@ -3,6 +3,9 @@
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from dataclasses import replace
 
 import numpy as np
@@ -19,6 +22,7 @@ from experiments.grug.fast_track.quality_pipeline import (
     PinnedFile,
     QualityBundle,
     QualityConfig,
+    QualityData,
     QualitySpec,
     QualityTrainingSource,
     SelectionMethod,
@@ -181,3 +185,43 @@ def test_quality_candidate_identity_changes_artifact_path(quality_config):
 
     assert len({baseline.name, candidate.name, incumbent.name}) == 3
     assert baseline.fingerprint() != candidate.fingerprint()
+
+
+def test_quality_cli_artifact_loads_through_python_api(quality_config, tmp_path):
+    spec = quality_config.spec
+    prefix = str(tmp_path / "artifacts")
+    version = "2026.10.03"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "experiments.grug.fast_track.quality_cli",
+            "--bundle",
+            spec.bundle.path,
+            "--bundle-sha256",
+            spec.bundle.sha256,
+            "--run-id",
+            "cli-round-trip",
+            "--fraction",
+            str(spec.fraction),
+            "--regularization",
+            str(spec.regularization),
+            "--tie-seed",
+            str(spec.tie_seed),
+            "--version",
+            version,
+            "--prepare-only",
+            "--run",
+        ],
+        env={**os.environ, "MARIN_PREFIX": prefix, "MARIN_FINGERPRINT_STRICT": "1"},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    step = build_quality_data(spec, version=version)
+    result = QualityData.raw_load(step.path(prefix))
+    cache = TreeCache.load(result.cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)})
+
+    assert result.requested_tokens == 40
+    np.testing.assert_array_equal(cache.get_batch_sync([0])[0]["input_ids"], np.full(40, 4))
