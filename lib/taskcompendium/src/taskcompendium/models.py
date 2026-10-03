@@ -14,7 +14,7 @@ from typing import Annotated, Literal, NoReturn
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 
-SCHEMA_VERSION = "0.19"
+SCHEMA_VERSION = "0.20"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
@@ -227,35 +227,13 @@ class InlineFile(BaseModel):
         return value
 
 
-class DatasetPath(BaseModel):
-    """A vendored path below the containing TaskCompendium dataset reader root.
-
-    The reader supplies its root and snapshot explicitly to a materializer;
-    upstream Source provenance, process cwd, and export layout do not locate it.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["dataset_path"] = "dataset_path"
-    path: str
-
-    @field_validator("path")
-    @classmethod
-    def validate_path(cls, value: str) -> str:
-        validate_relative_file_path(value)
-        return value
-
-
-ResourceSource = Annotated[InlineFile | DatasetPath, Field(discriminator="kind")]
-
-
 class TaskResource(BaseModel):
-    """One file or directory copied into a role's workspace."""
+    """One inline file copied into a role's workspace."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: str
-    source: ResourceSource
+    source: InlineFile
     mode: str | None = Field(default=None, pattern=r"^[0-7]{3,4}$")
     mtime_ns: int | None = Field(default=None, strict=True)
 
