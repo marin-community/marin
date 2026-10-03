@@ -29,9 +29,10 @@ def test_detector_finds_the_flipping_input_direction():
         c, e = side_stats(jnp.asarray(d), jnp.asarray(dp), "in")
         cross = beta * cross + (1 - beta) * np.asarray(c)
         energy = beta * energy + (1 - beta) * np.asarray(e)
-    rho, basis = flip_directions(cross, energy, k=1)
+    rho, basis = flip_directions(jnp.asarray(cross), jnp.asarray(energy), k=1)
+    rho, basis = np.asarray(rho), np.asarray(basis)
     assert rho[0] < -0.8 and rho[1] > -0.2 and rho[-1] > 0.8  # one flipping direction; the rest drift or are noise
-    assert subspace_overlap(basis, u[:, None]) > 0.95
+    assert float(subspace_overlap(jnp.asarray(basis), jnp.asarray(u[:, None]))) > 0.95
     f_cos, r_cos, share = flagged_cosines(jnp.asarray(ds[-1]), jnp.asarray(ds[-2]), jnp.asarray(basis), "in")
     assert float(f_cos) < -0.5 and float(r_cos) > 0.5 and 0.0 < float(share) < 1.0
 

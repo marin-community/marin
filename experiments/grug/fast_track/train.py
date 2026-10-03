@@ -1372,7 +1372,15 @@ def _flip_detector_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[..., None
                 cosines[key] = flagged_cosines(d, dprev[name], bases[key], side)
         return new_stats, cosines, {n: x + 0.0 for n, x in cur.items()}, {n: cur[n] - prev[n] for n in cur}
 
-    carry: dict = {"seen": set(), "block": [], "index": 0, "old_bases": {}}
+    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
+    def solve(stats, old_bases):
+        out = {}
+        for key, (cross, energy) in stats.items():
+            rho, basis = flip_directions(cross, energy, k)
+            out[key] = (rho, basis, subspace_overlap(old_bases[key], basis))
+        return out
+
+    carry: dict = {"seen": set(), "block": [], "index": 0, "solved": 0}
 
     def hook(info, force: bool = False) -> None:
         count = info.next_step
@@ -1398,31 +1406,26 @@ def _flip_detector_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[..., None
         carry["block"].append(jax.tree.map(np.asarray, multihost_utils.process_allgather(cosines, tiled=True)))
         if count % every:
             return
-        stats = multihost_utils.process_allgather(carry["stats"], tiled=True)
-        record, logs, new_bases = {}, {}, {}
-        for key, (cross, energy) in stats.items():
-            cross, energy = np.asarray(cross), np.asarray(energy)
-            rhos, bases = [], []
-            for layer in range(cross.shape[0]):
-                rho, basis = flip_directions(cross[layer], energy[layer], k)
-                rhos.append(rho)
-                bases.append(basis)
-                old = carry["old_bases"].get((key, layer))
+        with set_mesh(mesh), _pgle_disabled():
+            solved = solve(carry["stats"], carry["bases"])
+        carry["bases"] = {key: basis for key, (_, basis, _) in solved.items()}
+        host = multihost_utils.process_allgather({key: (rho, ov) for key, (rho, _, ov) in solved.items()}, tiled=True)
+        record, logs = {}, {}
+        for key, (rho, overlap) in host.items():
+            rho, overlap = np.asarray(rho), np.asarray(overlap)
+            block = np.asarray([b[key] for b in carry["block"]])  # [steps, 3, layers]
+            for layer in range(rho.shape[0]):
                 tag = f"flip/{key.replace('|', '/')}/L{layer}"
-                block = np.asarray([b[key] for b in carry["block"]])  # [steps, 3, layers]
-                if old is not None and len(block):
+                logs[f"{tag}/rho_min"] = float(rho[layer, 0])
+                logs[f"{tag}/rho_max"] = float(rho[layer, -1])
+                if carry["solved"] and len(block):
                     logs[f"{tag}/flagged_cos"] = float(np.mean(block[:, 0, layer]))
                     logs[f"{tag}/rest_cos"] = float(np.mean(block[:, 1, layer]))
                     logs[f"{tag}/flagged_share"] = float(np.mean(block[:, 2, layer]))
-                    logs[f"{tag}/overlap"] = subspace_overlap(old, basis)
-                logs[f"{tag}/rho_min"] = float(rho[0])
-                logs[f"{tag}/rho_max"] = float(rho[-1])
-                carry["old_bases"][(key, layer)] = basis
-            record[f"rho/{key}"] = np.stack(rhos)
-            record[f"cos/{key}"] = np.asarray([b[key] for b in carry["block"]])
-            new_bases[key] = np.stack(bases).astype(np.float32)
-        with set_mesh(mesh):
-            carry["bases"] = {key: jnp.asarray(v) for key, v in new_bases.items()}
+                    logs[f"{tag}/overlap"] = float(overlap[layer])
+            record[f"rho/{key}"] = rho
+            record[f"cos/{key}"] = block
+        carry["solved"] += 1
         carry["block"] = []
         if jax.process_index() == 0:
             levanter.tracker.log(logs, step=info.step)

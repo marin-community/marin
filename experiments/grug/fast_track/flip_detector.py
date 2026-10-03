@@ -24,7 +24,6 @@ Diagnostic only: nothing here changes the update.
 from __future__ import annotations
 
 import jax.numpy as jnp
-import numpy as np
 
 FLIP_DETECTOR_FILE = "flip_detector_{index:04d}.npz"
 DEFAULT_FLIP_PATTERNS = (
@@ -62,20 +61,23 @@ def flagged_cosines(d, d_prev, basis, side: str) -> tuple[jnp.ndarray, jnp.ndarr
     return cos(f, fp), cos(r, rp), share
 
 
-def flip_directions(cross: np.ndarray, energy: np.ndarray, k: int, ridge: float = 1e-3) -> tuple[np.ndarray, np.ndarray]:
-    """For one layer: the ascending correlations ``rho`` of ``sym(cross) v = rho energy v`` and an orthonormal
-    basis [n, k] of the ``k`` most negative directions."""
-    sym = 0.5 * (cross + cross.T)
-    n = energy.shape[0]
-    energy = energy + ridge * np.trace(energy) / n * np.eye(n)
-    w, q = np.linalg.eigh(energy)
-    inv_sqrt = q @ np.diag(1.0 / np.sqrt(np.maximum(w, 1e-30))) @ q.T
-    rho, u = np.linalg.eigh(inv_sqrt @ sym @ inv_sqrt)
-    v = inv_sqrt @ u[:, :k]
-    basis, _ = np.linalg.qr(v)
+def flip_directions(
+    cross: jnp.ndarray, energy: jnp.ndarray, k: int, ridge: float = 1e-3
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Per layer ([..., n, n] inputs): the ascending correlations ``rho`` [..., n] of ``sym(cross) v = rho energy v``
+    and an orthonormal basis [..., n, k] of the ``k`` most negative directions. Runs on device (batched eigh)."""
+    sym = 0.5 * (cross + jnp.swapaxes(cross, -1, -2))
+    n = energy.shape[-1]
+    trace = jnp.trace(energy, axis1=-2, axis2=-1)[..., None, None]
+    energy = energy + ridge * trace / n * jnp.eye(n, dtype=energy.dtype)
+    w, q = jnp.linalg.eigh(energy)
+    inv_sqrt = jnp.einsum("...ij,...j,...kj->...ik", q, 1.0 / jnp.sqrt(jnp.maximum(w, 1e-30)), q)
+    rho, u = jnp.linalg.eigh(inv_sqrt @ sym @ inv_sqrt)
+    basis, _ = jnp.linalg.qr(inv_sqrt @ u[..., :k])
     return rho, basis
 
 
-def subspace_overlap(a: np.ndarray, b: np.ndarray) -> float:
-    """``||a^T b||_F^2 / k`` for orthonormal [n, k] bases: 1 for the same subspace, about k/n for random ones."""
-    return float(np.sum((a.T @ b) ** 2) / a.shape[1])
+def subspace_overlap(a: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
+    """``||a^T b||_F^2 / k`` per layer for orthonormal [..., n, k] bases: 1 for the same subspace, about k/n for
+    random ones."""
+    return jnp.sum(jnp.einsum("...nk,...nj->...kj", a, b) ** 2, axis=(-2, -1)) / a.shape[-1]
