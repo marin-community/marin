@@ -162,7 +162,11 @@ def test_centroid_seed_rekeys_training():
 
 @pytest.mark.parametrize(
     ("constant", "step"),
-    [("LUXICAL_REVISION", "datakit/embed/a"), ("TOKENIZER_REVISION", "datakit/tokenize/a")],
+    [
+        ("LUXICAL_REVISION", "datakit/embed/a"),
+        ("TOKENIZER_REVISION", "datakit/tokenize/a"),
+        ("TOKENIZER_REVISION", "datakit/quality/a"),
+    ],
 )
 def test_upstream_revision_bump_rekeys_its_step(monkeypatch, constant, step):
     # The pins exist so a retagged upstream artifact invalidates the cache rather than

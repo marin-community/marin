@@ -44,8 +44,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     VerifiedFuzzyDupsArtifact,
     VerifiedFuzzyDupsPerSource,
 )
-from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
-from marin.processing.tokenize.attributes import TokenizedAttrData
+from marin.processing.tokenize.attributes import TokenizedAttrData, iter_tokenized_documents
 from pydantic import BaseModel
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -205,9 +204,6 @@ def _resolve_dedup_attr_dir(
     return entry.attr_dir
 
 
-# Rows read from a tokenized shard at once during the positional join.
-_TOKENIZE_BATCH_SIZE = 8192
-
 # Bucket caches are independent. This bounds simultaneous 512 MiB write buffers
 # while allowing TensorStore compression and object-store commits to overlap.
 DEFAULT_PARALLEL_BUCKET_WRITES = 4
@@ -290,55 +286,6 @@ class _SpillShardResult:
 # ---------------------------------------------------------------------------
 
 
-def _iter_tokenized_documents(path: str) -> Iterator[tuple[str, np.ndarray]]:
-    """Yield ``(doc_id, input_ids)`` per document from one tokenized shard.
-
-    A document above the token limit of one Parquet row occupies several adjacent
-    rows that share its ``id``, ordered by ``chunk_index`` (see
-    :mod:`marin.processing.tokenize.attributes`). Those rows are joined back into
-    one token array here, so this shard yields one document per source document
-    and the positional join against the dense per-document tables holds.
-
-    ``chunk_index == 0`` marks the first row of a document. A rule that instead
-    started a document on a change of ``id`` would merge two adjacent documents
-    that share an id, which some sources produce.
-
-    Raises ``RuntimeError`` on a shard with no ``chunk_index`` column (written
-    before the column existed) and on rows that do not run 0, 1, 2 ... within one
-    id. Concatenating out-of-order rows would corrupt the token stream silently.
-    """
-    with StoragePath(path).open("rb") as fh:
-        parquet = pq.ParquetFile(fh)
-        if CHUNK_INDEX_FIELD not in parquet.schema_arrow.names:
-            raise RuntimeError(
-                f"{path}: tokenize shard has no {CHUNK_INDEX_FIELD} column. It predates the column, "
-                "so its step identity does not match this code. Re-run tokenize for this source."
-            )
-        doc_id: str | None = None
-        chunks: list[np.ndarray] = []
-        for batch in parquet.iter_batches(
-            batch_size=_TOKENIZE_BATCH_SIZE, columns=["id", CHUNK_INDEX_FIELD, "input_ids"]
-        ):
-            row_ids = batch.column("id").to_pylist()
-            chunk_indices = batch.column(CHUNK_INDEX_FIELD).to_pylist()
-            input_ids = batch.column("input_ids")
-            for i, row_id in enumerate(row_ids):
-                if chunk_indices[i] == 0:
-                    if chunks:
-                        assert doc_id is not None
-                        yield doc_id, chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
-                    doc_id, chunks = row_id, []
-                elif row_id != doc_id or chunk_indices[i] != len(chunks):
-                    raise RuntimeError(
-                        f"{path}: row {i} is chunk {chunk_indices[i]} of {row_id}, but chunk "
-                        f"{len(chunks)} of {doc_id} must come next"
-                    )
-                chunks.append(input_ids[i].values.to_numpy())
-        if chunks:
-            assert doc_id is not None
-            yield doc_id, chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
-
-
 def _iter_surviving_docs(
     spec: dict[str, str],
     cluster_col: str,
@@ -375,7 +322,7 @@ def _iter_surviving_docs(
     verified_duplicates = _load_verified_duplicates(spec["dedup"]) if spec["dedup"] else set()
 
     doc_idx = 0
-    for doc_id, ids in _iter_tokenized_documents(spec["tokenize"]):
+    for doc_id, ids in iter_tokenized_documents(spec["tokenize"]):
         if doc_idx >= n_decon:
             raise RuntimeError(
                 f"{where}: tokenize holds more documents than decon rows ({n_decon}) -- co-partitioning broken"
