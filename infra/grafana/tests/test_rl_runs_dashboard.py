@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import duckdb
 import pytest
 from config import ClusterTarget
-from conftest import bridge_config, install_finelog_dialect_macros, queried_namespace
+from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
 from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
@@ -351,12 +351,6 @@ def _in_window(sql: str) -> str:
     return sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
 
 
-def _all_panels(panels):
-    for panel in panels:
-        yield panel
-        yield from _all_panels(panel.get("panels", []))
-
-
 def _view_sql(view: str) -> str:
     dataset = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
     sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
@@ -364,7 +358,7 @@ def _view_sql(view: str) -> str:
 
 
 def _panel_sql(title: str) -> str:
-    (panel,) = [panel for panel in _all_panels(_dashboard()["panels"]) if panel.get("title") == title]
+    (panel,) = [panel for panel in dashboard_panels(_dashboard()["panels"]) if panel.get("title") == title]
     (target,) = [target for target in panel["targets"] if target.get("url") == "/v1/rl/overview"]
     (view,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "view"]
     return _view_sql(view)
@@ -576,7 +570,7 @@ def test_every_timeseries_panel_declares_the_columns_its_projection_returns(stor
     """A panel is read through its declared columns, so executing its SQL cannot see a mistake there."""
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
 
-    for panel in _all_panels(dashboard["panels"]):
+    for panel in dashboard_panels(dashboard["panels"]):
         if panel.get("type") != "timeseries":
             continue
         for target in panel["targets"]:
@@ -596,7 +590,7 @@ def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
     # A duplicated panel renders twice and shares an id, and a test that looks panels up by
     # title cannot see it: the lookup keeps one and the dashboard keeps both.
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
-    panels = list(_all_panels(dashboard["panels"]))
+    panels = list(dashboard_panels(dashboard["panels"]))
 
     titles = [panel["title"] for panel in panels]
     assert len(titles) == len(set(titles)), titles
@@ -680,7 +674,7 @@ def _dashboard() -> dict:
 
 
 def test_every_labelled_series_panel_names_the_series_without_its_column() -> None:
-    for panel in _all_panels(_dashboard()["panels"]):
+    for panel in dashboard_panels(_dashboard()["panels"]):
         if panel.get("type") != "timeseries":
             continue
         if "series" not in {column["selector"] for target in panel.get("targets", []) for column in target["columns"]}:
@@ -707,6 +701,8 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
         (UNSTAMPED_RUN_ID, None, 0, 0, "policy_step"),
         ("mixed-run", None, 0, 0, "policy_step"),
         ("mixed-run", "async", 1, 0, "lifecycle"),
+        ("early-stamp-run", "async", 1, 0, "lifecycle"),
+        ("early-stamp-run", None, 5, 0, "policy_step"),
         (ASYNC_RUN_ID, None, 2, 0, "rollout_call"),
     ]:
         rows.append(
@@ -731,16 +727,17 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
             "cluster": CLUSTER,
             "step": step,
             "attempts": 1,
-            "window_from_ms": _WINDOW_START_MS - 60000,
-            "window_to_ms": _WINDOW_START_MS + minutes * 60000 + 60000,
+            "window_from_ms": _WINDOW_START_MS + first * 60000 - 60000,
+            "window_to_ms": _WINDOW_START_MS + last * 60000 + 60000,
             "last seen": _WINDOW_START_MS + minutes * 60000,
             "type": kind,
         }
-        for run, step, minutes, kind in [
-            (RUN_ID, 5, 25, "sync"),
-            (ASYNC_RUN_ID, 1, 5, "async"),
-            (UNSTAMPED_RUN_ID, 0, 0, "sync"),
-            ("mixed-run", 0, 0, "async"),
+        for run, step, minutes, first, last, kind in [
+            (RUN_ID, 5, 25, 0, 25, "sync"),
+            (ASYNC_RUN_ID, 1, 5, 0, 5, "async"),
+            (UNSTAMPED_RUN_ID, 0, 0, 0, 0, "sync"),
+            ("mixed-run", 0, 0, 0, 1, "async"),
+            ("early-stamp-run", 0, 5, 1, 5, "async"),
         ]
     ]
     actual = _request_rows(store, "/v1/rl/recent", {"from": _WINDOW_START_MS, "to": _NOW_MS, "view": "recent"})
@@ -753,6 +750,15 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
         if prop["id"] == "links"
     ]
     template = links[0]["url"]
+    run_variable = next(v for v in _dashboard()["templating"]["list"] if v["name"] == "run")
+    query = run_variable["query"]["infinityQuery"]
+    linked_options = {
+        RUN_ID: [RUN_ID, UNSTAMPED_RUN_ID],
+        ASYNC_RUN_ID: [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
+        UNSTAMPED_RUN_ID: [RUN_ID, UNSTAMPED_RUN_ID, "mixed-run"],
+        "mixed-run": [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
+        "early-stamp-run": [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
+    }
     for row in actual:
         concrete = re.sub(r"\$\{__data.fields.([^}]+)\}", lambda match, row=row: str(row[match[1]]), template)
         url = urlparse(concrete)
@@ -764,9 +770,25 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
             "from": [str(row["window_from_ms"])],
             "to": [str(row["window_to_ms"])],
         }
-    run_variable = next(v for v in _dashboard()["templating"]["list"] if v["name"] == "run")
-    query = run_variable["query"]["infinityQuery"]
-    for kind, wanted in (("sync", [RUN_ID, UNSTAMPED_RUN_ID]), ("async", [ASYNC_RUN_ID, "mixed-run"])):
+        linked = parse_qs(url.query)
+        params = {
+            param["key"]: (
+                param["value"]
+                .replace("${cluster:sqlstring}", f"'{linked['var-cluster'][0]}'")
+                .replace("${training_type:sqlstring}", f"'{linked['var-training_type'][0]}'")
+                .replace("${__from}", linked["from"][0])
+                .replace("${__to}", linked["to"][0])
+            )
+            for param in query["url_options"]["params"]
+        }
+        offered = _request_rows(store, query["url"], params)
+        assert sorted(offered, key=lambda item: item["value"]) == [
+            {"value": run} for run in sorted(linked_options[row["run"]])
+        ]
+    for kind, wanted in (
+        ("sync", [RUN_ID, UNSTAMPED_RUN_ID]),
+        ("async", [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"]),
+    ):
         params = {
             param["key"]: (
                 param["value"]
