@@ -106,6 +106,108 @@ class HFShardResume:
         write_export_json(self._path(record.filename), asdict(record))
 
 
+class _HFShardWriter:
+    """Own rank-zero write state for one export.
+
+    The main thread manages pending futures and returned receipts. Workers write
+    shards and release their bytes; these methods never enter collectives.
+    The caller owns reserved bytes until submit succeeds; the worker releases them
+    afterward. The surrounding executor context waits for workers on every exit.
+    """
+
+    def __init__(
+        self,
+        pool: ThreadPoolExecutor,
+        path: str,
+        export_host_budget_bytes: int,
+        max_concurrent_shards: int,
+        resume: HFShardResume | None,
+        upload_to_hf: Callable[[str, str], None] | None,
+    ) -> None:
+        self._pool = pool
+        self._root = StoragePath(path)
+        self._budget = HostByteBudget(export_host_budget_bytes)
+        self._max_concurrent_shards = max_concurrent_shards
+        self._resume = resume
+        self._upload_to_hf = upload_to_hf
+        self._pending: deque[Future[HFShardRecord | None]] = deque()
+        self._records: list[HFShardRecord] = []
+
+    def resume_shard(self, filename: str, tensor_names: list[str]) -> bool:
+        """Verify and retain an existing receipt, returning whether it can be reused."""
+        if self._resume is None:
+            return False
+        record = self._resume.completed(filename, tensor_names)
+        if record is None:
+            return False
+        self._records.append(record)
+        return True
+
+    def drain_one(self) -> None:
+        """Wait for one pending write and retain its receipt, propagating its failure."""
+        record = self._pending.popleft().result()
+        if record is not None:
+            self._records.append(record)
+
+    def reserve(self, num_bytes: int) -> None:
+        """Wait for capacity and observe completed writer failures before returning."""
+        if len(self._pending) >= self._max_concurrent_shards:
+            self.drain_one()
+        fsspec_sync(get_loop(), self._budget.acquire, num_bytes)
+        try:
+            # A writer may have failed while acquisition waited for its bytes.
+            for future in self._pending:
+                if future.done():
+                    future.result()
+        except BaseException:
+            self.release(num_bytes)
+            raise
+
+    def release(self, num_bytes: int) -> None:
+        self._budget.release(num_bytes)
+
+    def submit(
+        self,
+        filename: str,
+        tensors: dict[str, np.ndarray],
+        tensor_names: list[str],
+        reserved_bytes: int,
+    ) -> None:
+        """Validate names and transfer the reservation to a worker on success."""
+        if sorted(tensors) != tensor_names:
+            raise ValueError(f"Incomplete tensor mapping for {filename}")
+        self._pending.append(self._pool.submit(self._write_shard, filename, tensors, reserved_bytes))
+
+    def finish(self) -> list[HFShardRecord]:
+        """Return receipts after observing all pending writes."""
+        while self._pending:
+            self.drain_one()
+        return self._records
+
+    def _write_shard(self, filename: str, tensors: dict[str, np.ndarray], reserved_bytes: int) -> HFShardRecord | None:
+        try:
+            with TemporaryDirectory(prefix="hf-export-") as directory:
+                local = Path(directory) / filename
+                save_file(tensors, local, metadata={"format": "pt"})
+                record = None
+                if self._resume is not None:
+                    record = HFShardRecord(
+                        self._resume.export_id,
+                        filename,
+                        local.stat().st_size,
+                        _sha256(StoragePath(str(local))),
+                        sorted(tensors),
+                    )
+                (self._root / filename).upload_from(str(local))
+                if self._upload_to_hf is not None:
+                    self._upload_to_hf(directory, filename)
+                if self._resume is not None and record is not None:
+                    self._resume.commit(record)
+                return record
+        finally:
+            self.release(reserved_bytes)
+
+
 def save_hf_shards(
     shards: Mapping[str, Mapping[str, jax.Array | jax.ShapeDtypeStruct]],
     load_shard: Callable[[tuple[str, ...]], Mapping[str, jax.Array]],
@@ -136,67 +238,20 @@ def save_hf_shards(
     upload_to_hf receives a temporary directory containing exactly one shard and
     its filename, on a process-zero worker thread, and must not enter collectives.
     """
-    root = StoragePath(path)
-    budget = HostByteBudget(export_host_budget_bytes)
-    pending: deque[Future[HFShardRecord | None]] = deque()
-    records: list[HFShardRecord] = []
-
-    def drain_one() -> None:
-        record = pending.popleft().result()
-        if record is not None:
-            records.append(record)
-
-    def reserve(num_bytes: int) -> None:
-        if len(pending) >= max_concurrent_shards:
-            drain_one()
-        fsspec_sync(get_loop(), budget.acquire, num_bytes)
-        try:
-            # A writer may have failed while acquisition waited for its bytes.
-            for future in pending:
-                if future.done():
-                    future.result()
-        except BaseException:
-            budget.release(num_bytes)
-            raise
-
-    def write_shard(filename: str, tensors: dict[str, np.ndarray], reserved_bytes: int) -> HFShardRecord | None:
-        try:
-            with TemporaryDirectory(prefix="hf-export-") as directory:
-                local = Path(directory) / filename
-                save_file(tensors, local, metadata={"format": "pt"})
-                record = None
-                if resume is not None:
-                    record = HFShardRecord(
-                        resume.export_id,
-                        filename,
-                        local.stat().st_size,
-                        _sha256(StoragePath(str(local))),
-                        sorted(tensors),
-                    )
-                (root / filename).upload_from(str(local))
-                if upload_to_hf is not None:
-                    upload_to_hf(directory, filename)
-                if resume is not None and record is not None:
-                    resume.commit(record)
-                return record
-        finally:
-            budget.release(reserved_bytes)
-
     with ThreadPoolExecutor(max_workers=max_concurrent_shards, thread_name_prefix="hf_export") as pool:
+        writer = _HFShardWriter(pool, path, export_host_budget_bytes, max_concurrent_shards, resume, upload_to_hf)
         for filename, shapes in shards.items():
             names = sorted(
                 output for key in shapes for output in (tensor_names[key] if tensor_names is not None else (key,))
             )
             if resume is not None:
-                record = run_on_export_writer(lambda: resume.completed(filename, names))
-                reuse = multihost_utils.broadcast_one_to_all(np.asarray(record is not None))
+                reused = run_on_export_writer(lambda: writer.resume_shard(filename, names))
+                reuse = multihost_utils.broadcast_one_to_all(np.asarray(bool(reused)))
                 if reuse:
-                    if record is not None:
-                        records.append(record)
                     continue
 
             reserved_bytes = 2 * sum(value.size * value.dtype.itemsize for value in shapes.values())
-            run_on_export_writer(lambda: reserve(reserved_bytes))
+            run_on_export_writer(lambda: writer.reserve(reserved_bytes))
             tensors: dict[str, np.ndarray] = {}
             try:
                 weights = load_shard(tuple(shapes))
@@ -213,26 +268,19 @@ def save_hf_shards(
                     del host
                 del weights
 
-                def submit() -> None:
-                    if sorted(tensors) != names:
-                        raise ValueError(f"Incomplete tensor mapping for {filename}")
-                    pending.append(pool.submit(write_shard, filename, tensors, reserved_bytes))
-
-                run_on_export_writer(submit)
+                run_on_export_writer(lambda: writer.submit(filename, tensors, names, reserved_bytes))
             except BaseException:
                 if jax.process_index() == 0:
-                    budget.release(reserved_bytes)
+                    writer.release(reserved_bytes)
                 raise
             del tensors
             if max_concurrent_shards == 1:
-                run_on_export_writer(drain_one)
+                run_on_export_writer(writer.drain_one)
 
-        def finish() -> None:
-            while pending:
-                drain_one()
+        records = run_on_export_writer(writer.finish)
 
-        run_on_export_writer(finish)
-
+    if resume is None or records is None:
+        return []
     # Reused shards can be encountered before earlier asynchronous writes finish.
     by_filename = {record.filename: record for record in records}
-    return [by_filename[filename] for filename in shards] if resume is not None and jax.process_index() == 0 else []
+    return [by_filename[filename] for filename in shards]
