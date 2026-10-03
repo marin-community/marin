@@ -58,13 +58,13 @@ uv pip install 'jax[cuda13]==0.11.1' jaxlib==0.11.1 \
   'flash-attn-4[cu13]==4.0.0b28' 'nvidia-cutlass-dsl[cu13]==4.6.2' \
   'quack-kernels[cu13]==0.6.4'
 uv pip install --index-url https://download.pytorch.org/whl/cu128 'torch==2.11.0+cu128'
-uv pip install --no-deps --reinstall \
+uv pip install --no-deps --reinstall-package jaxpp \
   'jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@328f75a80cecf22c7cc030a82d8941d3c1e220b6'
 uv run --no-sync python experiments/grug/moe_hero_pipeline/runtime/apply_overlay.py
 uv run --no-sync python -c \
   'from iris.cluster.setup_scripts import cuda_toolchain_setup_script; print(cuda_toolchain_setup_script())' \
-  > /tmp/hero-cuda-toolchain.sh
-IRIS_VENV="$PWD/.venv" IRIS_WORKDIR="$PWD" bash /tmp/hero-cuda-toolchain.sh
+  > /tmp/pipeline-cuda-toolchain.sh
+IRIS_VENV="$PWD/.venv" IRIS_WORKDIR="$PWD" bash /tmp/pipeline-cuda-toolchain.sh
 export PATH="$PWD/.venv/bin:$PATH"
 ```
 
@@ -108,9 +108,9 @@ as `8 * task_index + local_rank`, sets `IRIS_MULTIGPU_PROCESS_COUNT=16`,
 `IRIS_MULTIGPU_PROCESS_INDEX`, and `IRIS_MULTIGPU_LOCAL_DEVICE_IDS`. The runner's
 `iris.jax.init.initialize_jax` registers rank zero's coordinator endpoint and
 discovers it for the remaining ranks. The worker command requires this Iris job
-context; it is not a standalone two-host shell launcher. Submit
-the coordinator and GPU workers at `PRIORITY_BAND_BATCH` with a one-hour timeout
-and no automatic retries. Retain per-step CUDA synchronization: the older
+context; it is not a standalone two-host shell launcher or an Iris submission
+entry point. Provision the allocation separately using the settings above.
+Retain per-step CUDA synchronization: the older
 full-shape pipeline showed NaNs without it.
 
 ## Bounded synthetic gate

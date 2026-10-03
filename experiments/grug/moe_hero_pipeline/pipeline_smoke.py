@@ -431,7 +431,7 @@ def main() -> None:
             project="marin_moe",
             id=args.run_id,
             name=args.run_id,
-            group="hero-h100-pipeline",
+            group="pipeline-gpu-validation",
             resume="never",
             config=vars(args),
             settings=wandb.Settings(save_code=False, console="redirect"),

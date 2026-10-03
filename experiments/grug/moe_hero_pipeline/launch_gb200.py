@@ -117,7 +117,7 @@ def main():
         'uv pip install --python "$IRIS_VENV/bin/python" --index-url https://download.pytorch.org/whl/cu128 '
         '"torch==2.11.0+cu128"\n'
         f'uv pip install --python "$IRIS_VENV/bin/python" --no-deps "{PJRT_WHEEL}"\n'
-        'uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall '
+        'uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall-package jaxpp '
         f'"jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@{JAXPP_COMMIT}"\n'
         "uv run --no-sync python experiments/grug/moe_hero_pipeline/runtime/apply_overlay.py\n"
         "uv run --no-sync python -c 'import torch; assert torch.cuda.is_available(), "
