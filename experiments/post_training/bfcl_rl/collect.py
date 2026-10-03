@@ -152,6 +152,7 @@ def collection_recipe(images: tuple[str, str, str]) -> str:
                 "sampling_params": {"temperature": 1.0, "top_p": 1.0, "logprobs": 0},
                 "eval_sampling_params": {"temperature": 1.0, "top_p": 1.0, "logprobs": 0},
                 "engine_init_kwargs": {
+                    "enable_auto_tool_choice": True,
                     "tool_call_parser": "hermes",
                     "model_loader_extra_config": {"distributed": True},
                 },
