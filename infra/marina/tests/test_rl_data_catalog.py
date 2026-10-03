@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import httpx
 import pytest
@@ -27,6 +27,7 @@ from infra.marina.applets.rl_data_catalog.server.app import (
 )
 from infra.marina.applets.rl_data_catalog.server.catalog import (
     Snapshot,
+    annotate_verifier_dependency,
     count_metadata,
     dataset_metadata,
     registry_sources,
@@ -37,6 +38,32 @@ from infra.marina.applets.rl_data_catalog.server.catalog import (
 )
 from infra.marina.applets.rl_data_catalog.server.composition import canonical_rows, component_rows
 from infra.marina.applets.rl_data_catalog.server.hf_auth import HuggingFaceAuth
+
+
+def cached_refresh_transport(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.MockTransport:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/marin-community/harbor/commits":
+            return httpx.Response(
+                200, json=[{"sha": "harbor1", "commit": {"committer": {"date": "2026-09-28T00:00:00Z"}}}]
+            )
+        return handler(request)
+
+    return httpx.MockTransport(upstream)
+
+
+def cached_verifier_metadata(rows: list[dict]) -> list[dict]:
+    """Supply the previously resolved verifier identity for dataset-only refresh fixtures."""
+    for row in rows:
+        row.setdefault("verifier_mode", "legacy")
+        row.setdefault("verifier_path_revision", row.get("verifier_revision", "code1"))
+        row.setdefault("verifier_path_revised_at", row["verifier_revised_at"])
+        row.setdefault("verifyit_revision", "f" * 40)
+        row.setdefault("verifyit_shared_revision", "shared1")
+        row.setdefault("verifyit_shared_revised_at", row["verifier_revised_at"])
+        row.setdefault("verifyit_dependency_revised_at", row["verifier_revised_at"])
+        row.setdefault("harbor_verifier_revision", "harbor1")
+        row.setdefault("harbor_verifier_revised_at", row["verifier_revised_at"])
+    return rows
 
 
 @pytest.fixture
@@ -100,7 +127,7 @@ def trove_manifest(count: int = 3) -> dict:
         "source_details": {"org__math": {"modes": {"math": count}, "languages": {}}},
         "source_verdicts": {
             "org__math": {"family": "math-answer", "reason": "Verified", "verdict": "keep"},
-            "org__old": {"family": "other", "reason": "No verifier", "verdict": "drop"},
+            "org__old": {"family": "instruction-following", "reason": "No verifier", "verdict": "drop"},
         },
     }
 
@@ -115,14 +142,54 @@ def test_tasktrove_counts_only_released_tasks_and_retains_exclusion_reason() -> 
     assert "/blob/release1/manifest.json" in kept["provenance_url"]
 
 
+def test_tasktrove_assigns_concrete_families_to_ambiguous_sources() -> None:
+    manifest = trove_manifest()
+    sources = {
+        "laion__exp_rpt_crosscodeeval-python-v2": "code-completion",
+        "laion__exp_rpt_ghactions-v3": "ci-workflow",
+        "laion__exp_rpt_scaffold-v3": "code-generation",
+        "laion__nemotron-gym-arc-agi-python-inductive-v2": "arc-agi",
+        "laion__nemotron-gym-reasoning-gym-v2": "reasoning-gym",
+        "laion__nemotron-gym-structured-outputs-v4": "instruction-following",
+    }
+    manifest["clean_tasks"] += len(sources)
+    for name in sources:
+        manifest["by_source"][name] = {"converted": 1}
+        manifest["source_details"][name] = {"modes": {"native": 1}, "languages": {}}
+        manifest["source_verdicts"][name] = {"family": "other", "reason": "Needs an audited family", "verdict": "keep"}
+
+    snapshot = tasktrove_snapshot(manifest, {"sha": "release1", "lastModified": "2026-10-01"})
+    families = {row["name"]: row["family"] for row in snapshot.rows}
+    assert {name: families[name] for name in sources} == sources
+    assert "other" not in families.values()
+    assert all(
+        row["family_basis"] == "Atlas audit of source task semantics" for row in snapshot.rows if row["name"] in sources
+    )
+
+
+def test_migration_reclassifies_saved_ambiguous_tasktrove_family(catalog_connection: Connection) -> None:
+    row = {
+        "id": "Task Trove:laion__exp_rpt_crosscodeeval-python-v2",
+        "family": "other",
+        "family_basis": "Task Trove release manifest source_verdicts.family",
+    }
+    save_snapshot(catalog_connection, Snapshot("Task Trove", "release1", "2026-10-01", [row]))
+
+    migrate(catalog_connection)
+
+    payload = catalog_connection.execute(
+        text("SELECT payload FROM catalog_sources WHERE id = :id"), {"id": row["id"]}
+    ).scalar_one()
+    assert payload["family"] == "code-completion"
+    assert payload["family_basis"] == "Atlas audit of source task semantics"
+
+
 def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(catalog_connection: Connection) -> None:
     connection = catalog_connection
     save_snapshot(connection, Snapshot("MarinSkyRL", "sky1", "2026-09-01", [{"id": "MarinSkyRL:math", "task_count": 7}]))
     old = tasktrove_snapshot(trove_manifest(), {"sha": "release1", "lastModified": "2026-09-01"})
     save_snapshot(connection, old)
-    connection.execute(
-        text("UPDATE catalog_sources SET difficulty = 'Hard', traces = 12 WHERE id = 'Task Trove:org__math'")
-    )
+    connection.execute(text("UPDATE catalog_sources SET difficulty = 'Hard' WHERE id = 'Task Trove:org__math'"))
 
     def upstream(request: httpx.Request) -> httpx.Response:
         if request.url.host == "api.github.com":
@@ -138,7 +205,7 @@ def test_refresh_failure_preserves_previous_data_and_other_catalog_progress(cata
     }
     assert payloads["MarinSkyRL:math"]["payload"]["task_count"] == 7
     assert payloads["Task Trove:org__math"]["payload"]["task_count"] == 5
-    assert (payloads["Task Trove:org__math"]["difficulty"], payloads["Task Trove:org__math"]["traces"]) == ("Hard", 12)
+    assert payloads["Task Trove:org__math"]["difficulty"] == "Hard"
     status = {row["origin"]: row for row in connection.execute(text("SELECT * FROM catalog_refreshes")).mappings()}
     assert status["MarinSkyRL"]["revision"] == "sky1"
     assert status["MarinSkyRL"]["error"]
@@ -169,7 +236,6 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
             "payload": payload,
             "quality": "good",
             "difficulty": "32/32",
-            "traces": 3,
             "review_id": "review1",
             "review_date": "2026-09-28",
             "review_source_revision": "data1",
@@ -182,6 +248,56 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
     assert row["review_stale"] == bool(changed_field)
     assert row["quality"] == (None if changed_field else "good")
     assert row["difficulty"] == (None if changed_field else "32/32")
+
+
+def test_verifyit_dependency_change_invalidates_quality_and_difficulty_only_on_active_routes() -> None:
+    date = "2026-10-01T00:00:00Z"
+    aime = {
+        "id": "MarinSkyRL:aime24",
+        "environment": "aime",
+        "dataset_revision": "data1",
+        "verifier_revision": "aime-code",
+        "verifier_revised_at": date,
+        "dataset_revised_at": date,
+    }
+    preference = {**aime, "id": "MarinSkyRL:preference", "environment": "preference"}
+    arc = {
+        **aime,
+        "id": "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive",
+        "environment": "nemotron_ultra",
+        "component_name": "ultra_sft_step3200_nvarc_transductive",
+        "component_selector": "ultra_sft_step3200_nvarc_transductive",
+    }
+    swe = {
+        **arc,
+        "id": "MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "component_name": "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
+        "component_selector": "ultra_sft_step3200_swe_pivot_len40k",
+    }
+    for row in (aime, preference, arc, swe):
+        annotate_verifier_dependency(row, "a" * 40, "shared-code", date, date, "harbor-code", date)
+    before = {row["id"]: row["verifier_revision"] for row in (aime, preference, arc, swe)}
+
+    for row in (aime, preference, arc, swe):
+        row["verifier_revision"] = row["verifier_path_revision"]
+        pin = "b" * 40 if row["environment"] == "aime" else "a" * 40
+        shared = "new-shared-code" if row["environment"] == "nemotron_ultra" else "shared-code"
+        annotate_verifier_dependency(row, pin, shared, date, date, "harbor-code", date)
+        reviewed = source_with_review(
+            {
+                "payload": row,
+                "quality": "good",
+                "difficulty": "measured",
+                "review_id": "review1",
+                "review_date": date,
+                "review_source_revision": "data1",
+                "review_verifier_revision": before[row["id"]],
+                "verifier_issues": [],
+            }
+        )
+        expected_stale = row["environment"] not in {"preference"} and row is not swe
+        assert reviewed["review_stale"] == expected_stale
+        assert bool(reviewed["difficulty"]) != expected_stale
 
 
 @pytest.mark.parametrize("quality,revision", [("good", "data1"), ("some_issues", "data1"), ("good", "data2")])
@@ -207,7 +323,6 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
             "quality": quality,
             "difficulty": "Legacy summary: Large 30/32",
             "difficulty_report": json.dumps(report),
-            "traces": None,
             "review_id": "review1",
             "review_date": "2026-09-28",
             "review_source_revision": "data1",
@@ -251,6 +366,8 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
         ("checklist_judge_missing_settings", "invalid"),
         ("checklist_judge_wrong_model", "invalid"),
         ("checklist_judge_wrong_source", "invalid"),
+        ("verifyit_reverification", "current"),
+        ("verifyit_reverification_missing_provenance", "invalid"),
         ("old_protocol", "historical"),
     ],
 )
@@ -362,6 +479,14 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
                     "substitution_reason": "OpenAI credits exhausted; the source verifier leaves model blank.",
                 }
             }
+    elif change in ("verifyit_reverification", "verifyit_reverification_missing_provenance"):
+        report["protocol"]["id"] = "atlas-difficulty-v6-current-verifyit-reverification"
+        if change != "verifyit_reverification_missing_provenance":
+            report["verifier_configuration"] = {
+                "native_code_sha": "a" * 40,
+                "verifyit_commit": "b" * 40,
+                "verifyit_enabled": True,
+            }
     elif change == "old_protocol":
         report["protocol"]["id"] = "atlas-difficulty-v2-65k16k"
     row = source_with_review(
@@ -374,7 +499,6 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
             "quality": "good",
             "difficulty": "Small / Large / Hosted comparison",
             "difficulty_report": json.dumps(report),
-            "traces": None,
             "review_id": "review1",
             "review_date": "2026-09-29",
             "review_source_revision": "data1",
@@ -622,15 +746,15 @@ def test_migration_reclassifies_saved_tasktrove_without_losing_counts_or_curatio
             ],
         ),
     )
-    connection.execute(text("UPDATE catalog_sources SET quality = 'Reviewed', traces = 8 WHERE id = 'Task Trove:math'"))
+    connection.execute(text("UPDATE catalog_sources SET quality = 'Reviewed' WHERE id = 'Task Trove:math'"))
     migrate(connection)
-    rows = list(connection.execute(text("SELECT payload, quality, traces FROM catalog_sources ORDER BY id")).mappings())
+    rows = list(connection.execute(text("SELECT payload, quality FROM catalog_sources ORDER BY id")).mappings())
     assert [(row["payload"]["environment"], row["payload"]["type"]) for row in rows] == [
         ("Harbor", "Agentic"),
         ("Harbor", "Agentic"),
     ]
     assert [row["payload"]["task_count"] for row in rows] == [30, 0]
-    assert (rows[0]["quality"], rows[0]["traces"]) == ("Reviewed", 8)
+    assert rows[0]["quality"] == "Reviewed"
 
 
 @pytest.mark.parametrize(
@@ -669,8 +793,8 @@ def test_unchanged_git_head_refreshes_hf_counts_and_reports_latest_change(verifi
             },
         )
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        snapshot = skyrl_snapshot(client, head, cached)
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
+        snapshot = skyrl_snapshot(client, head, cached_verifier_metadata(cached))
     row = snapshot.rows[0]
     assert (row["revised_at"], row["task_count"], row["dataset_revision"]) == (expected, 9, "hf2")
     assert (row["verifier_revised_at"], row["dataset_revised_at"]) == (verifier_date, hf_date)
@@ -773,8 +897,8 @@ def test_refresh_reads_card_counts_for_selected_population_and_canonical_names(
         assert request.url.path == f"/datasets/{dataset_id}/raw/hf2/README.md"
         return httpx.Response(200, text=card)
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["count_precision"] == ("estimated" if environment == "nemotron_ultra" else "reported")
     assert row["canonical_source"] == dataset_id + display_suffix
@@ -825,8 +949,8 @@ def test_gpqa_gated_viewer_preserves_audited_count_only_for_same_revision(revisi
             return httpx.Response(200, json={"sha": revision, "lastModified": "2026-09-28T00:00:00Z"})
         return httpx.Response(401, json={"error": "Gated dataset"})
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["count_metadata_error"]
     assert row["display_name"] == "Idavidrein/gpqa · gpqa_diamond"
@@ -851,7 +975,7 @@ def test_aime_benchmark_and_audited_family_survive_refresh_without_hf_tag() -> N
         }
     ]
 
-    def upstream(_request: httpx.Request) -> httpx.Response:
+    def upstream(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -862,8 +986,8 @@ def test_aime_benchmark_and_audited_family_survive_refresh_without_hf_tag() -> N
             },
         )
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["is_benchmark"] is True
     assert row["family"] == "math-answer"
     assert row["family_url"].startswith("https://huggingface.co/datasets/di-zhang-fdu/AIME_1983_2024/blob/")
@@ -902,8 +1026,8 @@ def test_github_sources_resolve_counts_and_links_without_invalid_hf_requests(
         assert request.url.path == f"/{dataset_id}/data1/README.md"
         return httpx.Response(200, text=card)
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        row = skyrl_snapshot(client, head, cached).rows[0]
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
+        row = skyrl_snapshot(client, head, cached_verifier_metadata(cached)).rows[0]
     assert row["task_count"] == expected
     assert row["url"] == f"https://github.com/{dataset_id}"
     assert row["dataset_revision"] == "data1"
@@ -980,8 +1104,8 @@ def test_gym_duplicates_stay_merged_after_dataset_metadata_refresh() -> None:
             },
         )
 
-    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
-        result = skyrl_snapshot(client, head, [dataset, adapter])
+    with httpx.Client(transport=cached_refresh_transport(upstream)) as client:
+        result = skyrl_snapshot(client, head, cached_verifier_metadata([dataset, adapter]))
     assert len(result.rows) == 1
     refreshed_dataset = result.rows[0]
     assert refreshed_dataset["task_count"] == 9
@@ -1165,3 +1289,70 @@ def test_unavailable_nemotron_metadata_keeps_the_canonical_population() -> None:
         dataset_id=composition.NEMOTRON, dataset_revision=None, task_count=None, metadata_error="HF metadata unavailable"
     )
     assert component_rows(parent, {"metadata_error": "HF metadata unavailable"}) == [parent]
+
+
+def test_cached_skyrl_refresh_invalidates_harbor_evidence_when_only_harbor_changes():
+    date = "2026-10-01T00:00:00Z"
+    revision = composition.NEMOTRON_COUNTS["revision"]
+    parent = source_row("MarinSkyRL", "nemotron_ultra_rlvr2", "sky1", date)
+    parent.update(
+        url=f"https://huggingface.co/datasets/{composition.NEMOTRON}",
+        family_url=f"https://huggingface.co/datasets/{composition.NEMOTRON}",
+        dataset_id=composition.NEMOTRON,
+        environment="nemotron_ultra",
+        split="train",
+        task_count=99116,
+        dataset_revision=revision,
+        dataset_revised_at=date,
+        verifier_revision="native1",
+        verifier_revised_at=date,
+        verifier_path_revised_at=date,
+    )
+    rows = component_rows(parent, {})
+    for row in rows:
+        annotate_verifier_dependency(row, "a" * 40, "shared1", date, date, "harbor1", date)
+    cached = cached_verifier_metadata(rows)
+    before = {row["id"]: row["verifier_revision"] for row in cached}
+
+    def upstream(request):
+        if request.url.host == "api.github.com":
+            assert request.url.params["path"] == "src/harbor/verifier"
+            return httpx.Response(
+                200, json=[{"sha": "harbor2", "commit": {"committer": {"date": "2026-10-02T00:00:00Z"}}}]
+            )
+        if request.url.path == f"/api/datasets/{composition.NEMOTRON}/tree/{revision}":
+            return httpx.Response(200, json=[])
+        if request.url.path == f"/datasets/{composition.NEMOTRON}/raw/{revision}/README.md":
+            return httpx.Response(200, text="| rlvr2 | 99,116 | 5.0 GB |")
+        assert request.url.path == f"/api/datasets/{composition.NEMOTRON}"
+        return httpx.Response(
+            200,
+            json={
+                "sha": revision,
+                "lastModified": date,
+                "cardData": {"dataset_info": {"splits": [{"name": "train", "num_examples": 99116}]}},
+            },
+        )
+
+    head = {"sha": "sky1", "commit": {"committer": {"date": date}}}
+    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+        snapshot = skyrl_snapshot(client, head, cached)
+    harbor_rows = [row for row in snapshot.rows if row["verifier_mode"] == "harbor"]
+    assert harbor_rows
+    for row in snapshot.rows:
+        assert row["harbor_verifier_revision"] == "harbor2"
+        reviewed = source_with_review(
+            {
+                "payload": row,
+                "quality": "good",
+                "difficulty": "measured",
+                "review_id": "review1",
+                "review_date": date,
+                "review_source_revision": revision,
+                "review_verifier_revision": before[row["id"]],
+                "verifier_issues": [],
+            }
+        )
+        assert reviewed["review_stale"] == (row["verifier_mode"] == "harbor")
+        assert bool(reviewed["difficulty"]) == (row["verifier_mode"] != "harbor")
+    assert all(row["harbor_verifier_revision"] == "harbor1" for row in cached)

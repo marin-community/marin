@@ -19,6 +19,7 @@ from skyrl_train.trajectory_runners.skyrl_gym_contracts import fold_verification
 
 def run_task(data: dict, root: Path, api_key: str | None) -> dict:
     task, config = data["task"], data["config"]
+    verifyit_enabled = bool(config.get("gym_config", {}).get(task["env_id"], {}).get("verifyit_enabled", False))
     extras = copy.deepcopy(task["extras"])
     extras["max_turns"] = config["max_turns"]
     env = skyrl_gym.make(
@@ -98,7 +99,13 @@ def run_task(data: dict, root: Path, api_key: str | None) -> dict:
                 "GenRM evaluation requires a comparison cohort; placeholder reward discarded"
             )
         write_json(root / "solver-trace.json", {"messages": messages, "turns": turn + 1, "done": done})
-        return {"verification": verification, "verifier_executed": bool(verdicts), "done": done, "turns": turn + 1}
+        return {
+            "verification": verification,
+            "verifier_executed": bool(verdicts),
+            "verifyit_enabled": verifyit_enabled,
+            "done": done,
+            "turns": turn + 1,
+        }
     finally:
         env.close()
 

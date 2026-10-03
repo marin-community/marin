@@ -59,6 +59,16 @@
             "null"
           ],
           "pattern": "^[a-f0-9]{40}$"
+        },
+        "verifyit": {
+          "type": ["object", "null"],
+          "properties": {
+            "version": {"type": "string", "minLength": 1},
+            "source_url": {"type": "string", "minLength": 1},
+            "source_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"}
+          },
+          "required": ["version", "source_url", "source_commit"],
+          "additionalProperties": false
         }
       },
       "required": [

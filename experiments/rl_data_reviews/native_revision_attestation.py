@@ -8,6 +8,8 @@ import json
 import subprocess
 from pathlib import Path
 
+HARBOR_VERIFIER_PATH = "src/harbor/verifier"
+
 NATIVE_BINDINGS = {
     "infra/rl_data/sources.py",
     "skyrl-gym/skyrl_gym",
@@ -54,3 +56,17 @@ def revision_attestation(root: Path, registry_revision: str, verifier_path: str)
         "objects": objects,
         "scope": "Full Gym library, native bindings, source registry and captured MSkyRL modules are unchanged.",
     }
+
+
+def validate_harbor_verifier_revision(root: Path, executed_commit: str | None, verifier_revision: str) -> None:
+    """Reject a review unless its executed Harbor verifier tree is current and clean."""
+    identity = json.loads((root / "run.json").read_text())
+    harbor = identity.get("harbor")
+    if not harbor or harbor["dirty"] or executed_commit is None or harbor["commit"] != executed_commit:
+        raise ValueError("Cannot attest missing, dirty, or inconsistent Harbor execution provenance")
+    checkout = Path(identity["config"]["runtime"]["harbor_checkout"])
+    path = HARBOR_VERIFIER_PATH
+    before = subprocess.check_output(["git", "rev-parse", f"{executed_commit}:{path}"], cwd=checkout, text=True).strip()
+    after = subprocess.check_output(["git", "rev-parse", f"{verifier_revision}:{path}"], cwd=checkout, text=True).strip()
+    if before != after:
+        raise ValueError("Executed Harbor verifier differs from the current Atlas verifier")
