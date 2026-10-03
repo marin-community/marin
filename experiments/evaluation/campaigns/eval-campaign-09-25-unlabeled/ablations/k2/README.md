@@ -73,9 +73,9 @@ Replace only the two config paths and arm letter for B–F as mapped above.
 
 ## Selected policy-compatible candidate
 
-The matched grid closed at A 7/10, B 0/10, C 8/10, D 9/10, and F 0/10.
-Arm E had five successes and four zeros among nine completed trials when its
-last trial entered a verifier-runtime retry. B and F each had ten agent
+The matched grid closed at A 7/10, B 0/10, C 8/10, D 9/10, E 5/10, and
+F 0/10. E's last trial resolved to a verifier-backed zero after one retry.
+B and F each had ten agent
 timeouts with substantial model output and no recorded transport or sandbox
 failure in the ten audited trajectories. B differs from A only in topology,
 so TP2/DP4/EP8 is sufficient to reproduce the collapse; eager execution does
