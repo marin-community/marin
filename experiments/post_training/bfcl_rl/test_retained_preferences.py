@@ -128,6 +128,24 @@ def test_retained_holdout_and_changed_model_cannot_form_training_preferences():
         )
 
 
+def test_setup_failure_without_model_tokens_is_unscored_and_cannot_form_a_preference():
+    record = _record("student", 0.0)
+    record["verification_result"] = {"status": "unavailable", "reason": "NonZeroAgentExitCodeError"}
+    record["disposition"]["exception_type"] = "NonZeroAgentExitCodeError"
+    record["prompt"]["token_ids"] = []
+    record["response"] = {"token_ids": [], "loss_mask": [], "step_boundaries": []}
+    student = retained_rollout(record, identity=_identity("student"), partition=PARTITION, trajectory_uri="setup-failed")
+    teacher = retained_rollout(
+        _record("teacher", 1.0), identity=_identity("teacher"), partition=PARTITION, trajectory_uri="teacher"
+    )
+    selection = select_pair(teacher.rollout, student.rollout)
+    assert selection.disposition == PairDisposition.UNSCORED
+    assert selection.pair is None
+    record["verification_result"] = _record("student", 0.0)["verification_result"]
+    with pytest.raises(ValueError, match="verified rollout requires exact model-token evidence"):
+        retained_rollout(record, identity=_identity("student"), partition=PARTITION, trajectory_uri="invalid-verified")
+
+
 def test_context_forks_and_overlong_preferences_cannot_be_silently_rewritten():
     steps = (TokenStep((1, 2), (10, 11), (1, 1)), TokenStep((99, 98), (12,), (1,)))
     with pytest.raises(ValueError, match="context fork"):

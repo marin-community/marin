@@ -110,8 +110,12 @@ def retained_rollout(
             raise ValueError("retained step requires exact prompt token IDs")
         steps.append(TokenStep(tuple(prompt), tuple(tokens[token_start:token_end]), tuple(masks[token_start:token_end])))
         token_start = token_end
-    if not steps or token_start != len(tokens) or tuple(record["prompt"]["token_ids"]) != steps[0].prompt_token_ids:
+    if token_start != len(tokens):
         raise ValueError("retained step evidence does not cover the trajectory")
+    if steps and tuple(record["prompt"]["token_ids"]) != steps[0].prompt_token_ids:
+        raise ValueError("retained step evidence does not cover the trajectory")
+    if not steps and outcome is not RolloutOutcome.UNSCORED:
+        raise ValueError("verified rollout requires exact model-token evidence")
     rollout = VerifiedRollout(
         task.source_id,
         task.digest,
