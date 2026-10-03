@@ -3,14 +3,15 @@
 
 """DataKit steps for the fast-track end-to-end experiment."""
 
+import hashlib
 import logging
-from dataclasses import replace
 
 from fray.types import ResourceConfig
-from levanter.data.text.datasets import DatasetComponentBase, LmDataConfig
+from levanter.data.text.datasets import LmDataConfig
 from levanter.tokenizers import load_tokenizer
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.build_context import resolve_version
+from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_spec import StepSpec
 from marin.experiment.namespacing import user_namespaced_name
@@ -32,34 +33,8 @@ from experiments.datakit.store.mixture import (
     log_store_summary,
     store_mixture,
 )
-from experiments.grug.fast_track.contracts import add_dataset_mixture_weights
 
 logger = logging.getLogger(__name__)
-
-
-def add_prepared_dataset_component(
-    baseline: LmDataConfig,
-    *,
-    name: str,
-    component: DatasetComponentBase,
-    fraction: float,
-    max_train_batches: int,
-) -> LmDataConfig:
-    """Add a prepared dataset at its token share without a second simulated slice."""
-    weights = baseline.train_weights
-    if not isinstance(weights, dict):
-        raise ValueError("add-dataset training requires fixed dictionary weights")
-    if name in baseline.components:
-        raise ValueError(f"new dataset component {name!r} already exists")
-
-    return replace(
-        baseline,
-        components={**baseline.components, name: component},
-        train_weights=add_dataset_mixture_weights(weights, new_component=name, fraction=fraction),
-        max_train_batches={name: max_train_batches},
-        target_budget=None,
-        experiment_budget=None,
-    )
 
 
 class FastTrackDataStore(Artifact):
@@ -90,7 +65,6 @@ def data_pool(name: str) -> ZephyrContext:
 
 def build_fast_track_data(
     *,
-    run_id: str,
     sources: dict[str, StepSpec],
     quality_model: str,
     quality_model_version: str,
@@ -107,6 +81,8 @@ def build_fast_track_data(
         driver_placement=DriverPlacement.COORDINATOR,
         tokenizer=tokenizer,
     )
+    identity = {"store": datakit.output_buckets.name_with_hash, "tokenizer_vocab": tokenizer_vocab}
+    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:20]
 
     def materialize(_config: object) -> FastTrackDataStore:
         loaded_tokenizer = load_tokenizer(tokenizer.name)
@@ -115,23 +91,20 @@ def build_fast_track_data(
                 f"tokenizer {tokenizer.name!r} has {len(loaded_tokenizer)} entries; "
                 f"the fast-track model requires {tokenizer_vocab}"
             )
-        with data_pool(f"fast-track-{run_id}-data") as pool:
+        with data_pool(f"fast-track-data-{digest}") as pool:
             run_steps_in_pool(datakit.all_steps, pool=pool, max_concurrent=DATA_PIPELINE_CONCURRENCY)
         store = read_artifact(datakit.output_buckets.output_path, ClusteredStoreData)
         log_store_summary(store)
         return FastTrackDataStore(store=store)
 
-    name = f"datakit/fast-track/{run_id}"
+    name = f"datakit/fast-track/{digest}"
     version = resolve_version(name, version)
     return ArtifactStep(
         name=user_namespaced_name(name, version),
         version=version,
         artifact_type=FastTrackDataStore,
         run=materialize,
-        build_config=lambda _ctx: {
-            "store": datakit.output_buckets.name_with_hash,
-            "tokenizer_vocab": tokenizer_vocab,
-        },
+        build_config=lambda _ctx: identity,
     )
 
 

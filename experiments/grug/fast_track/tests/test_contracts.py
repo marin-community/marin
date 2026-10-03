@@ -4,6 +4,7 @@
 import pytest
 from marin.execution.lazy import ArtifactStep, StepContext
 
+from experiments.grug.fast_track.add_dataset import AddDatasetTrainingSource
 from experiments.grug.fast_track.contracts import (
     AddDatasetConfig,
     AddDatasetSamplingPolicy,
@@ -13,7 +14,7 @@ from experiments.grug.fast_track.contracts import (
     PreparedAddDatasetCache,
     ResolvedTrainingBudget,
 )
-from experiments.grug.fast_track.launch import V16384_TOKENIZER, AddDatasetTrainingSource
+from experiments.grug.fast_track.launch import V16384_TOKENIZER
 
 
 def _source(*, fraction: float, available_unique_tokens: int) -> AddDatasetTrainingSource:
@@ -64,7 +65,7 @@ def test_add_dataset_config_preserves_baseline_mix_and_caps_prepared_cache_once(
     assert data.target_budget is None
     assert data.experiment_budget is None
     assert source.dependencies() == (source.config.token_cache,)
-    assert data.components["add-dataset"].cache_dir == context.artifact_path(source.config.token_cache)
+    assert data.components["add-dataset"].cache_dir == f"{context.artifact_path(source.config.token_cache)}/train"
 
 
 def test_add_dataset_config_rejects_share_below_one_full_batch():

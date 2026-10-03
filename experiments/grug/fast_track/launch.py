@@ -26,8 +26,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.datasets import LmDataConfig
 from levanter.tokenizers import tokenizer_content_hash
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
@@ -55,17 +54,13 @@ from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.contracts import (
-    TRAIN_SPLIT,
-    AddDatasetConfig,
     FrozenBaselineComponent,
     FrozenBaselineManifest,
     ResolvedTrainingBudget,
-    unique_token_sample_cap,
 )
 from experiments.grug.fast_track.data_pipeline import (
     FAST_TRACK_SAMPLE_PREFIX,
     FastTrackDataStore,
-    add_prepared_dataset_component,
     build_fast_track_data,
     store_mixture_for_step,
 )
@@ -360,79 +355,6 @@ class DataKitTrainingSource:
         return _with_validation_components(ctx=ctx, training_data=data, validation=validation)
 
 
-@dataclasses.dataclass(frozen=True)
-class AddDatasetTrainingSource:
-    """Add one prepared Hugging Face token cache to the frozen baseline."""
-
-    config: AddDatasetConfig
-    baseline: FrozenBaselineManifest = FROZEN_BASELINE
-
-    def dependencies(self) -> tuple[ArtifactStep, ...]:
-        return (self.config.token_cache,)
-
-    def data_config(
-        self,
-        *,
-        ctx: StepContext,
-        validation: Sequence[ArtifactStep[TokenizedCache]],
-        tokenizer: str,
-        budget: ResolvedTrainingBudget,
-    ) -> LmDataConfig:
-        baseline = FlatCacheTrainingSource(manifest=self.baseline).data_config(
-            ctx=ctx,
-            validation=validation,
-            tokenizer=tokenizer,
-            budget=budget,
-        )
-        loader_unit = budget.batch_size * budget.sequence_length
-        sample_cap = unique_token_sample_cap(
-            target_production_tokens=self.config.target_production_tokens,
-            fast_track_budget=budget.token_count,
-            available_unique_tokens=self.config.available_unique_tokens,
-            fraction=self.config.fraction,
-            loader_unit=loader_unit,
-        )
-        if sample_cap < loader_unit:
-            raise ValueError("add-dataset share yields fewer than one full training batch")
-
-        cache_format = TextLmDatasetFormat(text_key=self.config.prefix.text_field)
-        if ctx.is_fingerprint:
-            cache_dir = ctx.artifact_path(self.config.token_cache)
-        else:
-            token_cache = ctx.resolved(self.config.token_cache)
-            if token_cache.prefix.tokenizer != tokenizer:
-                raise ValueError(
-                    f"add-dataset tokenizer {token_cache.prefix.tokenizer!r} does not match requested {tokenizer!r}"
-                )
-            expected_prefix = self.config.prefix.model_dump(mode="json")
-            actual_prefix = token_cache.prefix.model_dump(mode="json")
-            if token_cache.prefix != self.config.prefix:
-                differences = {
-                    field: {"expected": expected_value, "actual": actual_prefix.get(field)}
-                    for field, expected_value in expected_prefix.items()
-                    if actual_prefix.get(field) != expected_value
-                }
-                raise ValueError(f"prepared add-dataset prefix differs from its training source: {differences}")
-            if token_cache.actual_num_tokens < sample_cap:
-                raise ValueError(
-                    f"prepared add-dataset cache has {token_cache.actual_num_tokens:,} tokens; "
-                    f"the run requires {sample_cap:,}"
-                )
-            cache_dir = token_cache.cache_dir
-
-        return add_prepared_dataset_component(
-            baseline,
-            name="add-dataset",
-            component=DatasetComponent(
-                cache_dir=cache_dir,
-                format=cache_format,
-                split=TRAIN_SPLIT,
-            ),
-            fraction=self.config.fraction,
-            max_train_batches=sample_cap // loader_unit,
-        )
-
-
 def resolve_h100_ladder_budget(
     *,
     size: str,
@@ -440,9 +362,9 @@ def resolve_h100_ladder_budget(
     match: MatchMode,
     num_steps: int | None,
     batch_size: int | None,
-    model: GrugModelConfig,
+    model: GrugModelConfig | None = None,
 ) -> ResolvedTrainingBudget:
-    """Resolve the batch and token budget used by the H100 ladder."""
+    """Resolve the ladder budget, pricing the named baseline when no candidate model is supplied."""
     rung = _h100_ladder_rung(size)
     if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
         raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
@@ -465,7 +387,8 @@ def resolve_h100_ladder_budget(
             resolved_steps = max(1, round(baseline_tokens / (resolved_batch_size * SEQ_LEN)))
         else:
             # Compute-match prices the candidate model against the fixed baseline FLOPs.
-            candidate_flops_per_example, _ = _compute_flops(model_config=model)
+            candidate_model = model if model is not None else _h100_ladder_model(rung, dense=dense)
+            candidate_flops_per_example, _ = _compute_flops(model_config=candidate_model)
             resolved_steps = max(1, round(baseline_flops / (candidate_flops_per_example * resolved_batch_size)))
     elif num_steps <= 0:
         raise ValueError(f"--num-steps must be positive, got {num_steps}")
@@ -732,9 +655,12 @@ def _data_source_from_options(
         selected = sample_sources(sample_prefix)
         if set(selected) != set(sample.source_paths):
             raise ValueError(f"Sample sources differ from the completion record at {sample_prefix}")
-        return selected if source_option in (None, "all") else {name: selected[name] for name in source_names}
-    if source_mode is not SourceMode.REGISTRY:
-        raise AssertionError(f"unexpected source mode: {source_mode}")
+        if source_option in (None, "all"):
+            return selected
+        unknown = sorted(set(source_names) - set(selected))
+        if unknown:
+            raise click.UsageError(f"Unknown sample sources: {unknown}. Available sources: {sorted(selected)}")
+        return {name: selected[name] for name in source_names}
     if not source_names:
         raise click.UsageError("--source-mode registry requires --sources")
     return select_sources(list(source_names))
@@ -885,7 +811,6 @@ def main(
     training_store = None
     if data_sources is not None:
         training_store = build_fast_track_data(
-            run_id=run_id,
             sources=data_sources,
             quality_model=quality_model,
             quality_model_version=quality_model_version,

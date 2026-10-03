@@ -5,16 +5,21 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from click.testing import CliRunner
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
-from levanter.store.cache import TreeCache
+from levanter.store.cache import TreeCache, write_levanter_cache
 from marin.execution.artifact import write_artifact
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.grug.fast_track.add_dataset import (
     AddDatasetPreparationConfig,
+    AddDatasetTrainingSource,
     add_dataset_cache_step,
+    add_prepared_dataset_component,
     prepare_add_dataset_cache,
 )
+from experiments.grug.fast_track.add_dataset_cli import main as add_dataset_cli
 from experiments.grug.fast_track.contracts import (
     AddDatasetConfig,
     AddDatasetSamplingPolicy,
@@ -24,8 +29,7 @@ from experiments.grug.fast_track.contracts import (
     PreparedAddDatasetCache,
     ResolvedTrainingBudget,
 )
-from experiments.grug.fast_track.data_pipeline import add_prepared_dataset_component
-from experiments.grug.fast_track.launch import V16384_TOKENIZER, AddDatasetTrainingSource
+from experiments.grug.fast_track.launch import V16384_TOKENIZER
 
 
 class _SmallTokenizer:
@@ -115,7 +119,130 @@ def test_prepare_add_dataset_cache_writes_and_loads_the_measured_prefix(tmp_path
     )
     assert training_data.train_weights == pytest.approx({"base": 0.8, "add-dataset": 0.2})
     assert training_data.max_train_batches == {"add-dataset": 5}
-    assert training_data.components["add-dataset"].cache_dir == prepared.cache_dir
+    assert training_data.components["add-dataset"].cache_dir == f"{prepared.cache_dir}/train"
+
+
+def test_add_dataset_cli_prepare_only_writes_cache_loadable_by_python_api(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(
+        "experiments.grug.fast_track.add_dataset.load_dataset",
+        lambda *args, **kwargs: [{"body": "a b"}, {"body": "c"}, {"body": "d e f"}],
+    )
+    monkeypatch.setattr("experiments.grug.fast_track.add_dataset.load_tokenizer", lambda _name: _SmallTokenizer())
+    args = [
+        "--repository",
+        "org/dataset",
+        "--revision",
+        "a" * 40,
+        "--subset",
+        "subset-a",
+        "--split",
+        "train",
+        "--text-field",
+        "body",
+        "--max-rows",
+        "10",
+        "--max-overshoot-tokens",
+        "2",
+        "--prepare-token-cap",
+        "7",
+        "--prepare-only",
+        "--version",
+        "2026.10.03",
+        "--run",
+    ]
+
+    result = CliRunner().invoke(add_dataset_cli, args)
+
+    assert result.exit_code == 0, result.output
+    step = add_dataset_cache_step(config=_config(tmp_path, token_cap=7), version="2026.10.03")
+    prepared = PreparedAddDatasetCache.raw_load(step.path(str(tmp_path / "artifacts")))
+    cache = TreeCache.load(
+        f"{prepared.cache_dir}/train",
+        {"input_ids": np.zeros((0,), dtype=np.int32)},
+    )
+    baseline_cache = str(tmp_path / "baseline-cache")
+    write_levanter_cache(
+        [{"input_ids": np.array([3, 4], dtype=np.int32)}],
+        baseline_cache,
+        metadata={"tokenizer": _SmallTokenizer.name_or_path, "format": "text", "text_field": "text"},
+    )
+    validation_root = tmp_path / "validation-artifact"
+    write_levanter_cache(
+        [{"input_ids": np.array([5, 6, 7], dtype=np.int32)}],
+        str(validation_root / "validation"),
+        metadata={"tokenizer": _SmallTokenizer.name_or_path, "format": "text", "text_field": "text"},
+    )
+    validation_step = ArtifactStep(
+        name="baseline-validation",
+        version="2026.10.03",
+        artifact_type=TokenizedCache,
+        run=lambda _config: None,
+        build_config=lambda _ctx: None,
+        override_path=str(validation_root),
+    )
+    training_source = AddDatasetTrainingSource(
+        config=AddDatasetConfig(
+            token_cache=step,
+            prefix=prepared.prefix,
+            fraction=0.2,
+            target_production_tokens=1_000,
+            available_unique_tokens=500,
+        ),
+        baseline=FrozenBaselineManifest(
+            tokenizer=V16384_TOKENIZER,
+            components=(FrozenBaselineComponent(name="base", cache_dir=baseline_cache, weight=1.0),),
+        ),
+    )
+    monkeypatch.setattr("levanter.data.text.datasets.load_marin_tokenizer", lambda _name: _SmallTokenizer())
+    training_config = training_source.data_config(
+        ctx=StepContext.for_run(
+            output_path="unused",
+            prefix=str(tmp_path / "artifacts"),
+            deps=(step, validation_step),
+        ),
+        validation=(validation_step,),
+        tokenizer=V16384_TOKENIZER,
+        budget=ResolvedTrainingBudget(batch_size=1, num_steps=25, sequence_length=1),
+    )
+    train_caches = training_config.build_caches("train")
+    validation_caches = training_config.build_caches("validation")
+    assert prepared.actual_num_rows == 2
+    assert prepared.actual_num_tokens == 7
+    assert len(cache) == 2
+    assert sum(len(row["input_ids"]) for row in cache) == 7
+    assert set(train_caches) == {"base", "add-dataset"}
+    assert train_caches["add-dataset"].flat_field_length("input_ids") == 7
+    assert set(validation_caches) == {validation_step.name}
+    assert training_config.train_weights[validation_step.name] == 0
+
+
+def test_add_dataset_cli_reports_invalid_revision_as_usage_error():
+    result = CliRunner().invoke(
+        add_dataset_cli,
+        [
+            "--repository",
+            "org/dataset",
+            "--revision",
+            "main",
+            "--split",
+            "train",
+            "--text-field",
+            "body",
+            "--max-rows",
+            "10",
+            "--prepare-token-cap",
+            "5",
+            "--prepare-only",
+            "--version",
+            "2026.10.03",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "revision must be" in result.output
+    assert "immutable Hugging Face commit hash" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_prepare_add_dataset_cache_stops_when_the_bounded_prefix_runs_out(tmp_path):
