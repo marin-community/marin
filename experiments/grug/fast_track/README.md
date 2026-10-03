@@ -48,6 +48,7 @@ moe: [d512](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d512) 
 
 ## DataKit sample results
 
+These experiments used the implementation through commit `d3a6671929`, before the later model/data-track changes.
 These runs use the completed 25B-target sample across all 292 registered sources,
 with token-proportional training weights and training seed 0.
 DataKit produced 29,858,746,027 usable tokens, above the largest ladder budget.
