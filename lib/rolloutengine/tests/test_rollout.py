@@ -37,6 +37,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.parquet import read_tasks, write_tasks
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from rolloutengine.contracts import (
@@ -47,7 +48,6 @@ from rolloutengine.contracts import (
     RolloutOperation,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
-from rolloutengine.parquet import read_tasks, write_tasks
 
 
 async def run_task(runner: ShellboxRolloutEngine, task: TaskSpec):
@@ -120,6 +120,87 @@ async def test_executable_answer_task_keeps_submission_instruction_and_shell_too
     assert result.grade.reward == 1.0
     assert model.requests[0].messages[-1] == {"role": "user", "content": "Give your answer as plain text."}
     assert model.requests[0].options["tools"][0]["function"]["name"] == "shell"
+
+
+async def test_executable_answer_call_keeps_submission_tool_and_finishes():
+    task = arithmetic_task().model_copy(update={"environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM)})
+    model = ReplayModel(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "answer",
+                        "type": "function",
+                        "function": {"name": "submit_answer", "arguments": '{"answer":"12"}'},
+                    }
+                ],
+            }
+        ]
+    )
+    runner = ShellboxRolloutEngine(
+        model.complete,
+        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+        max_turns=3,
+        command_timeout=5,
+        convention=SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL),
+    )
+
+    result = await runner.run(task)
+
+    assert result.grade.reward == 1.0
+    assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == [
+        "submit_answer",
+        "shell",
+    ]
+
+
+async def test_rollout_rejects_legacy_environment_requirements():
+    task = arithmetic_task().model_copy(
+        update={"environment_requirements": EnvironmentRequirements(working_directory="/workspace")}
+    )
+
+    with pytest.raises(ValueError, match="machine inputs"):
+        await engine(ReplayModel([]), {}).run(task)
+
+
+async def test_unknown_executable_tool_returns_an_observation():
+    model = ReplayModel(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "bad", "type": "function", "function": {"name": "other", "arguments": "{}"}}],
+            },
+            {"role": "assistant", "content": "Completed."},
+        ]
+    )
+
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
+
+    assert result.grade.reward == 0.0
+    assert json.loads(model.requests[1].messages[-1]["content"])["error"]
+
+
+async def test_malformed_assistant_message_is_a_graded_model_result():
+    model = ReplayModel(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "bad",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": "not-json"},
+                    }
+                ],
+            }
+        ]
+    )
+
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
+
+    assert result.grade.reward == 0.0
+    assert result.metrics == {"invalid_assistant_message": 1.0}
 
 
 def file_task() -> TaskSpec:
@@ -267,6 +348,7 @@ async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine(
     "script,status,reward",
     [
         ("echo 1 > /logs/verifier/reward.txt; exit 1", Outcome.GRADED, 1.0),
+        ("echo 0.5 > /logs/verifier/reward.json", Outcome.GRADED, 0.5),
         (
             "echo 1 > /logs/verifier/reward.txt; echo '{\"reward\":0}' > /logs/verifier/reward.json",
             Outcome.GRADED,

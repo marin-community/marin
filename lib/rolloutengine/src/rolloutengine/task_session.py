@@ -19,17 +19,31 @@ from taskcompendium.models import (
     TaskSpec,
     TaskStage,
 )
-from taskcompendium.submission import Submission, conversation_messages, submission_request
+from taskcompendium.submission import (
+    ANSWER_CALL_NAME,
+    AnswerFormat,
+    FinalAction,
+    Submission,
+    conversation_messages,
+    submission_request,
+)
 
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
 from rolloutengine.grading import _grade_rollout
-from rolloutengine.machines import _install_files, _machine_command, _wait_for_healthcheck
+from rolloutengine.machines import _install_files, _run_setup_commands, _wait_for_healthcheck
 
 SHELL_TOOL_NAME = "shell"
 
 
-def rollout_request(task: TaskSpec, convention: Submission) -> SessionStart:
+def _task_submission(task: TaskSpec, convention: Submission) -> Submission:
+    if task.answer_type == AnswerType.NATIVE_ACTION:
+        return FinalAction(id="final-action")
+    return convention
+
+
+def session_start(task: TaskSpec, convention: Submission) -> SessionStart:
     """Prepare only the public task fields for inference."""
+    convention = _task_submission(task, convention)
     if task.environment.interaction is not None or task.answer_type in (AnswerType.FILE, AnswerType.STATE):
         messages = conversation_messages(task.context)
         options = {}
@@ -40,7 +54,7 @@ def rollout_request(task: TaskSpec, convention: Submission) -> SessionStart:
     if task.environment.kind != EnvironmentKind.NULL:
         if task.final_tools:
             raise ValueError("Executable tasks expose the Shellbox shell tool only")
-        options["tools"] = [
+        options.setdefault("tools", []).append(
             {
                 "type": "function",
                 "function": {
@@ -54,7 +68,7 @@ def rollout_request(task: TaskSpec, convention: Submission) -> SessionStart:
                     },
                 },
             }
-        ]
+        )
     return SessionStart(tuple(messages), options)
 
 
@@ -72,14 +86,12 @@ class _ShellboxTaskSession:
     ):
         self.task = task
         self.machine = machine
-        self.convention = convention
+        self.convention = _task_submission(task, convention)
         self.command_timeout = command_timeout
         self.factories = factories
         self.stage = stage
 
     async def prepare(self) -> SessionStart:
-        if self.task.environment_requirements.tool_providers:
-            raise ValueError("No executable tool providers are configured")
         available = set() if self.machine is None else {SHELL_CAPABILITY, FILESYSTEM_CAPABILITY}
         if not set(self.task.environment_requirements.capabilities) <= available:
             raise ValueError("The task environment does not supply its required capabilities")
@@ -99,25 +111,41 @@ class _ShellboxTaskSession:
                         for file in self.stage.workdir_files
                     ),
                 )
-            for command in self.stage.setup:
-                result = await self.machine.run(_machine_command(command))
-                if result.exit_code != 0:
-                    raise RuntimeError(f"Task stage {self.stage.name} setup failed: exit={result.exit_code}")
+            await _run_setup_commands(self.machine, self.stage.setup, f"Task stage {self.stage.name} setup")
             if self.stage.healthcheck is not None:
                 await _wait_for_healthcheck(self.machine, self.stage.healthcheck)
-        return rollout_request(self.task, self.convention)
+        return session_start(self.task, self.convention)
 
     async def advance(self, turn: ModelTurn) -> Transition:
-        message = assistant_message(turn.message)
+        try:
+            message = assistant_message(turn.message)
+        except (TypeError, ValueError):
+            return Transition(done=True, metrics={"invalid_assistant_message": 1.0})
         if self.machine is None or not isinstance(message, AssistantToolCalls) or turn.stop_reason == LENGTH_STOP_REASON:
             return Transition(done=True)
         observations = []
         for call in message.calls:
+            if self.convention.answer_format == AnswerFormat.ANSWER_CALL and call.name == ANSWER_CALL_NAME:
+                return Transition(done=True)
             if call.name != SHELL_TOOL_NAME or set(call.arguments) != {"command"}:
-                raise ValueError("Executable tasks require shell(command: string) calls")
+                observations.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.call_id,
+                        "content": json.dumps({"error": "Executable tasks require shell(command: string) calls"}),
+                    }
+                )
+                continue
             command = call.arguments["command"]
             if not isinstance(command, str):
-                raise ValueError("Shell command must be a string")
+                observations.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.call_id,
+                        "content": json.dumps({"error": "Shell command must be a string"}),
+                    }
+                )
+                continue
             result = await self.machine.run(
                 Command(argv=("sh", "-c", command), timeout=self.command_timeout, user=self.task.agent_user)
             )
@@ -142,4 +170,4 @@ class _ShellboxTaskSession:
         return await _grade_rollout(self.task, self.convention, messages, self.machine, self.factories)
 
     async def close(self) -> None:
-        """Release no resources because the engine owns the machine."""
+        pass

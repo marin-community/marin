@@ -4,7 +4,7 @@
 """Machine creation, setup, and cleanup for task execution."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -43,6 +43,19 @@ def _machine_command(command: EnvironmentCommand) -> Command:
     )
 
 
+async def _run_setup_commands(
+    machine: Machine,
+    commands: Iterable[EnvironmentCommand],
+    failure_prefix: str,
+) -> None:
+    for command in commands:
+        result = await machine.run(_machine_command(command))
+        if result.reason == ExitReason.TIMED_OUT:
+            raise TimeoutError(f"{failure_prefix} timed out")
+        if result.exit_code != 0:
+            raise RuntimeError(f"{failure_prefix} failed: {result.reason}, exit={result.exit_code}")
+
+
 async def _wait_for_healthcheck(machine: Machine, healthcheck: HealthcheckSpec) -> None:
     loop = asyncio.get_running_loop()
     grace_end = loop.time() + healthcheck.start_period
@@ -61,7 +74,7 @@ async def _wait_for_healthcheck(machine: Machine, healthcheck: HealthcheckSpec) 
 
 @asynccontextmanager
 async def _task_machine(environment: EnvironmentSpec, factories: Mapping[EnvironmentKind, MachineFactory]):
-    """Release the machine after model or verifier failure and cancellation."""
+    """Yield a prepared machine, or none for a null environment, and release it after use."""
     if environment.kind == EnvironmentKind.NULL:
         yield None
         return
@@ -95,12 +108,7 @@ async def _task_machine(environment: EnvironmentSpec, factories: Mapping[Environ
             )
             resources.push_async_callback(_close_machine, machine)
             await _install_files(machine, environment.files)
-            for command in environment.setup:
-                result = await machine.run(_machine_command(command))
-                if result.reason == ExitReason.TIMED_OUT:
-                    raise TimeoutError("Environment setup command timed out")
-                if result.exit_code != 0:
-                    raise RuntimeError(f"Environment setup failed: {result.reason}, exit={result.exit_code}")
+            await _run_setup_commands(machine, environment.setup, "Environment setup command")
             if environment.healthcheck is not None:
                 await _wait_for_healthcheck(machine, environment.healthcheck)
         yield machine
