@@ -15,14 +15,35 @@ no Grafana library-panel API, no runtime sync, no new credential — while killi
 copy-pasted panel bodies that drift out of sync with the bridge's actual schema.
 Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
 ``SHARED_LINKS`` for the same reason.
+
+Targets with ``targetRef`` share endpoint parameters while specifying their view,
+format and columns locally. A panelRef mount's ``vars`` maps template variables
+after targets expand, in one pass, so a replacement can reference a dashboard
+variable without being substituted again.
 """
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 PANEL_REF_KEY = "panelRef"
+PANEL_VARS_KEY = "vars"
 LINK_REF_KEY = "linkRef"
+TARGET_REF_KEY = "targetRef"
+_VARIABLE = re.compile(r"\$\{([^}]+)\}")
+
+_RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"))
+_SHARED_TARGET_PARAMS = {
+    "rl_run": (("clusters", "${cluster:csv}"), ("run", "${run}"), *_RANGE_PARAMS, ("bucket_ms", "60000")),
+    "rl_attempt": (
+        ("clusters", "${cluster:csv}"),
+        ("run", "${run}"),
+        ("job", "${job}"),
+        ("executions", "${execution:csv}"),
+        *_RANGE_PARAMS,
+    ),
+}
 
 _ASYNC_RL_LINK = {
     "asDropdown": False,
@@ -91,6 +112,38 @@ def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
     return {path.stem: json.loads(path.read_text()) for path in panels_dir.glob("*.json")}
 
 
+def _substitute(value, variables: dict[str, str]):
+    """Replace variables in JSON string values once, preserving unlisted variables."""
+    if isinstance(value, str):
+        return _VARIABLE.sub(lambda match: variables.get(match.group(1), match.group(0)), value)
+    if isinstance(value, list):
+        return [_substitute(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {key: _substitute(item, variables) for key, item in value.items()}
+    return value
+
+
+def _stitch_target(target: dict) -> dict:
+    ref = target.get(TARGET_REF_KEY)
+    if ref is None:
+        return target
+    if ref not in _SHARED_TARGET_PARAMS:
+        raise KeyError(f"unknown target parameter set {ref!r}")
+    params = (*_SHARED_TARGET_PARAMS[ref], ("view", target["view"]))
+    local = ("refId", "format", "url", "columns", "view", TARGET_REF_KEY)
+    return {
+        "refId": target["refId"],
+        "type": "json",
+        "source": "url",
+        "format": target["format"],
+        "parser": "backend",
+        "url": target["url"],
+        "url_options": {"method": "GET", "params": [{"key": key, "value": value} for key, value in params]},
+        "columns": target["columns"],
+        **{key: value for key, value in target.items() if key not in local},
+    }
+
+
 def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]:
     """Resolve markers in one panels array, descending into collapsed rows.
 
@@ -100,14 +153,18 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
     resolved = []
     for panel in panels:
         ref = panel.get(PANEL_REF_KEY)
-        if ref is None:
-            if panel.get("panels"):
-                panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
-            resolved.append(panel)
-            continue
-        if ref not in fragments:
-            raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
-        resolved.append({**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]})
+        variables = panel.get(PANEL_VARS_KEY, {})
+        if ref is not None:
+            if ref not in fragments:
+                raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
+            panel = {**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]}
+        if panel.get("panels"):
+            panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
+        if "targets" in panel:
+            panel = {**panel, "targets": [_stitch_target(target) for target in panel["targets"]]}
+        if ref is not None:
+            panel = _substitute(panel, variables)
+        resolved.append(panel)
     return resolved
 
 
@@ -125,10 +182,10 @@ def _stitch_links(links: list[dict]) -> list[dict]:
 
 
 def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
-    """Replace panelRef and linkRef markers with their fragment bodies.
+    """Resolve panelRef, linkRef, targetRef and mounted variables in a dashboard.
 
     Raises:
-        KeyError: A panel or link references an unknown fragment.
+        KeyError: A panel, link or target references an unknown fragment.
     """
     dashboard = {**source, "panels": _stitch_panels(source["panels"], fragments)}
     if "links" in source:
