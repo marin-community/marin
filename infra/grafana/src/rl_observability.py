@@ -44,9 +44,16 @@ _DCGM_COUNTERS = ("gpu_pcie_replay_errors",)
 _DCGM_DEVICE = ("gpu_power_watts", *_DCGM_COUNTERS)
 
 
-def _run_nodes_cte(bucket: str, clusters_sql: str, start_ms: int, end_ms: int) -> str:
+def _run_nodes_cte(bucket: str, clusters_sql: str, run_sql: str, start_ms: int, end_ms: int) -> str:
     """Attribute each node bucket to the run with the most MarinSkyRL observations."""
-    return f"""run_node AS (
+    return f"""selected_nodes AS (
+    SELECT DISTINCT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           node_name AS node
+    FROM "telemetry_v1.marinskyrl"
+    WHERE service = 'marinskyrl' AND run_id = {run_sql} AND node_name <> ''
+      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+), run_node AS (
     SELECT origin_cluster, t, node, run
     FROM (
         SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
@@ -59,6 +66,7 @@ def _run_nodes_cte(bucket: str, clusters_sql: str, start_ms: int, end_ms: int) -
                ) AS rn
         FROM "telemetry_v1.marinskyrl"
         WHERE service = 'marinskyrl' AND node_name <> ''
+          AND node_name IN (SELECT node FROM selected_nodes)
           AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
           AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
         GROUP BY 1, 2, 3, 4
@@ -177,7 +185,7 @@ LIMIT {RL_MAX_ENGINE_ROWS + 1}
     dcgm_scope = f"""COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
       AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
     gpu_sql = f"""
-WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, counter_samples AS (
+WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_samples AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
            {bucket} AS t,
            node_name AS node,
