@@ -159,6 +159,7 @@ def _histogram_body(snapshot: HistogramSnapshot) -> dict[str, object]:
         isinstance(bound, bool) or not isinstance(bound, (int, float)) or not math.isfinite(bound) for bound in bounds
     ):
         raise ValueError("explicit bounds must be finite numbers")
+    bounds = tuple(float(bound) for bound in bounds)
     if any(left >= right for left, right in pairwise(bounds)):
         raise ValueError("explicit bounds must increase strictly")
     counts = snapshot.bucket_counts

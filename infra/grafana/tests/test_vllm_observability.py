@@ -78,17 +78,29 @@ def _vllm_projection_database():
         """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3, k4, v4, k5, v5,
                                      k6 := NULL, v6 := NULL, k7 := NULL, v7 := NULL,
                                      k8 := NULL, v8 := NULL, k9 := NULL, v9 := NULL,
-                                     k10 := NULL, v10 := NULL)
+                                     k10 := NULL, v10 := NULL, k11 := NULL, v11 := NULL)
                      AS struct_pack(timestamp_ms := v1, seq := v2, value := v3,
                                     body_json := v4, publication_id := v5,
                                     histogram_count := v6, histogram_sum := v7,
                                     histogram_bounds := v8, producer_epoch := v9,
-                                    source_sequence := v10)"""
+                                    source_sequence := v10, histogram_bins := v11)"""
     )
     return database
 
 
-@pytest.mark.parametrize("format_name", ["scalar", "structured", "mixed", "dual", "dual_missing"])
+@pytest.mark.parametrize(
+    "format_name",
+    [
+        "scalar",
+        "structured",
+        "structured_unidentified",
+        "structured_unidentified_fast",
+        "mixed",
+        "dual",
+        "dual_missing",
+        "dual_partial",
+    ],
+)
 @pytest.mark.parametrize(
     ("family", "metric", "section", "scale"),
     [
@@ -114,10 +126,12 @@ def test_vllm_histogram_dashboard_format_parity(
     snapshots = (
         (0, 0, (0, 0, 0), 0.0),
         (15_000, 1, (1, 2, 0), 0.3),
-        (30_000, 2, (2, 3, 0), 0.8),
+        (30_000, 2, (3, 2, 0), 0.8),
     )
     rows = []
     for timestamp, sequence, bins, total in snapshots:
+        if format_name == "structured_unidentified_fast":
+            timestamp //= 3
         count = sum(bins)
         common = {
             "engine": "engine-a",
@@ -126,10 +140,12 @@ def test_vllm_histogram_dashboard_format_parity(
             "source_kind": "histogram",
             "source_temporality": "cumulative_snapshot",
         }
-        scalar = format_name in ("scalar", "dual", "dual_missing") or (format_name == "mixed" and sequence < 2)
+        scalar = format_name in ("scalar", "dual", "dual_missing", "dual_partial") or (
+            format_name == "mixed" and sequence < 2
+        )
         structured = (
-            format_name in ("structured", "dual")
-            or (format_name == "dual_missing" and sequence != 1)
+            format_name in ("structured", "structured_unidentified", "structured_unidentified_fast", "dual")
+            or (format_name in ("dual_missing", "dual_partial") and sequence != 1)
             or (format_name == "mixed" and sequence > 0)
         )
         if scalar:
@@ -140,6 +156,8 @@ def test_vllm_histogram_dashboard_format_parity(
             running = 0
             for bound, bin_count in zip((*bounds, float("inf")), bins, strict=True):
                 running += bin_count
+                if format_name == "dual_partial" and sequence == 1 and bound != bounds[0]:
+                    continue
                 rows.append(
                     (
                         f"{family}_bucket",
@@ -150,12 +168,13 @@ def test_vllm_histogram_dashboard_format_parity(
                         timestamp,
                     )
                 )
-            rows.extend(
-                (
-                    (f"{family}_count", "gauge", float(count), None, canonical(labels), timestamp),
-                    (f"{family}_sum", "gauge", total * scale, None, canonical(labels), timestamp),
+            if format_name != "dual_partial" or sequence != 1:
+                rows.extend(
+                    (
+                        (f"{family}_count", "gauge", float(count), None, canonical(labels), timestamp),
+                        (f"{family}_sum", "gauge", total * scale, None, canonical(labels), timestamp),
+                    )
                 )
-            )
         if structured:
             body = {
                 "encoding": "explicit_bucket_v1",
@@ -167,6 +186,8 @@ def test_vllm_histogram_dashboard_format_parity(
                 "producer_epoch": "engine-a",
                 "sequence": sequence,
             }
+            if format_name.startswith("structured_unidentified"):
+                del body["producer_epoch"], body["sequence"]
             rows.append((family, "histogram", None, json.dumps(body), canonical(common), timestamp))
     database.executemany(
         """INSERT INTO "telemetry_v1.marinskyrl"
@@ -184,19 +205,19 @@ def test_vllm_histogram_dashboard_format_parity(
         if row["section"] == section and row["metric"] == metric and row["t"] is None
     }
     assert statistics["mean"] == pytest.approx((0.16 * scale, 5))
-    assert statistics["p50"] == pytest.approx((1.0 * scale, 5))
+    assert statistics["p50"] == pytest.approx((0.1 * scale, 5))
     assert statistics["p90"] == pytest.approx((1.0 * scale, 5))
     assert statistics["p99"] == pytest.approx((1.0 * scale, 5))
     if metric == "output_tokens":
         distribution = {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"}
-        assert distribution == {str(bounds[0]): 2, str(bounds[1]): 3, "+Inf": 0}
+        assert distribution == {str(bounds[0]): 3, str(bounds[1]): 2, "+Inf": 0}
     if metric not in ("ttft", "inter_token_latency"):
         return
     summary_series = database.execute(vllm_run_summary_samples_query(overview)).fetch_arrow_table()
     summary = vllm_run_summary_table(overview, summary_series, nullcontext(), max_rows=1_000).to_pylist()
     if metric == "ttft":
         # Untagged overlap during a format switch adds a zero-delta sample, not observations.
-        expected_samples = 3 if format_name == "mixed" else 2
+        expected_samples = 3 if format_name == "mixed" else 1 if format_name == "dual_partial" else 2
         assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "ttft_observations"] == [
             (5, expected_samples)
         ]
@@ -300,7 +321,11 @@ def test_vllm_target_histograms_weight_producers_without_dual_or_reset_counts() 
 
 
 @pytest.mark.parametrize("conflicting", [False, True])
-def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(conflicting: bool) -> None:
+@pytest.mark.parametrize("start_ms", [0, 30_000])
+@pytest.mark.parametrize("unsafe_fallback", [False, True])
+def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(
+    conflicting: bool, start_ms: int, unsafe_fallback: bool
+) -> None:
     database = _vllm_projection_database()
     first = (1 << 53) + 1
     samples = (
@@ -349,20 +374,38 @@ def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(confli
             for timestamp, sequence, count, total, arrival_seq in samples
         ],
     )
-    overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/train", 0, 90_000, 15_000)
+    if unsafe_fallback:
+        scalar_attributes = {**json.loads(attributes), "histogram_publication_id": "engine-a:2"}
+        scalar_rows = [("bucket", float(first + 3), {**scalar_attributes, "le": bound}) for bound in ("0.1", "+Inf")] + [
+            ("count", float(first + 3), scalar_attributes),
+            ("sum", 0.3, scalar_attributes),
+        ]
+        database.executemany(
+            """INSERT INTO "telemetry_v1.marinskyrl"
+               (cluster, service, job_id, name, kind, value,
+                resource_attributes_json, attributes_json, timestamp_ms, seq)
+               VALUES ('cw-a', 'marinskyrl', '/train', ?, 'gauge', ?, '{}', ?, 30000, ?)""",
+            [
+                (f"time_to_first_token_seconds_{component}", value, json.dumps(labels), seq + 10)
+                for seq, (component, value, labels) in enumerate(scalar_rows)
+            ],
+        )
+    overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/train", start_ms, 90_000, 15_000)
     series = database.execute(overview.samples_sql).fetch_arrow_table()
     result = vllm_overview_table(overview, series, nullcontext(), max_rows=10_000).to_pylist()
     means = [row for row in result if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean"]
-    assert [(row["value"], row["samples"]) for row in means] == [(pytest.approx(0.1), 7)]
+    expected_count = 7 if conflicting or start_ms == 0 else 5
+    assert [(row["value"], row["samples"]) for row in means] == [(pytest.approx(0.1), expected_count)]
     time_samples = {
         row["t"]: row["samples"]
         for row in result
         if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean_over_time"
     }
-    assert time_samples == ({45_000: 5, 75_000: 2} if conflicting else {15_000: 2, 45_000: 3, 75_000: 2})
+    expected_times = {45_000: 5, 75_000: 2} if conflicting else {15_000: 2, 45_000: 3, 75_000: 2}
+    assert time_samples == {t: count for t, count in expected_times.items() if t >= start_ms}
     summary_series = database.execute(vllm_run_summary_samples_query(overview)).fetch_arrow_table()
     summary = vllm_run_summary_table(overview, summary_series, nullcontext(), max_rows=1_000).to_pylist()
-    assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [7]
+    assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [expected_count]
 
 
 def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schema_tails() -> None:
