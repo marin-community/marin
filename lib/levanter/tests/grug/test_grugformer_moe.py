@@ -40,6 +40,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
+    QBRoutedMoE,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     moe_mlp,
@@ -61,6 +62,82 @@ def _make_dense_mesh() -> Mesh:
         axis_names=("data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
+
+
+def test_data_sharded_router_bias_matches_replicated_bias():
+    """A checkpoint-sharded router bias must broadcast over data-sharded token logits."""
+    script = textwrap.dedent(
+        """
+        import os
+        os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+        os.environ["JAX_PLATFORMS"] = "cpu"
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from haliax.partitioning import set_mesh
+        from jax import P
+        from jax.sharding import NamedSharding
+        from levanter.grug.grug_moe import MoEExpertMlp, QBRoutedMoE
+        from levanter.grug.sharding import compact_grug_mesh
+        from levanter.utils.activation import ActivationFunctionEnum
+
+        mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+        with set_mesh(mesh):
+            x = jax.device_put(jnp.arange(32 * 16, dtype=jnp.float32).reshape(32, 16) / 512,
+                               NamedSharding(mesh, P("data", None)))
+            valid = jax.device_put(jnp.ones((32,), dtype=bool), NamedSharding(mesh, P("data")))
+            router = jax.device_put(jnp.ones((16, 16), dtype=jnp.float32) / 16, NamedSharding(mesh, P()))
+            bias = jnp.arange(16, dtype=jnp.float32) / 16
+            expert = MoEExpertMlp.init(
+                num_experts=16, hidden_dim=16, intermediate_dim=16,
+                initializer_std=0.02, key=jax.random.PRNGKey(0),
+                implementation="scatter", activation=ActivationFunctionEnum.silu,
+            )
+            routed = QBRoutedMoE(num_experts_per_token=2, batch_axes=("data",))
+            forward = jax.jit(lambda b: routed(
+                x, valid, router=router, router_bias=b, expert_mlp=expert, mesh=mesh
+            )[0])
+            reference = np.asarray(forward(jax.device_put(bias, NamedSharding(mesh, P()))))
+            sharded = np.asarray(forward(jax.device_put(bias, NamedSharding(mesh, P("data")))))
+            np.testing.assert_allclose(sharded, reference, rtol=1e-5, atol=1e-5)
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_trainable_router_bias_preserves_forward_and_receives_gradient():
+    """The bias ablation must have the same initial output and a usable bias gradient."""
+    mesh = _make_dense_mesh()
+    with jax.set_mesh(mesh):
+        x = jax.random.normal(jax.random.key(1), (8, 8))
+        valid = jnp.ones((8,), dtype=bool)
+        router = jax.random.normal(jax.random.key(2), (8, 4)) * 0.1
+        bias = jnp.array([0.03, -0.02, 0.01, -0.02])
+        expert = MoEExpertMlp.init(
+            num_experts=4,
+            hidden_dim=8,
+            intermediate_dim=16,
+            initializer_std=0.1,
+            key=jax.random.key(3),
+            implementation="scatter",
+            activation=ActivationFunctionEnum.silu,
+        )
+
+        def output(current_bias, *, trainable):
+            routed = QBRoutedMoE(
+                num_experts_per_token=2,
+                batch_axes=("data",),
+                trainable_router_bias=trainable,
+            )
+            return routed(x, valid, router=router, router_bias=current_bias, expert_mlp=expert, mesh=mesh)[0]
+
+        np.testing.assert_allclose(output(bias, trainable=True), output(bias, trainable=False), atol=1e-6)
+        frozen_grad = jax.grad(lambda current: jnp.sum(output(current, trainable=False)))(bias)
+        learned_grad = jax.grad(lambda current: jnp.sum(output(current, trainable=True)))(bias)
+        np.testing.assert_allclose(frozen_grad, 0, atol=1e-8)
+        assert float(jnp.linalg.norm(learned_grad)) > 1e-8
 
 
 def _make_ep_mesh_or_none() -> Mesh | None:

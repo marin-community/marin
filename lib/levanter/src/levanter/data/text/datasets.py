@@ -189,6 +189,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
         *,
         input_ids_key: str,
         loss_weights_key: str | None,
+        segment_ids_key: str | None,
         loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None,
         eos_id: int | None = None,
         block_cross_document_attention: bool = True,
@@ -199,11 +200,33 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
         self.block_cross_document_attention = block_cross_document_attention
         self.input_ids_key = input_ids_key
         self.loss_weights_key = loss_weights_key
+        self.segment_ids_key = segment_ids_key
         self.loss_weight_transform = loss_weight_transform or _identity_loss_weight
 
         sharding = _single_cpu_sharding()
 
-        if loss_weights_key is None:
+        if segment_ids_key is not None:
+
+            @functools.partial(eqx.filter_jit)
+            def _create_lm_example(tokens: jax.Array, loss_weight: jax.Array, segment_ids: jax.Array) -> GrugLmExample:
+                example = GrugLmExample.causal(
+                    tokens=tokens,
+                    loss_weight=loss_weight,
+                    segment_ids=segment_ids,
+                    block_cross_document_attention=block_cross_document_attention,
+                )
+                return jax.lax.with_sharding_constraint(example, sharding)
+
+            def _map(example: dict) -> GrugLmExample:
+                loss_weight = (
+                    self.loss_weight_transform(example[loss_weights_key])
+                    if loss_weights_key is not None
+                    else np.ones_like(example[input_ids_key], dtype=np.float32)
+                )
+                # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
+                return _create_lm_example(example[input_ids_key], loss_weight, example[segment_ids_key])
+
+        elif loss_weights_key is None:
 
             @functools.partial(eqx.filter_jit)
             def _create_lm_example(tokens: jax.Array) -> GrugLmExample:
@@ -546,6 +569,7 @@ def dataset_for_component(
             Pos,
             input_ids_key=fmt.input_ids_key,
             loss_weights_key=fmt.loss_weights_key,
+            segment_ids_key=fmt.segment_ids_key,
             loss_weight_transform=fmt.loss_weight_transform,
             eos_id=eos_id,
             block_cross_document_attention=block_cross_document_attention,

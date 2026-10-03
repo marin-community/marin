@@ -9,6 +9,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import cast
 
 import equinox as eqx
@@ -42,21 +43,29 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug_sft.hf_initialization import load_vendored_transformer_from_hf, pending_qb_betas_from_export
 from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
 
-# This file intentionally mirrors `experiments/grug/base/train.py` with
-# variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
-# `.agents/skills/change-grug/`.
+# Copy of the legacy MoE SFT trainer with exact LM-head row copies and frozen routing.
 
 logger = logging.getLogger(__name__)
-_NUMERIC_DIAGNOSTIC_KEYS = (
-    "train/grads_finite",
-    "train/updates_finite",
-    "train/params_finite",
-    "train/qb_betas_finite",
-)
+
+
+class RouterFreeze(StrEnum):
+    """Routing parameters held fixed during an SFT update."""
+
+    BIAS = "bias"
+    ALL = "all"
+    NONE = "none"
+
+
+class RouterBiasUpdate(StrEnum):
+    """How to carry QB threshold estimates between optimizer steps."""
+
+    FIXED = "fixed"
+    PER_STEP = "per-step"
 
 
 @dataclass(frozen=True)
@@ -65,13 +74,16 @@ class GrugTrainerConfig:
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
     data_seed: int | None = None
+    data_start_step: int = 0
+    """Global optimizer step corresponding to the beginning of this data mixture."""
+    max_data_epochs: int | None = None
+    """Bound source consumption over the complete run, including before a resume."""
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
-    diagnose_numerics: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
+    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -79,9 +91,25 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
-    # This variant has no sequence sharding; context parallelism requires moe_hero_ep.
-    context_axis_size: int = 1
     model_axis_size: int = 1
+    context_axis_size: int = 1
+    """Shard queries and hidden activations across sequence; gather K/V for attention."""
+
+    reinitialize_token_ids: tuple[int, ...] = ()
+    """Reset these LM-head rows and their moments only when initializing from the base checkpoint."""
+
+    reinitialize_token_anchors: tuple[tuple[int, ...], ...] = ()
+    """Ordinary-token anchors, in the same order as reinitialize_token_ids."""
+
+    special_token_lr_ids: tuple[int, ...] = ()
+    special_token_lr_multiplier: float = 1.0
+    """Scale final optimizer updates for these input-embedding and LM-head token rows."""
+
+    router_freeze: RouterFreeze = RouterFreeze.ALL
+    """Freeze biases, all routing weights, or train a bias residual alongside QB."""
+
+    router_bias_update: RouterBiasUpdate = RouterBiasUpdate.FIXED
+    """Use the source QB threshold or overwrite it with each step's estimate."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -92,9 +120,8 @@ class GrugTrainerConfig:
     behaviour where ``initialize_from`` loads the whole train state (weights + optimizer +
     step). Own-run checkpoints still take precedence, so preemption resumes normally."""
 
-    def __post_init__(self):
-        if self.context_axis_size != 1:
-            raise ValueError("This Grug variant requires context_axis_size=1; use moe_hero_ep for context parallelism.")
+    initialize_from_hf: str | None = None
+    """Pinned HF export used for a fresh-optimizer weights-only initialization."""
 
 
 @dataclass(frozen=True)
@@ -137,6 +164,16 @@ def build_train_dataset(
 
     initial_batch_size = batch_schedule.batch_size_at_step(0)
     datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+    # Preserve EOS targets while masking the transition to the next packed document.
+    datasets = {
+        name: dataset.map(
+            functools.partial(
+                _prepare_packed_example,
+                block_cross_document_attention=data_config.block_cross_document_attention,
+            )
+        )
+        for name, dataset in datasets.items()
+    }
     return MixtureDataset(
         datasets=datasets,
         weights=weights,
@@ -144,6 +181,15 @@ def build_train_dataset(
         key=mix_key,
         block_size=data_config.mixture_block_size,
     )
+
+
+def _prepare_packed_example(example: GrugLmExample, *, block_cross_document_attention: bool) -> GrugLmExample:
+    loss_weight = example.loss_weight
+    if block_cross_document_attention and example.attn_mask.segment_ids is not None:
+        segment_ids = example.attn_mask.segment_ids[0]
+        same_document = segment_ids == jnp.roll(segment_ids, -1)
+        loss_weight = loss_weight * same_document.astype(loss_weight.dtype)
+    return dataclasses.replace(example, loss_weight=loss_weight)
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -156,7 +202,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -186,7 +232,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -312,12 +358,12 @@ def _compute_flops(
     return flops_per_example, flops_summary
 
 
-def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
+def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule, data_start_step: int):
     last_mixture_stage = -1
 
     def log_mixture_stage(step_info):
         nonlocal last_mixture_stage
-        seq_index = batch_schedule.global_data_offset_by_step(step_info.step)
+        seq_index = batch_schedule.global_data_offset_by_step(step_info.step - data_start_step)
         block_id = seq_index // train_dataset.block_size
         stage = train_dataset._get_stage_for_block(block_id)
         if stage == last_mixture_stage:
@@ -413,6 +459,52 @@ def init_weights_only_from_checkpoint(
     return dataclasses.replace(state, **updates)
 
 
+def init_weights_only_from_hf(
+    model_config: GrugModelConfig,
+    checkpoint_path: str,
+    *,
+    key: PRNGKeyArray,
+    param_dtype: jnp.dtype,
+    optimizer: optax.GradientTransformation,
+    ema_beta: float | None,
+    train_router_bias_residual: bool = False,
+) -> GrugTrainState:
+    """Load the public Snowball export while retaining fresh optimizer state."""
+    params = load_vendored_transformer_from_hf(
+        model_config,
+        checkpoint_path,
+        key=key,
+        dtype=param_dtype,
+    )
+    pending_qb_betas = pending_qb_betas_from_export(params)
+    if train_router_bias_residual:
+        params = eqx.tree_at(_router_bias, params, jnp.zeros_like(_router_bias(params)))
+    return GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=params if ema_beta is not None else None,
+        pending_qb_betas=pending_qb_betas,
+    )
+
+
+def _router_bias(model: Transformer):
+    return model.stacked_blocks.stacked.mlp.router_bias
+
+
+def _router_and_bias(model: Transformer):
+    return model.stacked_blocks.stacked.mlp.router, model.stacked_blocks.stacked.mlp.router_bias
+
+
+def _add_qb_betas_to_residual(model: Transformer, qb_betas: jax.Array) -> Transformer:
+    """Combine a learned bias residual with the centered QB threshold."""
+    if model.stacked_blocks is None:
+        raise ValueError("Trainable router bias requires stacked transformer blocks")
+    qb_bias = -qb_betas
+    qb_bias = qb_bias - jnp.mean(qb_bias, axis=-1, keepdims=True)
+    return eqx.tree_at(_router_bias, model, _router_bias(model) + qb_bias)
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -420,8 +512,15 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
-    diagnose_numerics: bool = False,
+    special_token_lr_ids: tuple[int, ...] = (),
+    special_token_lr_multiplier: float = 1.0,
+    router_freeze: RouterFreeze = RouterFreeze.ALL,
+    router_bias_update: RouterBiasUpdate = RouterBiasUpdate.FIXED,
 ):
+    if router_freeze == RouterFreeze.NONE and ema_beta is not None:
+        raise ValueError("Trainable router bias residual does not support EMA")
+    if router_bias_update == RouterBiasUpdate.PER_STEP and router_freeze != RouterFreeze.BIAS:
+        raise ValueError("Per-step QB updates require frozen bias gradients")
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -432,17 +531,32 @@ def _make_train_step(
     else:
         watch_targets = ()
 
+    if router_freeze == RouterFreeze.BIAS:
+        router_selector = _router_bias
+    elif router_freeze == RouterFreeze.ALL:
+        router_selector = _router_and_bias
+    elif router_freeze == RouterFreeze.NONE:
+        router_selector = None
+    else:
+        raise ValueError(f"Unknown router freeze mode: {router_freeze}")
+
     @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        qb_params = (
+            state.params if router_freeze == RouterFreeze.NONE else _apply_qb_betas(state.params, state.pending_qb_betas)
+        )
         if ema_beta is not None:
             qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
         else:
             qb_ema_params = None
 
         def loss_fn(params):
+            if router_selector is None:
+                params = _add_qb_betas_to_residual(params, state.pending_qb_betas)
+            else:
+                params = eqx.tree_at(router_selector, params, replace_fn=jax.lax.stop_gradient)
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
                 batch.tokens,
@@ -456,17 +570,19 @@ def _make_train_step(
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
-        if diagnose_numerics:
-            metrics.update(
-                {
-                    "train/supervised_tokens": jnp.sum(batch.loss_weight),
-                    "train/grads_finite": _tree_all_finite(grads),
-                    "train/updates_finite": _tree_all_finite(updates),
-                    "train/params_finite": _tree_all_finite(params),
-                    "train/qb_betas_finite": jnp.all(jnp.isfinite(metrics["qb_beta_per_layer"])),
-                }
+        if special_token_lr_ids:
+            # Scale after Adam normalization so the multiplier changes the effective LR.
+            scales = jnp.ones(updates.token_embed.shape[0], dtype=updates.token_embed.dtype)
+            scales = scales.at[jnp.asarray(special_token_lr_ids)].set(special_token_lr_multiplier)
+            updates = eqx.tree_at(
+                lambda model: (model.token_embed, model.output_proj),
+                updates,
+                (updates.token_embed * scales[:, None], updates.output_proj * scales[None, :]),
             )
+        params = optax.apply_updates(qb_params, updates)
+        # Inherited optimizer momentum must not move the frozen routing parameters.
+        if router_selector is not None:
+            params = eqx.tree_at(router_selector, params, router_selector(qb_params))
 
         if ema_beta is None:
             ema_params = None
@@ -500,7 +616,11 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=(
+                summarized_metrics["qb_beta_per_layer"]
+                if router_bias_update == RouterBiasUpdate.PER_STEP
+                else state.pending_qb_betas
+            ),
         )
 
         return next_state, metrics, watch_stats
@@ -508,24 +628,47 @@ def _make_train_step(
     return train_step
 
 
-def _tree_all_finite(tree: object) -> jax.Array:
-    finite = jnp.array(True)
-    for leaf in jax.tree.leaves(tree):
-        if eqx.is_inexact_array(leaf):
-            finite = finite & jnp.all(jnp.isfinite(leaf))
-    return finite
+def reinitialize_token_rows(
+    state: GrugTrainState,
+    token_ids: tuple[int, ...],
+    anchors: tuple[tuple[int, ...], ...],
+) -> GrugTrainState:
+    """Reset selected LM-head rows and their moments; preserve input embeddings and their moments."""
+    if not token_ids or len(set(token_ids)) != len(token_ids):
+        raise ValueError("Token IDs must be nonempty and unique")
+    if min(token_ids) < 0 or max(token_ids) >= state.params.token_embed.shape[0]:
+        raise ValueError("Token ID is outside the vocabulary")
+    if len(anchors) != len(token_ids) or any(len(row) != 1 for row in anchors):
+        raise ValueError("Each reset token needs exactly one source token")
+    if any(i < 0 or i >= state.params.token_embed.shape[0] or i in token_ids for row in anchors for i in row):
+        raise ValueError("Anchor IDs must refer to preserved vocabulary rows")
+    ids = jnp.asarray(token_ids)
+    sources = jnp.asarray([row[0] for row in anchors])
 
+    def reseed(matrix):
+        values = matrix.at[sources].get(out_sharding=P(None, jax.typeof(matrix).sharding.spec[1]))
+        return matrix.at[ids].set(values, out_sharding=jax.typeof(matrix).sharding)
 
-def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> None:
-    diagnostics = (
-        {key: float(metrics[key]) for key in (*_NUMERIC_DIAGNOSTIC_KEYS, "train/supervised_tokens")}
-        if diagnose_numerics
-        else {}
-    )
-    if not bool(jnp.isfinite(metrics["train/loss"])):
-        raise FloatingPointError(f"Non-finite Grug loss at step {step}: {diagnostics}")
-    if diagnose_numerics and not all(bool(metrics[key]) for key in _NUMERIC_DIAGNOSTIC_KEYS):
-        raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
+    @eqx.filter_jit
+    def reset(state):
+        params = eqx.tree_at(
+            lambda model: model.output_proj,
+            state.params,
+            reseed(state.params.output_proj.T).T,
+        )
+
+        def clear_moments(path, value):
+            if not eqx.is_array(value) or not path:
+                return value
+            name = str(path[-1])
+            if name == ".output_proj":
+                return value.at[:, ids].set(0, out_sharding=jax.typeof(value).sharding)
+            return value
+
+        moments = jax.tree_util.tree_map_with_path(clear_moments, state.opt_state)
+        return dataclasses.replace(state, params=params, opt_state=moments)
+
+    return reset(state)
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -537,17 +680,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     run_id = trainer.id
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
-
-    optimizer = config.optimizer.build(trainer.num_train_steps)
-    watch_config = trainer.watch
-    train_step = _make_train_step(
-        optimizer,
-        trainer.mp,
-        z_loss_weight=config.trainer.z_loss_weight,
-        ema_beta=config.trainer.ema_beta,
-        watch_config=watch_config if watch_config.is_enabled else None,
-        diagnose_numerics=config.trainer.diagnose_numerics,
-    )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
@@ -572,10 +704,42 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             batch_schedule=batch_schedule,
             key=data_key,
         )
+        if config.trainer.max_data_epochs is not None:
+            if config.trainer.max_data_epochs < 1 or len(train_dataset.weight_stages) != 1:
+                raise ValueError("Epoch limits require a positive limit and a fixed mixture")
+            run_steps = trainer.num_train_steps - config.trainer.data_start_step
+            run_sequences = batch_schedule.global_data_offset_by_step(run_steps)
+            blocks = (run_sequences + train_dataset.block_size - 1) // train_dataset.block_size
+            for name, count in zip(
+                train_dataset.dataset_index, train_dataset._counts_per_block_per_stage[0], strict=True
+            ):
+                available = len(train_dataset.datasets[name].as_sync_dataset())
+                if blocks * int(count) > config.trainer.max_data_epochs * available:
+                    raise ValueError(f"{name}: planned {blocks * int(count)} sequences exceeds {available} per epoch")
+            logger.info("Verified every source stays within %d data epoch(s)", config.trainer.max_data_epochs)
+        if train_dataset.is_finite():
+            available_steps = batch_schedule.find_step_containing_offset(len(train_dataset.as_sync_dataset()))
+            end_step = min(trainer.num_train_steps, config.trainer.data_start_step + available_steps)
+            logger.info("Finite mixture limits training to global step %d", end_step)
+            trainer = dataclasses.replace(trainer, num_train_steps=end_step)
         train_loader = build_train_loader(
             train_dataset,
             batch_schedule=batch_schedule,
             mesh=mesh,
+        )
+
+        optimizer = config.optimizer.build(trainer.num_train_steps)
+        watch_config = trainer.watch
+        train_step = _make_train_step(
+            optimizer,
+            trainer.mp,
+            z_loss_weight=config.trainer.z_loss_weight,
+            ema_beta=config.trainer.ema_beta,
+            watch_config=watch_config if watch_config.is_enabled else None,
+            special_token_lr_ids=config.trainer.special_token_lr_ids,
+            special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
+            router_freeze=config.trainer.router_freeze,
+            router_bias_update=config.trainer.router_bias_update,
         )
 
         @jax.jit
@@ -588,10 +752,42 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ema_beta=config.trainer.ema_beta,
             )
 
-        state = _init_state(model_key)
+        if config.trainer.initialize_from_hf is not None and trainer.initialize_from is not None:
+            raise ValueError("Specify only one of initialize_from_hf and TrainerConfig.initialize_from")
+
+        # A full checkpoint or HF export supplies every model array; avoid materializing a throwaway model.
+        state = (
+            eqx.filter_eval_shape(_init_state, model_key)
+            if config.trainer.reinitialize_token_ids or config.trainer.initialize_from_hf is not None
+            else _init_state(model_key)
+        )
 
         checkpointer = trainer.checkpointer.create(run_id)
-        if config.trainer.sft_weights_only_init:
+        if config.trainer.initialize_from_hf is not None:
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
+            if isinstance(state.step, jax.ShapeDtypeStruct):
+                state = init_weights_only_from_hf(
+                    config.model,
+                    config.trainer.initialize_from_hf,
+                    key=model_key,
+                    param_dtype=trainer.mp.param_dtype,
+                    optimizer=optimizer,
+                    ema_beta=config.trainer.ema_beta,
+                    train_router_bias_residual=config.trainer.router_freeze == RouterFreeze.NONE,
+                )
+                if config.trainer.reinitialize_token_ids:
+                    state = reinitialize_token_rows(
+                        state,
+                        config.trainer.reinitialize_token_ids,
+                        config.trainer.reinitialize_token_anchors,
+                    )
+        elif config.trainer.sft_weights_only_init:
             # SFT/RL: auto-resume from this run's own checkpoints if present (preemption),
             # otherwise load only base weights (+ pending_qb_betas) and keep the fresh
             # optimizer/step (marin #650). initialize_from is deliberately withheld here so
@@ -609,6 +805,31 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     trainer.initialize_from,
                     mesh=mesh,
                     load_ema=config.trainer.ema_beta is not None,
+                )
+        elif config.trainer.reinitialize_token_ids:
+            if trainer.initialize_from is None or config.trainer.ema_beta is not None:
+                raise ValueError("Token reinitialization requires a base checkpoint and no EMA")
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
+            if isinstance(state.step, jax.ShapeDtypeStruct):
+                state = restore_grug_state_from_checkpoint(
+                    state,
+                    checkpoint_search_paths=[trainer.initialize_from],
+                    load_checkpoint_setting=True,
+                    mesh=mesh,
+                    allow_partial=False,
+                )
+                state = reinitialize_token_rows(
+                    state, config.trainer.reinitialize_token_ids, config.trainer.reinitialize_token_anchors
+                )
+                logger.info(
+                    "Reinitialized %d LM-head special-token rows and their optimizer moments",
+                    len(config.trainer.reinitialize_token_ids),
                 )
         else:
             state = restore_grug_state_from_checkpoint(
@@ -640,7 +861,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
-        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
+        data_step = int(state.step) - config.trainer.data_start_step
+        if data_step < 0:
+            raise ValueError("Restored optimizer step precedes the configured data start")
+        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(data_step))
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
@@ -663,7 +887,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ),
                 every=1,
             )
-        state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        state_callbacks.add_hook(
+            _make_mixture_stage_callback(train_dataset, batch_schedule, config.trainer.data_start_step), every=1
+        )
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
@@ -697,7 +923,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
 
-                _check_step_numerics(metrics, int(state.step), config.trainer.diagnose_numerics)
+                if jnp.isnan(metrics["train/loss"]):
+                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
+                    break
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -759,6 +987,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "RouterFreeze",
     "initial_state",
     "run_grug",
 ]

@@ -37,22 +37,20 @@ from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
 from iris.resources.state import JobState as IrisJobState
+from iris.rpc import job_pb2
 from rigging.timing import Duration
 
 
 class TestConvertConstraints:
-    def test_preemptible_true_produces_no_constraints(self):
-        resources = ResourceConfig(preemptible=True)
-        constraints = convert_constraints(resources)
-        assert constraints == []
-
-    def test_preemptible_false_adds_constraint(self):
-        resources = ResourceConfig(preemptible=False)
+    @pytest.mark.parametrize("preemptible", [True, False])
+    def test_preemptible_adds_explicit_constraint(self, preemptible: bool):
+        resources = ResourceConfig(preemptible=preemptible)
         constraints = convert_constraints(resources)
         assert len(constraints) == 1
         c = constraints[0]
         assert c.key == "preemptible"
-        assert c.values[0].value == "false"
+        assert c.values[0].value == str(preemptible).lower()
+        assert c.mode == job_pb2.CONSTRAINT_MODE_REQUIRED
 
     def test_single_region_produces_eq_constraint(self):
         resources = ResourceConfig(regions=["us-central1"])
