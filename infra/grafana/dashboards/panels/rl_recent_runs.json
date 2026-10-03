@@ -1,7 +1,7 @@
 {
   "type": "table",
   "title": "Recent RL runs",
-  "description": "RL runs that reported a policy step in the selected window, most recently active first. The link opens RL Post-training with the run's training type, cluster and policy-step observation window. A run with any async stamp on its lifecycle, policy-step or rollout-call records is async; every other run is sync. Attempts counts the distinct executions that reported policy steps.",
+  "description": "RL runs that reported a policy step in the selected window, most recently active first. The link opens RL Post-training with the run's training type, cluster and window around its lifecycle, policy-step and rollout-call records, clipped to Home's range. A run with any async stamp on its lifecycle, policy-step or rollout-call records is async; every other run is sync. Attempts counts the distinct executions that reported policy steps.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"

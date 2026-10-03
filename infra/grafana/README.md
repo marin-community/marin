@@ -326,6 +326,9 @@ Execution pickers select the same attempt data for both types. All executions in
 identified execution of the selected job. Run-wide panels state that they ignore these two
 pickers. MarinSkyRL documents telemetry export at `docs/grafana-rl-runs.md`.
 
+Attempt panels require an Iris `job_id`. Runs without one show missing-job errors on the
+attempt panels; the run-wide panels still render.
+
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
 links and panel IDs; `marin-inference-overview` is the entry point from Home.

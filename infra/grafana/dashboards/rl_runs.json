@@ -438,7 +438,7 @@
       "gridPos": {
         "x": 0,
         "y": 9,
-        "w": 12,
+        "w": 24,
         "h": 8
       },
       "fieldConfig": {
@@ -2004,13 +2004,102 @@
       "interval": "1m"
     },
     {
+      "id": 42,
+      "type": "table",
+      "title": "Inference sampled throughput by learner phase",
+      "description": "vLLM generation_tokens_total / prompt_tokens_total counter deltas, rated per covered second and joined to async_phase_window driver phases. The vLLM engines export the counters independently; the trainer emits the phase windows to join against. Empty without trainer.rollout_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 115,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching observations"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "url": "/v1/rl/attempt",
+          "columns": [
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "collector",
+              "text": "collector",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "engine",
+              "text": "engine",
+              "type": "string"
+            },
+            {
+              "selector": "model",
+              "text": "model",
+              "type": "string"
+            },
+            {
+              "selector": "counter",
+              "text": "counter",
+              "type": "string"
+            },
+            {
+              "selector": "tokens_per_sampled_second",
+              "text": "tokens_per_sampled_second",
+              "type": "number"
+            },
+            {
+              "selector": "coverage_fraction",
+              "text": "coverage_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "intervals",
+              "text": "intervals",
+              "type": "number"
+            },
+            {
+              "selector": "phase_seconds",
+              "text": "phase_seconds",
+              "type": "number"
+            }
+          ],
+          "targetRef": "rl_attempt",
+          "view": "inference_service"
+        }
+      ],
+      "interval": "1m"
+    },
+    {
       "id": 210,
       "type": "row",
       "title": "Staleness (async runs; a sync run shows staleness 0 only)",
       "collapsed": true,
       "gridPos": {
         "x": 0,
-        "y": 115,
+        "y": 123,
         "w": 24,
         "h": 1
       },
@@ -2393,6 +2482,87 @@
             "type": "yesoreyeram-infinity-datasource",
             "uid": "finelog-marin"
           },
+          "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table above. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no tokens were observed.\n\nA sync run shows staleness 0 only.",
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 1,
+              "max": 1,
+              "min": 0,
+              "noValue": "No valid token denominator",
+              "unit": "percentunit"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 16,
+            "w": 12,
+            "h": 8
+          },
+          "id": 48,
+          "options": {
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "/uniform_staleness_token_fraction/",
+              "values": false
+            },
+            "textMode": "value"
+          },
+          "targets": [
+            {
+              "columns": [
+                {
+                  "selector": "uniform_staleness_token_fraction",
+                  "text": "uniform_staleness_token_fraction",
+                  "type": "number"
+                },
+                {
+                  "selector": "observed_loss_tokens",
+                  "text": "observed_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "represented_loss_tokens",
+                  "text": "represented_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "mixed_staleness_loss_tokens",
+                  "text": "mixed_staleness_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "uniform_updates",
+                  "text": "uniform_updates",
+                  "type": "number"
+                },
+                {
+                  "selector": "excluded_updates",
+                  "text": "excluded_updates",
+                  "type": "number"
+                }
+              ],
+              "format": "table",
+              "refId": "A",
+              "url": "/v1/rl/attempt",
+              "targetRef": "rl_attempt",
+              "view": "uniform_staleness_coverage"
+            }
+          ],
+          "title": "Uniform-staleness diagnostic token coverage",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
           "description": "Per-execution rollups of training_metric_value for optimizer batches whose async/staleness_min equals async/staleness_max: response length, token-weighted mean squared log-ratio, minimum ESS fraction and mean raw reward, one row per staleness value. Built from the same per-step metrics as the drift panels, restricted to uniform-staleness batches. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
           "fieldConfig": {
             "defaults": {
@@ -2493,87 +2663,6 @@
           ],
           "title": "Uniform-staleness batch diagnostics",
           "type": "table"
-        },
-        {
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table above. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no tokens were observed.\n\nA sync run shows staleness 0 only.",
-          "fieldConfig": {
-            "defaults": {
-              "decimals": 1,
-              "max": 1,
-              "min": 0,
-              "noValue": "No valid token denominator",
-              "unit": "percentunit"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "x": 0,
-            "y": 32,
-            "w": 12,
-            "h": 8
-          },
-          "id": 48,
-          "options": {
-            "colorMode": "none",
-            "graphMode": "none",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "/uniform_staleness_token_fraction/",
-              "values": false
-            },
-            "textMode": "value"
-          },
-          "targets": [
-            {
-              "columns": [
-                {
-                  "selector": "uniform_staleness_token_fraction",
-                  "text": "uniform_staleness_token_fraction",
-                  "type": "number"
-                },
-                {
-                  "selector": "observed_loss_tokens",
-                  "text": "observed_loss_tokens",
-                  "type": "number"
-                },
-                {
-                  "selector": "represented_loss_tokens",
-                  "text": "represented_loss_tokens",
-                  "type": "number"
-                },
-                {
-                  "selector": "mixed_staleness_loss_tokens",
-                  "text": "mixed_staleness_loss_tokens",
-                  "type": "number"
-                },
-                {
-                  "selector": "uniform_updates",
-                  "text": "uniform_updates",
-                  "type": "number"
-                },
-                {
-                  "selector": "excluded_updates",
-                  "text": "excluded_updates",
-                  "type": "number"
-                }
-              ],
-              "format": "table",
-              "refId": "A",
-              "url": "/v1/rl/attempt",
-              "targetRef": "rl_attempt",
-              "view": "uniform_staleness_coverage"
-            }
-          ],
-          "title": "Uniform-staleness diagnostic token coverage",
-          "type": "stat"
         }
       ]
     },
@@ -2584,7 +2673,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 116,
+        "y": 124,
         "w": 24,
         "h": 1
       },
@@ -2601,7 +2690,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 117,
+        "y": 125,
         "w": 12,
         "h": 8
       },
@@ -2672,7 +2761,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 117,
+        "y": 125,
         "w": 12,
         "h": 8
       },
@@ -2773,7 +2862,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 125,
+        "y": 133,
         "w": 12,
         "h": 8
       },
@@ -2845,7 +2934,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 125,
+        "y": 133,
         "w": 12,
         "h": 8
       },
@@ -2917,7 +3006,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 133,
+        "y": 141,
         "w": 12,
         "h": 8
       },
@@ -2992,7 +3081,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 133,
+        "y": 141,
         "w": 12,
         "h": 8
       },
@@ -3048,95 +3137,6 @@
           ],
           "targetRef": "rl_run",
           "view": "engine_prefix_cache"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 42,
-      "type": "table",
-      "title": "Inference sampled throughput by learner phase",
-      "description": "vLLM generation_tokens_total / prompt_tokens_total counter deltas, rated per covered second and joined to async_phase_window driver phases. The vLLM engines export the counters independently; the trainer emits the phase windows to join against. Empty without trainer.rollout_spans.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 141,
-        "w": 24,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "No matching observations"
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "execution",
-              "text": "execution",
-              "type": "string"
-            },
-            {
-              "selector": "collector",
-              "text": "collector",
-              "type": "string"
-            },
-            {
-              "selector": "phase",
-              "text": "phase",
-              "type": "string"
-            },
-            {
-              "selector": "engine",
-              "text": "engine",
-              "type": "string"
-            },
-            {
-              "selector": "model",
-              "text": "model",
-              "type": "string"
-            },
-            {
-              "selector": "counter",
-              "text": "counter",
-              "type": "string"
-            },
-            {
-              "selector": "tokens_per_sampled_second",
-              "text": "tokens_per_sampled_second",
-              "type": "number"
-            },
-            {
-              "selector": "coverage_fraction",
-              "text": "coverage_fraction",
-              "type": "number"
-            },
-            {
-              "selector": "intervals",
-              "text": "intervals",
-              "type": "number"
-            },
-            {
-              "selector": "phase_seconds",
-              "text": "phase_seconds",
-              "type": "number"
-            }
-          ],
-          "targetRef": "rl_attempt",
-          "view": "inference_service"
         }
       ],
       "interval": "1m"
@@ -3225,6 +3225,80 @@
           ],
           "targetRef": "rl_attempt",
           "view": "megatron_policy_wall"
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Optimizer diagnostics",
+      "description": "training_metric_value for policy/policy_entropy, policy/raw_grad_norm, policy/policy_kl, policy/final_loss and policy/policy_loss, one point per optimizer step. Logged by the policy worker after each optimizer_step call. Empty without trainer.training_metrics; these are different quantities and are not additive.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 150,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/attempt",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ],
+          "targetRef": "rl_attempt",
+          "view": "optimizer"
         }
       ],
       "interval": "1m"
@@ -3395,87 +3469,13 @@
       "interval": "1m"
     },
     {
-      "id": 24,
-      "type": "timeseries",
-      "title": "Optimizer diagnostics",
-      "description": "training_metric_value for policy/policy_entropy, policy/raw_grad_norm, policy/policy_kl, policy/final_loss and policy/policy_loss, one point per optimizer step. Logged by the policy worker after each optimizer_step call. Empty without trainer.training_metrics; these are different quantities and are not additive.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 174,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No matching records in this window.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          },
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ],
-          "targetRef": "rl_attempt",
-          "view": "optimizer"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
       "id": 206,
       "type": "row",
       "title": "Accelerators on this run's nodes (run-wide)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 182,
+        "y": 174,
         "w": 24,
         "h": 1
       },
@@ -3492,7 +3492,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 183,
+        "y": 175,
         "w": 12,
         "h": 8
       },
@@ -3565,7 +3565,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 183,
+        "y": 175,
         "w": 12,
         "h": 8
       },
@@ -3638,7 +3638,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 191,
+        "y": 183,
         "w": 12,
         "h": 8
       },
@@ -3709,7 +3709,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 191,
+        "y": 183,
         "w": 12,
         "h": 8
       },
@@ -3781,7 +3781,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 199,
+        "y": 191,
         "w": 24,
         "h": 8
       },
@@ -3831,7 +3831,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 207,
+        "y": 199,
         "w": 24,
         "h": 1
       },
@@ -3841,14 +3841,14 @@
       "id": 22,
       "type": "timeseries",
       "title": "Training reward and informative groups",
-      "description": "training_metric_value for reward/avg_raw_reward, reward/avg_pass_at_4 and reward/informative_group_fraction, one point per optimizer step. Logged by the trainer from the reward-shaping and group-admission pass over each mini-batch. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for reward/avg_raw_reward, reward/avg_pass_at_{n} and reward/informative_group_fraction, one point per optimizer step. Logged by the trainer from the reward-shaping and group-admission pass over each mini-batch. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
         "x": 0,
-        "y": 208,
+        "y": 200,
         "w": 12,
         "h": 8
       },
@@ -3923,7 +3923,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 208,
+        "y": 200,
         "w": 12,
         "h": 8
       },
@@ -3998,7 +3998,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 216,
+        "y": 208,
         "w": 12,
         "h": 8
       },
@@ -4074,7 +4074,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 216,
+        "y": 208,
         "w": 12,
         "h": 8
       },
@@ -4177,7 +4177,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 224,
+        "y": 216,
         "w": 12,
         "h": 8
       },
@@ -4247,7 +4247,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 232,
+        "y": 224,
         "w": 24,
         "h": 1
       },
@@ -4264,7 +4264,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 233,
+        "y": 225,
         "w": 12,
         "h": 8
       },
@@ -4338,7 +4338,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 233,
+        "y": 225,
         "w": 12,
         "h": 8
       },
@@ -4412,7 +4412,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 241,
+        "y": 233,
         "w": 12,
         "h": 8
       },
@@ -4486,7 +4486,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 241,
+        "y": 233,
         "w": 12,
         "h": 8
       },
@@ -4560,7 +4560,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 249,
+        "y": 241,
         "w": 12,
         "h": 8
       },
@@ -4635,7 +4635,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 249,
+        "y": 241,
         "w": 12,
         "h": 8
       },
@@ -4709,7 +4709,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 257,
+        "y": 249,
         "w": 12,
         "h": 8
       },
@@ -4783,7 +4783,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 257,
+        "y": 249,
         "w": 12,
         "h": 8
       },
@@ -4853,7 +4853,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 265,
+        "y": 257,
         "w": 24,
         "h": 1
       },
@@ -4863,14 +4863,14 @@
       "id": 34,
       "type": "timeseries",
       "title": "Core and cycle duration",
-      "description": "training_metric_value for async/performance/core_seconds, cycle_seconds and outside_core_seconds: the fully-async step's core wall and the surrounding cycle, including checkpoint/eval callbacks. Computed by async_step_metrics after each optimizer step. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for async/performance/core_seconds, cycle_seconds and outside_core_seconds: the step's core wall and the surrounding cycle, including checkpoint/eval callbacks. Computed by async_step_metrics after each optimizer step. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
         "x": 0,
-        "y": 266,
+        "y": 258,
         "w": 12,
         "h": 8
       },
@@ -4944,7 +4944,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 266,
+        "y": 258,
         "w": 12,
         "h": 8
       },
@@ -5018,7 +5018,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 274,
+        "y": 266,
         "w": 12,
         "h": 8
       },
@@ -5092,7 +5092,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 274,
+        "y": 266,
         "w": 12,
         "h": 8
       },
@@ -5166,7 +5166,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 282,
+        "y": 274,
         "w": 12,
         "h": 8
       },
@@ -5240,7 +5240,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 282,
+        "y": 274,
         "w": 12,
         "h": 8
       },
@@ -5310,7 +5310,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 290,
+        "y": 282,
         "w": 24,
         "h": 1
       },
@@ -5327,7 +5327,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 291,
+        "y": 283,
         "w": 12,
         "h": 8
       },
@@ -5393,7 +5393,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 291,
+        "y": 283,
         "w": 12,
         "h": 8
       },
