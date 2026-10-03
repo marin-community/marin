@@ -17,7 +17,6 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
-    InlineFile,
     Source,
     TaskSpec,
     TextMessage,
@@ -68,8 +67,8 @@ def specification():
             "resources": {
                 "worker": [
                     {
-                        "path": "project",
-                        "source": {"kind": "dataset_path", "path": "vendored/project"},
+                        "path": "project/input.txt",
+                        "source": {"kind": "inline_file", "content_base64": "cHVibGljIGlucHV0"},
                         "mode": "0755",
                     }
                 ]
@@ -89,8 +88,8 @@ def specification():
             "resources": {
                 "verifier": [
                     {
-                        "path": "checks",
-                        "source": {"kind": "dataset_path", "path": "vendored/checks"},
+                        "path": "checks/grade.py",
+                        "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSBjaGVja3M="},
                         "mode": "0755",
                     }
                 ]
@@ -111,22 +110,6 @@ def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path
     with pytest.raises(NotImplementedError):
         lower_to_harbor(task, convention, HarborEnvironmentConfig(), destination)
     assert not destination.exists()
-
-
-@pytest.mark.parametrize("path", ["../private.txt", "/private.txt", "https://example.com/private.txt", "a/../b"])
-def test_vendored_resource_references_cannot_escape_the_dataset_reader_root(specification, path):
-    wire = specification.model_dump()
-    source = {"kind": "dataset_path", "path": path}
-    wire["resources"] = {
-        "worker": [
-            {
-                "path": "input",
-                "source": source,
-            }
-        ]
-    }
-    with pytest.raises(ValidationError):
-        TaskSpec.model_validate(wire)
 
 
 @pytest.mark.parametrize("second_path", ["data", "DATA", "data/input.txt"])
@@ -288,8 +271,12 @@ def test_reader_preserves_private_schema_contracts_before_unsupported_export_is_
         "environment_requirements": {"environment_variables": {"CHECK_MODE": "strict"}},
     }
     wire["resources"] = {
-        "worker": [{"path": "project", "source": {"kind": "dataset_path", "path": "vendored/project"}}],
-        "verifier": [{"path": "checks", "source": {"kind": "dataset_path", "path": "vendored/checks"}}],
+        "worker": [
+            {"path": "project/input.txt", "source": {"kind": "inline_file", "content_base64": "cHVibGljIGlucHV0"}}
+        ],
+        "verifier": [
+            {"path": "checks/grade.py", "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSBjaGVja3M="}}
+        ],
     }
     task = TaskSpec.model_validate(wire)
     path = tmp_path / "specification.json"
@@ -323,7 +310,6 @@ def test_inline_file_bytes_and_metadata_survive_json_reader(tmp_path, specificat
     path = tmp_path / "specification.json"
     path.write_text(task.model_dump_json())
     restored = read_specification(path).resources.worker[0]
-    assert isinstance(restored.source, InlineFile)
     assert base64.b64decode(restored.source.content_base64) == payload
     assert restored.mode == "0500"
     assert restored.mtime_ns == 1_725_555_600_123_456_789
