@@ -631,7 +631,7 @@ def _submit_fast_track(
         run_id,
         target_cluster=target_cluster,
         dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS if uses_datakit else (),
-        coordinator_args=("--cpu", "2", "--memory", "8GB", "--disk", "32GB") if uses_datakit else (),
+        coordinator_args=("--cpu", "8", "--memory", "32GB", "--disk", "32GB") if uses_datakit else (),
         wandb_policy=wandb_policy,
     )
 

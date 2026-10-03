@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -13,10 +15,12 @@ from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
 from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
 from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, EmbeddingAttrData
 from experiments.datakit.execution import run_steps_in_pool
+from experiments.datakit.reference_pipeline import DriverPlacement, stage_driver
 
 
 @pytest.fixture
@@ -111,3 +115,43 @@ def test_centroid_sampling_threads_use_shared_pool(tmp_path, shared_pool):
     rows = pq.read_table(output).to_pylist()
     assert sorted(row["source"] for row in rows) == ["first", "second"]
     assert all(len(row["embedding"]) == LUXICAL_DIM for row in rows)
+
+
+def test_coordinator_drivers_preserve_caches_without_source_jobs(tmp_path, shared_pool, monkeypatch):
+    pool, _groups = shared_pool
+    submitted = []
+    submit = pool.client.submit
+
+    def record_submit(request):
+        submitted.append(request.name)
+        return submit(request)
+
+    monkeypatch.setattr(pool.client, "submit", record_submit)
+
+    def process_source(output_path, value):
+        with ZephyrContext(resources=ResourceConfig(cpu=1, ram="64m")) as context:
+            result = context.execute(Dataset.from_list([value]).map(lambda item: item * item))
+        Path(output_path, "value.txt").write_text(str(result.results[0]))
+
+    sources = [
+        StepSpec(
+            name=f"source-{value}",
+            fn=stage_driver(lambda output_path, v=value: process_source(output_path, v), DriverPlacement.COORDINATOR),
+        )
+        for value in range(4)
+    ]
+
+    def total(output_path):
+        values = [int(Path(source.output_path, "value.txt").read_text()) for source in sources]
+        Path(output_path, "total.txt").write_text(str(sum(values)))
+
+    heavy = StepSpec(name="heavy", deps=sources, fn=remote(total))
+    run_steps_in_pool([heavy], pool=pool, max_concurrent=4)
+    assert Path(heavy.output_path, "total.txt").read_text() == "14"
+    assert len(submitted) == 1
+    assert submitted[0].startswith("heavy")
+
+    submitted.clear()
+    run_steps_in_pool([heavy], pool=pool, max_concurrent=4)
+    assert submitted == []
+    assert [Path(source.output_path, "value.txt").read_text() for source in sources] == ["0", "1", "4", "9"]

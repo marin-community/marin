@@ -147,7 +147,7 @@ Run a short dense experiment on the curated sample:
 
 ```bash
 uv run fast-track --submit --run-id data-token-weighted --size d512 --dense --source-mode sample \
-    --sources cp/arxiv_abstracts,cp/wikiteam,starcoder2/ir_python \
+    --sources cp/arxiv_papers,cp/wikiteam,stack-v3 \
     --num-steps 20 --batch-size 8 --weighting token_proportional --version 2026.09.23
 ```
 
@@ -155,19 +155,25 @@ Change only the mixture. The second command uses the same DataKit store:
 
 ```bash
 uv run fast-track --submit --run-id data-uniform --size d512 --dense --source-mode sample \
-    --sources cp/arxiv_abstracts,cp/wikiteam,starcoder2/ir_python \
+    --sources cp/arxiv_papers,cp/wikiteam,stack-v3 \
     --num-steps 20 --batch-size 8 --weighting uniform --version 2026.09.23
 ```
 
 Fast-track defaults to sample mode and all sources in
-`s3://marin-us-east-02a/marin/datakit/sample_100b_2026_10_02`.
-This sample has a 100B-token target across the current registry.
+`s3://marin-us-east-02a/marin/datakit/sample_25b_2026_10_02`.
+This sample has a 25B-token input target across all registered sources.
+Each source receives a share proportional to its estimated corpus size.
+The sample manifest records the source paths and explicit relative token weights.
+These targets use the registry's token estimates. The usable token count depends
+on filtering and the training tokenizer. The largest default ladder run requires
+17,478,713,344 usable tokens.
 The default cluster is `cw-us-east-02a`, where the sample resides.
 Use `--sources` to select a subset or `--sample-prefix` to select another completed sample.
 The sample root must contain the completion record from the materialization command below.
 
 Use `--source-mode registry --sources <name>` to start from a registered raw source.
-Use `--source-mode cache` to use the existing training cache.
+Use `--source-mode cache` to read the existing Hero training cache at
+`s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf/train`.
 Use `--run` only in an Iris environment. Without `--run` or `--submit`, the command prints
 the artifact plan and does not start work. Set `WANDB_MODE=disabled` to run without a W&B record. The
 training mixture omits each bucket that has fewer tokens than one model sequence.
@@ -180,9 +186,12 @@ It processes the selected sources without a token limit.
 
 DataKit uses one fixed CPU worker pool for all Zephyr stages, including source
 download, normalization, embedding, quality scoring, deduplication, and store
-construction. Source recipes retain their task resource requests. Centroid
-training remains a separate CPU job. Model training uses a separate 8×H100 job.
-The data pool contains one worker with 120 CPUs, 1 TiB RAM, and 1 TiB disk.
+construction. Source recipes retain their task resource requests. The pipeline
+coordinator runs the embedding, quality, assignment, and centroid-sampling drivers
+with bounded concurrency. These drivers do not create per-source Iris jobs.
+Centroid training remains a separate CPU job. Model training uses a separate 8×H100 job.
+The pipeline coordinator requests 8 CPUs and 32 GB RAM. The data pool contains
+one worker with 120 CPUs, 1 TiB RAM, and 1 TiB disk, without a GPU reservation.
 Up to 64 pipeline steps can submit work to this pool at the same time. This lets
 more sources supply tasks at once when each source has few shards.
 The coordinator allows 68 concurrent pipelines, including capacity for the
@@ -193,24 +202,28 @@ fit the worker, but Zephyr does not account for concurrent disk use.
 The data artifact records the terminal DataKit store identity. Changes to
 upstream source recipes, tokenizer identity, or cluster configuration change
 its fingerprint. A changed recipe at a fixed version produces a drift warning
-and retains the cached result. Use a new version to build the changed recipe.
+and retains the cached result. Set a new `fast-track --version` to build the changed recipe.
 
-To produce a fresh testbed sample from the current registry:
+The following command defines the default sample from all registered sources:
 
 ```bash
 uv run iris --cluster marin job run --no-wait \
-  --job-name fast-track-sample-100b-20261002 --target-cluster cw-us-east-02a \
+  --job-name fast-track-sample-25b-20261002 --target-cluster cw-us-east-02a \
   --priority batch --cpu 8 --memory 32GB --disk 32GB --enable-extra-resources \
   --extra cpu --extra datakit -- \
   python -m experiments.datakit.materialize_zephyr_benchmark_sample \
   --mode regenerate --data-prefix s3://marin-us-east-02a/marin \
-  --destination-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_2026_10_02 \
-  --target-total-tokens-b 100 --max-concurrent 8
+  --destination-prefix s3://marin-us-east-02a/marin/datakit/sample_25b_2026_10_02 \
+  --target-total-tokens-b 25 --max-concurrent 4
 ```
 
 The sample builder reuses completed normalized artifacts from the current recipes.
 It writes the root completion record only after all source steps succeed.
-Use a new destination and job name for a new sample version.
+The record contains the selected source paths, token target, and mixture weights.
+Use `--sources <comma-separated-names>` to select sources with weights proportional
+to their estimated corpus sizes. This flag and `--source-mixture` are mutually exclusive.
+For a new sample version, change `--destination-prefix` and `--job-name`.
+Pass that destination to `fast-track --sample-prefix`.
 
 ## Shuffled-token comparison
 

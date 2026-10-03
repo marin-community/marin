@@ -30,7 +30,7 @@ Design choices:
 import logging
 import math
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow.parquet as pq
@@ -60,22 +60,31 @@ class SampleManifest(BaseModel):
 
     source_paths: dict[str, str]
     target_total_tokens_b: float | None
+    source_weights: dict[str, float] | None = None
 
 
 def proportional_sample_fractions(
     sources: Sequence[DatakitSource],
     target_total_tokens_b: float,
+    source_weights: Mapping[str, float] | None = None,
 ) -> dict[str, float]:
     """Per-source ``sample_fraction`` to hit ``target_total_tokens_b``.
 
-    Each source's ``rough_token_count_b`` determines its share of the
-    target; the fraction is ``target_share / its own count``, clamped to
+    Explicit weights determine each source's share of the target. Without
+    weights, use ``rough_token_count_b``. Divide each share by its source's
+    estimated token count, clamped to
     ``[0.0, 1.0]`` so a source whose target exceeds its known count
     simply contributes all of itself.
     """
     total_count = sum(s.rough_token_count_b for s in sources)
+    weights = {src.name: src.rough_token_count_b for src in sources} if source_weights is None else source_weights
+    if set(weights) != {src.name for src in sources}:
+        raise ValueError("Source weights must name exactly the selected sources")
+    if any(not math.isfinite(weight) or weight <= 0 for weight in weights.values()):
+        raise ValueError("Source weights must be finite and positive")
+    total_weight = sum(weights.values())
     fractions = {
-        src.name: min(1.0, target_total_tokens_b * (src.rough_token_count_b / total_count) / src.rough_token_count_b)
+        src.name: min(1.0, target_total_tokens_b * weights[src.name] / total_weight / src.rough_token_count_b)
         for src in sources
     }
     clamped = sum(1 for f in fractions.values() if f >= 1.0)
