@@ -73,18 +73,11 @@ def test_isolated_failure_cordons_only_after_threshold_and_preserves_node(config
     assert CORDON_ANNOTATION in node["metadata"]["annotations"]
     # Healthy probes never erase either an operator or automatic cordon.
     seed_node(k8s, config, "manual", cordoned=True)
-    k8s.patch_node(
-        "bad",
-        {
-            "metadata": {
-                "annotations": {
-                    HEALTH_ANNOTATION: k8s.get_json(K8sResource.NODES, "healthy1")["metadata"]["annotations"][
-                        HEALTH_ANNOTATION
-                    ]
-                }
-            }
-        },
-    )
+    recovered = StorageHealthReport.model_validate_json(node["metadata"]["annotations"][HEALTH_ANNOTATION])
+    recovered.result = ProbeResult.HEALTHY
+    recovered.failures = 0
+    recovered.failure_since = 0
+    k8s.patch_node("bad", {"metadata": {"annotations": {HEALTH_ANNOTATION: recovered.model_dump_json()}}})
     reconcile_storage_health(k8s, config)
     assert k8s.get_json(K8sResource.NODES, "bad")["spec"]["unschedulable"]
     assert k8s.get_json(K8sResource.NODES, "manual")["spec"]["unschedulable"]
