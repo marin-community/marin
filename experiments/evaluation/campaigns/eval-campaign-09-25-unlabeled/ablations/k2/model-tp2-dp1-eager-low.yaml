@@ -18,6 +18,7 @@ serve:
   - --enable-expert-parallel
   - --enable-prefix-caching
   - --enforce-eager
+  - --i-know-i-am-making-vllm-slow
   - --chat-template-content-format
   - string
   - --default-chat-template-kwargs
