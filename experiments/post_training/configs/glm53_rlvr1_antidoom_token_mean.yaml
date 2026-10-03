@@ -1,0 +1,208 @@
+# Antidoom RLVR1 step-12 token_mean ablation; other production settings match v3.
+entrypoint: standard
+context_budget:
+  request_window_tokens: 102400
+  max_new_tokens_per_turn: 49152
+  max_turns: 999999
+  generated_budget_fraction: 0.48
+  overlong_cache_fraction: 0.5
+trainer:
+  strategy: megatron
+  seed: 42
+  flash_attn: true
+  gradient_checkpointing: true
+  gradient_checkpointing_use_reentrant: false
+  offload_optimizer_during_rollouts: true
+  algorithm:
+    advantage_estimator: rloo_n
+    advantage_batch_normalize: false
+    eps_clip_low: 0.2
+    eps_clip_high: 0.2
+    use_entropy_loss: true
+    entropy_loss_coef: 0.001
+    use_kl_loss: false
+    use_kl_in_reward: false
+    loss_reduction: token_mean
+    group_advantage_min_size: 4
+    dynamic_sampling:
+      type: null
+    policy_loss_type: regular
+    off_policy_correction: tis
+    tito_full: true
+  epochs: 2
+  max_steps: 128
+  train_batch_size: 512
+  policy_mini_batch_size: 512
+  update_epochs_per_batch: 1
+  eval_batch_size: 100
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+  use_sample_packing: true
+  eval_before_train: true
+  eval_interval: 2
+  ckpt_interval: 2
+  max_ckpts_to_keep: 5
+  resume_mode: none
+  resume_path: null
+  logger: wandb
+  project_name: snowball-ultra-rlvr
+  policy:
+    optimizer_config:
+      optimizer: AdamW
+      lr: 4.0e-06
+      weight_decay: 0.0
+      max_grad_norm: 0.5
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 5
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      ddp_config:
+        overlap_grad_reduce: false
+        overlap_param_gather: false
+        grad_reduce_in_fp32: false
+      logprob_chunk_size: 256
+      moe_router_replay: true
+      transformer_config_kwargs:
+        cp_comm_type: a2a
+      optimizer_checkpoint_sharding_type: dp_reshardable
+    model:
+      path: s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-rlvr1-async/2026.10.02.6/exports-best-step12/global_step_12/policy
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 5
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      logprob_chunk_size: 256
+      moe_router_replay: true
+      transformer_config_kwargs:
+        cp_comm_type: a2a
+  placement:
+    colocate_all: false
+    colocate_policy_ref: true
+    policy_num_nodes: 10
+    policy_num_gpus_per_node: 8
+    ref_num_nodes: 10
+    ref_num_gpus_per_node: 8
+    policy_strict_spread_pg: true
+  run_name: antidoom-step12-rlvr1-token-mean-prod-v1-20261003
+  hf_hub_repo_id: null
+  debug_mode: light
+  restore_dataloader_state: true
+  hf_save_interval: -1
+  rollout_buffer:
+    max_staleness_steps: 2
+    # Preserve the previous trainer's commit-order admission policy.
+    batch_policy: rolling
+    # 128 groups × 16 responses exceed the engines' 768 sequence slots.
+    max_in_flight: 128
+    # Expiring checkpoint prefix: checkpoints store URIs instead of copying route payloads.
+    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/antidoom-step12-rlvr1-token-mean-2026.10.03.1
+generator:
+  # Frozen EAGLE-3 recipe from Echo wiki 541; no online draft training.
+  speculative_decoding:
+    method: eagle3
+    model:
+      source_uri: hf://laion/snowball-64k-eagle3-draft-r2egym
+      source_identity: 4bdb47c08e5b5190bea3c7a93c3e14470230e469
+    num_speculative_tokens: 3
+  trajectory_reward_shaping:
+    enabled: false
+  trajectory_retention:
+    phases: [train, eval]
+    sample_count_per_step: 100
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 4
+  inference_engine_expert_parallel_size: 4
+  num_inference_engines: 12
+  n_samples_per_prompt: 16
+  eval_n_samples_per_prompt: 1
+  gpu_memory_utilization: 0.8
+  max_num_seqs: 16
+  max_num_batched_tokens: 16384
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  enforce_eager: false
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  weight_sync_pause_timeout_seconds: 600.0
+  require_exact_chat_transport: true
+  chat_template:
+    source: file
+    name_or_path: /tmp/marinskyrl/model_metadata/4be62e99f28b1e32840874c56eb3a03709baaf2c5635f12902927dd0f22231af/chat_template.jinja
+  enable_http_endpoint: true
+  sampling_params:
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+    logprobs: 0
+  engine_init_kwargs:
+    enable_auto_tool_choice: true
+    tool_call_parser: hermes
+    served_model_name: antidoom-ftpo-step45
+    enable_return_routed_experts: true
+environment:
+  skyrl_gym:
+    aime:
+      length_penalty_weight: 0.0
+    nemotron_ultra:
+      sandbox:
+        host: snowball-nemo-skills-sandbox.iris.svc.cluster.local
+        port: 6000
+      judges:
+        general:
+          base_url: https://api.together.xyz/v1
+          model: openai/gpt-oss-120b
+          api_key_env: TOGETHER_API_KEY
+          reasoning_effort: low
+          timeout_seconds: 600.0
+        safety:
+          base_url: https://api.together.xyz/v1
+          model: openai/gpt-oss-120b
+          api_key_env: TOGETHER_API_KEY
+          reasoning_effort: low
+          timeout_seconds: 600.0
+      genrm:
+        judge:
+          base_url: https://api.together.xyz/v1
+          model: openai/gpt-oss-120b
+          api_key_env: TOGETHER_API_KEY
+          response_transport: chat_completions
+          reasoning_effort: low
+          timeout_seconds: 600.0
+        max_output_tokens: 512
+        temperature: 0.0
+        top_p: 1.0
+        max_concurrent_comparisons: 2
+        num_rollouts_per_prompt: 16
+        group_reasoning_length_penalty_coeff: 0.0
+        group_answer_length_penalty_coeff: 0.0
+    max_env_workers: 128
+data:
+  kind: parquet
+  train_data: []
+  val_data: []
+  shuffle: false
+extra_env:
+  # Allow object-store transfer stalls during parallel model initialization.
+  RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS: "60000"
+  LOGURU_LEVEL: INFO
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+  NCCL_DEBUG: WARN
+  TORCH_CPP_LOG_LEVEL: WARNING
+
+trajectory_runner:
+  rollout_workers:
+    # Workers are pinned to the 48-CPU driver node; reserve 32 CPUs for four processes.
+    # Evaluation reserves worker 0 while training continues on the other three.
+    num_workers: 4
+    cpus_per_worker: 8
+    executor_threads: 256
+    progress_timeout_seconds: 3600
