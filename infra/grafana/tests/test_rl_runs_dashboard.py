@@ -602,8 +602,9 @@ def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
     assert len(titles) == len(set(titles)), titles
     ids = [panel["id"] for panel in panels]
     assert len(ids) == len(set(ids)), ids
-    slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in panels]
-    assert len(slots) == len(set(slots)), slots
+    for group in (dashboard["panels"], *(panel["panels"] for panel in panels if panel.get("panels"))):
+        slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in group]
+        assert len(slots) == len(set(slots)), slots
 
 
 def test_ray_panels_exclude_cumulative_snapshots_and_never_mix_states(store) -> None:
