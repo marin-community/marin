@@ -1,0 +1,14 @@
+tasks: [GraphWalks]
+task_options:
+  GraphWalks:
+    num_fewshot: 0
+    task_alias: graphwalks
+    generation: true
+apply_chat_template: true
+prompt_budget_preflight: true
+batch_size: 1
+max_tokens: 131072
+gen_kwargs: temperature=0
+extra_model_args:
+  num_concurrent: 8
+runtime_extras: [graphwalks]
