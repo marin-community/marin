@@ -1,0 +1,145 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shellbox task operations and model request preparation."""
+
+import json
+from collections.abc import Mapping
+from typing import Any
+
+from shellbox.machine import Command, Machine, MachineFactory
+from taskcompendium.chat import assistant_message
+from taskcompendium.environment import EnvironmentKind
+from taskcompendium.grading import GradeResult
+from taskcompendium.models import (
+    FILESYSTEM_CAPABILITY,
+    SHELL_CAPABILITY,
+    AnswerType,
+    AssistantToolCalls,
+    TaskSpec,
+    TaskStage,
+)
+from taskcompendium.submission import Submission, conversation_messages, submission_request
+
+from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
+from rolloutengine.grading import _grade_rollout
+from rolloutengine.machines import _install_files, _machine_command, _wait_for_healthcheck
+
+SHELL_TOOL_NAME = "shell"
+
+
+def rollout_request(task: TaskSpec, convention: Submission) -> SessionStart:
+    """Prepare only the public task fields for inference."""
+    if task.environment.interaction is not None or task.answer_type in (AnswerType.FILE, AnswerType.STATE):
+        messages = conversation_messages(task.context)
+        options = {}
+    else:
+        request = submission_request(task, convention)
+        messages = request.pop("messages")
+        options = request
+    if task.environment.kind != EnvironmentKind.NULL:
+        if task.final_tools:
+            raise ValueError("Executable tasks expose the Shellbox shell tool only")
+        options["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": SHELL_TOOL_NAME,
+                    "description": "Run a shell command in the task workspace. Files persist between commands.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ]
+    return SessionStart(tuple(messages), options)
+
+
+class _ShellboxTaskSession:
+    """Execute shell calls and grade the final task state."""
+
+    def __init__(
+        self,
+        task: TaskSpec,
+        machine: Machine | None,
+        convention: Submission,
+        command_timeout: float,
+        factories: Mapping[EnvironmentKind, MachineFactory],
+        stage: TaskStage | None = None,
+    ):
+        self.task = task
+        self.machine = machine
+        self.convention = convention
+        self.command_timeout = command_timeout
+        self.factories = factories
+        self.stage = stage
+
+    async def prepare(self) -> SessionStart:
+        if self.task.environment_requirements.tool_providers:
+            raise ValueError("No executable tool providers are configured")
+        available = set() if self.machine is None else {SHELL_CAPABILITY, FILESYSTEM_CAPABILITY}
+        if not set(self.task.environment_requirements.capabilities) <= available:
+            raise ValueError("The task environment does not supply its required capabilities")
+        if self.stage is not None:
+            assert self.machine is not None
+            if self.stage.workdir_files:
+                result = await self.machine.run(
+                    Command(("pwd",), user=self.task.agent_user, timeout=self.command_timeout)
+                )
+                if result.exit_code != 0:
+                    raise RuntimeError("Cannot find the stage working directory")
+                workdir = result.stdout.decode().strip()
+                await _install_files(
+                    self.machine,
+                    tuple(
+                        file.model_copy(update={"path": f"{workdir.rstrip('/')}{file.path}"})
+                        for file in self.stage.workdir_files
+                    ),
+                )
+            for command in self.stage.setup:
+                result = await self.machine.run(_machine_command(command))
+                if result.exit_code != 0:
+                    raise RuntimeError(f"Task stage {self.stage.name} setup failed: exit={result.exit_code}")
+            if self.stage.healthcheck is not None:
+                await _wait_for_healthcheck(self.machine, self.stage.healthcheck)
+        return rollout_request(self.task, self.convention)
+
+    async def advance(self, turn: ModelTurn) -> Transition:
+        message = assistant_message(turn.message)
+        if self.machine is None or not isinstance(message, AssistantToolCalls) or turn.stop_reason == LENGTH_STOP_REASON:
+            return Transition(done=True)
+        observations = []
+        for call in message.calls:
+            if call.name != SHELL_TOOL_NAME or set(call.arguments) != {"command"}:
+                raise ValueError("Executable tasks require shell(command: string) calls")
+            command = call.arguments["command"]
+            if not isinstance(command, str):
+                raise ValueError("Shell command must be a string")
+            result = await self.machine.run(
+                Command(argv=("sh", "-c", command), timeout=self.command_timeout, user=self.task.agent_user)
+            )
+            observations.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.call_id,
+                    "content": json.dumps(
+                        {
+                            "stdout": result.stdout.decode(errors="replace"),
+                            "stderr": result.stderr.decode(errors="replace"),
+                            "exit_code": result.exit_code,
+                            "reason": result.reason.value,
+                            "truncated": result.stdout_truncated or result.stderr_truncated,
+                        }
+                    ),
+                }
+            )
+        return Transition(done=False, observations=tuple(observations))
+
+    async def grade(self, messages: tuple[dict[str, Any], ...]) -> GradeResult:
+        return await _grade_rollout(self.task, self.convention, messages, self.machine, self.factories)
+
+    async def close(self) -> None:
+        """Release no resources because the engine owns the machine."""
