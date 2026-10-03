@@ -65,9 +65,10 @@ def _run_nodes_cte(bucket: str, clusters_sql: str, run_sql: str, start_ms: int, 
                    ORDER BY COUNT(*) DESC, run_id
                ) AS rn
         FROM "telemetry_v1.marinskyrl"
+        JOIN selected_nodes
+          ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+         AND node_name = selected_nodes.node
         WHERE service = 'marinskyrl' AND node_name <> ''
-          AND node_name IN (SELECT node FROM selected_nodes)
-          AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
           AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
         GROUP BY 1, 2, 3, 4
     ) WHERE rn = 1
@@ -182,8 +183,7 @@ GROUP BY 1, 2, 3
 ORDER BY t, name, finished_reason
 LIMIT {RL_MAX_ENGINE_ROWS + 1}
 """.strip()
-    dcgm_scope = f"""COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
-      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
+    dcgm_scope = f"timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"
     gpu_sql = f"""
 WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_samples AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
@@ -197,8 +197,10 @@ WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_
                ORDER BY timestamp_ms, seq
            ) AS previous_value
     FROM "telemetry_v1.node_agent"
+    JOIN selected_nodes
+      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+     AND node_name = selected_nodes.node
     WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
-      AND node_name IN (SELECT node FROM run_node WHERE run = {sql_string(run)})
 ), gpu AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
            {bucket} AS t,
@@ -208,8 +210,10 @@ WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_
            AVG(value) AS mean_value,
            MAX(value) AS max_value
     FROM "telemetry_v1.node_agent"
+    JOIN selected_nodes
+      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+     AND node_name = selected_nodes.node
     WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
-      AND node_name IN (SELECT node FROM run_node WHERE run = {sql_string(run)})
     GROUP BY 1, 2, 3, 4, 5
     UNION ALL BY NAME
     SELECT origin_cluster, t, node, gpu, name,
