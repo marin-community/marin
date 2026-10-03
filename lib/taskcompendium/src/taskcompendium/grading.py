@@ -66,7 +66,7 @@ def supports_verifier(specification: VerifierSpec) -> bool:
 
 
 def grade_answer(specification: TaskSpec, convention: Submission, conversation: ConversationTrace) -> GradeResult:
-    """Translate terminal evidence into the shared grader's candidate representation."""
+    """Score terminal evidence and return its grading status and reward."""
     verifier = resolve_verifier(specification.verifier)
     final = conversation.events[-1]
     if isinstance(convention, FinalAction):
