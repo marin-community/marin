@@ -5,9 +5,10 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 from verifyit import grade as grade_module
 from verifyit.grade import Status, main, scored
-from verifyit.spec import Mode
+from verifyit.spec import FunctionCall, Mode, PredictedActionSpec, render_spec
 
 
 def _verdict(logs: Path) -> dict:
@@ -82,5 +83,48 @@ def test_pytest_setup_failure_opt_in_clears_previous_reward(tmp_path):
     spec.write_text(spec.read_text() + 'setup = "exit 3"\n')
     assert main([str(spec), "--logs-dir", str(logs), "--workspace", str(workspace)]) == 0
     assert _verdict(logs)["status"] == Status.INFRA_ERROR
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "candidate,reward",
+    [
+        ('[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"value"}]}}]', 1.0),
+        ('[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"wrong"}]}}]', 0.0),
+        ("not json", 0.0),
+    ],
+)
+def test_predicted_action_file_grading_preserves_nested_json_from_toml(tmp_path, candidate, reward):
+    spec = PredictedActionSpec(
+        expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
+        output=str(tmp_path / "answer.json"),
+    )
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(spec))
+    (tmp_path / "answer.json").write_text(candidate)
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
+
+
+def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_path):
+    specification = PredictedActionSpec(
+        expected_calls=(FunctionCall("lookup", {"id": 1}),),
+        output=str(tmp_path / "answer.json"),
+    )
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(specification))
+    (tmp_path / "answer.json").write_text('[{"name":"lookup","arguments":{"id":1}}]')
+    logs = tmp_path / "logs"
+    arguments = [str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]
+    assert main(arguments) == 0
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
+    assert (logs / "reward.txt").read_text() == "1.0\n"
+
+    config.write_text(config.read_text() + f"numeric_tolerance = {10**400}\n")
+    assert main(arguments) == 0
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
     assert not (logs / "reward.json").exists()
     assert not (logs / "reward.txt").exists()

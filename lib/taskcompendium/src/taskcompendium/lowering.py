@@ -12,9 +12,17 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from taskcompendium.direct_chat import unsupported_direct_chat_features
+from taskcompendium.grading import supports_verifier, validate_verifier
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
-from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
-from taskcompendium.verifier_registry import validate_verifier
+from taskcompendium.submission import (
+    AnswerFormat,
+    FinalAction,
+    Submission,
+    SubmissionConvention,
+    render_instruction,
+    submission_compatible,
+)
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"
@@ -41,7 +49,7 @@ class HarborEnvironmentConfig(BaseModel):
 class LoweringCandidate:
     """A compatible submission convention and Harbor environment configuration."""
 
-    convention: SubmissionConvention
+    convention: Submission
     environment_config: HarborEnvironmentConfig
 
 
@@ -55,11 +63,11 @@ class SelectionPolicy(StrEnum):
 
 def compatible_lowerings(
     specification: TaskSpec,
-    convention_library: Sequence[SubmissionConvention],
+    convention_library: Sequence[Submission],
     environment_configs: Sequence[HarborEnvironmentConfig],
 ) -> tuple[LoweringCandidate, ...]:
     """Enumerate conventions and environments that preserve this task's contract."""
-    if specification.environment_requirements.capabilities or specification.environment_requirements.action_interfaces:
+    if unsupported_direct_chat_features(specification) or not supports_verifier(specification.verifier):
         return ()
     return tuple(
         LoweringCandidate(convention, environment_config)
@@ -103,30 +111,32 @@ def validate_environment_config(specification: TaskSpec, environment_config: Har
     """Require direct chat to satisfy every declared semantic operation."""
     if environment_config != HarborEnvironmentConfig():
         raise ValueError("Only direct-chat environment configuration is supported")
-    if specification.environment_requirements.capabilities or specification.environment_requirements.action_interfaces:
-        raise ValueError("Direct chat cannot satisfy capability or action-interface requirements")
+    unsupported = unsupported_direct_chat_features(specification)
+    if unsupported:
+        raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
 
 
 def read_specification(path: Path) -> TaskSpec:
     data = json.loads(path.read_text())
     if data["schema_version"] != SCHEMA_VERSION:
         raise ValueError(f"Unsupported TaskSpec schema: {data['schema_version']}")
-    specification = TaskSpec.model_validate(data)
-    validate_verifier(specification.verifier)
-    return specification
+    return TaskSpec.model_validate(data)
 
 
 def read_environment_config(path: Path) -> HarborEnvironmentConfig:
     return HarborEnvironmentConfig.model_validate_json(path.read_text())
 
 
-def read_submission_convention(path: Path) -> SubmissionConvention:
-    return SubmissionConvention.model_validate_json(path.read_text())
+def read_submission_convention(path: Path) -> Submission:
+    data = json.loads(path.read_text())
+    if data["answer_format"] == AnswerFormat.FINAL_ACTION:
+        return FinalAction.model_validate(data)
+    return SubmissionConvention.model_validate(data)
 
 
 def lower_to_harbor(
     specification: TaskSpec,
-    convention: SubmissionConvention,
+    convention: Submission,
     environment_config: HarborEnvironmentConfig,
     destination: Path,
 ) -> Path:
