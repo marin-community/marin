@@ -156,6 +156,9 @@ class ModelServeConfig(BaseModel):
     vllm_use_flashinfer_sampler: bool | None = None
     runai_streamer_concurrency: int | None = None
     runai_streamer_s3_request_timeout_ms: int | None = None
+    vllm_source: str | None = None
+    vllm_version: str | None = None
+    vllm_plugin_requirements: tuple[str, ...] = ()
     object_store_load_mode: str = "stream"
     vllm_extra_args: tuple[str, ...]
     speculative: SpeculativeServingRef | None = None

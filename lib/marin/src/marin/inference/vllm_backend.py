@@ -45,7 +45,7 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     version = config.version if source is VllmType.UPSTREAM else None
     if source is VllmType.UPSTREAM and version is None:
         version = DEFAULT_CUDA_VLLM_VERSION
-    return IsolatedCudaVllm(source=source, version=version)
+    return IsolatedCudaVllm(source=source, version=version, extra_requirements=config.extra_requirements)
 
 
 def _with_subprocess_env(

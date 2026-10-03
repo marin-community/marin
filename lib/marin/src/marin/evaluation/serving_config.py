@@ -200,10 +200,14 @@ def _vllm_engine_config(
 ) -> VllmEngineConfig:
     """Build the evaluation engine settings shared by GPU and TPU workers."""
     launcher = VllmLauncherType.CUDA if platform is Platform.GPU else VllmLauncherType.TPU
-    source = VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM
+    if platform is Platform.TPU and (serve.vllm_source is not None or serve.vllm_plugin_requirements):
+        raise ValueError("model-specific vLLM source and plugins require GPU serving")
+    source = serve.vllm_source or (VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM)
     return VllmEngineConfig(
         launcher=launcher,
         source=source,
+        version=serve.vllm_version,
+        extra_requirements=serve.vllm_plugin_requirements,
         startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
         max_num_batched_tokens=(
             serve.max_num_batched_tokens

@@ -16,6 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 from marin.inference.config import (
     ObjectStoreLoadMode,
     SpeculativeServingConfig,
+    VllmSource,
     resolve_tokenizer_revision,
     validate_pipeline_args,
 )
@@ -99,6 +100,9 @@ class ServeConfig:
     vllm_use_flashinfer_sampler: bool | None = None
     runai_streamer_concurrency: int | None = None
     runai_streamer_s3_request_timeout_ms: int | None = None
+    vllm_source: VllmSource | None = None
+    vllm_version: str | None = None
+    vllm_plugin_requirements: tuple[str, ...] = ()
     object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
     vllm_extra_args: tuple[str, ...] = ()
     speculative: SpeculativeServingConfig | None = None
@@ -106,6 +110,12 @@ class ServeConfig:
     auto_overrides: bool = True
 
     def __post_init__(self) -> None:
+        if self.vllm_source is VllmSource.UPSTREAM and not self.vllm_version:
+            raise ValueError("upstream vLLM serving requires an exact vllm_version")
+        if self.vllm_version is not None and self.vllm_source is not VllmSource.UPSTREAM:
+            raise ValueError("vllm_version requires vllm_source=upstream")
+        if self.backend is not ServeBackend.VLLM and (self.vllm_source is not None or self.vllm_plugin_requirements):
+            raise ValueError("vLLM source and plugins require the vLLM backend")
         if self.pipeline_parallel_size < 1:
             raise ValueError("pipeline_parallel_size must be >= 1")
         for name in ("tensor_parallel_size", "data_parallel_size"):

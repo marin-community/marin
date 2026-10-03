@@ -20,7 +20,8 @@ from marin.evaluation.model_config import (
     serve_config_vllm_args,
 )
 from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
-from marin.inference.config import BrokerConfig, LevanterEngineConfig
+from marin.inference.config import BrokerConfig, LevanterEngineConfig, VllmSource
+from marin.inference.vllm_backend import vllm_launcher
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -166,6 +167,40 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     ).engine.extra_args
     assert "--swap-space" not in engine_args
     assert "--trust-remote-code" not in engine_args
+
+
+def test_gpu_catalog_can_pin_upstream_vllm_with_model_plugin(tmp_path):
+    model = load_model_config(
+        _write(
+            tmp_path,
+            "kolibri.yaml",
+            """\
+name: kolibri-smoke
+location: Aleph-Alpha/Kolibri-1
+resource_hint:
+  gpu:
+    H100: 2
+  memory: 128g
+serve:
+  tensor_parallel_size: 2
+  auto_overrides: false
+  vllm_source: upstream
+  vllm_version: 0.29.0
+  vllm_plugin_requirements:
+  - aleph-alpha-inference==1.0.0
+""",
+        )
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=2)
+    engine = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT).engine
+
+    assert engine.source is VllmSource.UPSTREAM
+    launcher = vllm_launcher(engine)
+    command = launcher.command()
+    assert command[command.index("--from") + 1] == "vllm[runai]==0.29.0"
+    requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
+    assert "aleph-alpha-inference==1.0.0" in requirements
+    assert "aleph-alpha-inference==1.0.0" in launcher.cache_identity()
 
 
 def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
