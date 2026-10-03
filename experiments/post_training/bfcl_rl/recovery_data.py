@@ -243,6 +243,20 @@ def write_recovery_cache(rows: Sequence[PretokenizedPreference], report: Mapping
     (root / "train" / ".stats.json").write_text(json.dumps(stats, sort_keys=True) + "\n")
 
 
+def recovery_cache_value(output_path: str) -> RecoveryPreferenceCache:
+    """Read the completed cache's selection metadata for artifact persistence."""
+    manifest_uri = str(StoragePath(output_path) / "selection.json")
+    report = json.loads(StoragePath(manifest_uri).read_text())
+    return RecoveryPreferenceCache(
+        path=output_path,
+        num_preferences=len(report["preferences"]),
+        tokenizer_uri=MODELS["student"].model,
+        tokenizer_revision=report["student"]["model_revision"],
+        max_length=report["max_length"],
+        selection_manifest_uri=manifest_uri,
+    )
+
+
 def build_recovery_cache(config: RecoveryCacheConfig) -> RecoveryPreferenceCache:
     """Bind successful collection receipts and archive evidence into a recovery artifact."""
     partition = load_audited_partition(config.data_root)
@@ -270,11 +284,4 @@ def build_recovery_cache(config: RecoveryCacheConfig) -> RecoveryPreferenceCache
     )
     report["terminal_manifests"] = [config.teacher_terminal_uri, config.student_terminal_uri]
     write_recovery_cache(rows, report, config.output_path)
-    return RecoveryPreferenceCache(
-        path=config.output_path,
-        num_preferences=len(rows),
-        tokenizer_uri=MODELS["student"].model,
-        tokenizer_revision=MODELS["student"].revision,
-        max_length=config.max_length,
-        selection_manifest_uri=str(StoragePath(config.output_path) / "selection.json"),
-    )
+    return recovery_cache_value(config.output_path)

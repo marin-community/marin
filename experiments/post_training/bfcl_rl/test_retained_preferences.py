@@ -12,12 +12,15 @@ import numpy as np
 import pytest
 from levanter.data.text.preference import PreferencePairDataset
 from levanter.store.cache import TreeCache
+from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 
 from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS
 from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, BFCLPartition, TaskIdentity
 from experiments.post_training.bfcl_rl.preferences import PairDisposition, select_pair
 from experiments.post_training.bfcl_rl.recovery_data import (
+    RecoveryPreferenceCache,
     collection_receipt,
+    recovery_cache_value,
     recovery_preference_rows,
     write_recovery_cache,
 )
@@ -264,6 +267,18 @@ def test_recovery_cache_roundtrip_preserves_causal_scoring_with_tool_context(tmp
         max_length=16,
     )
     write_recovery_cache(rows, report, str(tmp_path / "cache"))
+    value = recovery_cache_value(str(tmp_path / "cache"))
+    write_record(
+        ArtifactRecord(
+            output_path=value.path,
+            result_type=result_type_name(RecoveryPreferenceCache),
+            result=value.result_payload(),
+        )
+    )
+    reloaded = RecoveryPreferenceCache.raw_load(value.path)
+    assert reloaded.num_preferences == 1
+    assert reloaded.tokenizer_revision == MODELS["student"].revision
+    assert reloaded.max_length == 16
     exemplar = {key: np.zeros((0,), dtype=np.int32) for key in rows[0]}
     cache = TreeCache.load(str(tmp_path / "cache" / "train"), exemplar)
     example = PreferencePairDataset(cache, hax.Axis("position", 16)).as_sync_dataset()[0]

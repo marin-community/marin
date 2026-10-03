@@ -18,7 +18,17 @@ from experiments.post_training.bfcl_rl.recovery_data import (
     RecoveryCacheConfig,
     RecoveryPreferenceCache,
     build_recovery_cache,
+    recovery_cache_value,
 )
+
+
+def dispatch_recovery_cache(config: RecoveryCacheConfig) -> RecoveryPreferenceCache:
+    """Build the remote cache and return its persisted selection metadata."""
+    remote(
+        build_recovery_cache,
+        resources=ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi"),
+    )(config)
+    return recovery_cache_value(config.output_path)
 
 
 def recovery_cache_step(
@@ -39,15 +49,11 @@ def recovery_cache_step(
             data_root = ctx.resolved(data).path
         return RecoveryCacheConfig(teacher_uri, student_uri, data_root, max_length, ctx.output_path)
 
-    work = remote(
-        build_recovery_cache,
-        resources=ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi"),
-    )
     return ArtifactStep(
         name=name,
         version=resolve_version(name, None),
         artifact_type=RecoveryPreferenceCache,
-        run=work,
+        run=dispatch_recovery_cache,
         build_config=build_config,
         deps=(teacher, student, data),
     )
