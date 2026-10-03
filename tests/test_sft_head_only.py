@@ -19,7 +19,9 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.schedule import BatchSchedule
 
 from experiments.grug_sft.head_only_train import (
+    RouterBiasUpdate,
     RouterFreeze,
+    _add_qb_betas_to_residual,
     _apply_qb_betas,
     _make_train_step,
     build_train_dataset,
@@ -159,3 +161,70 @@ def test_frozen_router_and_exact_token_initialization():
             np.testing.assert_array_equal(np.array(s.pending_qb_betas), pending)
         assert np.isfinite(float(metrics["train/loss"]))
         assert not np.array_equal(np.array(s.params.output_proj), other)
+
+        qb_step = _make_train_step(
+            opt,
+            mp,
+            z_loss_weight=1e-4,
+            ema_beta=None,
+            router_freeze=RouterFreeze.BIAS,
+            router_bias_update=RouterBiasUpdate.PER_STEP,
+        )
+        qb_state, qb_metrics, _ = qb_step(original, batch)
+        new_betas = np.asarray(qb_state.pending_qb_betas)
+        np.testing.assert_allclose(new_betas, np.asarray(qb_metrics["qb_beta_per_layer"]))
+        assert not np.array_equal(new_betas, pending)
+        qb_state, _, _ = qb_step(qb_state, batch)
+        expected_bias = -new_betas
+        expected_bias -= expected_bias.mean(axis=-1, keepdims=True)
+        np.testing.assert_allclose(np.asarray(qb_state.params.stacked_blocks.stacked.mlp.router_bias), expected_bias)
+
+
+def test_learned_router_bias_residual_survives_qb_updates():
+    mesh = Mesh(
+        np.array(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    cfg = GrugModelConfig(
+        vocab_size=64,
+        hidden_dim=32,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=32,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        max_seq_len=16,
+        sliding_window=8,
+        disable_pko=True,
+        disable_long_rope=True,
+        use_array_stacked_blocks=True,
+        trainable_router_bias=True,
+    )
+    with jax.set_mesh(mesh):
+        optimizer = optax.adam(1e-3)
+        state = initial_state(cfg, optimizer=optimizer, mp=jmp.get_policy("f32"), key=jax.random.key(9), ema_beta=None)
+        state = dataclasses.replace(state, pending_qb_betas=jnp.arange(8, dtype=jnp.float32).reshape(2, 4))
+        batch = GrugLmExample(
+            tokens=jax.sharding.reshard(jnp.arange(64, dtype=jnp.int32).reshape(4, 16) % 64, P("data", None)),
+            loss_weight=jax.sharding.reshard(jnp.ones((4, 16)), P("data", None)),
+            attn_mask=GrugAttentionMask.causal(),
+        )
+        initial_bias = np.asarray(
+            _add_qb_betas_to_residual(state.params, state.pending_qb_betas).stacked_blocks.stacked.mlp.router_bias
+        )
+        step = _make_train_step(
+            optimizer, jmp.get_policy("f32"), z_loss_weight=1e-4, ema_beta=None, router_freeze=RouterFreeze.NONE
+        )
+        state, _, _ = step(state, batch)
+        first_residual = np.asarray(state.params.stacked_blocks.stacked.mlp.router_bias)
+        assert np.linalg.norm(first_residual) > 1e-10
+        first_effective = np.asarray(
+            _add_qb_betas_to_residual(state.params, state.pending_qb_betas).stacked_blocks.stacked.mlp.router_bias
+        )
+        np.testing.assert_allclose(first_effective - initial_bias, first_residual, atol=1e-6)
+        state, _, _ = step(state, batch)
+        second_residual = np.asarray(state.params.stacked_blocks.stacked.mlp.router_bias)
+        assert not np.array_equal(second_residual, first_residual)

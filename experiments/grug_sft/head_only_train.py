@@ -43,6 +43,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug_sft.hf_initialization import load_vendored_transformer_from_hf, pending_qb_betas_from_export
 from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
@@ -57,6 +58,14 @@ class RouterFreeze(StrEnum):
 
     BIAS = "bias"
     ALL = "all"
+    NONE = "none"
+
+
+class RouterBiasUpdate(StrEnum):
+    """How to carry QB threshold estimates between optimizer steps."""
+
+    FIXED = "fixed"
+    PER_STEP = "per-step"
 
 
 @dataclass(frozen=True)
@@ -97,7 +106,10 @@ class GrugTrainerConfig:
     """Scale final optimizer updates for these input-embedding and LM-head token rows."""
 
     router_freeze: RouterFreeze = RouterFreeze.ALL
-    """Freeze router biases only, or both router matrices and biases."""
+    """Freeze biases, all routing weights, or train a bias residual alongside QB."""
+
+    router_bias_update: RouterBiasUpdate = RouterBiasUpdate.FIXED
+    """Use the source QB threshold or overwrite it with each step's estimate."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -107,6 +119,9 @@ class GrugTrainerConfig:
     not a full-state resume. False (default) keeps the byte-identical continued-pretrain
     behaviour where ``initialize_from`` loads the whole train state (weights + optimizer +
     step). Own-run checkpoints still take precedence, so preemption resumes normally."""
+
+    initialize_from_hf: str | None = None
+    """Pinned HF export used for a fresh-optimizer weights-only initialization."""
 
 
 @dataclass(frozen=True)
@@ -444,12 +459,50 @@ def init_weights_only_from_checkpoint(
     return dataclasses.replace(state, **updates)
 
 
+def init_weights_only_from_hf(
+    model_config: GrugModelConfig,
+    checkpoint_path: str,
+    *,
+    key: PRNGKeyArray,
+    param_dtype: jnp.dtype,
+    optimizer: optax.GradientTransformation,
+    ema_beta: float | None,
+    train_router_bias_residual: bool = False,
+) -> GrugTrainState:
+    """Load the public Snowball export while retaining fresh optimizer state."""
+    params = load_vendored_transformer_from_hf(
+        model_config,
+        checkpoint_path,
+        key=key,
+        dtype=param_dtype,
+    )
+    pending_qb_betas = pending_qb_betas_from_export(params)
+    if train_router_bias_residual:
+        params = eqx.tree_at(_router_bias, params, jnp.zeros_like(_router_bias(params)))
+    return GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=params if ema_beta is not None else None,
+        pending_qb_betas=pending_qb_betas,
+    )
+
+
 def _router_bias(model: Transformer):
     return model.stacked_blocks.stacked.mlp.router_bias
 
 
 def _router_and_bias(model: Transformer):
     return model.stacked_blocks.stacked.mlp.router, model.stacked_blocks.stacked.mlp.router_bias
+
+
+def _add_qb_betas_to_residual(model: Transformer, qb_betas: jax.Array) -> Transformer:
+    """Combine a learned bias residual with the centered QB threshold."""
+    if model.stacked_blocks is None:
+        raise ValueError("Trainable router bias requires stacked transformer blocks")
+    qb_bias = -qb_betas
+    qb_bias = qb_bias - jnp.mean(qb_bias, axis=-1, keepdims=True)
+    return eqx.tree_at(_router_bias, model, _router_bias(model) + qb_bias)
 
 
 def _make_train_step(
@@ -462,7 +515,12 @@ def _make_train_step(
     special_token_lr_ids: tuple[int, ...] = (),
     special_token_lr_multiplier: float = 1.0,
     router_freeze: RouterFreeze = RouterFreeze.ALL,
+    router_bias_update: RouterBiasUpdate = RouterBiasUpdate.FIXED,
 ):
+    if router_freeze == RouterFreeze.NONE and ema_beta is not None:
+        raise ValueError("Trainable router bias residual does not support EMA")
+    if router_bias_update == RouterBiasUpdate.PER_STEP and router_freeze != RouterFreeze.BIAS:
+        raise ValueError("Per-step QB updates require frozen bias gradients")
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -477,6 +535,8 @@ def _make_train_step(
         router_selector = _router_bias
     elif router_freeze == RouterFreeze.ALL:
         router_selector = _router_and_bias
+    elif router_freeze == RouterFreeze.NONE:
+        router_selector = None
     else:
         raise ValueError(f"Unknown router freeze mode: {router_freeze}")
 
@@ -484,18 +544,19 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        qb_params = (
+            state.params if router_freeze == RouterFreeze.NONE else _apply_qb_betas(state.params, state.pending_qb_betas)
+        )
         if ema_beta is not None:
             qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
         else:
             qb_ema_params = None
 
         def loss_fn(params):
-            params = eqx.tree_at(
-                router_selector,
-                params,
-                replace_fn=jax.lax.stop_gradient,
-            )
+            if router_selector is None:
+                params = _add_qb_betas_to_residual(params, state.pending_qb_betas)
+            else:
+                params = eqx.tree_at(router_selector, params, replace_fn=jax.lax.stop_gradient)
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
                 batch.tokens,
@@ -520,11 +581,8 @@ def _make_train_step(
             )
         params = optax.apply_updates(qb_params, updates)
         # Inherited optimizer momentum must not move the frozen routing parameters.
-        params = eqx.tree_at(
-            router_selector,
-            params,
-            router_selector(qb_params),
-        )
+        if router_selector is not None:
+            params = eqx.tree_at(router_selector, params, router_selector(qb_params))
 
         if ema_beta is None:
             ema_params = None
@@ -558,7 +616,11 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=state.pending_qb_betas,
+            pending_qb_betas=(
+                summarized_metrics["qb_beta_per_layer"]
+                if router_bias_update == RouterBiasUpdate.PER_STEP
+                else state.pending_qb_betas
+            ),
         )
 
         return next_state, metrics, watch_stats
@@ -677,6 +739,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             special_token_lr_ids=config.trainer.special_token_lr_ids,
             special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
             router_freeze=config.trainer.router_freeze,
+            router_bias_update=config.trainer.router_bias_update,
         )
 
         @jax.jit
@@ -689,15 +752,42 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ema_beta=config.trainer.ema_beta,
             )
 
-        # A full checkpoint supplies every array; avoid materializing a throwaway model.
+        if config.trainer.initialize_from_hf is not None and trainer.initialize_from is not None:
+            raise ValueError("Specify only one of initialize_from_hf and TrainerConfig.initialize_from")
+
+        # A full checkpoint or HF export supplies every model array; avoid materializing a throwaway model.
         state = (
             eqx.filter_eval_shape(_init_state, model_key)
-            if config.trainer.reinitialize_token_ids
+            if config.trainer.reinitialize_token_ids or config.trainer.initialize_from_hf is not None
             else _init_state(model_key)
         )
 
         checkpointer = trainer.checkpointer.create(run_id)
-        if config.trainer.sft_weights_only_init:
+        if config.trainer.initialize_from_hf is not None:
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
+            if isinstance(state.step, jax.ShapeDtypeStruct):
+                state = init_weights_only_from_hf(
+                    config.model,
+                    config.trainer.initialize_from_hf,
+                    key=model_key,
+                    param_dtype=trainer.mp.param_dtype,
+                    optimizer=optimizer,
+                    ema_beta=config.trainer.ema_beta,
+                    train_router_bias_residual=config.trainer.router_freeze == RouterFreeze.NONE,
+                )
+                if config.trainer.reinitialize_token_ids:
+                    state = reinitialize_token_rows(
+                        state,
+                        config.trainer.reinitialize_token_ids,
+                        config.trainer.reinitialize_token_anchors,
+                    )
+        elif config.trainer.sft_weights_only_init:
             # SFT/RL: auto-resume from this run's own checkpoints if present (preemption),
             # otherwise load only base weights (+ pending_qb_betas) and keep the fresh
             # optimizer/step (marin #650). initialize_from is deliberately withheld here so

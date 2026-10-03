@@ -178,7 +178,7 @@ def train(version: str, excluded_groups: tuple[str, ...], steps: int) -> None:
         mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             entity="marin-community",
-            project="marin_moe_sft",
+            project="marin_moe",
             name=run_id,
             id=run_id,
             resume="allow",

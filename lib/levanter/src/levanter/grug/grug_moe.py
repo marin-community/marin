@@ -258,6 +258,7 @@ class QBRoutedMoE(eqx.Module):
     # This is part of the QB routing recipe, rather than an independently tuned
     # model hyperparameter: selected sigmoid weights are normalized to this sum.
     routing_renorm_sum: float = eqx.field(static=True, default=2.5)
+    trainable_router_bias: bool = eqx.field(static=True, default=False)
 
     @named_call
     def __call__(
@@ -286,12 +287,19 @@ class QBRoutedMoE(eqx.Module):
 
         with jax.named_scope("moe_route"):
             router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
-            biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
+            bias = reshard(router_bias, P(None))
+            biased_logits = router_logits + jax.lax.stop_gradient(bias)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
             topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
             qb_alpha = topk_logits[:, -1:]
             selected_experts = selected_experts[:, :-1]
             selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+            if self.trainable_router_bias:
+                # Preserve QB's forward combine weights while providing a gradient
+                # surrogate for the discrete expert-selection bias.
+                bias_rows = reshard(jnp.broadcast_to(bias[None, :], router_logits.shape), P(self.batch_axes, None))
+                selected_bias = jnp.take_along_axis(bias_rows, selected_experts, axis=-1)
+                selected_logits = selected_logits + selected_bias - jax.lax.stop_gradient(selected_bias)
             combine_weights = jax.nn.sigmoid(selected_logits)
             combine_weights *= self.routing_renorm_sum / (jnp.sum(combine_weights, axis=-1, keepdims=True) + 1e-9)
             combine_weights = combine_weights.astype(x.dtype)

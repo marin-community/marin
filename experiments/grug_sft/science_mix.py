@@ -10,9 +10,10 @@ from enum import StrEnum
 
 CONTEXT = 262_144
 BATCH = 256
-START_STEP = 157_000
+BASE_STEP = 157_000
+START_STEP = 0
 STEPS = 1_491
-FINAL_STEP = START_STEP + STEPS
+FINAL_STEP = STEPS
 TOKENS = STEPS * BATCH * CONTEXT
 # Seven equal blocks cover the run exactly while staying below MixtureDataset's
 # 16-bit per-block index limit.

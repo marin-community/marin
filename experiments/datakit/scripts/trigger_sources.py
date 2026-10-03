@@ -39,6 +39,7 @@ class SourceCatalog(StrEnum):
     """Source registry selected for materialization."""
 
     ACTIVE = "active"
+    ACTIVE_SFT = "active-sft"
     SCIENCE_CANDIDATES = "science-candidates"
     SCIENCE_SFT_CANDIDATES = "science-sft-candidates"
 
@@ -81,7 +82,9 @@ def _print_pending(source_terminals: list[tuple[DatakitSource, StepSpec]]) -> No
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    if args.catalog == SourceCatalog.SCIENCE_CANDIDATES:
+    if args.catalog == SourceCatalog.ACTIVE_SFT:
+        registry = all_sft_sources()
+    elif args.catalog == SourceCatalog.SCIENCE_CANDIDATES:
         registry = science_source_candidates()
     elif args.catalog == SourceCatalog.SCIENCE_SFT_CANDIDATES:
         registry = {"megascience/textbook-reasoning": all_sft_sources()["megascience/textbook-reasoning"]}

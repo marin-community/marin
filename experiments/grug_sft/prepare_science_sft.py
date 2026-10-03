@@ -15,9 +15,10 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.cli import experiment_main
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug_sft.regional_pool import snowball_model_path
+
 logger = logging.getLogger(__name__)
 
-TOKENIZER = "gs://marin-us-central2/grug_sft/tokenizer/2026.09.12"
 CONTEXT_LENGTH = 262_144
 SHUFFLE_SEED = 0
 TARGET_TOKENS_PER_SHARD = 62_500_000
@@ -50,7 +51,7 @@ def prepare_source(config: SourceConfig) -> SftTokenStore:
     result = build_sft_store(
         [SftInput(config.name, prefix_join(source.normalized.output_path, "outputs/main"))],
         output_path=config.output_path,
-        tokenizer=TOKENIZER,
+        tokenizer=snowball_model_path(),
         max_length=CONTEXT_LENGTH,
         seed=SHUFFLE_SEED,
         num_shards=config.shards,

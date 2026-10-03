@@ -32,6 +32,7 @@ from levanter.tokenizers import (
     _load_tokenizer_config,
     _stage_from_hf,
     _stage_from_mirror,
+    _stage_from_url,
     _stage_tokenizer,
     _try_load_tokenizer_from_dir,
     load_tokenizer,
@@ -1426,6 +1427,20 @@ def test_load_tokenizer_from_url(tmp_path, fake_tokenizer_dir, clear_stage_cache
         tokenizer = load_tokenizer("memory://tokenizer")
 
     assert tokenizer.vocab_size == 0
+
+
+def test_stage_from_url_excludes_model_files(tmp_path, fake_tokenizer_dir):
+    remote = MemoryFileSystem()
+    remote.store.clear()
+    for source in fake_tokenizer_dir.iterdir():
+        remote.pipe_file(f"tokenizer/{source.name}", source.read_bytes())
+    remote.pipe_file("tokenizer/model-00001-of-00001.safetensors", b"weights")
+    remote.pipe_file("tokenizer/config.json", b"{}")
+
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+    assert _stage_from_url("memory://tokenizer", str(local_dir))
+    assert sorted(path.name for path in local_dir.iterdir()) == ["tokenizer.json", "tokenizer_config.json"]
 
 
 def test_stage_tokenizer_local_cache_hit(tmp_path, fake_tokenizer_dir, clear_stage_cache):

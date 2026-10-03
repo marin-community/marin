@@ -16,6 +16,7 @@ Usage:
 
 import contextlib
 import dataclasses
+import fnmatch
 import functools
 import hashlib
 import json
@@ -864,7 +865,7 @@ def _stage_from_url(name_or_path: str, local_dir: str) -> bool:
         if entry.get("type") == "directory":
             continue
         filename = os.path.basename(entry["name"].rstrip("/"))
-        if not filename:
+        if not filename or not any(fnmatch.fnmatch(filename, pattern) for pattern in _TOKENIZER_ALLOW_PATTERNS):
             continue
         source_url = f"{name_or_path.rstrip('/')}/{filename}"
         if fetch_file_atomic(source_url, os.path.join(local_dir, filename)):

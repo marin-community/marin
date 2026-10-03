@@ -9,7 +9,6 @@ import json
 import logging
 import math
 from datetime import timedelta
-from pathlib import Path
 
 import jmp
 from fray.types import ResourceConfig
@@ -17,20 +16,27 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.mixture import StopStrategy
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.sft import SftTokenStore
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import temporary_checkpoint_base_path
+from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datasets.science_curricula import science_curriculum_datasets
 from experiments.grug_sft.head_only_train import GrugRunConfig, GrugTrainerConfig, RouterFreeze, run_grug
 from experiments.grug_sft.prepare_science_sft import SCIENCE_SFT_SOURCES
+from experiments.grug_sft.regional_pool import (
+    SNOWBALL_VERIFIED_WEIGHTS_REVISION,
+    snowball_model_path,
+    snowball_release_manifest_path,
+)
 from experiments.grug_sft.science_mix import (
+    BASE_STEP,
     BATCH,
     CONTEXT,
     FINAL_STEP,
@@ -46,15 +52,7 @@ from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 
 logger = logging.getLogger(__name__)
 
-PREFIX = "gs://marin-us-central2"
 MIN_EXPECTED_SEQUENCES_PER_BLOCK = 1.000001
-OUTPUT_ROOT = f"{PREFIX}/users/benfeuer/grug_sft"
-BASE = (
-    f"{PREFIX}/grug/"
-    "moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew8-c06695/"
-    "checkpoints/step-157000"
-)
-TOKENIZER = f"{PREFIX}/grug_sft/tokenizer/2026.09.12"
 SFT_VERSION = "2026.09.20"
 SUPPORTED_TPU_ZONES = {
     ("v4-32", "us-central2-b"),
@@ -95,6 +93,7 @@ BIOCOLLECTION_SOURCES = (
     "biocollection/free_text_stream",
     "biocollection/instruction_stream",
 )
+SNOWBALL_REPLAY_SOURCES = ("nemotron_specialized/math_textbooks",)
 SWALLOW_SOURCES = (
     "swallow-math-v2/qa",
     "swallow-math-v2/textbook",
@@ -122,7 +121,7 @@ def _share(tokens_b: float) -> float:
 def _sft_store_path(name: str) -> str:
     if name not in SCIENCE_SFT_SOURCES:
         raise ValueError(f"Unknown science SFT source: {name}")
-    return prefix_join(PREFIX, f"grug_sft/science_sft/{name}/{SFT_VERSION}")
+    return prefix_join(marin_prefix(), f"grug_sft/science_sft/{name}/{SFT_VERSION}")
 
 
 def _add_weighted_group(
@@ -171,7 +170,7 @@ def _text_entries(names: tuple[str, ...]) -> dict[str, tuple[DatasetComponent, f
     handles = science_curriculum_datasets()
     entries = {}
     for name in names:
-        cache = TokenizedCache.raw_load(handles[name].path(PREFIX))
+        cache = TokenizedCache.raw_load(handles[name].path(marin_prefix()))
         entries[name] = (cache.as_component(), cache.num_train_tokens / CONTEXT)
     return entries
 
@@ -183,11 +182,11 @@ def _sft_entries(names: tuple[str, ...]) -> dict[str, tuple[DatasetComponent, fl
         entries[name] = (
             DatasetComponent(
                 source=UrlDatasetSourceConfig(train_urls=[], validation_urls=[]),
-                cache_dir=store.cache_path,
+                cache_dir=_sft_store_path(name),
                 format=TextLmDatasetFormat(),
                 pack=store.max_length,
             ),
-            store.packed_sequences,
+            float(store.packed_sequences),
         )
     return entries
 
@@ -197,38 +196,38 @@ def _add_replay(
     components: dict[str, DatasetComponent | ConcatDatasetComponent],
     weights: dict[str, float],
 ) -> None:
-    replay = json.loads(Path(__file__).with_name("replay_skew8.json").read_text())
-    pooled = {}
-    pooled_weight = 0.0
-    for name, record in replay.items():
-        children = {
-            f"{path}/{copy}": DatasetComponent(
-                source=None,
-                cache_dir=path,
-                format=TextLmDatasetFormat(),
-                flat_cache=True,
-            )
-            for path, copies in record["copies"].items()
-            for copy in range(copies)
-        }
-        weight = share * record["weight"]
-        if weight * MIXTURE_BLOCK_SIZE < MIN_EXPECTED_SEQUENCES_PER_BLOCK:
-            pooled.update({f"{name}/{key}": child for key, child in children.items()})
-            pooled_weight += weight
-        else:
-            components[f"replay/{name}"] = ConcatDatasetComponent(children=children)
-            weights[f"replay/{name}"] = weight
-    if pooled and pooled_weight * MIXTURE_BLOCK_SIZE < MIN_EXPECTED_SEQUENCES_PER_BLOCK:
-        smallest = min((key for key in weights if key.startswith("replay/")), key=weights.__getitem__)
-        pooled.update(components.pop(smallest).children)
-        pooled_weight += weights.pop(smallest)
-    if pooled:
-        components["replay/pooled"] = ConcatDatasetComponent(children=pooled)
-        weights["replay/pooled"] = pooled_weight
+    _add_weighted_group(
+        group="replay",
+        share=share,
+        entries=_text_entries(SNOWBALL_REPLAY_SOURCES),
+        components=components,
+        weights=weights,
+    )
 
 
-def data_config(mix: ScienceMix) -> LmDataConfig:
+def data_config(mix: ScienceMix, prebaked_root: str | None = None) -> LmDataConfig:
     """Build a one-pass mixture from materialized source measurements."""
+    if prebaked_root is not None:
+        return LmDataConfig(
+            tokenizer=snowball_model_path(),
+            cache_dir=None,
+            components={
+                "prebaked": DatasetComponent(
+                    cache_dir=prefix_join(prebaked_root, mix.value),
+                    format=PrebuiltLmDatasetFormat(
+                        loss_weights_key="loss_weight",
+                        segment_ids_key="segment_ids",
+                    ),
+                    flat_cache=True,
+                )
+            },
+            train_weights={"prebaked": 1.0},
+            auto_build_caches=False,
+            shuffle=False,
+            block_cross_document_attention=True,
+            mixture_block_size=MIXTURE_BLOCK_SIZE,
+            stop_strategy=StopStrategy.RESTART_STRATEGY,
+        )
     budget = MIX_BUDGETS[mix]
     if not math.isclose(math.fsum(budget.as_dict().values()), 100.0):
         raise ValueError(f"{mix} budget must total 100B tokens")
@@ -285,7 +284,7 @@ def data_config(mix: ScienceMix) -> LmDataConfig:
         raise ValueError(f"{mix} contains a component that rounds to zero sequences")
     logger.info("%s token budget: %s", mix, budget.as_dict())
     return LmDataConfig(
-        tokenizer=TOKENIZER,
+        tokenizer=snowball_model_path(),
         cache_dir=None,
         components=components,
         train_weights=weights,
@@ -297,17 +296,28 @@ def data_config(mix: ScienceMix) -> LmDataConfig:
     )
 
 
-def train(mix: ScienceMix, version: str, tpu: str, zone: str) -> None:
+def train(
+    mix: ScienceMix,
+    version: str,
+    tpu: str,
+    zone: str,
+    wandb_mode: str | None = None,
+    prebaked_root: str | None = None,
+) -> None:
     """Dispatch one preemptible curriculum run on a supported TPU slice."""
     if (tpu, zone) not in SUPPORTED_TPU_ZONES:
         raise ValueError(f"Unsupported TPU and zone combination: {tpu} in {zone}")
     identity = run_id(mix, version)
-    output = f"{OUTPUT_ROOT}/{identity}"
-    data = data_config(mix)
-    metadata = json.loads(StoragePath(prefix_join(BASE, "metadata.json")).read_text())
-    if metadata["step"] != START_STEP:
-        raise ValueError(f"Expected base step {START_STEP}, found {metadata['step']}")
-    tokenizer = load_tokenizer(TOKENIZER)
+    output = prefix_join(marin_prefix(), f"runs/{identity}")
+    data = data_config(mix, prebaked_root)
+    export_manifest = json.loads(
+        StoragePath(prefix_join(snowball_release_manifest_path(), "export-manifest.json")).read_text()
+    )
+    if export_manifest["step"] != BASE_STEP:
+        raise ValueError(f"Expected base step {BASE_STEP}, found {export_manifest['step']}")
+    if export_manifest["verified_weights_revision"] != SNOWBALL_VERIFIED_WEIGHTS_REVISION:
+        raise ValueError("Snowball release manifest does not verify the staged weights revision")
+    tokenizer = load_tokenizer(snowball_model_path())
     token_ids = tuple(ANCHORS)
     anchor_ids = tuple(tuple(tokenizer.encode(text, add_special_tokens=False)) for text in ANCHORS.values())
     if anchor_ids != EXPECTED_ANCHOR_IDS:
@@ -330,9 +340,10 @@ def train(mix: ScienceMix, version: str, tpu: str, zone: str) -> None:
         mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             entity="marin-community",
-            project="marin_moe_sft",
+            project="marin_moe",
             name=identity,
             id=identity,
+            mode=wandb_mode,
             resume="allow",
             tags=["science-curriculum", "100b", f"mix:{mix}"],
         ),
@@ -340,7 +351,7 @@ def train(mix: ScienceMix, version: str, tpu: str, zone: str) -> None:
         mesh=MeshConfig(axes={"expert": 1, "context": 4}, compute_mapping={"batch": ["data", "expert"]}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        initialize_from=BASE,
+        initialize_from=None,
         load_checkpoint=None,
         checkpointer=CheckpointerConfig(
             base_path=prefix_join(output, "checkpoints"),
@@ -373,7 +384,7 @@ def train(mix: ScienceMix, version: str, tpu: str, zone: str) -> None:
             resources=ResourceConfig.with_tpu(tpu, zone=zone, preemptible=True),
             trainer=GrugTrainerConfig(
                 trainer=trainer,
-                sft_weights_only_init=False,
+                initialize_from_hf=snowball_model_path(),
                 data_start_step=START_STEP,
                 max_data_epochs=1,
                 special_token_lr_ids=token_ids,
@@ -415,6 +426,8 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument("--zone", choices=("us-central2-b", "us-central1-a", "us-east5-a", "us-east5-b"), required=True)
+    parser.add_argument("--wandb-mode", choices=("online", "offline", "disabled"))
+    parser.add_argument("--prebaked-root")
     args = parser.parse_args()
     for mix in args.mix:
-        train(mix, args.version, args.tpu, args.zone)
+        train(mix, args.version, args.tpu, args.zone, args.wandb_mode, args.prebaked_root)

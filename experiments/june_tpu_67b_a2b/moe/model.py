@@ -72,7 +72,7 @@ class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
     Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
-    Only shape/size knobs live here. All layers are MoE.
+    Shape and runtime knobs live here. All layers are MoE.
     """
 
     vocab_size: int
@@ -97,6 +97,8 @@ class GrugModelConfig:
     context extension, where softmax logits sharpen with sequence length but
     sliding-window layers stay bounded by their window."""
     router_z_loss_coef: float = 0.0
+    trainable_router_bias: bool = False
+    """Use a straight-through gradient for the QB router bias while preserving its forward combine weights."""
     # When True, the every-4th-and-last "long" layers skip the Partial Key
     # Offset (no shift of the second half of K, no doc-start zeroing). They
     # still run full causal attention (no sliding window); only the PKO step
@@ -504,6 +506,7 @@ class MoEMLP(eqx.Module):
             routed_moe=QBRoutedMoE(
                 num_experts_per_token=cfg.num_experts_per_token,
                 batch_axes=_BATCH_AXES,
+                trainable_router_bias=cfg.trainable_router_bias,
             ),
             cfg=cfg,
         )
