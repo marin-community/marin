@@ -6,18 +6,30 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from click.testing import CliRunner
 from levanter.store.cache import SerialCacheWriter, TreeCache
 from marin.execution.artifact import write_artifact
 from marin.execution.lazy import StepContext
+from marin.execution.lazy import run as run_artifacts
+from numpy.typing import NDArray
 
 from experiments.grug.fast_track.contracts import ResolvedTrainingBudget
-from experiments.grug.fast_track.quality import PoolRequirements
+from experiments.grug.fast_track.quality import (
+    LabelledEmbedding,
+    LabelSplit,
+    PoolRequirements,
+    QualityScorer,
+    RidgeHeadConfig,
+    label_split,
+)
+from experiments.grug.fast_track.quality_cli import main as quality_cli
 from experiments.grug.fast_track.quality_pipeline import (
     PinnedFile,
     QualityBundle,
@@ -29,6 +41,44 @@ from experiments.grug.fast_track.quality_pipeline import (
     build_quality_data,
     prepare_quality_data,
 )
+
+
+@dataclass(frozen=True)
+class _NegativeScorer:
+    def scores(self, embeddings: NDArray) -> NDArray[np.float64]:
+        return -np.asarray(embeddings, dtype=np.float64)[:, 0]
+
+
+class _NegativeHeadConfig:
+    def __init__(self, revision: str = "test-v1", split_seed: int = 7):
+        self.revision = revision
+        self.split_seed = split_seed
+        self.runtime_state = object()
+
+    @property
+    def identity(self) -> Mapping[str, str]:
+        return {"implementation": "test-negative", "revision": self.revision}
+
+    def fit(self, rows: Sequence[LabelledEmbedding]) -> QualityScorer:
+        assert rows
+        assert all(label_split(row.duplicate_group, self.split_seed) is LabelSplit.TRAIN for row in rows)
+        return _NegativeScorer()
+
+
+@dataclass(frozen=True)
+class _WrongShapeScorer:
+    def scores(self, embeddings: NDArray) -> NDArray[np.float64]:
+        return np.zeros((len(embeddings), 1), dtype=np.float64)
+
+
+@dataclass(frozen=True)
+class _WrongShapeHeadConfig:
+    @property
+    def identity(self) -> Mapping[str, str]:
+        return {"implementation": "test-wrong-shape", "revision": "test-v1"}
+
+    def fit(self, rows: Sequence[LabelledEmbedding]) -> QualityScorer:
+        return _WrongShapeScorer()
 
 
 def _pin(path) -> PinnedFile:
@@ -104,7 +154,8 @@ def quality_config(tmp_path) -> QualityConfig:
     bundle_path = tmp_path / "bundle.json"
     bundle_path.write_text(bundle.model_dump_json())
     return QualityConfig(
-        QualitySpec(_pin(bundle_path), SelectionMethod.RIDGE, 0.4, 0.01, 0), str(tmp_path / "selection")
+        QualitySpec(_pin(bundle_path), SelectionMethod.CANDIDATE, RidgeHeadConfig(0.01), fraction=0.4, tie_seed=0),
+        str(tmp_path / "selection"),
     )
 
 
@@ -178,17 +229,56 @@ def test_quality_preparation_rejects_changed_token_join(quality_config, tmp_path
 
 def test_quality_candidate_identity_changes_artifact_path(quality_config):
     baseline = build_quality_data(quality_config.spec, version="test-dev")
-    candidate = build_quality_data(replace(quality_config.spec, regularization=0.5), version="test-dev")
+    candidate = build_quality_data(replace(quality_config.spec, head=RidgeHeadConfig(0.5)), version="test-dev")
     incumbent = build_quality_data(
         replace(quality_config.spec, selection_method=SelectionMethod.INCUMBENT), version="test-dev"
     )
+    custom_head = build_quality_data(
+        replace(quality_config.spec, head=_NegativeHeadConfig(revision="test-v1")), version="test-dev"
+    )
+    revised_custom_head = build_quality_data(
+        replace(quality_config.spec, head=_NegativeHeadConfig(revision="test-v2")), version="test-dev"
+    )
 
-    assert len({baseline.name, candidate.name, incumbent.name}) == 3
+    assert len({baseline.name, candidate.name, incumbent.name, custom_head.name, revised_custom_head.name}) == 5
     assert baseline.fingerprint() != candidate.fingerprint()
+    assert custom_head.fingerprint() != revised_custom_head.fingerprint()
+
+
+def test_quality_custom_head_uses_fixed_training_split_and_changes_selection(quality_config, tmp_path, monkeypatch):
+    spec = replace(quality_config.spec, head=_NegativeHeadConfig(split_seed=7))
+    step = build_quality_data(spec, version="test-dev")
+    prefix = str(tmp_path / "artifacts")
+    monkeypatch.setenv("MARIN_PREFIX", prefix)
+    (result,) = run_artifacts(step, max_concurrent=1)
+    cache = TreeCache.load(result.cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)})
+    rows = cache.get_batch_sync(range(len(cache)))
+    with open(result.report_path) as stream:
+        report = json.load(stream)
+    with open(report["selected_ids_path"]) as stream:
+        selected_ids = {json.loads(line)["id"] for line in stream}
+
+    assert selected_ids == {"0", "1"}
+    assert {int(row["input_ids"][0]) for row in rows} == {1, 2}
+    assert report["head"] == spec.head.identity
+    assert report["development"]["documents"] > 0
+
+    spec.head.revision = "mutated-after-build"
+    run_config = step.build_config(StepContext.for_run(output_path=step.path(prefix), prefix=prefix, deps=step.deps))
+    with pytest.raises(ValueError, match="identity changed after artifact construction"):
+        step.run(run_config)
+
+
+def test_quality_custom_head_must_return_one_score_per_embedding(quality_config):
+    spec = replace(quality_config.spec, head=_WrongShapeHeadConfig())
+
+    with pytest.raises(ValueError, match="one finite score per embedding"):
+        prepare_quality_data(replace(quality_config, spec=spec))
 
 
 def test_quality_cli_artifact_loads_through_python_api(quality_config, tmp_path):
-    spec = quality_config.spec
+    ridge_head = RidgeHeadConfig(0.01)
+    spec = replace(quality_config.spec, head=ridge_head)
     prefix = str(tmp_path / "artifacts")
     version = "2026.10.03"
     subprocess.run(
@@ -200,12 +290,10 @@ def test_quality_cli_artifact_loads_through_python_api(quality_config, tmp_path)
             spec.bundle.path,
             "--bundle-sha256",
             spec.bundle.sha256,
-            "--run-id",
-            "cli-round-trip",
             "--fraction",
             str(spec.fraction),
             "--regularization",
-            str(spec.regularization),
+            str(ridge_head.regularization),
             "--tie-seed",
             str(spec.tie_seed),
             "--version",
@@ -225,3 +313,22 @@ def test_quality_cli_artifact_loads_through_python_api(quality_config, tmp_path)
 
     assert result.requested_tokens == 40
     np.testing.assert_array_equal(cache.get_batch_sync([0])[0]["input_ids"], np.full(40, 4))
+
+
+def test_quality_training_cli_requires_run_id(quality_config):
+    spec = quality_config.spec
+    result = CliRunner().invoke(
+        quality_cli,
+        [
+            "--bundle",
+            spec.bundle.path,
+            "--bundle-sha256",
+            spec.bundle.sha256,
+            "--version",
+            "2026.10.03",
+            "--run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--run-id is required when training" in result.output

@@ -8,6 +8,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 
 from experiments.grug.fast_track.launch import ThroughputResult, build_h100_ladder_run
+from experiments.grug.fast_track.quality import RidgeHeadConfig
 from experiments.grug.fast_track.quality_pipeline import (
     PinnedFile,
     QualityData,
@@ -21,10 +22,13 @@ from experiments.grug.fast_track.quality_pipeline import (
 @click.command()
 @click.option("--bundle", required=True, help="Frozen quality bundle JSON path.")
 @click.option("--bundle-sha256", required=True, help="SHA-256 of the bundle JSON bytes.")
-@click.option("--run-id", required=True)
+@click.option("--run-id", help="Run identifier for training.")
 @click.option("--size", type=click.Choice(["d512", "d768", "d1024"]), default="d512", show_default=True)
 @click.option(
-    "--selection-method", type=click.Choice([item.value for item in SelectionMethod]), default="ridge", show_default=True
+    "--selection-method",
+    type=click.Choice([item.value for item in SelectionMethod]),
+    default="candidate",
+    show_default=True,
 )
 @click.option("--fraction", type=click.FloatRange(min=0, max=1, min_open=True), default=0.1, show_default=True)
 @click.option("--regularization", type=click.FloatRange(min=0, min_open=True), default=0.01, show_default=True)
@@ -36,7 +40,7 @@ from experiments.grug.fast_track.quality_pipeline import (
 def main(
     bundle: str,
     bundle_sha256: str,
-    run_id: str,
+    run_id: str | None,
     size: str,
     selection_method: str,
     fraction: float,
@@ -47,15 +51,17 @@ def main(
     prepare_only: bool,
 ) -> ArtifactStep[QualityData] | ArtifactStep[ThroughputResult]:
     spec = QualitySpec(
-        PinnedFile(path=bundle, sha256=bundle_sha256),
-        SelectionMethod(selection_method),
-        fraction,
-        regularization,
-        tie_seed,
+        bundle=PinnedFile(path=bundle, sha256=bundle_sha256),
+        selection_method=SelectionMethod(selection_method),
+        head=RidgeHeadConfig(regularization),
+        fraction=fraction,
+        tie_seed=tie_seed,
     )
     selection = build_quality_data(spec)
     if prepare_only:
         return selection
+    if run_id is None or not run_id.strip():
+        raise click.UsageError("--run-id is required when training")
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
