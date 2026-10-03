@@ -225,7 +225,7 @@ PY
 # All other serving and agent settings are copied unchanged from the canonical model YAML.
 stage_model_config() {
   local model=$1
-  local source="$MODEL_CONFIG_DIR/$model.yaml"
+  local source=${2:-$MODEL_CONFIG_DIR/$model.yaml}
   STAGED_MODEL_CONFIG="$STAGING_ROOT/$model/model.yaml"
   export STAGED_MODEL_CONFIG
 

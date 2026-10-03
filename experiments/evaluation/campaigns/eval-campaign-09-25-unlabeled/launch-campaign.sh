@@ -124,8 +124,24 @@ fi
 for model in "${models[@]}"; do
   model_config="$MODEL_CONFIG_DIR/$model.yaml"
   [ -f "$model_config" ] || die "unknown model config: $model"
+  if [ "$suite" = agentic ] && [ "${#selected_harbor_names[@]}" -eq 1 ]; then
+    override=$(cd "$MARIN_DIR" && CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" MODEL_NAME="$model" EVAL_NAME="${selected_harbor_names[0]}" uv run python - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+
+campaign = yaml.safe_load(Path(os.environ["CAMPAIGN_CONFIG"]).read_text())
+print(campaign.get("model_config_overrides", {}).get(os.environ["MODEL_NAME"], {}).get(os.environ["EVAL_NAME"], ""))
+PY
+)
+    if [ -n "$override" ]; then
+      model_config="$CANONICAL_CONFIG_ROOT/$override"
+      [ -f "$model_config" ] || die "missing canonical model override: $model_config"
+    fi
+  fi
   reset_staging_root
-  stage_model_config "$model"
+  stage_model_config "$model" "$model_config"
   stage_harbor_configs "$model"
 
   base_arguments=(
