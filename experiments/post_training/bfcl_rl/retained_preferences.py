@@ -87,9 +87,9 @@ def retained_rollout(
             raise ValueError("BFCL preferences require a binary verifier score")
         if verdict["passed"] is not None and verdict["passed"] != (score == 1.0):
             raise ValueError("BFCL verifier pass flag contradicts its score")
-        if record["reward"]["outcome"] != score:
-            raise ValueError("retained outcome differs from the BFCL verifier score")
-        if disposition["server_error"] is None and disposition["error_treatment"] != "mask":
+        if disposition["server_error"] is None and disposition["error_treatment"] is None:
+            if record["reward"]["outcome"] != score:
+                raise ValueError("retained outcome differs from the BFCL verifier score")
             outcome = RolloutOutcome.CORRECT if score == 1.0 else RolloutOutcome.INCORRECT
 
     response = record["response"]

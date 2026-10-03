@@ -196,15 +196,17 @@ def recovery_preference_rows(
     retained = {record.rollout.trajectory_uri: record for record in (*teacher, *student)}
     rows = []
     pairs = []
+    excluded_pairs = []
     for selection in selections:
         pair = selection.pair
         if pair is None:
             continue
-        rows.append(
-            pretokenized_preference(
-                retained[pair.chosen.trajectory_uri], retained[pair.rejected.trajectory_uri], max_length=max_length
-            )
-        )
+        chosen = retained[pair.chosen.trajectory_uri]
+        rejected = retained[pair.rejected.trajectory_uri]
+        if chosen.steps[0].prompt_token_ids != rejected.steps[0].prompt_token_ids:
+            excluded_pairs.append({"reason": "initial_prompt_mismatch", "pair": asdict(pair)})
+            continue
+        rows.append(pretokenized_preference(chosen, rejected, max_length=max_length))
         pairs.append(asdict(pair))
     report = {
         "dataset_commit": partition.dataset_commit,
@@ -214,6 +216,7 @@ def recovery_preference_rows(
         "conditions_digest": teacher_receipt.conditions_digest,
         "dispositions": dict(Counter(selection.disposition.value for selection in selections)),
         "preferences": pairs,
+        "excluded_preferences": excluded_pairs,
         "max_length": max_length,
     }
     return rows, report

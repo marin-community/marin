@@ -111,6 +111,22 @@ def test_retained_verdict_overrides_shaping_and_discards_infrastructure_failures
         retained_rollout(teacher_record, identity=_identity("teacher"), partition=PARTITION, trajectory_uri="teacher")
 
 
+@pytest.mark.parametrize("score", [0.0, 1.0])
+def test_zero_treated_agent_exit_is_excluded_from_verified_preferences(score):
+    teacher_record = _record("teacher", score)
+    teacher_record["reward"]["outcome"] = 0.0
+    teacher_record["disposition"].update(error_treatment="zero", exception_type="NonZeroAgentExitCodeError")
+    teacher = retained_rollout(
+        teacher_record, identity=_identity("teacher"), partition=PARTITION, trajectory_uri="teacher"
+    )
+    student = retained_rollout(
+        _record("student", 1.0 - score), identity=_identity("student"), partition=PARTITION, trajectory_uri="student"
+    )
+    selection = select_pair(teacher.rollout, student.rollout)
+    assert selection.disposition == PairDisposition.UNSCORED
+    assert selection.pair is None
+
+
 def test_retained_holdout_and_changed_model_cannot_form_training_preferences():
     with pytest.raises(ValueError, match="outside the BFCL training complement"):
         retained_rollout(
@@ -290,6 +306,32 @@ def test_incomplete_collections_cannot_publish_a_preference_cache(tmp_path: Path
             max_length=16,
         )
     assert not (tmp_path / "cache").exists()
+
+
+def test_mismatched_initial_context_is_excluded_with_pair_provenance():
+    receipts = [
+        collection_receipt(*_receipts(model), model=model, partition=PARTITION) for model in ("teacher", "student")
+    ]
+    teacher, student = [
+        retained_rollout(_record(model, score), identity=receipt.identity, partition=PARTITION, trajectory_uri=model)
+        for model, score, receipt in zip(("teacher", "student"), (1.0, 0.0), receipts, strict=True)
+    ]
+    student = replace(student, steps=(TokenStep((3, 4), (30,), (1,)),))
+    rows, report = recovery_preference_rows(
+        [teacher],
+        [student],
+        teacher_receipt=receipts[0],
+        student_receipt=receipts[1],
+        partition=PARTITION,
+        max_length=16,
+    )
+    assert rows == []
+    assert report["preferences"] == []
+    excluded = report["excluded_preferences"]
+    assert len(excluded) == 1
+    assert excluded[0]["reason"] == "initial_prompt_mismatch"
+    assert excluded[0]["pair"]["chosen"]["trajectory_uri"] == "teacher"
+    assert excluded[0]["pair"]["rejected"]["trajectory_uri"] == "student"
 
 
 def test_two_wrong_rollouts_produce_no_optimizer_data(tmp_path: Path):
