@@ -121,7 +121,7 @@ def collection_receipt(
         raise ValueError("worker data source differs from the collection launch")
     if resolved["val_data_sources"]:
         raise ValueError("recovery collection cannot consume parity validation tasks")
-    skyrl = resolved["config"]
+    skyrl = resolved["config"]["skyrl"]
     policy = skyrl["trainer"]["policy"]["model"]
     if policy["source_identity"] != locator["identity"] or policy["source_uri"] != expected.uri:
         raise ValueError("worker model source differs from the collection launch")

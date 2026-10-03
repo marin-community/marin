@@ -227,6 +227,7 @@ def _receipts(model: str) -> tuple[dict, dict]:
             },
         },
     }
+    resolved["config"] = {"skyrl": resolved["config"]}
     return terminal, resolved
 
 
@@ -320,7 +321,7 @@ def test_collection_receipts_reject_holdout_sources_and_sampling_mismatches():
         collection_receipt(terminal, resolved, model="teacher", partition=PARTITION)
     teacher_receipt = collection_receipt(*_receipts("teacher"), model="teacher", partition=PARTITION)
     terminal, resolved = _receipts("student")
-    resolved["config"]["generator"]["sampling_params"]["temperature"] = 0.5
+    resolved["config"]["skyrl"]["generator"]["sampling_params"]["temperature"] = 0.5
     student_receipt = collection_receipt(terminal, resolved, model="student", partition=PARTITION)
     with pytest.raises(ValueError, match="different harness or sampling conditions"):
         recovery_preference_rows(
