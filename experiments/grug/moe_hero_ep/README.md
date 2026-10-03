@@ -160,6 +160,61 @@ rows. Before submission, the launcher posts source SHA, run and coordinator IDs,
 fork point, and checkpoint to [#8506](https://github.com/marin-community/marin/issues/8506);
 a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
+## Context-length switches
+
+The scaling ladder keeps 4,194,304 tokens per rack per update. The 11-rack hero
+therefore uses batch 11264 at 4K, 5632 at 8K, and 2816 at 16K, with the same
+390251-step optimizer schedule. Use `--seq-len`, `--qk-mult`, and
+`--capacity-factor` to select the training shape. The QK multiplier applies to
+all attention layers; a changed context requires an explicit value. The
+launcher rejects shapes that cannot divide the token batch or device batch axes.
+The active run identity and handoff remain unchanged until a separate deployment.
+
+For a continuation at a new context, also pass `--flops-baseline-step N` and
+`--flops-baseline-total F`, where N is the number of completed updates at the
+handoff and F is their cumulative training FLOPs. The parent row at global step
+N−1 contains the total after N updates; convert `throughput/total_gflops` to
+FLOPs by multiplying by 1e9. Keep this baseline on child retries. It corrects
+historical totals while current MFU uses the new attention cost. Compare speed
+with tokens/s and elapsed iteration time. Do not reuse a production FLOPs
+baseline for a diagnostic with a smaller execution batch.
+
+Harrier shuffles 1Mi-token blocks within 512-block windows at every supported
+context. Completed windows retain their token membership; partial windows can
+repeat or omit tokens. Keep the data seed, component order, and token store
+unchanged. Mixture blocks remain 49152 sequences because rescaling them changes
+rounded source weights. At 16K the historical main-mixture boundary moves from
+108000 to 108096; cooldown remains at 312192. A continuation requires
+`--accept-mixture-boundary-shift` to accept that displacement. This does not
+make the token stream identical to the parent. See the
+[context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790)
+for residual data differences and the validation gate.
+
+Canonical hero evaluation stays at 4K packing and runs after the first resumed
+update as well as on its regular cadence. This keeps the inherited
+`eval_dropless/*` series at the same packing. QK changes still change the model
+being scored. Before deployment, rehearse training, dropless eval, the next
+training update, and save/resume from the actual checkpoint. Record replacement
+loss/gradient/drop/throughput acceptance thresholds for the context change.
+
+For a bounded one-rack trial, set `--schedule-steps 390251`,
+`--optimizer-tokens-per-step 46137344`, `--gate-router-weight-decay 0.02`, and
+`--gc-interval 100` in `launch_diagnostics`. The stop is an absolute global step;
+`run_progress` uses the full schedule. Set the actual `--batch-size` separately:
+matching optimizer settings does not match production gradient statistics or
+data offsets. With `--eval-every` enabled, diagnostics score Paloma and
+uncheatable. Use `--eval-seq-len 4096` for comparable packing or
+`--eval-seq-len 16384 --eval-prefix eval_16k` for a separate long-context
+series. Run separate trial arms when both packings are needed.
+
+Before a live switch, update `SEQ_LEN`, `QK_MULT`, `CAPACITY_FACTOR`, the FLOPs
+baseline, and mixture-boundary acceptance in `trigger_hero.sh` together with the
+run ID, checkpoint, and fork point. The trigger stores these settings in W&B
+lineage and the launch record and verifies them on retries. The selected QK,
+capacity, and trial thresholds require measured evidence; the launcher does not
+choose them. Later 64K/262K phases need their own mesh, attention, and memory
+validation.
+
 ## Coordinated garbage collection
 
 The scaling-ladder launcher, including the production hero launched by `trigger_hero.sh`,

@@ -322,6 +322,8 @@ class GrugEvalConfig:
     eval_batch_size: int = 512
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
+    # Keep packing fixed when comparing checkpoints trained at different context lengths.
+    max_seq_len: int | None = None
     prefix: str = "eval"
     # Evaluate with the training MoE backend (capacity-limited, with drops): `eval_current` scores
     # the live parameters and `eval_ema` the EMA parameters; either one schedules the
@@ -335,9 +337,31 @@ class GrugEvalConfig:
     # Local MoE kernel used after collapsing the expert axis. ``sonic`` is the Hopper Triton path;
     # ``sonic_cute`` is the Blackwell QuACK/CUTLASS path.
     dropless_eval_moe_implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
-    # Run the evals once after the first optimization step, for a baseline at the start of the loss
-    # curve. The periodic cadence first fires at `steps_per_eval`, thus it leaves that start bare.
+    # Evaluate after the first optimization step of each process, including checkpoint resumes.
+    # This checks the eval-to-train handoff before the next periodic evaluation.
     eval_at_first_step: bool = False
+
+
+@dataclass(frozen=True)
+class FlopsBaseline:
+    """Cumulative training FLOPs through a completed handoff step."""
+
+    completed_steps: int
+    total_flops: float
+
+    def __post_init__(self):
+        if self.completed_steps < 0:
+            raise ValueError("FLOPs baseline step must be nonnegative")
+        if not np.isfinite(self.total_flops) or self.total_flops < 0:
+            raise ValueError("FLOPs baseline must be finite and nonnegative")
+        # Completed updates always cost FLOPs; a zero total restarts the cumulative series at the handoff.
+        if self.completed_steps > 0 and self.total_flops == 0:
+            raise ValueError("A FLOPs baseline after completed updates must have a positive total")
+
+    def offset(self, batch_schedule: BatchSchedule, flops_per_example: float, restored_step: int) -> float:
+        if self.completed_steps > restored_step:
+            raise ValueError("FLOPs baseline must precede or equal the restored checkpoint step")
+        return self.total_flops - flops_per_example * batch_schedule.global_data_offset_by_step(self.completed_steps)
 
 
 @dataclass(frozen=True)
@@ -355,6 +379,7 @@ class GrugRunConfig:
     # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
+    flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
@@ -488,21 +513,19 @@ def _to_dropless_local(
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
 
 
-def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
-    """Wrap ``hook`` so that it runs one time only, after the first optimization step.
-
-    ``StateCallbackRunner`` dispatches on ``next_step % every``, thus ``every=1`` is the only
-    interval that covers the first step. The gate makes that registration one-shot. A resumed run
-    starts above step 1 and never fires it.
-    """
+def _first_step_only(hook: Callable[..., None], *, start_step: int) -> Callable[..., None]:
+    """Run ``hook`` once after the first update following initialization or restore."""
+    fired = False
 
     # `LambdaCallback` reads the signature to decide whether to pass `force`, and the `**kwargs`
     # below would otherwise advertise a `force` parameter that the wrapped hook can lack.
     @functools.wraps(hook)
     def gated(step, *args, **kwargs):
-        if step.next_step != 1:
+        nonlocal fired
+        if fired or step.next_step != start_step + 1:
             return
         hook(step, *args, **kwargs)
+        fired = True
 
     return gated
 
@@ -529,7 +552,7 @@ def build_tagged_evaluator(
     mp: jmp.Policy,
     model_transform: Callable[[Transformer], Transformer] | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
-    pos = Axis("position", max_seq_len)
+    pos = Axis("position", max_seq_len if eval_cfg.max_seq_len is None else eval_cfg.max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
@@ -1032,6 +1055,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
+        flops_offset = (
+            config.flops_baseline.offset(batch_schedule, flops_per_example, int(state.step))
+            if config.flops_baseline is not None
+            else 0.0
+        )
 
         eval_cfg = config.eval
         evaluator = None
@@ -1077,8 +1105,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         ),
                     )
 
-        # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
-        # both use it so a head-of-schedule run reports against the steps it will actually take.
+        # Bound diagnostics independently of the full optimizer and data schedule.
         requested_stop_step = trainer.num_train_steps if config.stop_after_steps is None else config.stop_after_steps
         stop_step = min(requested_stop_step, trainer.num_train_steps)
 
@@ -1110,11 +1137,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if progress_watchdog is not None:
             state_callbacks.add_hook(progress_watchdog, every=1)
         state_callbacks.add_hook(
-            callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
+            callbacks.log_performance_stats(
+                config.model.max_seq_len, batch_schedule, flops_per_example, flops_offset=flops_offset
+            ),
             every=log_every,
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=stop_step), every=log_every)
-        state_callbacks.add_hook(callbacks.log_step_info(stop_step), every=log_every)
+        state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
                 profiler_cfg.build(
@@ -1157,16 +1186,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    last_dropless_eval_step = step_count
                     # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
                     # the expert axis lands replicated, and the copy is much larger than the
                     # train-mesh params. The train step needs almost the whole device budget for
                     # its temporary buffer, thus this copy must die before the next step.
-                    with set_mesh(_mesh):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
-                        with jax_config.enable_pgle(False):
-                            log_dict = eval_model(_ev, model, prefix=_prefix)
-                        levanter.tracker.log(log_dict, step=step_count)
+                    with callbacks.progress_event_scope(
+                        step.emit_event,
+                        callbacks.ProgressEvent.EVALUATION_STARTED,
+                        callbacks.ProgressEvent.EVALUATION_FINISHED,
+                    ):
+                        with set_mesh(_mesh):
+                            model = _reshard_tree_to_mesh(step.model, _mesh)
+                            with jax_config.enable_pgle(False):
+                                log_dict = eval_model(_ev, model, prefix=_prefix)
+                            levanter.tracker.log(log_dict, step=step_count)
+                    last_dropless_eval_step = step_count
 
                 eval_hooks.append(dropless_eval_hook)
 
@@ -1177,17 +1211,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 for hook in eval_hooks:
                     state_callbacks.add_hook(hook, every=interval)
 
-            # Baseline point at the start of the loss curve. The periodic cadence first fires at
-            # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
-            # These run after the first optimization step, not before it: the first train step
-            # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
-            # step 2 instead of first at step 3000. `every=1` is the only interval that covers
-            # the first step, and `_first_step_only` makes the hook fire once. A resumed run
-            # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
-            # is 0 there, so the point lands at step 0 on the curve.
+            # Train once before evaluating so its first allocation sees a clean pool, then
+            # exercise the eval-to-train handoff immediately, including after a context switch.
             if eval_cfg.eval_at_first_step:
                 for hook in eval_hooks:
-                    state_callbacks.add_hook(_first_step_only(hook), every=1)
+                    state_callbacks.add_hook(_first_step_only(hook, start_step=int(state.step)), every=1)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0

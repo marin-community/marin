@@ -5,6 +5,7 @@
 
 import dataclasses
 
+import click
 import jmp
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
@@ -21,6 +22,7 @@ from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.grug.moe_hero_ep.model import OFFLOAD_CARRY_REMAT_MODE, GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
+    FlopsBaseline,
     GrugTrainerConfig,
     MasterParamMode,
     TrainingDataMode,
@@ -133,3 +135,26 @@ def hero_trainer_config(
 def validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
     # Weight-zero datasets appear as tagged evaluation sets.
     return list(paloma_datasets(tokenizer=marin_tokenizer).values())
+
+
+def flops_baseline_options(command):
+    """Add the FLOPs-baseline options a context-switch continuation passes to an EP hero launcher."""
+    command = click.option(
+        "--flops-baseline-total",
+        type=click.FloatRange(min=0),
+        default=None,
+        help="Cumulative FLOPs at the context switch. Requires --flops-baseline-step.",
+    )(command)
+    return click.option(
+        "--flops-baseline-step",
+        type=click.IntRange(min=0),
+        default=None,
+        help="Completed steps at the context switch. Requires --flops-baseline-total.",
+    )(command)
+
+
+def flops_baseline_from_options(step: int | None, total: float | None) -> FlopsBaseline | None:
+    """Build the baseline from ``flops_baseline_options`` values, which must be given together."""
+    if (step is None) != (total is None):
+        raise click.UsageError("--flops-baseline-step and --flops-baseline-total must be provided together")
+    return None if step is None or total is None else FlopsBaseline(step, total)

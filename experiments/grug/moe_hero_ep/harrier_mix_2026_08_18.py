@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import BlockShuffleConfig, DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -41,6 +41,7 @@ HARRIER_MIX_2026_08_18_TAG = "harrier-mix-2026.08.18-to-996f4891"
 # training-FLOP budget the run is expensive enough that we want maximally-real data over a simulated
 # larger run, so it trains on the raw mixture instead.
 SIMULATED_EPOCHING_MAX_FLOPS = 1e23
+_SHUFFLE_BLOCK_TOKENS = 2**20
 
 HARRIER_MIX_2026_08_18_STORE = ArtifactStep.adopt(
     "datakit/store/harrier-all-sources-k40-q5-fuzzy-dedup-exempt16",
@@ -101,6 +102,13 @@ def _validate_spec(spec: _HarrierMixSpec) -> None:
 _validate_spec(_SPEC)
 
 
+def harrier_mixture_stage_steps(total_steps: int, batch_size: int) -> tuple[int, int]:
+    """Return the main-mixture and cooldown start steps after mixture-block alignment."""
+    step_multiple = _MIXTURE_BLOCK_SIZE // math.gcd(_MIXTURE_BLOCK_SIZE, batch_size)
+    switch_step = math.ceil(total_steps * _MIXTURE_SWITCH_FRACTION / step_multiple) * step_multiple
+    return switch_step, _phase_1_start_step(total_steps, batch_size)
+
+
 def harrier_mix_2026_08_18_data_config(
     *,
     ctx: StepContext,
@@ -119,6 +127,8 @@ def harrier_mix_2026_08_18_data_config(
     raw mixture rather than a simulated larger budget.
     """
     available_tokens = dict(_SPEC.available_tokens)
+    if _SHUFFLE_BLOCK_TOKENS % max_seq_len:
+        raise ValueError(f"Sequence length {max_seq_len} must divide {_SHUFFLE_BLOCK_TOKENS} shuffle-block tokens")
     phase_weights = tuple(dict(weights) for weights in _SPEC.phase_weights)
     components = {
         cell: DatasetComponent(
@@ -148,9 +158,7 @@ def harrier_mix_2026_08_18_data_config(
         enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
     )
 
-    step_multiple = _MIXTURE_BLOCK_SIZE // math.gcd(_MIXTURE_BLOCK_SIZE, batch_size)
-    switch_step = math.ceil(total_steps * _MIXTURE_SWITCH_FRACTION / step_multiple) * step_multiple
-    cooldown_step = _phase_1_start_step(total_steps, batch_size)
+    switch_step, cooldown_step = harrier_mixture_stage_steps(total_steps, batch_size)
     val_zero_weights = {name: 0.0 for name in val_components}
     # A short diagnostic can round both transitions to the same block; cooldown wins there.
     stages = {
@@ -163,6 +171,15 @@ def harrier_mix_2026_08_18_data_config(
         components={**components, **val_components},
         train_weights=sorted(stages.items()),
         auto_build_caches=False,
+        # Preserve the outer token-block permutation across context changes. The permutation
+        # inside each window still changes, so an in-progress window can repeat or omit tokens.
+        shuffle=BlockShuffleConfig(
+            io_block_size=_SHUFFLE_BLOCK_TOKENS // max_seq_len,
+            window_blocks=512,
+            perm_type="feistel",
+        ),
+        # Keep the per-cell rounding of mixture weights unchanged. Rescaling this block with
+        # context length changes realized weights; retaining it can shift stage boundaries.
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
         target_budget=target_budget,
         experiment_budget=experiment_budget,
