@@ -20,7 +20,7 @@ from zephyr.dataset import Dataset
 from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
 from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, EmbeddingAttrData
 from experiments.datakit.execution import run_steps_in_pool
-from experiments.datakit.reference_pipeline import DriverPlacement, stage_driver
+from experiments.datakit.reference_pipeline import DriverPlacement, coordinator_source_steps, stage_driver
 
 
 @pytest.fixture
@@ -50,7 +50,17 @@ def shared_pool(tmp_path, monkeypatch):
         client.shutdown()
 
 
-def test_shared_pool_downloads_and_normalizes_source(tmp_path, shared_pool):
+@pytest.mark.parametrize(
+    ("placement", "step_resources", "expected_jobs"),
+    [
+        (DriverPlacement.COORDINATOR, None, 0),
+        (DriverPlacement.COORDINATOR, ResourceConfig(cpu=1, ram="2g"), 0),
+        (DriverPlacement.REMOTE, None, 1),
+    ],
+)
+def test_source_driver_placement_preserves_outputs_and_caches(
+    tmp_path, shared_pool, monkeypatch, placement, step_resources, expected_jobs
+):
     source = tmp_path / "source"
     source.mkdir()
     pq.write_table(
@@ -64,6 +74,7 @@ def test_shared_pool_downloads_and_normalizes_source(tmp_path, shared_pool):
     )
     download = StepSpec(
         name="download",
+        resources=step_resources,
         fn=remote(
             lambda output_path: download_hf(
                 DownloadConfig(
@@ -77,15 +88,30 @@ def test_shared_pool_downloads_and_normalizes_source(tmp_path, shared_pool):
     )
     normalized = normalize_step(name="normalize", download=download, file_extensions=(".parquet",))
     pool, groups = shared_pool
+    submitted = []
+    submit = pool.client.submit
+
+    def record_submit(request):
+        submitted.append(request.name)
+        return submit(request)
+
+    monkeypatch.setattr(pool.client, "submit", record_submit)
     initial_groups = list(groups)
-    run_steps_in_pool([normalized], pool=pool, max_concurrent=2)
+    sources = {"source": normalized}
+    if placement is DriverPlacement.COORDINATOR:
+        sources = coordinator_source_steps(sources)
+    run_steps_in_pool(list(sources.values()), pool=pool, max_concurrent=2)
     assert groups == initial_groups
+    assert len(submitted) == expected_jobs
     artifact = read_artifact(normalized.output_path, NormalizedData)
     result = pq.read_table(artifact.main_output_dir).to_pylist()
     assert sorted(row["text"] for row in result) == [
         "Each source uses the same worker pool.",
         "Shared pools retain the original document text.",
     ]
+    submitted.clear()
+    run_steps_in_pool([normalized], pool=pool, max_concurrent=2)
+    assert submitted == []
 
 
 def test_centroid_sampling_threads_use_shared_pool(tmp_path, shared_pool):

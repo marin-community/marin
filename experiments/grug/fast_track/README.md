@@ -187,7 +187,7 @@ It processes the selected sources without a token limit.
 DataKit uses one fixed CPU worker pool for all Zephyr stages, including source
 download, normalization, embedding, quality scoring, deduplication, and store
 construction. Source recipes retain their task resource requests. The pipeline
-coordinator runs the embedding, quality, assignment, and centroid-sampling drivers
+coordinator runs source-recipe, embedding, quality, assignment, and centroid-sampling drivers
 with bounded concurrency. These drivers do not create per-source Iris jobs.
 Centroid training remains a separate CPU job. Model training uses a separate 8×H100 job.
 The pipeline coordinator requests 8 CPUs and 32 GB RAM. The data pool contains
