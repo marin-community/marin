@@ -52,8 +52,8 @@ def session_start(task: TaskSpec, convention: Submission) -> SessionStart:
         messages = request.pop("messages")
         options = request
     if task.environment.kind != EnvironmentKind.NULL:
-        if task.final_tools:
-            raise ValueError("Executable tasks expose the Shellbox shell tool only")
+        if any(function.name == SHELL_TOOL_NAME for function in task.final_tools):
+            raise ValueError("The shell tool name is reserved for executable tasks")
         options.setdefault("tools", []).append(
             {
                 "type": "function",
@@ -124,8 +124,11 @@ class _ShellboxTaskSession:
         if self.machine is None or not isinstance(message, AssistantToolCalls) or turn.stop_reason == LENGTH_STOP_REASON:
             return Transition(done=True)
         observations = []
+        final_tools = {function.name for function in self.task.final_tools}
         for call in message.calls:
-            if self.convention.answer_format == AnswerFormat.ANSWER_CALL and call.name == ANSWER_CALL_NAME:
+            if call.name in final_tools or (
+                self.convention.answer_format == AnswerFormat.ANSWER_CALL and call.name == ANSWER_CALL_NAME
+            ):
                 return Transition(done=True)
             if call.name != SHELL_TOOL_NAME or set(call.arguments) != {"command"}:
                 observations.append(
