@@ -646,6 +646,24 @@ class KueueConfig(_Config):
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
 
 
+class NodeStorageHealthConfig(_Config):
+    """Opt-in regional S3 viability probes and bounded automatic quarantine."""
+
+    scratch_prefix: str
+    interval: float = Field(default=60, gt=0)
+    timeout: float = Field(default=15, gt=0)
+    failure_threshold: int = Field(default=3, ge=2)
+    max_cordoned_nodes: int = Field(default=1, ge=0)
+    minimum_healthy_peers: int = Field(default=2, ge=1)
+
+    @field_validator("scratch_prefix")
+    @classmethod
+    def _s3_prefix(cls, value: str) -> str:
+        if not value.startswith("s3://") or not value.removeprefix("s3://").partition("/")[2].strip("/"):
+            raise ValueError("scratch_prefix must be an s3://bucket/prefix dedicated to health probes")
+        return value.rstrip("/")
+
+
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
@@ -654,6 +672,7 @@ class KubernetesProviderConfig(_Config):
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
+    storage_health: NodeStorageHealthConfig | None = None
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass

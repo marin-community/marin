@@ -34,7 +34,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.config import NodeStorageHealthConfig, TaskOutputPolicy
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -57,6 +57,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
@@ -2332,6 +2333,7 @@ class K8sTaskProvider:
     # but these LISTs run at most once per cluster_scan_interval to bound kubectl
     # load. New-pod application (dispatch) is NOT gated — it runs every tick.
     # Tests set this to 0.0 so every reconcile scans.
+    storage_health: NodeStorageHealthConfig | None = None
     cluster_scan_interval: float = 5.0
     _pod_unresolved_counts: dict[RunningTaskEntry, int] = field(default_factory=dict, init=False, repr=False)
     # The disruption condition last seen on an attempt's pod, keyed by the
@@ -2481,6 +2483,8 @@ class K8sTaskProvider:
         if now - self._last_cluster_scan < self.cluster_scan_interval:
             return apply_failures
         self._last_cluster_scan = now
+        if self.storage_health is not None:
+            reconcile_storage_health(self.kubectl, self.storage_health)
 
         # Single pod list for the entire cycle — excludes terminal pods via field selector.
         managed_pods = self.kubectl.list_json(

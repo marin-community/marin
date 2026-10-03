@@ -24,6 +24,7 @@ from iris.cluster.config import (
     IrisClusterConfig,
     KubernetesProviderConfig,
     KueueConfig,
+    NodeStorageHealthConfig,
     PlatformConfig,
     ScaleGroupConfig,
     SliceConfig,
@@ -1087,3 +1088,24 @@ def test_iris_priority_class_manifest_rejects_unknown_band():
 def _apply_stub(k8s: InMemoryK8sService, kind: str, name: str, namespace: str = "iris") -> None:
     """Apply a minimal stub resource into the in-memory K8s store."""
     k8s.apply_json({"kind": kind, "metadata": {"name": name, "namespace": namespace}, "spec": {}})
+
+
+def test_storage_health_agent_receives_task_storage_credentials_and_rolls_on_config_change():
+    provider, k8s = _make_provider()
+    config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    config.kubernetes_provider.storage_health = NodeStorageHealthConfig(scratch_prefix="s3://test-bucket/health")
+    config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://regional.example"
+    _seed_prerequisites(k8s, config)
+    provider.start_controller(config)
+    agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
+    container = agent["spec"]["containers"][0]
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env"}}]
+    assert {"name": "AWS_ENDPOINT_URL", "value": "https://regional.example"} in container["env"]
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    assert "AWS_ACCESS_KEY_ID" in secret["data"]
+    assert not any(item["name"] == "AWS_ACCESS_KEY_ID" for item in container["env"])
+    config.kubernetes_provider.storage_health.failure_threshold = 4
+    provider.start_controller(config)
+    changed = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
+    assert changed["metadata"]["annotations"] != agent["metadata"]["annotations"]
+    provider.shutdown()
