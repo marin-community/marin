@@ -21,3 +21,10 @@ harbor_harness_profiles:
 
 harbor_eval_harness_profiles:
   bixbench-pi: pi-65k-16k
+
+# This model's Terminal-Bench serving arm was validated at the exact agent
+# context/output limits. Selection is benchmark-specific; neither launcher nor
+# refill manager changes the serving settings in these canonical YAML files.
+model_config_overrides:
+  IFM-K2-Horizon-MoVA-36B-A4B:
+    tb2-recovery: ablations/k2/model-recommended-tb2.yaml

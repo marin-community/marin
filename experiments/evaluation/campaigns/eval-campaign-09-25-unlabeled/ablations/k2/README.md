@@ -70,3 +70,34 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 Replace only the two config paths and arm letter for B–F as mapped above.
+
+## Selected policy-compatible candidate
+
+The matched grid closed at A 7/10, B 0/10, C 8/10, D 9/10, and F 0/10.
+Arm E had five successes and four zeros among nine completed trials when its
+last trial entered a verifier-runtime retry. B and F each had ten agent
+timeouts with substantial model output and no recorded transport or sandbox
+failure in the ten audited trajectories. B differs from A only in topology,
+so TP2/DP4/EP8 is sufficient to reproduce the collapse; eager execution does
+not rescue it. The paired full HumanEval+ TP2/DP4 arms scored 76/164 without
+HF position overrides and 75/164 with them, so those overrides are not the
+main cause on the current grader.
+
+An additional compiled TP2/DP1 arm with native HF positions, 65,536-token
+serving context, and the draft policy's 16,384-token output cap scored **9/10**
+on the same ten tasks. Its only zero was a scoreable 30-minute agent timeout
+on `build-pov-ray`. The result is at
+`s3://marin-us-east-02a/marin/evals/20261003-164550-K2-Horizon-screen-tp2-dp1-high-65k-16k-tb2-ten-old-wins-e79a/results/harbor_jobs/harbor_terminal-bench_terminal-bench-2-_e217262a908e/result.json`.
+This single-trial subset is not a release score, but it does not justify a
+K2-specific 8k output-cap exception.
+
+The campaign's default K2 config uses the same tested TP2/DP1 serving setup
+with 73,728 served tokens for the full single-turn Evalchemy budgets. The
+`campaign.yaml` override selects `model-recommended-tb2.yaml` with the
+canonical three-trial `harbor-configs/tb2-recovery.yaml`. The TB2 config
+differs from the scored 9/10 diagnostic
+model config only in its `thinking_off_template_kwargs` (`low` rather than
+`high`), which Terminal-Bench does not request; its effective agent reasoning
+remains `high`. It uses compiled TP2/DP1, native HF position settings, and the
+same 65k/16k context and output limits as the release policy. Do not assign a
+policy label until the full benchmark has actually run and passed conformance.

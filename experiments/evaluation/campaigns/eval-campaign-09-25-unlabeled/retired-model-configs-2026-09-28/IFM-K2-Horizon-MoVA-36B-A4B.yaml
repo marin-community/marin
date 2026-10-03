@@ -16,11 +16,8 @@ resource_hint:
   memory: 512g
 serve:
   tensor_parallel_size: 2
-  # Four replicas keep the policy's 16 concurrent Evalchemy requests to roughly four
-  # requests per replica.  At TP2-only, long K2 reasoning generations exceeded the
-  # client's 30-minute transport timeout, while the abandoned server requests kept
-  # running and amplified retries.  Data parallelism changes serving throughput only;
-  # context, prompts, sampling, and generation budgets remain unchanged.
+  # Retired: controlled October 3 screens found that TP2/DP4 can corrupt K2
+  # generations even with eager execution and the older 8k output cap.
   data_parallel_size: 4
   max_model_len: 73728
   vllm_extra_args:
