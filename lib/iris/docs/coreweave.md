@@ -568,7 +568,11 @@ that key after a timeout. The deadline covers the entire subprocess, including
 DNS, credentials, SDK retries, and cleanup. Successful and configuration-error
 probes reset the consecutive-failure count. Read/write/delete permissions are
 required. Agents receive the same task environment Secret and cluster literals
-as tasks; individual job environment overrides are outside this check.
+as tasks; individual job environment overrides are outside this check. Deployment
+injects an `environment_revision` derived from the Secret UID/resource version
+and task literals. Credential or endpoint changes roll the agents, and old
+reports cannot corroborate probes from the new environment. Do not set this
+revision by hand; it contains no Secret values.
 
 Agents report on `iris.marin.community/storage-health`, independently of
 Finelog. Failures also appear in node-agent logs, without SDK exception bodies

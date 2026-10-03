@@ -10,6 +10,7 @@ Worker pods and node scaling are handled by K8sTaskProvider.
 """
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -524,6 +525,24 @@ class K8sControllerProvider:
         default_env.update(collect_inject_env(config.defaults.inject_env))
         if default_env or config.kubernetes_provider.storage_health is not None:
             self.ensure_task_env_secret(default_env)
+
+        if config.kubernetes_provider.storage_health is not None:
+            # envFrom is captured at pod startup. A Secret revision rolls agents
+            # and fences old reports without copying credential values into config.
+            secret = self._kubectl.get_json(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
+            assert secret is not None
+            environment_revision = hashlib.sha256(
+                json.dumps(
+                    [secret["metadata"]["uid"], secret["metadata"]["resourceVersion"], config.defaults.task_env],
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            health = config.kubernetes_provider.storage_health.model_copy(
+                update={"environment_revision": environment_revision}
+            )
+            config = config.model_copy(
+                update={"kubernetes_provider": config.kubernetes_provider.model_copy(update={"storage_health": health})}
+            )
 
         signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
         if self._prepared_controller_env is None or self.signing_key_spec != signing_key_spec:
