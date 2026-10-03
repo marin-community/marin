@@ -1053,7 +1053,7 @@ class GrugModelConfig:
     moe_shadow_width: int = 0
     """Width of a detached per-layer ReLU^2 MLP trained on ``sg(shared input) -> sg(routed output)`` (0: off).
     Its gradient reaches only its own weights, so training is unchanged; its explained variance of the routed
-    output (``train/compress/shadow_r2_L*``) measures how much of it a shared-sized expert could absorb."""
+    output (``train/aux/compress/shadow_r2_L*``) measures how much of it a shared-sized expert could absorb."""
     moe_compress: MoeCompress = MoeCompress.NONE
     moe_compress_weight: float = 0.0
     """Per-MoE-layer weight of the ``moe_compress`` term (summed over layers)."""
@@ -7234,10 +7234,10 @@ class Transformer(eqx.Module):
                 summarized_metrics["train/aux/erc_loss"] = erc_loss
                 summarized_metrics.update(erc_ratios)
             if compress_loss is not None:
-                summarized_metrics["train/compress/loss"] = jnp.sum(compress_loss)
+                summarized_metrics["train/aux/compress/loss"] = jnp.sum(compress_loss)
                 for name, per_layer in compress_stats.items():
                     for i in range(per_layer.shape[0]):
-                        summarized_metrics[f"train/{name}_L{i}"] = per_layer[i]
+                        summarized_metrics[f"train/aux/{name}_L{i}"] = per_layer[i]
             if nitp_loss is not None:
                 summarized_metrics["train/aux/nitp_loss"] = nitp_loss
                 summarized_metrics["train/aux/nitp_cos"] = nitp_cos

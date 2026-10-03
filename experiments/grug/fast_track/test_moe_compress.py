@@ -72,6 +72,6 @@ def test_shadow_r2_is_logged_per_layer():
         _, metrics = eqx.filter_jit(
             lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape), train_terms=True, return_router_metrics=True)
         )(model)
-    r2 = [float(metrics[f"train/compress/shadow_r2_L{i}"]) for i in range(2)]
+    r2 = [float(metrics[f"train/aux/compress/shadow_r2_L{i}"]) for i in range(2)]
     assert all(np.isfinite(r2)) and all(v < 1.0 for v in r2)
-    assert 0.0 < float(metrics["train/compress/r_share_L0"]) < 10.0
+    assert 0.0 < float(metrics["train/aux/compress/r_share_L0"]) < 10.0
