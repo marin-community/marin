@@ -14,3 +14,11 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 Change only the model-config basename and description to run the other three arms (`tp2-dp1-high`, `tp2-dp4-low`, and `tp2-dp4-high`). The TP2/DP4 configs otherwise match the TP2/DP1 pair, so they isolate the MoE topology change. Do not use `--version` or a policy label.
+
+After a serving arm recovers on the full cheap benchmarks, screen it against
+`tb2-ten-old-wins.yaml`. The filter is the first ten task names in sorted order
+among the 30 tasks K2 solved in the September 24 Terminal-Bench archive; all
+ten are present in the new dataset at ref 6. It uses one trial per task to
+limit diagnostic cost. The release benchmark remains the unfiltered,
+three-trial `harbor-configs/tb2-recovery.yaml`; do not report the diagnostic
+subset as a policy score.
