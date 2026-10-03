@@ -880,6 +880,154 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
 }
 
 #[tokio::test]
+async fn structured_histogram_round_trips_alongside_scalar_histogram() {
+    let store = disk_store("telemetry-structured-histogram");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "e5e59e73-fd83-4842-9537-85097293a5ce";
+    let exact_count = (1_i64 << 53) + 1;
+    let body = serde_json::to_vec(&json!({
+        "version": 1,
+        "batch_id": batch_id,
+        "resource": {"service": "marinskyrl", "attributes": {"run_id": "run-histogram"}},
+        "records": [
+            {
+                "timestamp_ms": 1_700_000_000_000_i64,
+                "kind": "histogram",
+                "name": "request_queue_time_seconds",
+                "unit": "s",
+                "body": {
+                    "encoding": "explicit_bucket_v1",
+                    "aggregation_temporality": "cumulative",
+                    "explicit_bounds": [0.01, 0.1],
+                    "bucket_counts": [exact_count, 2, 3],
+                    "count": exact_count + 5,
+                    "sum": 42.5,
+                    "producer_epoch": "engine-incarnation-1",
+                    "sequence": 7
+                },
+                "attributes": {"engine": "engine-a", "metric_source": "vllm"}
+            },
+            {
+                "timestamp_ms": 1_700_000_000_001_i64,
+                "kind": "histogram",
+                "name": "ras_poll_duration_seconds",
+                "unit": "s",
+                "value": 0.25,
+                "attributes": {}
+            },
+            {
+                "timestamp_ms": 1_700_000_000_002_i64,
+                "kind": "histogram",
+                "name": "request_duration_seconds",
+                "unit": "s",
+                "body": {
+                    "encoding": "explicit_bucket_v1",
+                    "aggregation_temporality": "cumulative",
+                    "explicit_bounds": [0.1],
+                    "bucket_counts": [2, 1],
+                    "count": 3,
+                    "sum": 0.2
+                },
+                "attributes": {}
+            }
+        ]
+    }))
+    .unwrap();
+
+    let response = post(
+        &client,
+        addr,
+        body,
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{:?}", response.payload);
+    store
+        .await_persisted("telemetry_v1.marinskyrl", 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let rows = query(
+        &store,
+        "SELECT value, body_json FROM \"telemetry_v1.marinskyrl\" ORDER BY record_index",
+    )
+    .await;
+    assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 3);
+    let values = rows[0]
+        .column(0)
+        .as_primitive::<arrow::datatypes::Float64Type>();
+    let bodies = rows[0].column(1).as_string::<i32>();
+    assert!(values.is_null(0));
+    let point: Value = serde_json::from_str(bodies.value(0)).unwrap();
+    assert_eq!(point["bucket_counts"][0].as_i64(), Some(exact_count));
+    assert_eq!(point["count"].as_i64(), Some(exact_count + 5));
+    assert!(bodies.is_null(1));
+    assert_eq!(values.value(1), 0.25);
+    let generic: Value = serde_json::from_str(bodies.value(2)).unwrap();
+    assert_eq!(generic["bucket_counts"], json!([2, 1]));
+    assert!(generic.get("producer_epoch").is_none());
+}
+
+#[tokio::test]
+async fn malformed_structured_histograms_are_rejected() {
+    let store = disk_store("telemetry-invalid-structured-histogram");
+    let (addr, _) = serve(store, AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "f0df64c8-9117-4ae9-8e64-24dfc72f3d66";
+    let valid_body = json!({
+        "encoding": "explicit_bucket_v1",
+        "aggregation_temporality": "cumulative",
+        "explicit_bounds": [0.1],
+        "bucket_counts": [2, 1],
+        "count": 3,
+        "sum": 0.2,
+        "producer_epoch": "engine-incarnation-1",
+        "sequence": 1
+    });
+    let mut wrong_total = valid_body.clone();
+    wrong_total["count"] = json!(4);
+    let mut oversized_integer = valid_body.clone();
+    oversized_integer["bucket_counts"] = json!([(i64::MAX as u64) + 1, 0]);
+    oversized_integer["count"] = json!((i64::MAX as u64) + 1);
+    let mut invalid_bounds = valid_body;
+    invalid_bounds["explicit_bounds"] = json!([0.1, 0.1]);
+    invalid_bounds["bucket_counts"] = json!([1, 1, 1]);
+
+    for histogram_body in [wrong_total, oversized_integer, invalid_bounds] {
+        let body = serde_json::to_vec(&json!({
+            "version": 1,
+            "batch_id": batch_id,
+            "resource": {"service": "marinskyrl", "attributes": {}},
+            "records": [{
+                "timestamp_ms": 1_700_000_000_000_i64,
+                "kind": "histogram",
+                "name": "request_queue_time_seconds",
+                "body": histogram_body,
+                "attributes": {"engine": "engine-a"}
+            }]
+        }))
+        .unwrap();
+        let response = post(
+            &client,
+            addr,
+            body,
+            Some(batch_id),
+            Some("application/json"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{:?}",
+            response.payload
+        );
+    }
+}
+
+#[tokio::test]
 async fn automated_levanter_telemetry_stays_in_its_service_namespace() {
     let store = disk_store("telemetry-client-namespace");
     let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
