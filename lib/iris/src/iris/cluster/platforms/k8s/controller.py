@@ -323,6 +323,8 @@ def _build_node_agent_daemonset(
     image: str,
     cache_dir: str,
     cache_max_age: Duration | None = None,
+    storage_health_env: dict[str, str] | None = None,
+    storage_health_config: str = "disabled",
 ) -> dict:
     """Run the Iris physical-node collector once on every Kubernetes node."""
     volume_mounts = [
@@ -347,9 +349,14 @@ def _build_node_agent_daemonset(
                 "metadata": {
                     "labels": {"app": _NODE_AGENT_NAME},
                     "annotations": {
+                        **(
+                            {"iris.marin.community/storage-health-config": storage_health_config}
+                            if storage_health_env is not None
+                            else {}
+                        ),
                         "iris.marin.community/cache-max-age-ms": (
                             str(cache_max_age.to_ms()) if cache_max_age is not None else "disabled"
-                        )
+                        ),
                     },
                 },
                 "spec": {
@@ -371,7 +378,13 @@ def _build_node_agent_daemonset(
                                 "k8s",
                                 "--config=/etc/iris/config.json",
                             ],
+                            **(
+                                {"envFrom": [{"secretRef": {"name": TASK_ENV_SECRET_NAME}}]}
+                                if storage_health_env is not None
+                                else {}
+                            ),
                             "env": [
+                                *[{"name": key, "value": value} for key, value in (storage_health_env or {}).items()],
                                 {
                                     "name": IRIS_NODE_NAME_ENV,
                                     "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
@@ -564,7 +577,7 @@ class K8sControllerProvider:
         if self._s3_enabled:
             default_env.update(self._s3_task_env())
         default_env.update(collect_inject_env(config.defaults.inject_env))
-        if default_env:
+        if default_env or config.kubernetes_provider.storage_health is not None:
             self.ensure_task_env_secret(default_env)
         self.ensure_egress_network_policies(config)
 
@@ -594,6 +607,14 @@ class K8sControllerProvider:
                 image=config.controller.image,
                 cache_dir=cache_dir,
                 cache_max_age=config.kubernetes_provider.cache_max_age,
+                storage_health_env=(
+                    dict(config.defaults.task_env) if config.kubernetes_provider.storage_health is not None else None
+                ),
+                storage_health_config=(
+                    config.kubernetes_provider.storage_health.model_dump_json()
+                    if config.kubernetes_provider.storage_health is not None
+                    else "disabled"
+                ),
             )
         )
         logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)

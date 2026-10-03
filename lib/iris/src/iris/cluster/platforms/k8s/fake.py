@@ -553,6 +553,16 @@ class InMemoryK8sService:
         """Insert a pod in an arbitrary namespace (outside the service's own)."""
         self._namespaced_pods[(namespace, name)] = manifest
 
+    def patch_node(self, name: str, patch: dict) -> None:
+        self._check_failure("patch_node")
+        node = self._resources[(K8sResource.NODES.plural, name)]
+        metadata = patch.get("metadata", {})
+        expected = metadata.get("resourceVersion")
+        if expected is not None and expected != node["metadata"].get("resourceVersion"):
+            raise KubectlError("node resourceVersion conflict")
+        node["metadata"].setdefault("annotations", {}).update(metadata.get("annotations", {}))
+        node.setdefault("spec", {}).update(patch.get("spec", {}))
+
     # -- Protocol methods --
 
     def _check_failure(self, operation: str) -> None:
