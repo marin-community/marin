@@ -7,7 +7,7 @@ import logging
 import math
 from dataclasses import dataclass
 
-from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store
+from marin.datakit.sft_text import SftInput, SftTokenStore, build_sft_store
 from marin.datakit.sft_sources import all_sft_sources
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext

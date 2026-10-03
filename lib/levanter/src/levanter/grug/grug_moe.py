@@ -63,6 +63,7 @@ from levanter.grug.sharding import (
     _reshard_for_init,
     _reshard_for_shard_map,
     _value_spec_or_default,
+    unshard,
 )
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -287,8 +288,8 @@ class QBRoutedMoE(eqx.Module):
 
         with jax.named_scope("moe_route"):
             router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
-            bias = reshard(router_bias, P(None))
-            biased_logits = router_logits + jax.lax.stop_gradient(bias)
+            # A loaded [E] bias may be data-sharded; replicate it before broadcasting over data-sharded tokens.
+            biased_logits = router_logits + jax.lax.stop_gradient(unshard(router_bias))
             router_probs = jax.nn.softmax(router_logits, axis=-1)
             topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
             qb_alpha = topk_logits[:, -1:]

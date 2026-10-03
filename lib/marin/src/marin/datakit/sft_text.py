@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare masked Harmony conversation stores for packed Snowball SFT."""
+"""Prepare conversation stores and mix them in proportion to packed sequence counts."""
 
 import hashlib
 import json
@@ -9,18 +9,20 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 
+import fsspec
 import numpy as np
 from fray.types import ResourceConfig
 from haliax import Axis
+from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.datasets import (
-    ChatDataset,
     ConcatDatasetComponent,
     DatasetComponent,
     DatasetComponentBase,
     LmDataConfig,
+    PackedTokenDataset,
     UrlDatasetSourceConfig,
 )
-from levanter.data.text.formats import ChatLmDatasetFormat, ChatProcessor
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import TreeCache
 from levanter.tokenizers import load_tokenizer
 from pydantic import BaseModel
@@ -29,11 +31,8 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import load_parquet
 
-from marin.datakit.chat_render import chat_training_record
 from marin.execution.artifact import Artifact, write_artifact
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
-
-SOURCE_COUNTS_DIR = "source-counts"
 
 
 @dataclass(frozen=True)
@@ -45,7 +44,6 @@ class SftInput:
 class SftSourceCounts(BaseModel):
     conversations: int = 0
     tokens: int = 0
-    assistant_tokens: int = 0
     overlength_conversations: int = 0
     overlength_tokens: int = 0
 
@@ -53,7 +51,6 @@ class SftSourceCounts(BaseModel):
 class SftTokenStore(Artifact):
     cache_path: str
     tokenizer: str
-    chat_template: str
     max_length: int
     seed: int
     sources: dict[str, SftSourceCounts]
@@ -62,7 +59,7 @@ class SftTokenStore(Artifact):
 
 def _read_source_file(source: SftInput) -> Iterator[dict]:
     for row in load_parquet(source.path):
-        yield {**chat_training_record(row), "source": source.name}
+        yield {"id": row["id"], "source": source.name, "text": row["text"]}
 
 
 def _shuffle_key(record: dict, seed: int) -> str:
@@ -80,16 +77,10 @@ def _tokenize_conversations(
     shard: ShardInfo,
     *,
     tokenizer: str,
-    chat_template: str,
     max_length: int,
     output_path: str,
 ) -> Iterator[dict]:
-    processor = ChatProcessor(
-        load_tokenizer(tokenizer),
-        chat_template=chat_template,
-        system_prompt_field=None,
-        mask_user_turns=True,
-    )
+    processor = BatchTokenizer(load_tokenizer(tokenizer), enforce_bos=True, enforce_eos=True)
     counts: dict[str, SftSourceCounts] = {}
     for batch in batches:
         for row, encoded in zip(batch, processor(batch), strict=True):
@@ -101,9 +92,8 @@ def _tokenize_conversations(
                 continue
             count.conversations += 1
             count.tokens += length
-            count.assistant_tokens += int(np.count_nonzero(encoded["assistant_masks"]))
             yield {"id": row["id"], **encoded}
-    path = prefix_join(output_path, f"{SOURCE_COUNTS_DIR}/{shard.shard_idx:05d}.json")
+    path = prefix_join(output_path, f"source-counts/{shard.shard_idx:05d}.json")
     StoragePath(path).write_text(json.dumps({name: count.model_dump() for name, count in counts.items()}))
 
 
@@ -112,43 +102,33 @@ def build_sft_store(
     *,
     output_path: str,
     tokenizer: str,
-    chat_template: str,
     max_length: int,
     seed: int,
     num_shards: int,
     max_workers: int,
 ) -> SftTokenStore:
-    """Shuffle normalized Harmony sources into a masked chat token store.
+    """Shuffle normalized sources into one store, retaining one row per conversation.
 
-    Assistant analysis and final spans receive loss; user text is context only.
-    Conversations longer than ``max_length`` are excluded and counted. Source
-    shares follow retained data volume without resampling.
+    Conversations longer than ``max_length`` after BOS/EOS insertion are excluded
+    and counted. Source shares follow retained data volume without resampling.
     """
     if max_length < 2 or num_shards < 1 or max_workers < 1:
         raise ValueError("max_length must be >= 2; num_shards and max_workers must be positive")
-    if not chat_template:
-        raise ValueError("chat_template must be specified for SFT tokenization")
     if not sources or len({source.name for source in sources}) != len(sources):
         raise ValueError("SFT sources must be nonempty and have distinct names")
     files = []
     for source in sources:
-        paths = StoragePath(prefix_join(source.path, "*.parquet")).glob()
+        paths = fsspec.open_files(prefix_join(source.path, "*.parquet"), mode="rb")
         if not paths:
             raise FileNotFoundError(f"No normalized Parquet shards for {source.name}: {source.path}")
-        files.extend(SftInput(source.name, str(path)) for path in paths)
+        files.extend(SftInput(source.name, path.full_name) for path in paths)
     rows = (
         Dataset.from_list(files)
         .flat_map(_read_source_file)
         .group_by(key=partial(_shuffle_key, seed=seed), reducer=_keep_rows, num_output_shards=num_shards)
     )
     tokenized = rows.window(16).map_shard(
-        partial(
-            _tokenize_conversations,
-            tokenizer=tokenizer,
-            chat_template=chat_template,
-            max_length=max_length,
-            output_path=output_path,
-        )
+        partial(_tokenize_conversations, tokenizer=tokenizer, max_length=max_length, output_path=output_path)
     )
     cache_path = prefix_join(output_path, "train")
     ledger = build_from_datasets(
@@ -158,11 +138,11 @@ def build_sft_store(
         dataset=tokenized,
         output_path=cache_path,
         batch_size=128,
-        skip_existing=True,
+        skip_existing=False,
     )
     counts = {source.name: SftSourceCounts() for source in sources}
     for shard in range(num_shards):
-        path = prefix_join(output_path, f"{SOURCE_COUNTS_DIR}/{shard:05d}.json")
+        path = prefix_join(output_path, f"source-counts/{shard:05d}.json")
         for name, values in json.loads(StoragePath(path).read_text()).items():
             previous = counts[name]
             counts[name] = SftSourceCounts(**{key: getattr(previous, key) + value for key, value in values.items()})
@@ -173,18 +153,16 @@ def build_sft_store(
     write_stats_json(cache_path, ledger)
     packed_sequences = 0
     if ledger.total_num_rows:
-        cache = TreeCache.load(
-            cache_path,
-            {"input_ids": np.zeros(0, dtype=np.int32), "assistant_masks": np.zeros(0, dtype=np.int32)},
-        )
+        cache = TreeCache.load(cache_path, {"input_ids": np.zeros(0, dtype=np.int32)})
         packed_sequences = len(
-            ChatDataset(cache, Axis("position", max_length), max_segments_per_example=max_length).as_sync_dataset()
+            PackedTokenDataset(
+                cache, Axis("position", max_length), max_segments_per_example=max_length
+            ).as_sync_dataset()
         )
     result = SftTokenStore(
         path=output_path,
-        cache_path=cache_path,
+        cache_path=output_path,
         tokenizer=tokenizer,
-        chat_template=chat_template,
         max_length=max_length,
         seed=seed,
         sources=counts,
@@ -205,10 +183,9 @@ def sft_data_config(stores: Mapping[str, SftTokenStore], *, minimum_weight: floa
     if not stores or not 0 < minimum_weight <= 1:
         raise ValueError("SFT stores must be nonempty and minimum_weight must be in (0, 1]")
     tokenizers = {store.tokenizer for store in stores.values()}
-    chat_templates = {store.chat_template for store in stores.values()}
     lengths = {store.max_length for store in stores.values()}
-    if len(tokenizers) != 1 or len(chat_templates) != 1 or len(lengths) != 1:
-        raise ValueError("SFT stores must share a tokenizer, chat template, and packing context length")
+    if len(tokenizers) != 1 or len(lengths) != 1:
+        raise ValueError("SFT stores must share a tokenizer and packing context length")
     total = sum(store.packed_sequences for store in stores.values())
     if total == 0:
         raise ValueError("No conversations fit the SFT context length")
@@ -222,8 +199,7 @@ def sft_data_config(stores: Mapping[str, SftTokenStore], *, minimum_weight: floa
         component = DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[], validation_urls=[]),
             cache_dir=store.cache_path,
-            flat_cache=True,
-            format=ChatLmDatasetFormat(chat_template=store.chat_template, mask_user_turns=True),
+            format=TextLmDatasetFormat(),
             pack=store.max_length,
         )
         if store.packed_sequences / total < minimum_weight:

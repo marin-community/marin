@@ -97,6 +97,8 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
+    "streamer_concurrency": "--streamer-concurrency",
+    "streamer_s3_request_timeout_ms": "--streamer-s3-request-timeout-ms",
 }
 _LEVANTER_ONLY_OPTIONS = {
     "max_seqs": "--max-seqs",
@@ -371,6 +373,18 @@ def _mint_and_print_capability_url(
 )
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
 @click.option(
+    "--streamer-concurrency",
+    type=click.IntRange(min=1),
+    default=None,
+    help="RunAI model-streamer object-store reader count in each serving worker.",
+)
+@click.option(
+    "--streamer-s3-request-timeout-ms",
+    type=click.IntRange(min=1),
+    default=None,
+    help="RunAI model-streamer S3 low-throughput timeout in each serving worker, in milliseconds.",
+)
+@click.option(
     "--vllm-metrics-config",
     type=click.Path(path_type=Path, dir_okay=False),
     default=None,
@@ -441,6 +455,8 @@ def main(
     instances: int,
     broker: bool,
     vllm_args: tuple[str, ...],
+    streamer_concurrency: int | None,
+    streamer_s3_request_timeout_ms: int | None,
     vllm_metrics_config: Path | None,
     vllm_version: str,
     vllm_source: str,
@@ -537,10 +553,16 @@ def main(
     setup_scripts = None
     if workspace_dir is None:
         setup_scripts = [_checkout_free_setup_script(_marin_core_version(), plan.worker_extras)]
+    streamer_env = {}
+    if streamer_concurrency is not None:
+        streamer_env["RUNAI_STREAMER_CONCURRENCY"] = str(streamer_concurrency)
+    if streamer_s3_request_timeout_ms is not None:
+        streamer_env["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] = str(streamer_s3_request_timeout_ms)
     worker_environment = create_environment(
         workspace=str(workspace_dir or Path.cwd()),
         extras=plan.worker_extras,
         setup_scripts=setup_scripts,
+        env_vars=streamer_env,
     )
     model_config = ServedModelConfig(
         weights=model,

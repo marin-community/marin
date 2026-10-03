@@ -32,6 +32,8 @@ from marin.inference.types import (
 
 logger = logging.getLogger(__name__)
 
+_FORWARD_LIMITER_HEADROOM = 16
+
 
 @dataclass
 class ProxyStats:
@@ -71,6 +73,9 @@ class InferenceProxy:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
         self._pending: dict[str, Future[InferenceResponse]] = {}
+        # Requests wait for their broker responses on these threads. Size this limit
+        # to the pending budget, with spare slots for immediate overload responses.
+        self._forward_limiter = anyio.CapacityLimiter(max_pending_requests + _FORWARD_LIMITER_HEADROOM)
         self._lock = threading.Lock()
         self._poll_stop_event: threading.Event | None = None
         self._poll_thread: threading.Thread | None = None
@@ -149,7 +154,8 @@ class InferenceProxy:
                 query_string=request.url.query,
                 headers=forwardable_request_headers(request.headers),
                 timeout_seconds=timeout_seconds,
-            )
+            ),
+            limiter=self._forward_limiter,
         )
 
     def forward_raw_request(

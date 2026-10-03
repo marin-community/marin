@@ -86,10 +86,11 @@ class OpenAIBatchClient:
         )
         return BatchSubmission(file_id=file_response["id"], batch_id=batch["id"])
 
-    def wait(self, batch_id: str, poll_seconds: float) -> dict[str, Any]:
+    def wait(self, batch_id: str, poll_seconds: float, timeout_seconds: float | None = None) -> dict[str, Any]:
         """Wait for a batch to reach an OpenAI terminal state."""
 
         last_counts = None
+        deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
         while True:
             batch = self._request_json(f"batches/{batch_id}")
             counts = batch.get("request_counts")
@@ -98,6 +99,8 @@ class OpenAIBatchClient:
                 last_counts = counts
             if batch.get("status") in TERMINAL_BATCH_STATES:
                 return batch
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(f"Batch {batch_id} did not finish within {timeout_seconds} seconds")
             time.sleep(poll_seconds)
 
     def output(self, batch: Mapping[str, Any]) -> BatchOutput:

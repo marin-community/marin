@@ -123,6 +123,55 @@ def test_bf16_router_sigmoid_scoring_matches_differentiated_forward():
         np.testing.assert_array_equal(scored, trained)
 
 
+def test_june_router_forward_and_gradient_with_data_sharded_loaded_bias():
+    """Loaded [E] bias shards over data on 8 GPUs; routing must still broadcast over tokens."""
+    script = textwrap.dedent(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import NamedSharding, PartitionSpec as P
+        from levanter.grug.sharding import compact_grug_mesh
+        from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, MoEMLP
+
+        assert jax.device_count() == 8
+        cfg = GrugModelConfig(
+            vocab_size=32, hidden_dim=64, intermediate_dim=64, shared_expert_intermediate_dim=0,
+            num_experts=16, num_experts_per_token=2, num_layers=2, num_heads=4, num_kv_heads=2,
+            max_seq_len=8, sliding_window=4, moe_implementation="scatter",
+        )
+        mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+        with jax.set_mesh(mesh):
+            model = MoEMLP.init(cfg, key=jax.random.PRNGKey(0))
+            bias = jnp.arange(16, dtype=jnp.float32) / 100
+            sharded = eqx.tree_at(
+                lambda m: m.router_bias, model, jax.device_put(bias, NamedSharding(mesh, P("data")))
+            )
+            replicated = eqx.tree_at(
+                lambda m: m.router_bias, model, jax.device_put(bias, NamedSharding(mesh, P()))
+            )
+            tokens = jnp.ones((8, 4, 64), dtype=jnp.float32)
+            valid = jnp.ones((8, 4), dtype=jnp.bool_)
+
+            def objective(m):
+                routed, _ = m(tokens, valid)
+                return jnp.sum(jnp.square(routed))
+
+            loss_and_grad = eqx.filter_jit(eqx.filter_value_and_grad(objective))
+            actual_loss, actual_grad = loss_and_grad(sharded)
+            expected_loss, expected_grad = loss_and_grad(replicated)
+            np.testing.assert_allclose(actual_loss, expected_loss, rtol=1e-5)
+            np.testing.assert_allclose(actual_grad.router, expected_grad.router, rtol=1e-5)
+        print("OK")
+        """
+    )
+    env = os.environ | {"XLA_FLAGS": "--xla_force_host_platform_device_count=8", "JAX_PLATFORMS": "cpu"}
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert "OK" in result.stdout
+
+
 def _config():
     return JuneSnowballConfig(
         vocab_size=24,

@@ -20,7 +20,7 @@ from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFor
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.datakit.sft import SftTokenStore
+from marin.datakit.sft_text import SftTokenStore
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.cluster_config import marin_prefix

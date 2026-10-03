@@ -214,6 +214,10 @@ uv run python -m experiments.evaluation.cli launch \
   --limit 1
 ```
 
+For `marin-serve iris`, pass `--streamer-concurrency` and
+`--streamer-s3-request-timeout-ms`; these options forward the corresponding
+variables to each serving worker, including brokered replicas.
+
 Do not set `AWS_RETRY_MODE` or `AWS_MAX_ATTEMPTS` to increase retries for this loader. The AWS CRT
 client bundled with RunAI already retries each request five times, and that build does not propagate
 `AWS_MAX_ATTEMPTS` to the CRT retry count. Marin separately retries vLLM startup up to three times
