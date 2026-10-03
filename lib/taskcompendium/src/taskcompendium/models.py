@@ -385,6 +385,14 @@ class StageVerifierSpec(BaseModel):
     strategy: StageRewardStrategy
 
 
+class SkippedVerifierSpec(BaseModel):
+    """Explain why a runtime intentionally omitted grading."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: str = Field(min_length=1)
+
+
 class TaskSpec(BaseModel):
     """The private definition of one task."""
 

@@ -13,5 +13,4 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
-# Select the SkyRL runtime that implements this rollout contract.
 marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "f0d88f2ebffede9b37148429537af69b900382c8" }

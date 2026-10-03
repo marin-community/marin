@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12, <3.14"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -3017,7 +3017,7 @@ requires-dist = [
     { name = "marin-shellbox", editable = "../shellbox" },
     { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "../zephyr" },
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
-    { name = "pyarrow", specifier = ">=15.0" },
+    { name = "pyarrow", specifier = ">=17" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "verifyit", extras = ["answer", "judge", "reasoning-gym", "schema"], editable = "../verifyit" },
 ]

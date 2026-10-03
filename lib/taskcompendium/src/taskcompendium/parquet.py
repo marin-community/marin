@@ -9,25 +9,22 @@ from itertools import islice
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.models import TaskSpec
 
-from rolloutengine.grading import validate_task_verifiers
+from taskcompendium.models import TaskSpec
 
 TASK_SCHEMA = pa.schema([pa.field("task_spec", pa.string(), nullable=False)])
 PARQUET_BATCH_SIZE = 1024
 
 
 def read_tasks(path: str) -> Iterator[TaskSpec]:
-    """Read tasks in bounded batches and validate their private grader configuration."""
+    """Read tasks in bounded batches."""
     with StoragePath(path).open("rb") as source:
         parquet = pq.ParquetFile(source)
         if parquet.schema_arrow.names != TASK_SCHEMA.names:
             raise ValueError("Task Parquet requires exactly one task_spec column")
         for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_SIZE):
             for value in batch.column("task_spec").to_pylist():
-                task = TaskSpec.model_validate_json(value)
-                validate_task_verifiers(task)
-                yield task
+                yield TaskSpec.model_validate_json(value)
 
 
 def write_tasks(path: str, tasks: Iterable[TaskSpec]) -> None:
@@ -35,8 +32,6 @@ def write_tasks(path: str, tasks: Iterable[TaskSpec]) -> None:
     task_iterator = iter(tasks)
     with StoragePath(path).open("wb") as destination, pq.ParquetWriter(destination, TASK_SCHEMA) as writer:
         while batch := list(islice(task_iterator, PARQUET_BATCH_SIZE)):
-            for task in batch:
-                validate_task_verifiers(task)
             writer.write_table(
                 pa.Table.from_pydict({"task_spec": [task.model_dump_json() for task in batch]}, TASK_SCHEMA)
             )

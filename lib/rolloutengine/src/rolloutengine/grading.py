@@ -20,7 +20,6 @@ from taskcompendium.environment import (
     ArtifactKind,
     EnvironmentKind,
     ExitCodeReward,
-    ExternalVerifierSpec,
     FileReward,
     MissingArtifactPolicy,
     RewardFileFormat,
@@ -28,7 +27,7 @@ from taskcompendium.environment import (
     VerifierArtifact,
 )
 from taskcompendium.grading import GradeResult, GradingFailure, Outcome, grade_answer, validate_verifier
-from taskcompendium.models import StageRewardStrategy, StageVerifierSpec, TaskSpec, TaskStage, VerifierKind
+from taskcompendium.models import SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
 from taskcompendium.submission import Submission
 
 from rolloutengine.machines import _install_files, _machine_command, _task_machine
@@ -36,21 +35,22 @@ from rolloutengine.machines import _install_files, _machine_command, _task_machi
 MISSING_FILE_EXIT = 44
 
 
-def validate_task_verifiers(task: TaskSpec) -> None:
-    """Validate pure and rollout-specific verifier payloads."""
+def _validate_task(task: TaskSpec) -> None:
+    """Reject task features that this engine cannot execute."""
+    requirements = task.environment_requirements
+    if (
+        requirements.docker_image is not None
+        or requirements.working_directory is not None
+        or requirements.setup_commands
+        or requirements.environment_variables
+        or requirements.tool_providers
+        or any((task.resources.all, task.resources.worker, task.resources.oracle, task.resources.verifier))
+    ):
+        raise ValueError("The rollout engine requires machine inputs in environment")
+    if task.verifier.kind == VerifierKind.EXTERNAL and task.environment.interaction is None:
+        raise ValueError("External verifiers require an interaction session")
     for specification in (task.verifier, *(stage.verifier for stage in task.stages)):
-        if specification.kind == VerifierKind.SHELL:
-            ShellVerifierSpec.model_validate_json(specification.parameters_json)
-        elif specification.kind == VerifierKind.EXTERNAL:
-            ExternalVerifierSpec.model_validate_json(specification.parameters_json)
-        elif specification.kind == VerifierKind.STAGED:
-            StageVerifierSpec.model_validate_json(specification.parameters_json)
-        elif specification.kind == VerifierKind.SKIPPED:
-            parameters = json.loads(specification.parameters_json)
-            if not isinstance(parameters.get("reason"), str):
-                raise ValueError("Skipped verifier parameters require a reason")
-        else:
-            validate_verifier(specification)
+        validate_verifier(specification)
 
 
 async def _grade_rollout(
@@ -62,8 +62,8 @@ async def _grade_rollout(
 ) -> GradeResult:
     """Grade the final transcript and task filesystem without model access to private files."""
     if task.verifier.kind == VerifierKind.SKIPPED:
-        parameters = json.loads(task.verifier.parameters_json)
-        return GradeResult(Outcome.SKIPPED, None, parameters["reason"])
+        parameters = SkippedVerifierSpec.model_validate_json(task.verifier.parameters_json)
+        return GradeResult(Outcome.SKIPPED, None, parameters.reason)
     if task.verifier.kind != VerifierKind.SHELL:
         conversation = chat_conversation(list(messages))
         return await asyncio.to_thread(grade_answer, task, convention, conversation)
@@ -262,7 +262,11 @@ async def _file_grade(
             )
         try:
             values = json.loads(result.stdout) if file.format == RewardFileFormat.JSON else None
-            value = values[file.key] if values is not None else result.stdout.decode()
+            value = (
+                values[file.key]
+                if isinstance(values, dict)
+                else values if values is not None else result.stdout.decode()
+            )
             if isinstance(value, bool):
                 raise ValueError("A boolean is not a numeric reward")
             reward = float(value)
@@ -329,9 +333,6 @@ def _combined_stage_grade(grades: list[GradeResult], strategy: StageRewardStrate
     reward = sum(value for _, value in valid) / len(valid)
     components = [grade.diagnostics.get("rewards", {"reward": value}) for grade, value in valid]
     rewards = {key: sum(values.get(key, 0.0) for values in components) / len(valid) for key in set().union(*components)}
-    return GradeResult(
-        Outcome.GRADED,
-        reward,
-        passed=reward > 0,
-        diagnostics={**final.diagnostics, "rewards": rewards},
-    )
+    pass_results = [grade.passed for grade, _ in valid]
+    passed = all(pass_results) if all(result is not None for result in pass_results) else None
+    return GradeResult(Outcome.GRADED, reward, passed=passed, diagnostics={"rewards": rewards})
