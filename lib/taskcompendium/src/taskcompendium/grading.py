@@ -7,16 +7,16 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
-from tasktrove_verify.candidate import (
+from verifyit.candidate import (
     CandidateSpec,
     candidate_spec,
     grade_text_candidate,
     supports_candidate_mode,
 )
-from tasktrove_verify.grade import InvalidTask
-from tasktrove_verify.modes.grade_predicted_action import grade_predicted_action_candidate
-from tasktrove_verify.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec, Spec, mode_of, spec_to_table
-from tasktrove_verify.spec import FunctionCall as CandidateCall
+from verifyit.grade import InvalidTask
+from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
+from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec, Spec, mode_of, spec_to_table
+from verifyit.spec import FunctionCall as CandidateCall
 
 from taskcompendium.models import (
     AssistantToolCalls,

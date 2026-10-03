@@ -3,8 +3,8 @@
 
 """Select the shared function-call contract during task conversion."""
 
-from tasktrove_verify.spec import FunctionCall as CandidateCall
-from tasktrove_verify.spec import PredictedActionSpec
+from verifyit.spec import FunctionCall as CandidateCall
+from verifyit.spec import PredictedActionSpec
 
 from taskcompendium.grading import verifier_descriptor
 from taskcompendium.models import FunctionCall, VerifierSpec

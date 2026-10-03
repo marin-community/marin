@@ -150,12 +150,19 @@ def test_predicted_action_rejects_invalid_expected_arguments(arguments):
         import_row(row, canonical_sha256(row))
 
 
-def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_path):
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"expected_message": "Any response"},
+        {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}], "numeric_tolerance": 10**400},
+    ],
+)
+def test_predicted_action_rejects_invalid_contract_on_private_read(tmp_path, parameters):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     data = json.loads((task / "specification.json").read_text())
-    data["verifier"]["parameters_json"] = json.dumps({"expected_message": "Any response"})
+    data["verifier"]["parameters_json"] = json.dumps(parameters)
     (task / "specification.json").write_text(json.dumps(data))
 
     with pytest.raises(ValueError, match="Invalid 'predicted_action' verifier parameters"):
