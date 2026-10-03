@@ -155,13 +155,25 @@ def test_parent_kick_rejects_stale_attempt_on_peer(federation: FederationJourney
     assert federation.peer_tasks(child)[0].current_attempt_id == 1
 
 
-def test_parent_kick_unreachable_peer_does_not_acknowledge_success(federation: FederationJourney) -> None:
+def test_mixed_kick_peer_outage_preserves_local_success_without_retry(federation: FederationJourney) -> None:
     job = federation.submit("unreachable-kick")
     federation.promote()
     federation.sync()
     federation.run_peer()
     federation.sync()
     federation.set_peer_reachable(False)
-    with pytest.raises(ConnectionError):
-        federation.parent.kick(job[0])
+    local = federation.parent.submit("local-kick", preemption_retries=2)
+    federation.parent.settle()
+    response = federation.parent.controller.kick_tasks(
+        controller_pb2.Controller.KickTasksRequest(
+            targets=[local[0].wire_id, job[0].wire_id], desired_state=job_pb2.TASK_STATE_PREEMPTED
+        )
+    )
+    assert [(result.target, result.queued) for result in response.results] == [
+        (local[0].wire_id, True),
+        (job[0].wire_id, False),
+    ]
+    federation.parent.settle()
+    federation.parent.settle()
+    assert federation.parent.task(local[0]).current_attempt_id == 1
     assert federation.peer_tasks(job)[0].state == job_pb2.TASK_STATE_RUNNING

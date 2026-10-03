@@ -227,10 +227,21 @@ def kick_tasks(
         peer_request = controller_pb2.Controller.KickTasksRequest(
             targets=targets, desired_state=request.desired_state, reason=reason
         )
-        response = dependencies.runtime.federation.proxy_to_peer(
-            peer_id, lambda peer, forwarded_request=peer_request: peer.kick_tasks(forwarded_request)
-        )
-        results.extend(response.results)
+        try:
+            response = dependencies.runtime.federation.proxy_to_peer(
+                peer_id, lambda peer, forwarded_request=peer_request: peer.kick_tasks(forwarded_request)
+            )
+        except (ConnectError, ConnectionError, OSError) as error:
+            # A retry of the entire batch could kick an already accepted target's
+            # next attempt. Preserve partial success without a retryable RPC error.
+            results.extend(
+                controller_pb2.Controller.KickResult(
+                    target=target, queued=False, detail=f"Peer {peer_id} did not confirm the action: {error}"
+                )
+                for target in targets
+            )
+        else:
+            results.extend(response.results)
     return controller_pb2.Controller.KickTasksResponse(results=results)
 
 
