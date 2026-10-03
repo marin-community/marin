@@ -26,6 +26,7 @@ DEFAULT_WORKSPACE = "/app"
 
 
 class Mode(StrEnum):
+    UNSOLVABLE = "unsolvable"
     STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     MCQ = "mcq"
@@ -72,6 +73,11 @@ class FunctionCall:
 
     name: str
     arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class UnsolvableSpec:
+    """A private label requiring an explicit acquired terminal ejection."""
 
 
 @dataclass(frozen=True)
@@ -260,7 +266,8 @@ class ScriptSpec:
 
 
 Spec = (
-    StructuredExactSpec
+    UnsolvableSpec
+    | StructuredExactSpec
     | PredictedActionSpec
     | McqSpec
     | MathSpec
@@ -280,6 +287,7 @@ Spec = (
 )
 
 SPEC_TYPES: dict[Mode, type] = {
+    Mode.UNSOLVABLE: UnsolvableSpec,
     Mode.STRUCTURED_EXACT: StructuredExactSpec,
     Mode.PREDICTED_ACTION: PredictedActionSpec,
     Mode.MCQ: McqSpec,

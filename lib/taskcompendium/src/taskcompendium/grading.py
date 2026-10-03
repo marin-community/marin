@@ -11,6 +11,7 @@ from pydantic import JsonValue
 from tasktrove_verify.candidate import (
     CandidateSpec,
     candidate_spec,
+    grade_ejection_candidate,
     grade_text_candidate,
     supports_candidate_mode,
 )
@@ -24,6 +25,7 @@ from tasktrove_verify.spec import (
     PredictedActionSpec,
     Spec,
     StructuredExactSpec,
+    UnsolvableSpec,
     mode_of,
     spec_to_table,
 )
@@ -36,6 +38,7 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.submission import (
+    EJECT_CALL_NAME,
     ActionSubmission,
     GradingAttempt,
     StateSubmission,
@@ -43,6 +46,9 @@ from taskcompendium.submission import (
     SubmissionConvention,
     SubmissionFailure,
     TextSubmission,
+    extract_submission,
+    is_ejection,
+    submission_compatibility,
 )
 
 
@@ -83,6 +89,10 @@ def supports_verifier(specification: VerifierSpec) -> bool:
 
 
 def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeResult:
+    if is_ejection(submission):
+        return GradeResult(Outcome.GRADED, grade_ejection_candidate(verifier).reward)
+    if isinstance(verifier, UnsolvableSpec):
+        return GradeResult(Outcome.GRADED, 0.0)
     if isinstance(verifier, StructuredExactSpec):
         if not isinstance(submission, StateSubmission):
             raise TypeError("Structured exact verifier requires a state submission")
@@ -113,8 +123,18 @@ async def grade_answer(
 ) -> GradeResult:
     """Acquire one submission and score it through the shared candidate contract."""
     verifier = resolve_verifier(specification.verifier)
+    if isinstance(verifier, UnsolvableSpec):
+        compatibility = submission_compatibility(specification, convention)
+        if not compatibility.compatible:
+            raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
     try:
-        submission = await convention.extract(attempt)
+        # Source history is input, not a submission made during this interaction.
+        for event in attempt.conversation.events[len(specification.context.events) : -1]:
+            if isinstance(event, AssistantToolCalls) and any(call.name == EJECT_CALL_NAME for call in event.calls):
+                raise SubmissionFailure("The interaction continued after eject_button")
+        submission = await extract_submission(convention, attempt)
+        if is_ejection(submission) and not any(tool.name == EJECT_CALL_NAME for tool in specification.final_tools):
+            raise SubmissionFailure("Ejection was not advertised for this task")
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
     return _grade_submission(verifier, submission)
@@ -141,3 +161,7 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
 
 def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))
+
+
+def unsolvable() -> VerifierSpec:
+    return verifier_descriptor(UnsolvableSpec())

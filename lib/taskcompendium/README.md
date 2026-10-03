@@ -67,6 +67,65 @@ A task whose result is a function call uses `answer_type=native_action`. Its `fi
 
 With the `answer_call` convention, the chat agent adds `submit_answer(answer: string)` alongside the task’s final tools and records the assistant's final response. It never invokes the function. The convention extracts the call's `answer` argument and passes it to the task's ordinary verifier. A non-call response or a call to another function receives `submission_failure` with reward `0.0`. The same final-action decoder handles native-action tasks; their verifier compares the recorded call's function name and argument dictionary with the private expected call.
 
+### Optional ejection
+
+Add `taskcompendium.submission.eject_button()` to `TaskSpec.final_tools` to advertise the terminal
+`eject_button(reason: string)` function alongside the normal answer interface.
+Advertise the same tool and normal answer interface for solvable and unsolvable tasks.
+Ejection instructions live in the tool description; no ejection prompt is appended.
+
+Source exporters can use `taskcompendium.ejection.enable_ejection(specification)`
+for every supported task, then `mark_unsolvable(specification, normal_submission)`
+only for confirmed broken rows. The latter returns the private spec and its
+submission convention, preserving the visible problem, source provenance, and
+semantic answer type. Native action conventions retain their call constraints.
+Unsupported adapters, runtime requirements, and source-read failures must remain
+export failures; they are not evidence that a task is unsolvable.
+
+The call claims that the task cannot be completed. The reason must be nonempty.
+Ejection needs no tool implementation or container; direct chat records the call and ends the interaction without dispatching it.
+An assistant turn combining ejection with another function call receives
+`submission_failure` with zero reward. Text accompanying a sole ejection call
+is retained but is not a separate answer. A trace containing another turn after
+ejection also receives `submission_failure`; source conversation history is excluded
+from this check. Direct chat itself stops immediately.
+
+Solvable tasks retain their ordinary convention and verifier. Ejection receives
+zero reward; normal answers use the ordinary verifier. Privately labeled
+unsolvable tasks set `TaskSpec.verifier=unsolvable()` and use
+`FinalAction(id="ejection-final", normal_submission=normal)`.
+Here `normal` is the same `PlainText`, `JsonAnswer`, or `AnswerCall` convention
+used for solvable tasks. This nested convention controls presentation only;
+`FinalAction` always extracts the final action. Ejection availability comes solely
+from `final_tools`.
+For matching normal conventions and source conversations, the visible
+instructions, tools, tool choice, and parallel-call policy are identical.
+Ejection receives reward one; normal answers receive zero. Reasons are retained
+for inspection; the shared candidate scorer checks the
+ejection call against the private label, without assessing the reason's prose.
+
+The extractor receives only conversation and workspace evidence, never the
+private task spec. Direct chat has no agent workspace files. It extracts one
+`TextSubmission` or `ActionSubmission`; grading
+produces one reward. Solvability labels, expected answers, and verifier settings
+stay in private task files. Verifier infrastructure failures record
+`infra_error` with no reward in `taskcompendium-result.json`.
+The library schema remains 0.20; older serialized specs require regeneration.
+
+The proof of concept builds paired missing-information arithmetic,
+contradictory integer constraints, and guideline-conflict tasks. Export 192
+no-container Harbor tasks with:
+
+```bash
+uv run --project lib/taskcompendium python -m taskcompendium.examples.ejection \
+  /tmp/ejection-tasks --pairs-per-family 32
+```
+
+`taskcompendium.examples.ejection.ejection_examples(pairs_per_family, normal_submission)`
+also lets callers choose a plain, JSON, or answer-call interface. These are synthetic smoke examples;
+they do not establish model performance on natural unsolvable tasks. Run the
+exported tasks using the [`run_trial` interface](#how-does-harbor-run-it).
+
 ### Files and state
 
 `answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Exporting and running these results requires environment configurations and submission conventions that are not implemented here. The shared `structured_exact` verifier compares acquired JSON values with exact scalar types and ordered arrays. This package does not acquire state results.
@@ -172,7 +231,7 @@ Schema loading accepts descriptors without a grader implementation. Shared verif
 
 Standard verifier contracts and pure candidate scoring live in `tasktrove-verify`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. Submission conventions acquire evidence; TaskCompendium scores it and translates shared rewards into Harbor outcomes; it has no verifier registry or separate standard verifier schema.
 
-The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` compares acquired JSON values without scalar coercion; it requires a state submission and has no direct-chat lowering. The expected answer and grading settings stay out of the model-visible instruction.
+The implemented canonical kinds are `unsolvable` for a private confirmed-broken classification and terminal ejection, `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` compares acquired JSON values without scalar coercion; it requires a state submission and has no direct-chat lowering. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 
@@ -248,7 +307,7 @@ result = asyncio.run(
 
 Each direct-chat Harbor trial runs one `ChatAgent` using the exported submission convention. The lowering prepares the conversation and tool configuration; the agent makes one request, validates the chat protocol, and writes a typed `ConversationTrace` to `submission.json`. This trace contains the complete model-visible conversation, including submission instructions and the final assistant message. Function-call arguments are decoded objects in both source context and grading evidence. The raw provider response is retained separately in `chat-response.json` for diagnostics.
 
-The direct-chat environment exposes no filesystem or shell tools. Harbor's custom verifier reads the typed trace and awaits `grade_answer` with a typed `GradingAttempt`. The convention extracts one typed submission asynchronously; TaskCompendium passes its text, numeric or final-action evidence to shared scoring. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
+The direct-chat environment exposes no filesystem or shell tools. Harbor's custom verifier reads the typed trace and awaits `grade_answer` with a typed `GradingAttempt`. The shared grading boundary intercepts terminal ejection or awaits the normal convention to extract one typed submission; TaskCompendium passes its text, numeric or final-action evidence to shared scoring. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
 
 A valid but wrong answer receives reward `0.0`. A text, numeric, or final-action answer that violates its submission convention receives `submission_failure` with reward `0.0`. A native-action submission that satisfies its convention but differs from the expected function calls receives reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
 

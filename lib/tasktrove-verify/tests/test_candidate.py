@@ -6,9 +6,20 @@
 import json
 
 import pytest
-from tasktrove_verify.candidate import candidate_spec, grade_text_candidate
+from tasktrove_verify.candidate import candidate_spec, grade_ejection_candidate, grade_text_candidate
+from tasktrove_verify.grade import grade
 from tasktrove_verify.modes.grade_predicted_action import grade_predicted_action_candidate
-from tasktrove_verify.spec import ExactSpec, FunctionCall, Mode, PredictedActionSpec, StructuredExactSpec, spec_to_table
+from tasktrove_verify.spec import (
+    ExactSpec,
+    FunctionCall,
+    Mode,
+    PredictedActionSpec,
+    StructuredExactSpec,
+    UnsolvableSpec,
+    parse_spec,
+    render_spec,
+    spec_to_table,
+)
 
 
 @pytest.mark.parametrize(
@@ -69,3 +80,27 @@ def test_exact_candidate_does_not_extract_a_different_presentation():
     spec = ExactSpec(expected=("12",))
     assert grade_text_candidate(spec, "\\boxed{12}").reward == 0.0
     assert grade_text_candidate(spec, "12").reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "spec,expected_reward",
+    [
+        (ExactSpec(expected=("yes",)), 0.0),
+        (PredictedActionSpec(expected_calls=(FunctionCall("choose", {}),)), 0.0),
+        (UnsolvableSpec(), 1.0),
+    ],
+)
+def test_ejection_candidate_scores_only_explicit_private_unsolvability(spec, expected_reward):
+    table = spec_to_table(spec)
+    mode = table.pop("mode")
+    restored = candidate_spec(mode, json.loads(json.dumps(table)))
+    assert grade_ejection_candidate(restored).reward == expected_reward
+    if isinstance(restored, UnsolvableSpec):
+        assert grade_text_candidate(restored, "The reason sounds convincing.").reward == 0.0
+        assert parse_spec(render_spec(restored)) == restored
+
+
+def test_unsolvable_filesystem_grading_requires_explicit_terminal_evidence(tmp_path):
+    (tmp_path / "answer.txt").write_text("eject_button: cannot solve")
+    with pytest.raises(NotImplementedError, match="terminal evidence"):
+        grade(UnsolvableSpec(), tests_dir=tmp_path, workspace=tmp_path)

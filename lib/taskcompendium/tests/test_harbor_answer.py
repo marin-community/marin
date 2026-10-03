@@ -10,11 +10,13 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from threading import Thread
+from unittest.mock import patch
 
 import pytest
 from harbor.models.task.task import Task
 from tasktrove_verify.spec import Mode
 
+from taskcompendium.examples.ejection import ejection_examples
 from taskcompendium.grading import exact_answer, grade_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import (
@@ -28,7 +30,9 @@ from taskcompendium.lowering import (
 )
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     ConversationInput,
+    ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
     FunctionDefinition,
@@ -554,3 +558,83 @@ async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specificati
 
     assert result.exception_info is not None
     assert "model unavailable" in (tmp_path / "trials/run/result.json").read_text()
+
+
+@pytest.mark.parametrize("example_index", range(6))
+async def test_ejection_poc_terminal_harbor_rewards_and_trace(tmp_path, example_index, chat_endpoint):
+    example = ejection_examples(1, AnswerCall(id="answer"))[example_index]
+    task = lower_to_harbor(example.specification, example.convention, HarborEnvironmentConfig(), tmp_path / "task")
+    reason = "The request cannot be completed with the supplied information or guidelines."
+    final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "terminal-eject",
+                "type": "function",
+                "function": {"name": "eject_button", "arguments": json.dumps({"reason": reason})},
+            }
+        ],
+    }
+    chat_endpoint.body = json.dumps({"choices": [{"message": final}]}).encode()
+    result = await run_trial(
+        task,
+        HarborEnvironmentConfig(),
+        ChatLaunch(model="model", api_base=chat_endpoint.url),
+        tmp_path / "trials",
+        "run",
+    )
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": float(example_index % 2)}
+    assert len(chat_endpoint.requests) == 1
+    assert [tool["function"]["name"] for tool in chat_endpoint.requests[0]["tools"]] == ["eject_button", "submit_answer"]
+    assert chat_endpoint.requests[0]["parallel_tool_calls"] is False
+    trace = ConversationTrace.model_validate_json((tmp_path / "trials/run/agent/submission.json").read_text())
+    assert trace.events[-1].calls[0].name == "eject_button"
+    assert trace.events[-1].calls[0].arguments == {"reason": reason}
+    assert trace.events[-1].calls[0].call_id == "terminal-eject"
+    assert trace.events == (
+        *example.specification.context.events,
+        TextMessage(role="user", content=chat_endpoint.requests[0]["messages"][-1]["content"]),
+        AssistantToolCalls(
+            calls=(ConversationToolCall(call_id="terminal-eject", name="eject_button", arguments={"reason": reason}),)
+        ),
+    )
+
+
+async def test_ejection_verifier_infrastructure_failure_remains_ungraded(tmp_path):
+    example = ejection_examples(1, AnswerCall(id="answer"))[1]
+    task = lower_to_harbor(example.specification, example.convention, HarborEnvironmentConfig(), tmp_path / "task")
+
+    # Corrupt private inputs after launch validation, at the external HTTP boundary.
+    def response_after_corruption(_request, **_kwargs):
+        (task / "specification.json").write_text("{broken")
+        return BytesIO(json.dumps({"choices": [{"message": _answer_action("5")}]}).encode())
+
+    with patch("taskcompendium.harbor.adapter.urllib.request.urlopen", side_effect=response_after_corruption):
+        result = await run_trial(
+            task,
+            HarborEnvironmentConfig(),
+            ChatLaunch(model="model", api_base="https://example.invalid"),
+            tmp_path / "trials",
+            "run",
+        )
+    outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
+    assert outcome["status"] == "infra_error"
+    assert outcome["reward"] is None
+    assert result.verifier_result is None
+    assert result.exception_info is not None
+
+
+@pytest.mark.parametrize(
+    "example_index,correct", [(0, "5"), (1, "5"), (2, "2"), (3, "2"), (4, "REDACTED"), (5, "REDACTED")]
+)
+@pytest.mark.parametrize("answer_correct", [True, False])
+async def test_ejection_poc_normal_submission_rewards(tmp_path, example_index, correct, answer_correct):
+    example = ejection_examples(1, AnswerCall(id="answer"))[example_index]
+    task = lower_to_harbor(example.specification, example.convention, HarborEnvironmentConfig(), tmp_path / "task")
+    result = await run_replay_trial(
+        task, _answer_action(correct if answer_correct else "wrong"), tmp_path / "trials", "run"
+    )
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": float(example_index % 2 == 0 and answer_correct)}

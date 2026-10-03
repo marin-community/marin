@@ -174,6 +174,8 @@ GRADERS: dict[Mode, Grader] = {}
 
 
 def grader_for(mode: Mode) -> Grader:
+    if mode not in MODE_MODULES:
+        raise NotImplementedError(f"Mode {mode!r} requires acquired terminal evidence; no filesystem grader exists")
     if mode not in GRADERS:
         GRADERS[mode] = importlib.import_module(f"tasktrove_verify.modes.{MODE_MODULES[mode]}").grade
     return GRADERS[mode]
