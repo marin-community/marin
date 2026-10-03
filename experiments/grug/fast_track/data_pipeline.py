@@ -48,6 +48,17 @@ DATA_PIPELINE_CONCURRENCY = 64
 FAST_TRACK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_2026_10_02"
 
 
+def data_pool(name: str) -> ZephyrContext:
+    """Create the shared fast-track worker pool with room for nested sampling."""
+    return ZephyrContext(
+        name=name,
+        resources=DATA_POOL_RESOURCES,
+        max_workers=DATA_POOL_WORKERS,
+        max_concurrent_pipelines=DATA_PIPELINE_CONCURRENCY + SMOKE_SCALE.sample_parallel_sources,
+        stage_runner_factory=SubprocessRunner,
+    )
+
+
 def build_fast_track_data(
     *,
     run_id: str,
@@ -74,12 +85,7 @@ def build_fast_track_data(
                 f"tokenizer {tokenizer.name!r} has {len(loaded_tokenizer)} entries; "
                 f"the fast-track model requires {tokenizer_vocab}"
             )
-        with ZephyrContext(
-            name=f"fast-track-{run_id}-data",
-            resources=DATA_POOL_RESOURCES,
-            max_workers=DATA_POOL_WORKERS,
-            stage_runner_factory=SubprocessRunner,
-        ) as pool:
+        with data_pool(f"fast-track-{run_id}-data") as pool:
             run_steps_in_pool(datakit.all_steps, pool=pool, max_concurrent=DATA_PIPELINE_CONCURRENCY)
         store = read_artifact(datakit.output_buckets.output_path, ClusteredStoreData)
         log_store_summary(store)
