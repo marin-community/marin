@@ -22,3 +22,10 @@ ten are present in the new dataset at ref 6. It uses one trial per task to
 limit diagnostic cost. The release benchmark remains the unfiltered,
 three-trial `harbor-configs/tb2-recovery.yaml`; do not report the diagnostic
 subset as a policy score.
+
+The second Terminal-Bench isolation pair uses those same ten tasks. Run
+`model-tp2-dp1-eager-low.yaml` with `tb2-ten-old-wins.yaml` to change only
+compiled versus eager execution. Run `model-tp2-dp1-low.yaml` with
+`tb2-ten-old-wins-output8k.yaml` to change only the per-turn output cap from
+16,384 to 8,192. The eager and 8k arms are diagnostic deviations, not release
+settings. Keep their run descriptions explicit and omit a policy version.
