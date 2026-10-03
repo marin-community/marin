@@ -1353,7 +1353,9 @@ def _flip_detector_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[..., None
         for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
             name = leaf_name(path)
             if isinstance(leaf, jax.Array) and leaf.ndim in (2, 3) and any(p.search(name) for p in patterns):
-                out[name] = leaf.astype(jnp.float32) if leaf.ndim == 3 else leaf.astype(jnp.float32)[None]
+                x = leaf.astype(jnp.float32) if leaf.ndim == 3 else leaf.astype(jnp.float32)[None]
+                # Replicated: the matrices are small, and contracting a sharded axis needs an explicit out sharding.
+                out[name] = reshard(x, P(None, None, None))
         return out
 
     @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
