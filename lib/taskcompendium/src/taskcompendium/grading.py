@@ -4,8 +4,9 @@
 """Extract TaskCompendium submission evidence for shared pure candidate graders."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from verifyit.candidate import (
     CandidateSpec,
@@ -33,6 +34,16 @@ class Outcome(StrEnum):
     GRADED = "graded"
     EXTRACTION_ERROR = "extraction_error"
     INFRA_ERROR = "infra_error"
+    UNAVAILABLE = "unavailable"
+    SKIPPED = "skipped"
+
+
+class GradingFailure(StrEnum):
+    TIMEOUT = "timeout"
+    MISSING_REWARD = "missing_reward"
+    EMPTY_REWARD = "empty_reward"
+    INVALID_REWARD = "invalid_reward"
+    EXECUTION = "execution"
 
 
 @dataclass(frozen=True)
@@ -40,10 +51,15 @@ class GradeResult:
     status: Outcome
     reward: float | None
     error: str | None = None
+    passed: bool | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    failure: GradingFailure | None = None
+    score_min: float = 0.0
+    score_max: float = 1.0
 
 
 def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
-    """Read a shared verifier spec without any TaskCompendium registration step."""
+    """Validate and return the pure candidate grader for a verifier spec."""
     if specification.environment_requirements != EnvironmentRequirements():
         raise NotImplementedError("Pure verifiers cannot satisfy private environment requirements")
     try:
@@ -113,3 +129,8 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
 
 def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))
+
+
+def skipped_verifier(reason: str) -> VerifierSpec:
+    """Describe an explicit rollout-time grading omission."""
+    return VerifierSpec(kind="skipped", parameters_json=json.dumps({"reason": reason}))
