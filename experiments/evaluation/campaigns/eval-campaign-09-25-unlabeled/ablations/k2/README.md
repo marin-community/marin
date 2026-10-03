@@ -36,3 +36,9 @@ high reasoning, compiled execution, and the 65,536-token server window fixed.
 `high-65k-16k` is the no-HF-override control; `high-65k-16k-hf-overrides`
 adds only the archived HF position overrides; `high-65k-8k` instead changes
 only the generation cap. These are unlabeled diagnostics, not policy scores.
+
+The `model-tp2-dp4-high-65k-16k` pair repeats the HF-override comparison at
+the degraded TP2/DP4 topology. The two configs differ only in
+`serve.hf_overrides`; run each with the canonical full HumanEval+ config and
+the same launch options as the first pair. This tests whether position
+overrides interact with DP4/EP8 to account for the residual historical gap.
