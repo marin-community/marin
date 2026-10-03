@@ -10,13 +10,13 @@ from enum import StrEnum
 from pydantic import JsonValue
 from verifyit.candidate import (
     CandidateSpec,
-    candidate_spec,
     grade_text_candidate,
     supports_candidate_mode,
 )
-from verifyit.grade import InvalidTask
+from verifyit.json_comparison import NumericTypePolicy
 from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
 from verifyit.modes.grade_structured_exact import grade_structured_exact_candidate
+from verifyit.numeric import NumericCandidateError
 from verifyit.spec import (
     ExactSpec,
     McqSpec,
@@ -29,21 +29,23 @@ from verifyit.spec import (
 )
 from verifyit.spec import FunctionCall as CandidateCall
 
+from taskcompendium.grading_contract import (
+    ActionSubmission,
+    GradingAttempt,
+    JsonSubmission,
+    StateSubmission,
+    Submission,
+    SubmissionFailure,
+    TextSubmission,
+    resolve_verifier,
+)
 from taskcompendium.models import (
     AssistantToolCalls,
     EnvironmentRequirements,
     TaskSpec,
     VerifierSpec,
 )
-from taskcompendium.submission import (
-    ActionSubmission,
-    GradingAttempt,
-    StateSubmission,
-    Submission,
-    SubmissionConvention,
-    SubmissionFailure,
-    TextSubmission,
-)
+from taskcompendium.submission import Convention, submission_compatibility
 
 
 class Outcome(StrEnum):
@@ -57,16 +59,6 @@ class GradeResult:
     status: Outcome
     reward: float | None
     error: str | None = None
-
-
-def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
-    """Read a shared verifier spec without any TaskCompendium registration step."""
-    if specification.environment_requirements != EnvironmentRequirements():
-        raise NotImplementedError("Pure verifiers cannot satisfy private environment requirements")
-    try:
-        return candidate_spec(specification.kind, json.loads(specification.parameters_json))
-    except (ValueError, InvalidTask) as error:
-        raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error
 
 
 def validate_verifier(specification: VerifierSpec) -> None:
@@ -84,8 +76,8 @@ def supports_verifier(specification: VerifierSpec) -> bool:
 
 def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeResult:
     if isinstance(verifier, StructuredExactSpec):
-        if not isinstance(submission, StateSubmission):
-            raise TypeError("Structured exact verifier requires a state submission")
+        if not isinstance(submission, (JsonSubmission, StateSubmission)):
+            raise TypeError("Structured exact verifier requires a JSON or state submission")
         return GradeResult(Outcome.GRADED, grade_structured_exact_candidate(verifier, submission.value).reward)
     if isinstance(verifier, PredictedActionSpec):
         if not isinstance(submission, ActionSubmission):
@@ -97,7 +89,9 @@ def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeR
             else ()
         )
         return GradeResult(Outcome.GRADED, grade_predicted_action_candidate(verifier, calls).reward)
-    if isinstance(verifier, ExactSpec) and isinstance(submission, StateSubmission) and isinstance(submission.value, str):
+    if isinstance(verifier, ExactSpec) and isinstance(submission, (JsonSubmission, StateSubmission)):
+        if not isinstance(submission.value, str):
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, "Text verifier requires a string JSON value")
         return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, submission.value).reward)
     if not isinstance(submission, TextSubmission):
         raise TypeError("Text candidate verifier requires a text submission")
@@ -108,20 +102,24 @@ def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeR
     return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, submission.value).reward)
 
 
-async def grade_answer(
-    specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt
-) -> GradeResult:
+async def grade_answer(specification: TaskSpec, convention: Convention, attempt: GradingAttempt) -> GradeResult:
     """Acquire one submission and score it through the shared candidate contract."""
     verifier = resolve_verifier(specification.verifier)
+    compatibility = submission_compatibility(specification, convention)
+    if not compatibility.compatible:
+        raise ValueError(f"Submission convention is incompatible: {compatibility.reasons}")
     try:
         submission = await convention.extract(attempt)
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
-    return _grade_submission(verifier, submission)
+    try:
+        return _grade_submission(verifier, submission)
+    except NumericCandidateError as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
 
 
-def structured_exact(expected: JsonValue) -> VerifierSpec:
-    return verifier_descriptor(StructuredExactSpec(expected=expected))
+def structured_exact(expected: JsonValue, *, numeric_types: NumericTypePolicy = NumericTypePolicy.VALUE) -> VerifierSpec:
+    return verifier_descriptor(StructuredExactSpec(expected=expected, numeric_types=numeric_types))
 
 
 def verifier_descriptor(spec: Spec) -> VerifierSpec:
@@ -139,5 +137,5 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
     )
 
 
-def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
+def numeric_answer(expected: str, *, tolerance_abs: str, tolerance_rel: str) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))

@@ -7,17 +7,29 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model_validator
+from verifyit.json_objects import unique_object
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
+from taskcompendium.grading_contract import (
+    ActionSubmission,
+    GradingAttempt,
+    JsonSubmission,
+    Submission,
+    SubmissionFailure,
+    TextSubmission,
+    accepted_submission_types,
+    resolve_verifier,
+)
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationEvent,
     ConversationInput,
-    ConversationTrace,
+    ConversationToolCall,
+    RawAssistantToolCalls,
     TaskSpec,
     TextMessage,
     format_conversation,
@@ -25,6 +37,7 @@ from taskcompendium.models import (
 
 ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
+JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
 
 
 def answer_call_tool() -> dict[str, object]:
@@ -49,38 +62,9 @@ class AnswerFormat(StrEnum):
 
     PLAIN = "plain"
     JSON = "json"
+    JSON_VALUE = "json_value"
     ANSWER_CALL = "answer_call"
     FINAL_ACTION = "final_action"
-
-
-@dataclass(frozen=True)
-class GradingAttempt:
-    """Trial evidence available to submission conventions and verifiers."""
-
-    conversation: ConversationTrace
-    workspace: object
-
-
-@dataclass(frozen=True)
-class TextSubmission:
-    value: str
-
-
-@dataclass(frozen=True)
-class ActionSubmission:
-    message: TextMessage | AssistantToolCalls
-
-
-@dataclass(frozen=True)
-class StateSubmission:
-    value: JsonValue
-
-
-type Submission = TextSubmission | ActionSubmission | StateSubmission
-
-
-class SubmissionFailure(ValueError):
-    """The agent ended the interaction without a valid submission."""
 
 
 class Convention(BaseModel, ABC):
@@ -90,6 +74,7 @@ class Convention(BaseModel, ABC):
 
     id: str
     answer_format: AnswerFormat
+    submission_types: ClassVar[tuple[type[Submission], ...]]
 
     @model_validator(mode="after")
     def validate_convention(self) -> Self:
@@ -99,6 +84,8 @@ class Convention(BaseModel, ABC):
 
     def supports(self, answer_type: AnswerType) -> bool:
         """Whether this convention can carry the semantic result."""
+        if self.answer_format == AnswerFormat.JSON_VALUE:
+            return answer_type == AnswerType.JSON
         if self.answer_format == AnswerFormat.FINAL_ACTION:
             return answer_type == AnswerType.NATIVE_ACTION
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
@@ -109,6 +96,7 @@ class Convention(BaseModel, ABC):
 
 
 class PlainText(Convention):
+    submission_types = (TextSubmission,)
     answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
 
     async def extract(self, attempt: GradingAttempt) -> TextSubmission:
@@ -116,27 +104,39 @@ class PlainText(Convention):
 
 
 class JsonAnswer(Convention):
+    submission_types = (TextSubmission,)
     answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
 
     async def extract(self, attempt: GradingAttempt) -> TextSubmission:
         try:
-            value = json.loads(_text_answer(attempt.conversation.events[-1]))
-        except json.JSONDecodeError as error:
+            value = _json_submission(_text_answer(attempt.conversation.events[-1]))
+        except ValueError as error:
             raise SubmissionFailure("JSON submission is malformed") from error
-        if (
-            not isinstance(value, dict)
-            or not isinstance(value.get(ANSWER_FIELD), str)
-            or not value[ANSWER_FIELD].strip()
-        ):
+        answer = value.get(ANSWER_FIELD) if isinstance(value, dict) else None
+        if not isinstance(answer, str) or not answer.strip():
             raise SubmissionFailure("JSON submission requires a nonempty string answer")
-        return TextSubmission(value[ANSWER_FIELD])
+        return TextSubmission(answer)
+
+
+class JsonValueAnswer(Convention):
+    """Parse the complete final assistant text as one JSON value."""
+
+    submission_types = (JsonSubmission,)
+    answer_format: Literal[AnswerFormat.JSON_VALUE] = AnswerFormat.JSON_VALUE
+
+    async def extract(self, attempt: GradingAttempt) -> JsonSubmission:
+        try:
+            return JsonSubmission(_json_submission(_text_answer(attempt.conversation.events[-1])))
+        except ValueError as error:
+            raise SubmissionFailure("JSON value submission is malformed") from error
 
 
 class AnswerCall(Convention):
+    submission_types = (TextSubmission,)
     answer_format: Literal[AnswerFormat.ANSWER_CALL] = AnswerFormat.ANSWER_CALL
 
     async def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        response = attempt.conversation.events[-1]
+        response = _decoded_final_action(attempt.conversation.events[-1])
         if (
             not isinstance(response, AssistantToolCalls)
             or len(response.calls) != 1
@@ -154,13 +154,17 @@ class AnswerCall(Convention):
 
 
 class FinalAction(Convention):
+    submission_types = (ActionSubmission,)
     answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
 
     require_call: bool = False
     max_calls: int | None = Field(default=None, gt=0)
 
-    def validate_final_message(self, response: ConversationEvent) -> TextMessage | AssistantToolCalls:
+    def validate_final_message(
+        self, response: ConversationEvent | RawAssistantToolCalls
+    ) -> TextMessage | AssistantToolCalls:
         """Require the assistant's final message to honor the call contract."""
+        response = _decoded_final_action(response)
         if not isinstance(response, (TextMessage, AssistantToolCalls)) or (
             isinstance(response, TextMessage) and response.role != "assistant"
         ):
@@ -179,10 +183,36 @@ class FinalAction(Convention):
         return ActionSubmission(self.validate_final_message(attempt.conversation.events[-1]))
 
 
-SubmissionConvention = Annotated[PlainText | JsonAnswer | AnswerCall | FinalAction, Field(discriminator="answer_format")]
+SubmissionConvention = Annotated[
+    PlainText | JsonAnswer | JsonValueAnswer | AnswerCall | FinalAction, Field(discriminator="answer_format")
+]
 
 
-def _text_answer(response: ConversationEvent) -> str:
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"Non-JSON numeric constant: {value}")
+
+
+def _json_submission(text: str) -> JsonValue:
+    value = json.loads(text, object_pairs_hook=unique_object, parse_constant=_reject_json_constant)
+    return JSON_VALUE.validate_python(value)
+
+
+def _decoded_final_action(response: ConversationEvent | RawAssistantToolCalls) -> ConversationEvent:
+    if not isinstance(response, RawAssistantToolCalls):
+        return response
+    try:
+        calls = []
+        for call in response.calls:
+            arguments = _json_submission(call.arguments_json)
+            if not isinstance(arguments, dict):
+                raise ValueError("Function arguments must be a JSON object")
+            calls.append(ConversationToolCall(call_id=call.call_id, name=call.name, arguments=arguments))
+        return AssistantToolCalls(calls=tuple(calls), content=response.content)
+    except ValueError as error:
+        raise SubmissionFailure("Function arguments are malformed") from error
+
+
+def _text_answer(response: ConversationEvent | RawAssistantToolCalls) -> str:
     if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
         raise SubmissionFailure("Text submission requires nonempty assistant content without tool calls")
     return response.content
@@ -199,12 +229,15 @@ class SubmissionCompatibility:
         return not self.reasons
 
 
-def submission_compatibility(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
+def submission_compatibility(specification: TaskSpec, convention: Convention) -> SubmissionCompatibility:
     """Explain which parts of the task a submission convention cannot carry."""
     if not convention.supports(specification.answer_type):
         return SubmissionCompatibility(
             (f"{convention.answer_format.value} cannot carry {specification.answer_type.value}",)
         )
+    accepted = accepted_submission_types(resolve_verifier(specification.verifier))
+    if not any(produced in accepted for produced in convention.submission_types):
+        return SubmissionCompatibility(("Submission envelope is not accepted by the selected verifier",))
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
         reasons = []
         if not specification.final_tools:
@@ -224,6 +257,8 @@ def submission_instruction(convention: SubmissionConvention) -> str:
         return "Give your answer as plain text."
     if convention.answer_format == AnswerFormat.JSON:
         return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
+    if convention.answer_format == AnswerFormat.JSON_VALUE:
+        return "Give your final answer as one JSON value, without Markdown fences."
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
     if convention.answer_format == AnswerFormat.FINAL_ACTION:

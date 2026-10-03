@@ -15,11 +15,12 @@ from verifyit.grade import grade as source_grade
 from verifyit.spec import McqSpec, Mode
 
 from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import AnswerType, ConversationTrace, TextMessage
-from taskcompendium.submission import GradingAttempt, JsonAnswer, PlainText, render_instruction
+from taskcompendium.submission import JsonAnswer, PlainText, render_instruction
 
 from .harbor_replay import run_replay_trial
 
@@ -185,7 +186,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     script = (
         "import asyncio, json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
-        "from taskcompendium.submission import GradingAttempt; "
+        "from taskcompendium.grading_contract import GradingAttempt; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "

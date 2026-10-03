@@ -16,6 +16,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from harbor.verifier.base import BaseVerifier
 from upath import UPath
 
 from taskcompendium.grading import GradeResult, Outcome, grade_answer
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.harbor.protocol import chat_conversation
 from taskcompendium.lowering import (
     SPECIFICATION_FILE,
@@ -36,7 +38,6 @@ from taskcompendium.lowering import (
     read_submission_convention,
 )
 from taskcompendium.models import ConversationTrace
-from taskcompendium.submission import GradingAttempt
 
 SUBMISSION_FILE = "submission.json"
 CHAT_RESPONSE_FILE = "chat-response.json"
@@ -193,7 +194,7 @@ class SemanticVerifier(BaseVerifier):
         self._write_result(result)
         if result.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE) or result.reward is None:
             raise RuntimeError(result.error or result.status.value)
-        return VerifierResult(rewards={"reward": result.reward})
+        return VerifierResult(rewards={"reward": result.reward}, stdout=json.dumps(asdict(result)))
 
     def _write_result(self, result: GradeResult) -> None:
         self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)

@@ -3,12 +3,37 @@
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from verifyit import grade as grade_module
 from verifyit.grade import Status, main, scored
-from verifyit.spec import FunctionCall, Mode, PredictedActionSpec, StructuredExactSpec, render_spec
+from verifyit.json_comparison import NumericTypePolicy
+from verifyit.spec import FunctionCall, Mode, NumericSpec, PredictedActionSpec, StructuredExactSpec, render_spec
+
+
+@pytest.mark.parametrize(
+    "invalid_contract",
+    [
+        'expected = 0.30000000000000004\ntolerance_abs = "0"\ntolerance_rel = "0"',
+        'expected = "0.3"\ntolerance_abs = 0.01\ntolerance_rel = "0"',
+        'expected = "0.3"\ntolerance_abs = "0"',
+    ],
+)
+def test_numeric_private_literals_are_explicit_and_clear_previous_rewards(tmp_path, invalid_contract):
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(NumericSpec("0.3", tolerance_abs="0", tolerance_rel="0")))
+    (tmp_path / "answer.txt").write_text("0.3")
+    logs = tmp_path / "logs"
+    arguments = [str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]
+    assert main(arguments) == 0
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
+    config.write_text('mode = "numeric"\n' + invalid_contract + "\n")
+    assert main(arguments) == 0
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
 
 
 def _verdict(logs: Path) -> dict:
@@ -135,7 +160,7 @@ def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_
     [
         ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1,1.0]}', 1.0),
         ({"values": [None, True, 1, 1.0]}, '{"values":[null,1,1,1.0]}', 0.0),
-        ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1.0,1]}', 0.0),
+        ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1.0,1]}', 1.0),
         (None, "null", 1.0),
         (None, "not json", 0.0),
     ],
@@ -149,6 +174,38 @@ def test_structured_exact_file_grading_preserves_json_types_from_toml(tmp_path, 
     assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
     assert _verdict(logs)["status"] == Status.SCORED
     assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
+
+
+@pytest.mark.parametrize("policy,reward", [(NumericTypePolicy.VALUE, 1.0), (NumericTypePolicy.STRICT, 0.0)])
+def test_structured_exact_cli_respects_explicit_numeric_type_policy(tmp_path, policy, reward):
+    spec = StructuredExactSpec(expected={"nested": [16]}, numeric_types=policy, output=str(tmp_path / "answer.json"))
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(spec))
+    (tmp_path / "answer.json").write_text('{"nested":[16.0]}')
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
+
+
+@pytest.mark.parametrize(
+    "spec,candidate",
+    [
+        (StructuredExactSpec(expected={"payload": {"id": 1}}), '{"payload":{"id":0,"id":1}}'),
+        (
+            PredictedActionSpec(expected_calls=(FunctionCall("lookup", {"id": 1}),)),
+            '[{"name":"lookup","arguments":{"id":0,"id":1}}]',
+        ),
+    ],
+)
+def test_json_candidate_duplicate_keys_cannot_keep_a_matching_last_value(tmp_path, spec, candidate):
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(replace(spec, output=str(tmp_path / "answer.json"))))
+    (tmp_path / "answer.json").write_text(candidate)
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 0.0}
 
 
 @pytest.mark.parametrize("malformed_expected", ["true", "42", "[]"])

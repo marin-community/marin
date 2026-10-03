@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from taskcompendium.grading import exact_answer, grade_answer
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import (
@@ -22,7 +23,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierSpec,
 )
-from taskcompendium.submission import GradingAttempt, PlainText, chat_request
+from taskcompendium.submission import PlainText, chat_request
 
 
 @pytest.fixture
@@ -227,7 +228,7 @@ async def test_launch_rejects_schema_only_verifier_before_starting_a_trial(tmp_p
         await run_trial(
             task,
             HarborEnvironmentConfig(),
-            ChatLaunch(model="unused", api_base="https://example.invalid"),
+            ChatLaunch(request_timeout=180, model="unused", api_base="https://example.invalid"),
             tmp_path / "trials",
             "unsupported",
         )

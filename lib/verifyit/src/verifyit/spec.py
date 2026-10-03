@@ -19,7 +19,8 @@ from typing import Any
 
 import tomlkit
 
-from verifyit.json_comparison import JsonValue
+from verifyit.json_comparison import JsonValue, NumericTypePolicy
+from verifyit.json_objects import unique_object
 
 DEFAULT_REWARD_KEY = "reward"
 DEFAULT_OUTPUT = "/app/answer.txt"
@@ -107,6 +108,7 @@ class StructuredExactSpec:
     expected: JsonValue
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+    numeric_types: NumericTypePolicy = field(default=NumericTypePolicy.VALUE, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -129,9 +131,9 @@ class MathSpec:
 
 @dataclass(frozen=True)
 class NumericSpec:
-    expected: float
-    tolerance_abs: float = 1e-6
-    tolerance_rel: float = 1e-6
+    expected: str
+    tolerance_abs: str
+    tolerance_rel: str
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
@@ -433,11 +435,11 @@ def parse_spec(text: str) -> Spec:
     if table.get("mode") == Mode.PREDICTED_ACTION and isinstance(table.get("expected_calls"), list):
         for call in table.get("expected_calls", []):
             if isinstance(call, dict) and isinstance(call.get("arguments"), str):
-                call["arguments"] = json.loads(call["arguments"])
+                call["arguments"] = json.loads(call["arguments"], object_pairs_hook=unique_object)
     if table.get("mode") == Mode.STRUCTURED_EXACT and "expected" in table:
         if not isinstance(table["expected"], str):
             raise ValueError("Structured reference in TOML must be a JSON string")
-        table["expected"] = json.loads(table["expected"])
+        table["expected"] = json.loads(table["expected"], object_pairs_hook=unique_object)
     return spec_from_table(table)
 
 

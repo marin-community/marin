@@ -11,10 +11,9 @@ from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
-from verifyit.spec import StructuredExactSpec
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
-from taskcompendium.grading import resolve_verifier, supports_verifier, validate_verifier
+from taskcompendium.grading import supports_verifier, validate_verifier
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec, VerifierSpec
 from taskcompendium.submission import (
     SubmissionConvention,
@@ -60,7 +59,7 @@ class SelectionPolicy(StrEnum):
 
 
 def direct_chat_verifier_supported(specification: VerifierSpec) -> bool:
-    return supports_verifier(specification) and not isinstance(resolve_verifier(specification), StructuredExactSpec)
+    return supports_verifier(specification)
 
 
 def compatible_lowerings(

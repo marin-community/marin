@@ -9,6 +9,7 @@ import ast
 import functools
 import inspect
 import math
+from fractions import Fraction
 from importlib import import_module
 
 from verifyit.adapters import harness_validation as validation
@@ -168,7 +169,10 @@ def grade_mmmu_open(references, candidates) -> Reward:
                     candidate,
                 )
             elif type(candidate) is float and type(reference) is float:
-                result = grade_numeric_candidate(NumericSpec(reference, tolerance_abs=0.0, tolerance_rel=0.0), candidate)
+                result = grade_numeric_candidate(
+                    NumericSpec(str(Fraction.from_float(reference)), tolerance_abs="0", tolerance_rel="0"),
+                    Fraction.from_float(candidate),
+                )
             else:
                 continue
             if result.reward:

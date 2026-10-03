@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.grading import grade_answer, validate_verifier
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.harbor.protocol import assistant_message
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
@@ -19,10 +20,12 @@ from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowering
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
+    ConversationInput,
     ConversationToolCall,
     ConversationTrace,
+    TextMessage,
 )
-from taskcompendium.submission import FinalAction, GradingAttempt, chat_request
+from taskcompendium.submission import FinalAction, chat_request
 
 from .harbor_replay import run_replay_trial
 
@@ -73,7 +76,8 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
         "import asyncio, json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.harbor.protocol import chat_conversation; "
-        "from taskcompendium.submission import GradingAttempt, chat_request; "
+        "from taskcompendium.grading_contract import GradingAttempt; "
+        "from taskcompendium.submission import chat_request; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "specification = read_specification(root / 'specification.json'); "
@@ -249,7 +253,9 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     result = await run_trial(
         task,
         environment_config,
-        ChatLaunch(model="model", api_base="https://example.invalid", api_key_env="NEMO_TEST_API_KEY"),
+        ChatLaunch(
+            request_timeout=180, model="model", api_base="https://example.invalid", api_key_env="NEMO_TEST_API_KEY"
+        ),
         tmp_path / "trials",
         "run",
     )
@@ -296,7 +302,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
         await run_trial(
             task,
             environment_config,
-            ChatLaunch(model="model", api_base="https://example.invalid", parallel_tool_calls=True),
+            ChatLaunch(request_timeout=180, model="model", api_base="https://example.invalid", parallel_tool_calls=True),
             tmp_path / "trials",
             "conflicting-launch",
         )
@@ -326,7 +332,6 @@ async def test_predicted_action_grades_typed_evidence_from_any_harness():
     "response",
     [
         {"role": "assistant", "tool_calls": "not-a-list"},
-        _action("authenticate_user", "not-json"),
     ],
 )
 async def test_chat_protocol_failure_is_ungraded_and_retains_raw_response(tmp_path, monkeypatch, response):
@@ -342,7 +347,7 @@ async def test_chat_protocol_failure_is_ungraded_and_retains_raw_response(tmp_pa
     result = await run_trial(
         task,
         environment_config,
-        ChatLaunch(model="model", api_base="https://example.invalid"),
+        ChatLaunch(request_timeout=180, model="model", api_base="https://example.invalid"),
         tmp_path / "trials",
         "run",
     )
@@ -399,3 +404,26 @@ async def test_final_action_max_two_preserves_the_submission_limit_before_scorin
     attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)), object())
     result = await grade_answer(specification, FinalAction(id="max-two", require_call=True, max_calls=2), attempt)
     assert (result.status, result.reward) == (status, reward)
+
+
+@pytest.mark.parametrize("arguments", ["not-json", '{"name":"Alice","name":"Bob"}', '{"name":{"x":1,"x":2}}'])
+async def test_malformed_final_argument_json_is_submission_failure_not_infrastructure(tmp_path, arguments):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification, convention = import_row(row, canonical_sha256(row))
+    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
+    result = await run_replay_trial(task, _action("authenticate_user", arguments), tmp_path / "trials", "invalid")
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": 0.0}
+    assert json.loads(result.verifier_result.stdout)["status"] == "submission_failure"
+    trace = ConversationTrace.model_validate_json((tmp_path / "trials/invalid/agent/submission.json").read_text())
+    assert trace.events[-1].calls[0].arguments_json == arguments
+
+
+def test_raw_calls_cannot_enter_historical_context():
+    response = assistant_message(_action("authenticate_user", '{"name":"Alice"}'))
+    with pytest.raises(ValueError):
+        ConversationInput(events=(TextMessage(role="user", content="task"), response))
+    with pytest.raises(ValueError):
+        ConversationTrace(
+            events=(TextMessage(role="user", content="task"), response, TextMessage(role="assistant", content="Done"))
+        )

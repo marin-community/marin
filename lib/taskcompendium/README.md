@@ -4,7 +4,7 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for final text, number, and native-action results. It grades them through the shared verifier library after extracting the submission. The complete semantic schema also represents files, workspace state, arbitrary environment state, pinned images, initial workspaces, tool providers, and private resources. Their execution requires additional runtimes; direct chat rejects their requirements before export or launch.
+The current implementation exports Harbor tasks for final text, number, JSON-value, and native-action results. It grades them through the shared verifier library after extracting the submission. The complete semantic schema also represents files, workspace state, arbitrary environment state, pinned images, initial workspaces, tool providers, and private resources. Their execution requires additional runtimes; direct chat rejects their requirements before export or launch.
 
 ## What does it contain?
 
@@ -36,10 +36,10 @@ flowchart LR
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
 | `final_tools` | An ordered list of functions that terminate a chat. They are not backed by a tool provider. |
-| `answer_type` | The semantic result: `text`, `number`, `file`, `state`, `workspace_state`, or `native_action`. |
+| `answer_type` | The semantic result: `text`, `number`, `json`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
-| `schema_version` | Version of the serialized spec: `0.20`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.21`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
@@ -59,7 +59,7 @@ A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` 
 
 ### Numeric answers
 
-A numeric task uses `answer_type=number` and can use the same submission conventions as text. The `numeric` verifier parses the extracted string as a number and applies the explicitly configured absolute and relative tolerances. For example, both `12` and `12.0` can satisfy an expected value of `12.0`.
+A numeric task uses `answer_type=number` and can use the same submission conventions as text. Expected values and tolerances are required numeric literal strings, preserving integers, decimals and fractions without float rounding. The `numeric` verifier extracts a full final scalar, the last boxed answer, or an explicit `Answer:` / `The answer is` envelope, then compares exact numeric values with the configured tolerances. Missing, malformed, or ambiguous numeric output is `submission_failure`; a valid wrong number is `graded` with reward `0.0`.
 
 ### Final function calls
 
@@ -69,7 +69,9 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Exporting and running these results requires environment configurations and submission conventions that are not implemented here. The shared `structured_exact` verifier compares acquired JSON values with exact scalar types and ordered arrays. This package does not acquire state results.
+`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Exporting and running these results requires environment configurations and submission conventions that are not implemented here. The shared `structured_exact` verifier compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types. This package does not acquire environment-state results.
+
+`answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` remains evidence acquired from an environment; direct chat cannot produce it. The shared structured scorer accepts either evidence envelope. The existing `JsonAnswer` convention instead unwraps an `answer` string for text or numeric tasks. Both reject duplicate keys at every nesting level and nonfinite numbers. Native final-call argument strings remain raw in trial evidence until the convention validates and decodes them; malformed or duplicate arguments receive `submission_failure`, rather than an infrastructure error. Historical source calls retain decoded arguments.
 
 Public expectations belong in `context`: for example, the columns a CSV must contain or the behavior a repaired project must provide. The private verifier checks those expectations. A submission convention chooses how the result is delivered and extracted. `answer_type` identifies its semantic kind. TaskSpec has no extra intrinsic encoding or answer-format field.
 
@@ -172,13 +174,13 @@ Schema loading accepts descriptors without a grader implementation. Shared verif
 
 Standard verifier contracts and pure candidate scoring live in `verifyit`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. Submission conventions acquire evidence; TaskCompendium scores it and translates shared rewards into Harbor outcomes; it has no verifier registry or separate standard verifier schema.
 
-The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` compares acquired JSON values without scalar coercion; it requires a state submission and has no direct-chat lowering. The expected answer and grading settings stay out of the model-visible instruction.
+The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` compares JSON evidence with value equality for numbers by default and optional strict numeric types. It accepts a JSON chat answer through `JsonValueAnswer` or a value acquired by another runtime. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 
 A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with a Harbor environment configuration, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the environment configuration says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
 
-`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no worker or verifier environment capabilities, images, workspace initialization, tool providers, or resources; a task requiring `shell` has no candidate in the current implementation. File, workspace-state, arbitrary-state, and unimplemented-verifier tasks also have no direct-chat candidate. Export and launch raise `NotImplementedError` for these requirements before producing artifacts or requesting a model response. Chat request construction also rejects unsupported environment and resource requirements. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
+`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` also intersects the convention’s declared submission types with those accepted by the scoring bridge and checks environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no worker or verifier environment capabilities, images, workspace initialization, tool providers, or resources; a task requiring `shell` has no candidate in the current implementation. File, workspace-state, arbitrary-state, and unimplemented-verifier tasks also have no direct-chat candidate. Export and launch raise `NotImplementedError` for these requirements before producing artifacts or requesting a model response. Chat request construction also rejects unsupported environment and resource requirements. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
 Submission conventions preserve the task’s advertised functions. Plain-text and JSON submissions keep those functions; the `answer_call` convention adds `submit_answer` and requires one call with an answer string. An existing function named `submit_answer` conflicts with that convention and is rejected. `FinalAction(require_call=True)` requests a call, and `FinalAction(max_calls=1)` disables parallel calls. Before scoring, the grading boundary rejects missing required calls or calls exceeding `max_calls` as `submission_failure` with reward `0.0`. Direct chat captures the final assistant turn without executing advertised functions.
 
@@ -203,7 +205,7 @@ spec = TaskSpec(
     context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
     environment_requirements=EnvironmentRequirements(),
     answer_type=AnswerType.NUMBER,
-    verifier=numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0),
+    verifier=numeric_answer("12", tolerance_abs="0", tolerance_rel="0"),
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
 )
 conventions = (
@@ -228,7 +230,7 @@ separately.
 
 `lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `environment_config.json` for the launcher and custom verifier. The package also has an empty `environment/` directory. A chat launch sends the structured conversation from the spec, then adds the convention's final answer instruction when needed. The agent has no tool to read the package files. Harbor's custom verifier can read the spec and private reference answer. The convention file tells it how to extract the submitted answer.
 
-`run_trial` takes the exported directory, its environment configuration, and a chat launch. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. Provide the endpoint's base URL and, if needed, the name of an environment variable containing the API key. The agent resolves that variable in its process; the trial configuration retains only its name.
+`run_trial` takes the exported directory, its environment configuration, and a chat launch. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. Provide the endpoint's base URL and, if needed, the name of an environment variable containing the API key. The agent resolves that variable in its process; the trial configuration retains only its name. `request_timeout` is an explicit positive finite endpoint timeout. Optional `max_tokens` and `reasoning_effort` reach the model request; provider support for the selected reasoning-effort string is the caller’s responsibility. These launch controls do not alter the task or its private verifier.
 
 ```python
 import asyncio
@@ -239,18 +241,21 @@ result = asyncio.run(
     run_trial(
         Path("/tmp/arithmetic-task"),
         chosen.environment_config,
-        ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key_env="MODEL_API_KEY"),
+        ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key_env="MODEL_API_KEY",
+                   request_timeout=900, max_tokens=8192, reasoning_effort="high"),
         Path("/tmp/arithmetic-trials"),
         "arithmetic-run",
     )
 )
 ```
 
-Each direct-chat Harbor trial runs one `ChatAgent` using the exported submission convention. The lowering prepares the conversation and tool configuration; the agent makes one request, validates the chat protocol, and writes a typed `ConversationTrace` to `submission.json`. This trace contains the complete model-visible conversation, including submission instructions and the final assistant message. Function-call arguments are decoded objects in both source context and grading evidence. The raw provider response is retained separately in `chat-response.json` for diagnostics.
+Each direct-chat Harbor trial runs one `ChatAgent` using the exported submission convention. The lowering prepares the conversation and tool configuration; the agent makes one request, validates the chat protocol, and writes a typed `ConversationTrace` to `submission.json`. This trace contains the complete model-visible conversation, including submission instructions and the final assistant message. Earlier function calls in the source context have decoded arguments. The final assistant call keeps its argument JSON string until submission extraction. The raw provider response is retained separately in `chat-response.json` for diagnostics.
 
 The direct-chat environment exposes no filesystem or shell tools. Harbor's custom verifier reads the typed trace and awaits `grade_answer` with a typed `GradingAttempt`. The convention extracts one typed submission asynchronously; TaskCompendium passes its text, numeric or final-action evidence to shared scoring. Expected values stay in private verifier configuration. Each harness translates its protocol into the shared conversation types.
 
-A valid but wrong answer receives reward `0.0`. A text, numeric, or final-action answer that violates its submission convention receives `submission_failure` with reward `0.0`. A native-action submission that satisfies its convention but differs from the expected function calls receives reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
+A valid but wrong answer receives reward `0.0`. A text, numeric, or final-action answer that violates its submission convention receives `submission_failure` with reward `0.0`. A native-action submission that satisfies its convention but differs from the expected function calls receives reward `0.0`. Malformed final-call argument JSON receives `submission_failure` with reward `0.0`. A malformed provider message fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
+
+`read_trial_outcome(result)` returns a typed `GradeResult` from the full Harbor result: `graded` (including a valid wrong answer), `submission_failure`, or `infra_error` with no reward. The verifier returns its outcome JSON in `VerifierResult.stdout` and writes the same outcome to the host trial logs. HTTP or lifecycle failure before verification is read from Harbor’s exception. A result with neither outcome nor exception raises instead of fabricating reward. Harbor’s `slimmed()` aggregation copy drops stdout; retain the full returned or persisted `TrialResult` when submission status is needed.
 
 The package tests use a test-only `ReplayAgent` in `tests/harbor_replay.py` to write fixed assistant messages and exercise Harbor grading without a model request. They also replay responses at the HTTP boundary through the production launcher. Replay is absent from the installed package and public launcher.
 
@@ -265,3 +270,5 @@ uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskc
 cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
+
+Schema `0.21` adds the distinct JSON result kind. Decoders reject other schema versions; existing conversion pipelines must emit the current contract.

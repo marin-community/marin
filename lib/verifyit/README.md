@@ -22,7 +22,7 @@ process exit after a verdict has been written.
 
 | mode | contract |
 |---|---|
-| `structured_exact` | exact JSON values with distinct scalar types and ordered arrays |
+| `structured_exact` | exact JSON values with ordered arrays and optional strict numeric types |
 | `predicted_action` | unordered function calls with exact JSON types and optional float tolerance |
 | `mcq` | expected option letter |
 | `math` | expression equality through math-verify |
@@ -43,10 +43,17 @@ process exit after a verdict has been written.
 For the `math` and `numeric` grading modes, the last `\boxed{...}` occurrence determines the
 candidate when the output contains a box marker. Its braces must be balanced and its content must be
 nonempty. Otherwise, the candidate receives reward `0.0`, even when an earlier marker contains the
-expected answer. Without a box marker, `math` grades the last nonempty line and `numeric` grades the
-last number. Numeric expected values and absolute and relative tolerances must be finite. Tolerances
-must also be nonnegative. The effective tolerance,
-`max(tolerance_abs, tolerance_rel * abs(expected))`, must be finite.
+expected answer. Without a box marker, both modes read the last nonempty line. Numeric answers
+require one integer, decimal, scientific-notation value or integer fraction, optionally preceded
+by `Answer:` or `The answer is`. Thousands separators require groups of three digits. Alternatives
+such as `12 or 13`, arithmetic expressions and nonfinite values are malformed submissions.
+
+Numeric private `expected`, `tolerance_abs` and `tolerance_rel` are required literal strings.
+For example, `expected = "1/2"`, `tolerance_abs = "0"`, `tolerance_rel = "0"` accepts both `1/2`
+and `0.5`. Comparison uses exact rational arithmetic with
+`max(tolerance_abs, tolerance_rel * abs(expected))`; tolerances must be nonnegative.
+Native float configuration is rejected because rounding may already have changed its meaning.
+Literal components and expanded decimal powers are limited to 4096 digits before parsing.
 
 [`spec.py`](src/verifyit/spec.py) owns the frozen mode dataclasses plus `parse_spec` and
 `render_spec`. Spec paths are relative to the directory containing `verifier.toml`. `grade.py`
@@ -71,15 +78,18 @@ execution, dispatch, and dependency pins; installing this package does not enabl
 `preparation/` retains raw inputs and named normalization policies. Preparation failures carry
 Harbor's error categories from the pinned config-only `harbor-config` dependency.
 
-`json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
-float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
+`json_comparison.json_values_equal` compares decoded JSON values and ordered arrays, with an optional
+float tolerance. Numbers compare by value by default, so `16` equals `16.0`; booleans remain distinct
+from numbers. `NumericTypePolicy.STRICT` also distinguishes integers from floats. Integer comparisons
+retain their precision. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
 
 `candidate_spec(mode, parameters)` validates the shared exact, numeric, MCQ and predicted-action
 contracts for callers that already extracted a submission. `grade_text_candidate` scores extracted
 text; `grade_predicted_action_candidate` scores decoded function calls. These APIs perform no
 filesystem or harness operations. Predicted-action matching preserves duplicate calls and requires
-all calls to match one to one. Argument objects stay decoded in JSON descriptors; `render_spec`
+all calls to match one to one, using strict numeric types. Argument objects stay decoded in JSON
+descriptors; `render_spec`
 encodes each argument object as a JSON string in TOML so nested JSON null values survive
 `parse_spec`.
 
@@ -112,4 +122,6 @@ uv run --group test pytest lib/verifyit/tests
 
 `StructuredExactSpec` compares acquired JSON values through `grade_structured_exact_candidate`.
 Its TOML reference is encoded as a JSON string so null and nested JSON types survive
-`render_spec` and `parse_spec`; private JSON descriptors keep decoded values.
+`render_spec` and `parse_spec`; private JSON descriptors keep decoded values. Its `numeric_types`
+defaults to `"value"`; set `"strict"` to distinguish integers from floats. Structured and predicted-action
+candidate JSON rejects duplicate object keys.
