@@ -183,7 +183,8 @@ def complement_data_step() -> ArtifactStep:
     )
 
 
-def collection_step(model: str, task: str | None, images: tuple[str, str, str]) -> ArtifactStep:
+def collection_spec(model: str, task: str | None, images: tuple[str, str, str]) -> SkyRLSpec:
+    """Bind unchanged complement tasks and one pinned model into a rollout specification."""
     source = MODELS[model]
     model_step = ArtifactStep.adopt(
         user_owned_name(f"models/bfcl-rl-{model}"),
@@ -194,40 +195,44 @@ def collection_step(model: str, task: str | None, images: tuple[str, str, str]) 
     )
     data_step = complement_data_step()
     name = user_owned_name(f"rollouts/bfcl-rl-recovery-{model}-{task or 'full'}")
-    return skyrl_step(
-        SkyRLSpec(
-            name=name,
-            version=resolve_version(name, None),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-            config_yaml=collection_recipe(images),
-            model=ArtifactHfModel(model_step, source.model, source.revision, relative_path=""),
-            train_data=(
-                ArtifactDataSource(data_step, relative_path=f"bfcl_complement/{task}" if task else "bfcl_complement"),
-            ),
-            validation_data=(),
-            topology=SkyRLTopology(
-                num_nodes=ROLE_PLAN.policy_num_nodes,
-                gpus_per_node=ROLE_PLAN.policy_num_gpus_per_node,
-                gpu_variant="H100",
-                role_plan=ROLE_PLAN,
-            ),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, temporary_storage_ttl_days=14),
-            seed=42,
+    return SkyRLSpec(
+        name=name,
+        version=resolve_version(name, None),
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        config_yaml=collection_recipe(images),
+        model=ArtifactHfModel(model_step, source.model, source.revision, relative_path=""),
+        train_data=(
+            ArtifactDataSource(data_step, relative_path=f"bfcl_complement/{task}" if task else "bfcl_complement"),
         ),
-        IrisSkyRLExecution(
-            cluster="cw-rno2a",
-            cluster_config="lib/iris/config/cw-rno2a.yaml",
-            target_cluster="cw-rno2a",
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            cpu=48,
-            memory="1611Gi",
-            disk="21745Gi",
-            priority="interactive",
-            max_retries=0,
-            coordinator_timeout_hours=24,
-            job_timeout_seconds=24 * 60 * 60,
+        validation_data=(),
+        topology=SkyRLTopology(
+            num_nodes=ROLE_PLAN.policy_num_nodes,
+            gpus_per_node=ROLE_PLAN.policy_num_gpus_per_node,
+            gpu_variant="H100",
+            role_plan=ROLE_PLAN,
         ),
+        retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, temporary_storage_ttl_days=14),
+        seed=42,
     )
+
+
+COLLECTION_EXECUTION = IrisSkyRLExecution(
+    cluster="cw-rno2a",
+    cluster_config="lib/iris/config/cw-rno2a.yaml",
+    target_cluster="cw-rno2a",
+    parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+    cpu=48,
+    memory="1611Gi",
+    disk="21745Gi",
+    priority="interactive",
+    max_retries=0,
+    coordinator_timeout_hours=24,
+    job_timeout_seconds=24 * 60 * 60,
+)
+
+
+def collection_step(model: str, task: str | None, images: tuple[str, str, str]) -> ArtifactStep:
+    return skyrl_step(collection_spec(model, task, images), COLLECTION_EXECUTION)
 
 
 @click.command(help=__doc__)
