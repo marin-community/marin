@@ -11,7 +11,8 @@ from experiments.grug.fast_track.negative_control import shuffle_bucket_tokens
 
 
 @pytest.mark.parametrize("layout", ["materialized", "sharded"])
-def test_token_shuffle_preserves_documents_and_special_positions(tmp_path, layout):
+def test_token_shuffle_preserves_documents_and_special_positions(tmp_path, monkeypatch, layout):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "scratch"))
     source = str(tmp_path / "source")
     exemplar = {"input_ids": np.zeros(0, dtype=np.int32)}
     documents = [
