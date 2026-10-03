@@ -202,7 +202,7 @@ class ShellVerifierSpec(BaseModel):
     """Private files, a verifier command, and its reward source.
 
     The engine installs private files after the final model response. For file
-    rewards, a valid reward file takes priority over the command exit code.
+    rewards, the command exit code does not supply the score.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

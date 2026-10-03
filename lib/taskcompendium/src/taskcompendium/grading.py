@@ -19,12 +19,16 @@ from verifyit.modes.grade_predicted_action import grade_predicted_action_candida
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec, Spec, mode_of, spec_to_table
 from verifyit.spec import FunctionCall as CandidateCall
 
+from taskcompendium.environment import ExternalVerifierSpec, ShellVerifierSpec
 from taskcompendium.models import (
     AssistantToolCalls,
     ConversationTrace,
     EnvironmentRequirements,
+    SkippedVerifierSpec,
+    StageVerifierSpec,
     TaskSpec,
     TextMessage,
+    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.submission import AnswerFormat, FinalAction, Submission, extract_answer
@@ -69,7 +73,17 @@ def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
 
 
 def validate_verifier(specification: VerifierSpec) -> None:
-    resolve_verifier(specification)
+    """Validate the payload for each supported verifier kind."""
+    if specification.kind == VerifierKind.SHELL:
+        ShellVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.EXTERNAL:
+        ExternalVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.STAGED:
+        StageVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.SKIPPED:
+        SkippedVerifierSpec.model_validate_json(specification.parameters_json)
+    else:
+        resolve_verifier(specification)
 
 
 def supports_verifier(specification: VerifierSpec) -> bool:
@@ -133,4 +147,7 @@ def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) 
 
 def skipped_verifier(reason: str) -> VerifierSpec:
     """Describe an explicit rollout-time grading omission."""
-    return VerifierSpec(kind="skipped", parameters_json=json.dumps({"reason": reason}))
+    return VerifierSpec(
+        kind=VerifierKind.SKIPPED,
+        parameters_json=SkippedVerifierSpec(reason=reason).model_dump_json(),
+    )
