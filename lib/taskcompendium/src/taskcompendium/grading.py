@@ -41,7 +41,7 @@ from verifyit.spec import (
 from verifyit.spec import FunctionCall as CandidateCall
 
 from taskcompendium.grader import grader_package
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -178,7 +178,7 @@ def _grade_result(verdict: Reward) -> GradeResult:
     if verdict.status == Status.SCORED:
         return GradeResult(Outcome.GRADED, verdict.reward, detail=verdict.detail)
     status = Outcome.INVALID_TASK if verdict.status == Status.INVALID_TASK else Outcome.INFRA_ERROR
-    return GradeResult(status, None, verdict.detail.get("error"), verdict.detail)
+    return GradeResult(status, None, verdict.detail.get("error"), detail=verdict.detail)
 
 
 def _answer_output(verifier: Spec) -> Path:
@@ -285,3 +285,8 @@ def predicted_action_verifier(expected_calls: tuple[FunctionCall, ...]) -> Verif
     return verifier_descriptor(
         PredictedActionSpec(expected_calls=tuple(CandidateCall(call.name, call.arguments) for call in expected_calls))
     )
+
+
+def skipped_verifier(reason: str) -> VerifierSpec:
+    """Describe an explicit rollout-time grading omission."""
+    return VerifierSpec(kind="skipped", parameters_json=json.dumps({"reason": reason}))

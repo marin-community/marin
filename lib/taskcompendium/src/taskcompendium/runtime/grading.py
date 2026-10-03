@@ -141,7 +141,7 @@ async def _sandbox_grade(
                 status,
                 verdict["reward"] if status == Outcome.GRADED else None,
                 verdict["detail"].get("error"),
-                verdict["detail"],
+                detail=verdict["detail"],
             )
     finally:
         await machine.close()
