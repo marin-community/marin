@@ -171,6 +171,16 @@ def collection_recipe(images: tuple[str, str, str]) -> str:
     )
 
 
+def complement_data_step() -> ArtifactStep:
+    return ArtifactStep.adopt(
+        user_owned_name("data/bfcl-rl-complement"),
+        "2026.10.03",
+        DATA_URI,
+        kind=Artifact,
+        config={"dataset_commit": DATASET_COMMIT, "train_tasks": 3518, "parity_tasks": 123},
+    )
+
+
 def collection_step(model: str, task: str | None, images: tuple[str, str, str]) -> ArtifactStep:
     source = MODELS[model]
     model_step = ArtifactStep.adopt(
@@ -180,13 +190,7 @@ def collection_step(model: str, task: str | None, images: tuple[str, str, str]) 
         kind=LevanterCheckpoint,
         config={"model": source.model, "revision": source.revision},
     )
-    data_step = ArtifactStep.adopt(
-        user_owned_name("data/bfcl-rl-complement"),
-        "2026.10.03",
-        DATA_URI,
-        kind=Artifact,
-        config={"dataset_commit": DATASET_COMMIT, "train_tasks": 3518, "parity_tasks": 123},
-    )
+    data_step = complement_data_step()
     name = user_owned_name(f"rollouts/bfcl-rl-recovery-{model}-{task or 'full'}")
     return skyrl_step(
         SkyRLSpec(

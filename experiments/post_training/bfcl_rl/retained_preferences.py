@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
 
-from experiments.post_training.bfcl_rl.data import BFCLPartition, DATASET_COMMIT
+from rigging.filesystem.storage_path import StoragePath
+
+from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, BFCLPartition
 from experiments.post_training.bfcl_rl.preferences import RolloutOutcome, VerifiedRollout, select_pair
 
 
@@ -24,6 +26,7 @@ class CollectionIdentity:
     model_revision: str
     harness: str
     dataset_commit: str
+    task_root: str
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,8 @@ def retained_rollout(
         raise ValueError("preference ingestion requires per-step prompt evidence from schema v6")
     if record["run_id"] != identity.run_id:
         raise ValueError("retained record belongs to a different collection run")
+    if record["phase"] != "eval" or record["global_step"] != 0:
+        raise ValueError("recovery requires generation-only evidence before optimizer updates")
     if record["provenance"]["model_source_identity"] != identity.model_source_identity:
         raise ValueError("retained record belongs to a different model source")
     tasks = {task.name: task for task in partition.complement}
@@ -71,8 +76,8 @@ def retained_rollout(
     if task.source_id in {item.source_id for item in partition.parity}:
         raise ValueError("audited partition contains a parity task in the training complement")
     data_source = record["trajectory"]["environment_extras"]["data_source"]
-    if Path(data_source).name != task.name:
-        raise ValueError("retained task name differs from its source path")
+    if Path(data_source).name != task.name or str(Path(data_source).parent) != identity.task_root:
+        raise ValueError("retained task path differs from the worker's audited data source")
     verdict = record["verification_result"]
     outcome = RolloutOutcome.UNSCORED
     disposition = record["disposition"]
@@ -120,13 +125,13 @@ def retained_rollout(
 
 
 def read_retained_archives(
-    archives: Sequence[Path], *, identity: CollectionIdentity, partition: BFCLPartition
+    archives: Sequence[str], *, identity: CollectionIdentity, partition: BFCLPartition
 ) -> tuple[RetainedRollout, ...]:
     """Read native retention ZIP archives without extracting files or retokenizing."""
     records = []
     record_ids = set()
     for path in archives:
-        with zipfile.ZipFile(path) as archive:
+        with StoragePath(path).open("rb") as source, zipfile.ZipFile(source) as archive:
             for name in sorted(archive.namelist()):
                 if not name.startswith("records/") or not name.endswith(".json.gz"):
                     continue
