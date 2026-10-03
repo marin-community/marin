@@ -85,7 +85,9 @@ export async function fetchChatShare(shareId: string): Promise<unknown> {
   throw new Error(`chat share returned ${response.status}: ${await response.text()}`)
 }
 
-/** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */
+/** POST an OpenAI request and invoke onData for buffered JSON or SSE events.
+ * Returns the first choice's finish reason, or null when the server omits it.
+ * With a vLLM context length, count prompt tokens and cap the output budget. */
 export async function requestCompletion(
   path: string,
   body: Record<string, unknown>,
