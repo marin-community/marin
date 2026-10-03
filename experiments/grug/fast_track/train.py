@@ -210,9 +210,6 @@ def _apply_runtime_defaults(*, inline_watch_enabled: bool, ragged_transport: Rag
         # Size the jit_train_step temp arena below the allocator limit, leaving slack for fragmentation.
         "--xla_gpu_memory_limit_slop_factor=85",
         XLA_GPU_COMMAND_BUFFER_FLAG,
-        # Sharded autotuning exchanges results through the coordination KV store, and it deadlocks when the
-        # processes' per-fusion autotune caches differ (a new fusion is a miss on some processes only).
-        "--xla_gpu_shard_autotuning=false",
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
