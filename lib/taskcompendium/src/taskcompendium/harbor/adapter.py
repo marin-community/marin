@@ -16,6 +16,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from harbor.verifier.base import BaseVerifier
 from upath import UPath
 
 from taskcompendium.grading import GradeResult, Outcome, grade_answer
+from taskcompendium.grading_contract import GradingAttempt
 from taskcompendium.harbor.protocol import chat_conversation
 from taskcompendium.lowering import (
     SPECIFICATION_FILE,
@@ -184,15 +186,15 @@ class SemanticVerifier(BaseVerifier):
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             conversation_path = self.trial_paths.agent_dir / SUBMISSION_FILE
             conversation = ConversationTrace.model_validate_json(conversation_path.read_text())
-            result = grade_answer(specification, convention, conversation)
+            result = await grade_answer(specification, convention, GradingAttempt(conversation, self.environment))
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
             raise RuntimeError(result.error) from error
         self._write_result(result)
-        if result.status != Outcome.GRADED or result.reward is None:
+        if result.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE) or result.reward is None:
             raise RuntimeError(result.error or result.status.value)
-        return VerifierResult(rewards={"reward": result.reward})
+        return VerifierResult(rewards={"reward": result.reward}, stdout=json.dumps(asdict(result)))
 
     def _write_result(self, result: GradeResult) -> None:
         self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)

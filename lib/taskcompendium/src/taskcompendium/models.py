@@ -13,8 +13,9 @@ from typing import Annotated, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
+from verifyit.json_objects import unique_object
 
-SCHEMA_VERSION = "0.20"
+SCHEMA_VERSION = "0.21"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 
 
@@ -23,6 +24,7 @@ class AnswerType(StrEnum):
 
     TEXT = "text"
     NUMBER = "number"
+    JSON = "json"
     FILE = "file"
     STATE = "state"
     WORKSPACE_STATE = "workspace_state"
@@ -113,6 +115,26 @@ class AssistantToolCalls(BaseModel):
     content: str | None = None
 
 
+class RawToolCall(BaseModel):
+    """One final model call before JSON arguments have been extracted."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    call_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    arguments_json: str
+
+
+class RawAssistantToolCalls(BaseModel):
+    """Final-call wire evidence; historical source calls remain decoded."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["raw_assistant_tool_calls"] = "raw_assistant_tool_calls"
+    calls: tuple[RawToolCall, ...] = Field(min_length=1)
+    content: str | None = None
+
+
 class ToolResult(BaseModel):
     """A historical result for a function call in the conversation prefix."""
 
@@ -184,7 +206,7 @@ class ConversationTrace(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    events: tuple[ConversationEvent, ...]
+    events: tuple[ConversationEvent | RawAssistantToolCalls, ...]
 
     @model_validator(mode="after")
     def validate_trace(self) -> "ConversationTrace":
@@ -194,7 +216,7 @@ class ConversationTrace(BaseModel):
         final = self.events[-1]
         if isinstance(final, ToolResult) or (isinstance(final, TextMessage) and final.role != "assistant"):
             raise ValueError("Grading evidence requires a final assistant message")
-        if isinstance(final, AssistantToolCalls):
+        if isinstance(final, (AssistantToolCalls, RawAssistantToolCalls)):
             identifiers = [call.call_id for call in final.calls]
             historical = {
                 call.call_id
@@ -327,7 +349,9 @@ class VerifierSpec(BaseModel):
     @field_validator("parameters_json")
     @classmethod
     def validate_parameters(cls, value: str) -> str:
-        parameters = json.loads(value, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
+        parameters = json.loads(
+            value, object_pairs_hook=unique_object, parse_constant=_reject_json_constant, parse_float=_finite_json_float
+        )
         if not isinstance(parameters, dict):
             raise ValueError("Verifier configuration must be a JSON object")
         return value

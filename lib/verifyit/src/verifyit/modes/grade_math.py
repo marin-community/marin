@@ -21,6 +21,7 @@ import math
 import re
 import threading
 from enum import StrEnum
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ from verifyit.grade import (
     scored,
 )
 from verifyit.modes.extract import BOXED, extract_boxed, last_line, strip_math_delimiters
+from verifyit.numeric import NumericCandidateError, extract_numeric_candidate, numeric_literal
 from verifyit.spec import MathProfile, MathSpec, MathType, NumericSpec
 
 SET_TYPES = frozenset({MathType.SET, MathType.INTERVAL})
@@ -43,7 +45,6 @@ SIZE_COMMANDS = ("\\left", "\\right", "\\big", "\\Big", "\\bigg", "\\Bigg")
 TIMEOUT = 5
 """Seconds math-verify may spend parsing or comparing one expression. Its timeout arms
 ``signal.alarm``, which only the main thread may do, so a worker thread runs without it."""
-NUMBER = re.compile(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?(?:[eE][-+]?\d+)?|[-+]?\.\d+(?:[eE][-+]?\d+)?")
 
 
 def _timeout() -> int:
@@ -316,16 +317,6 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
     return grade_math_candidate(spec, candidate)
 
 
-def _last_number(text: str) -> float | None:
-    boxed = extract_boxed(text)
-    sources = [boxed or ""] if BOXED in text else [text]
-    for source in sources:
-        matches = NUMBER.findall(source)
-        if matches:
-            return float(matches[-1].replace(",", ""))
-    return None
-
-
 def _numeric_rows(value: object) -> list[list[float]]:
     if not isinstance(value, (list, tuple)) or not value:
         raise ValueError("numeric rows must be a nonempty matrix")
@@ -399,29 +390,33 @@ def grade_regression_candidate(expected: object, candidate: object, *, variance_
     return scored(max(0.0, r2), nmse=nmse, nmae=nmae, r2=r2)
 
 
-def grade_numeric_candidate(spec: NumericSpec, value: float) -> Reward:
-    """Score a numeric value after the caller extracts it from its submission format."""
+def grade_numeric_candidate(spec: NumericSpec, value: Fraction) -> Reward:
+    """Compare an exact scalar against validated private literals and tolerances."""
     empty_output_policy(spec)
     tolerance = numeric_tolerance(spec)
-    try:
-        finite = math.isfinite(value)
-    except OverflowError:
-        return scored(0.0, reason="unrepresentable_candidate", expected=spec.expected)
-    if not finite:
-        return scored(0.0, reason="nonfinite_candidate", expected=spec.expected)
-    match = abs(value - spec.expected) <= tolerance
-    return scored(float(match), extracted=value, expected=spec.expected, tolerance=tolerance)
+    if not isinstance(value, Fraction):
+        raise TypeError("numeric candidate must be an exact Fraction")
+    expected = numeric_literal(spec.expected)
+    match = abs(value - expected) <= tolerance
+    return scored(
+        float(match),
+        extracted=str(value),
+        expected=spec.expected,
+        tolerance_abs=spec.tolerance_abs,
+        tolerance_rel=spec.tolerance_rel,
+    )
 
 
 def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
+    empty_output_policy(spec)
+    numeric_tolerance(spec)
     text = read_output(spec, workspace)
     if text is None:
-        numeric_tolerance(spec)
         return scored(0.0, reason="no_output")
-    value = _last_number(text)
-    if value is None:
-        numeric_tolerance(spec)
-        return scored(0.0, reason="no_number", expected=spec.expected)
+    try:
+        value = extract_numeric_candidate(text)
+    except NumericCandidateError as error:
+        return scored(0.0, reason="invalid_numeric_candidate", error=str(error))
     return grade_numeric_candidate(spec, value)
 
 

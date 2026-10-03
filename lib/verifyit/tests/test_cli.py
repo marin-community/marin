@@ -3,12 +3,37 @@
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from verifyit import grade as grade_module
 from verifyit.grade import Status, main, scored
-from verifyit.spec import FunctionCall, Mode, PredictedActionSpec, render_spec
+from verifyit.json_comparison import NumericTypePolicy
+from verifyit.spec import FunctionCall, Mode, NumericSpec, PredictedActionSpec, StructuredExactSpec, render_spec
+
+
+@pytest.mark.parametrize(
+    "invalid_contract",
+    [
+        'expected = 0.30000000000000004\ntolerance_abs = "0"\ntolerance_rel = "0"',
+        'expected = "0.3"\ntolerance_abs = 0.01\ntolerance_rel = "0"',
+        'expected = "0.3"\ntolerance_abs = "0"',
+    ],
+)
+def test_numeric_private_literals_are_explicit_and_clear_previous_rewards(tmp_path, invalid_contract):
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(NumericSpec("0.3", tolerance_abs="0", tolerance_rel="0")))
+    (tmp_path / "answer.txt").write_text("0.3")
+    logs = tmp_path / "logs"
+    arguments = [str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]
+    assert main(arguments) == 0
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
+    config.write_text('mode = "numeric"\n' + invalid_contract + "\n")
+    assert main(arguments) == 0
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
 
 
 def _verdict(logs: Path) -> dict:
@@ -125,6 +150,82 @@ def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_
 
     config.write_text(config.read_text() + f"numeric_tolerance = {10**400}\n")
     assert main(arguments) == 0
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "spec,candidate,reward",
+    [
+        pytest.param(
+            StructuredExactSpec(expected={"values": [None, True, 1, 1.0]}),
+            '{"values":[null,true,1,1.0]}',
+            1.0,
+            id="nested-json-roundtrip",
+        ),
+        pytest.param(
+            StructuredExactSpec(expected={"values": [None, True, 1, 1.0]}),
+            '{"values":[null,1,1,1.0]}',
+            0.0,
+            id="bool-is-not-number",
+        ),
+        pytest.param(
+            StructuredExactSpec(expected={"values": [None, True, 1, 1.0]}),
+            '{"values":[null,true,1.0,1]}',
+            1.0,
+            id="nested-numeric-value-equality",
+        ),
+        pytest.param(StructuredExactSpec(expected=None), "null", 1.0, id="null-roundtrip"),
+        pytest.param(StructuredExactSpec(expected=None), "not json", 0.0, id="malformed-candidate"),
+        pytest.param(
+            StructuredExactSpec(expected={"nested": [16]}, numeric_types=NumericTypePolicy.VALUE),
+            '{"nested":[16.0]}',
+            1.0,
+            id="explicit-value-policy",
+        ),
+        pytest.param(
+            StructuredExactSpec(expected={"nested": [16]}, numeric_types=NumericTypePolicy.STRICT),
+            '{"nested":[16.0]}',
+            0.0,
+            id="explicit-strict-policy",
+        ),
+        pytest.param(
+            StructuredExactSpec(expected={"payload": {"id": 1}}),
+            '{"payload":{"id":0,"id":1}}',
+            0.0,
+            id="structured-duplicate-candidate",
+        ),
+        pytest.param(
+            PredictedActionSpec(expected_calls=(FunctionCall("lookup", {"id": 1}),)),
+            '[{"name":"lookup","arguments":{"id":0,"id":1}}]',
+            0.0,
+            id="action-duplicate-candidate",
+        ),
+    ],
+)
+def test_json_file_grading_preserves_contract_from_toml(tmp_path, spec, candidate, reward):
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(replace(spec, output=str(tmp_path / "answer.json"))))
+    (tmp_path / "answer.json").write_text(candidate)
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
+
+
+@pytest.mark.parametrize("malformed_expected", ["true", "42", "[]"])
+def test_structured_exact_malformed_contract_clears_prior_reward(tmp_path, malformed_expected):
+    config = tmp_path / "verifier.toml"
+    spec = StructuredExactSpec(expected={"answer": 12}, output=str(tmp_path / "answer.json"))
+    config.write_text(render_spec(spec))
+    (tmp_path / "answer.json").write_text('{"answer":12}')
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
+
+    config.write_text(f'mode = "structured_exact"\nexpected = {malformed_expected}\n')
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
     assert _verdict(logs)["status"] == Status.INVALID_TASK
     assert not (logs / "reward.json").exists()
     assert not (logs / "reward.txt").exists()
