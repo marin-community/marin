@@ -11,8 +11,8 @@ recovery input. The EvalDash Marina runner scans object storage and commits cata
 instances do no background reconciliation work.
 The runner writes through the database engine without loading a serving snapshot. Catalog
 materialization reads and writes at most 128 run IDs per batch within the prefix transaction.
-Object checks finish before that transaction begins; all due records for the prefix remain in memory
-until commit.
+Object checks finish before that transaction begins; parsed records from those checks remain in
+memory until commit.
 Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
 value as `None`. Current writers include the field.
 

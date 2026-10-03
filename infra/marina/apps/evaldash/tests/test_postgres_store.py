@@ -323,10 +323,15 @@ def test_scheduled_ingest_publishes_multiple_batches_without_loading_a_serving_s
 
     materialized_sizes = []
 
-    def inspect_catalog_queries(_conn, _cursor, statement, parameters, _context, _many):
-        if statement.startswith("SELECT eval_catalog_runs.record") and "WHERE" not in statement:
+    def inspect_catalog_queries(_conn, _cursor, _statement, parameters, context, _many):
+        if context.compiled is None:
+            return  # Schema reflection uses raw driver SQL, not catalog projections.
+        query = context.compiled.statement
+        if not isinstance(query, sqlalchemy.sql.Select):
+            return
+        if query.selected_columns.contains_column(results_db.catalog_runs.c.record) and query.whereclause is None:
             raise AssertionError("ingestion must not load the serving catalog")
-        if statement.startswith("SELECT eval_record_sources.run_id, eval_record_sources.record"):
+        if query.selected_columns.contains_column(results_db.record_sources.c.record):
             materialized_sizes.append(len(parameters))
 
     sqlalchemy.event.listen(engine, "before_cursor_execute", inspect_catalog_queries)
