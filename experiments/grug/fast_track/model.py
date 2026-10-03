@@ -254,6 +254,9 @@ class MoeCompress(StrEnum):
     TRANSFER = "transfer"
     """``||s - sg(s + r)||^2 / sg(mean ||y||^2)``: pushes the shared expert along the routed output until the
     routed side holds nothing the shared expert can express; the LM loss then sheds the overshoot from ``r``."""
+    GAP = "gap"
+    """``||s - sg(r)||^2 / sg(mean ||y||^2)``: pulls the shared expert toward the routed output. It is zero at
+    ``s = r``, where the two paths duplicate each other."""
     ROUTED_PENALTY = "routed_penalty"
     """``||r||^2 / sg(mean ||y||^2)``: routed output is costly, so the LM gradient moves onto the shared expert
     whatever it can express."""
@@ -3805,7 +3808,7 @@ def moe_and_shared_fused(
     shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
     if shadow is not None or mlp.cfg.moe_compress != MoeCompress.NONE:
         shared_in = part_inputs["shared"] if part_inputs and "shared" in part_inputs else x
-        # The transfer term reads the shared expert on a stop-gradient input so it moves only the shared expert.
+        # The transfer and gap terms read the shared expert on a stop-gradient input so they move only it.
         detached = rearrange(jax.lax.stop_gradient(shared_in), "b s d -> (b s) d")
         detached_parts = [jnp.einsum("td,de->te", detached, w, out_sharding=_batch_spec()) for w in shared_weights]
         shared_detached = _shared_experts_tail(
@@ -3838,6 +3841,9 @@ def _compress_terms(
         detached = shared_detached.astype(jnp.float32)
         loss = -2.0 * jnp.mean(jnp.sum(detached * jax.lax.stop_gradient(r32), axis=-1)) / y_energy
         loss = cfg.moe_compress_weight * loss
+    elif cfg.moe_compress == MoeCompress.GAP:
+        gap = shared_detached.astype(jnp.float32) - jax.lax.stop_gradient(r32)
+        loss = cfg.moe_compress_weight * jnp.mean(jnp.sum(gap**2, axis=-1)) / y_energy
     elif cfg.moe_compress == MoeCompress.ROUTED_PENALTY:
         loss = cfg.moe_compress_weight * r_energy / y_energy
     terms = {

@@ -8,6 +8,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 import experiments.grug.fast_track.test_ngram_stat as t
 from experiments.grug.fast_track.model import MoeCompress
@@ -43,8 +44,9 @@ def test_shadow_probe_trains_only_itself():
     assert float(jnp.abs(grads.kda_blocks.stacked.shadow.w_up).max()) > 0
 
 
-def test_transfer_moves_the_shared_expert_but_not_the_routed_experts():
-    diff, _ = _grads(moe_compress=MoeCompress.TRANSFER, moe_compress_weight=0.1)
+@pytest.mark.parametrize("mode", [MoeCompress.TRANSFER, MoeCompress.GAP])
+def test_shared_side_terms_move_the_shared_expert_but_not_the_routed_experts(mode):
+    diff, _ = _grads(moe_compress=mode, moe_compress_weight=0.1)
     assert _moved(diff, ".shared[0].w_up") and _moved(diff, ".shared[0].w_down")
     assert not _moved(diff, ".mlp.")
     assert not _moved(diff, "attn")
