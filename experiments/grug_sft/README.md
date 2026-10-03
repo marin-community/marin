@@ -1,5 +1,21 @@
 # Grug 67B Datakit SFT ablations
 
+## September 2026 science mixes on Step38
+
+`science_curriculum.py`, `science_mix.py`, and `prebake_science_mix.py`
+construct the balanced, proof-first, and science-forward 100B-token physical
+mixes. `science_rlvr1_step38.py` trains each mix with the pinned GLM 5.3 RLVR1
+chat add-on. From a checkout with RNO2A access, set `WANDB_API_KEY` and run
+`experiments/grug_sft/launch_science_rlvr1_step38.sh VERSION MIX`; omit `MIX`
+to submit all three. The exact physical mixes and historical evaluation records
+are in the [public Step38 science SFT dataset](https://huggingface.co/datasets/open-athena/snowball-step38-science-rlvr-sft-2026-09). Evaluation records and pinned launch bundles are in the [public experiment archive](https://huggingface.co/datasets/open-athena/marin-science-expert-sft-results-2026-10).
+
+The pretraining-formatted source store remains in `marin.datakit.sft_text`.
+The separate `marin.datakit.sft` module builds assistant-masked chat stores for
+the later synthetic conversion experiment.
+
+## Earlier Datakit ablations
+
 `head_only_scaled.py` reproduces the September 17 head-initialized, scaled-LR,
 frozen-router recipe and supports leave-groups-out data ablations. Its source was
 recovered from Iris bundle

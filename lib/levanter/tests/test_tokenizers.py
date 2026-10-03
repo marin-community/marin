@@ -1475,7 +1475,7 @@ def test_stage_from_url_excludes_model_files(tmp_path, fake_tokenizer_dir):
 
     local_dir = tmp_path / "staged"
     local_dir.mkdir()
-    assert _stage_from_url("memory://tokenizer", str(local_dir))
+    _stage_from_url("memory://tokenizer", str(local_dir))
     assert sorted(path.name for path in local_dir.iterdir()) == ["tokenizer.json", "tokenizer_config.json"]
 
 

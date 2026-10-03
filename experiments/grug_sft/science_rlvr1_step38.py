@@ -4,7 +4,6 @@
 """Train three science mixes with GLM 5.3 RLVR1 replay from the Step38 Snowball export."""
 
 import argparse
-import dataclasses
 import json
 import math
 from datetime import timedelta
@@ -34,17 +33,13 @@ from experiments.grug_sft.head_only_train import (
     run_grug,
 )
 from experiments.grug_sft.science_mix import ScienceMix
-from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
+from experiments.grug_sft.science_step38_model import CONTEXT, MODEL_PATH, MODEL_REVISION, science_model_config
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
 
-MODEL_PATH = "s3://marin-us-east-02a/models/open-athena--Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38"
-MODEL_REVISION = "cfc1d845dae89b067cdc7250d0164abefa5a69cf"
 BASE_MIX_ROOT = "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-mixes/2026.09.21-v1"
 RLVR_CACHE = "s3://marin-us-east-02a/marin/users/benfeuer/targeted-sft/glm53-rlvr1-32k-2026.09.25-v1"
 COMBINED_ROOT = "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-rlvr1-mixes/2026.09.25-v1"
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-rlvr1-runs"
-CONTEXT = 32_768
 BASE_CONTEXT = 262_144
 BATCH = 64
 EXPERT_PARALLEL = 8
@@ -124,21 +119,6 @@ def validated_sources(mix: ScienceMix) -> tuple[int, int]:
     if not rlvr.is_finished or rlvr.total_num_rows != manifest["rlvr_sequences_32k"]:
         raise ValueError("RLVR1 cache is incomplete")
     return base.total_num_rows * (BASE_CONTEXT // CONTEXT), rlvr.total_num_rows
-
-
-def science_model_config(*, trainable_router_bias: bool = False) -> GrugModelConfig:
-    """Return the Snowball architecture shared by these SFT arms and their exports."""
-    return dataclasses.replace(
-        MoeMuonHHeuristic(min_lr_ratio=0.05).build_model_config(2560, seq_len=CONTEXT),
-        disable_pko=True,
-        disable_long_rope=True,
-        sliding_window=2048,
-        use_array_stacked_blocks=True,
-        qk_mult=1.5703274004183787,
-        max_seq_len=CONTEXT,
-        attention_implementation="gpu_fa4_cute",
-        trainable_router_bias=trainable_router_bias,
-    )
 
 
 def run(

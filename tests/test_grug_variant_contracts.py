@@ -197,6 +197,8 @@ def test_legacy_checkpoint_restore_with_context_sharding():
         np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
         """,
     )
+
+
 @pytest.mark.parametrize(
     "module_name",
     [

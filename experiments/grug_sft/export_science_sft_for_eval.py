@@ -19,10 +19,9 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug_sft import science_rlvr1_step38
 from experiments.grug_sft.head_only_train import _add_qb_betas_to_residual, _apply_qb_betas
 from experiments.grug_sft.hf_initialization import _copy_matching_parameters
-from experiments.grug_sft.science_rlvr1_step38 import MODEL_PATH, MODEL_REVISION, science_model_config
+from experiments.grug_sft.science_step38_model import MODEL_PATH, MODEL_REVISION, science_model_config
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
@@ -134,7 +133,9 @@ def export(
         "source_step": expected_step,
         "source_timestamp": metadata["timestamp"],
         "source_checkout_commit": source_commit,
-        "trainer_recipe_sha256": hashlib.sha256(Path(science_rlvr1_step38.__file__).read_bytes()).hexdigest(),
+        "trainer_recipe_sha256": (
+            hashlib.sha256(Path(__file__).with_name("science_rlvr1_step38.py").read_bytes()).hexdigest()
+        ),
         "exporter_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "reference_model": BASE_REPOSITORY,
         "reference_revision": MODEL_REVISION,

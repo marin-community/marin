@@ -1,5 +1,19 @@
 # Converted science-forward Snowball SFT
 
+## Dr Doom two-epoch run
+
+`dr_doom.py`, `snapshot.py`, `prepare.py`, `train.py`, and
+`export_dr_doom.py` define the October 2 run from the pinned Dr Doom export.
+The conversion producer is in `experiments/datakit/science_sft_conversion`;
+its Ortet batch launch is documented in `ORTET.md` there. The exact producer
+and handoff commands, run configuration, evaluation traces, and audits are in
+the [public experiment archive](https://huggingface.co/datasets/open-athena/marin-science-expert-sft-results-2026-10).
+The frozen 3,477,625-row training snapshot is in a [private dataset](https://huggingface.co/datasets/open-athena/marin-science-expert-sft-2026-10) pending review of the transformed sources' original licenses and derivative-output rights.
+The snapshot manifest fixes the input file set. The training code checks the
+model revision and tokenizer template before consuming the packed store.
+
+## Step38 conversion run
+
 This run starts from the pinned Step38 Snowball Hugging Face export and trains
 one pass over the MiniMax-converted science-forward chat corpus. The trainer
 packs conversations at 32,768 tokens, applies loss only to assistant reasoning
