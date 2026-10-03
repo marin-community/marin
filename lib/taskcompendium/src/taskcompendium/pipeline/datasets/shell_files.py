@@ -28,7 +28,7 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
 )
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH
+from taskcompendium.runtime.shell import CONTROL_PATH, INTERFACE, OUTPUT_PATH
 from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.runtime import CaptureOutputVerifier
 
@@ -86,7 +86,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
             context=ConversationInput(events=(TextMessage(role="user", content=data["instruction"]),)),
             environment_requirements=EnvironmentRequirements(
                 capabilities=("shell", "filesystem"),
-                tool_providers={"shell": ProviderRequirement(action_interface="shell:v1", initial_state={})},
+                tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
             ),
             interaction_tools=(BASH,),
             resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle)),

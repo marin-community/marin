@@ -13,8 +13,7 @@ from verifyit.modes.grade_puzzle import PuzzleAnswerType, puzzle_spec
 from verifyit.spec import ReasoningGymSpec, Spec
 
 from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.submission import extract_answer
-from taskcompendium.verifiers.base import GradingAttempt, Verifier
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_extracted
 
 
 def grade_answer(spec: Spec, answer: str, entry_json: str | None = None) -> GradeResult:
@@ -51,11 +50,9 @@ class ReasoningGymVerifier(Verifier):
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            answer = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return grade_answer(ReasoningGymSpec(dataset=self.dataset), answer, json.dumps(self.entry))
+        return grade_extracted(
+            attempt, lambda answer: grade_answer(ReasoningGymSpec(dataset=self.dataset), answer, json.dumps(self.entry))
+        )
 
 
 class PuzzleAnswerVerifier(Verifier):
@@ -69,8 +66,6 @@ class PuzzleAnswerVerifier(Verifier):
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            answer = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return grade_answer(puzzle_spec(self.expected, self.answer_type), answer)
+        return grade_extracted(
+            attempt, lambda answer: grade_answer(puzzle_spec(self.expected, self.answer_type), answer)
+        )

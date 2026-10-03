@@ -36,7 +36,9 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.review import (
     BASE_RUBRIC,
     DEFAULT_PROMPT_CHARACTERS,
+    DEFAULT_REVIEW_MAX_ATTEMPTS,
     DEFAULT_REVIEW_MAX_TOKENS,
+    DEFAULT_REVIEW_RETRY_MAX_TOKENS,
     BatchReviewer,
     Reviewer,
 )
@@ -57,6 +59,7 @@ from taskcompendium.pipeline.transforms import (
 from taskcompendium.pipeline.verification import verify_task
 
 AUDIT_SHARDS = 64
+AUDIT_SHARD_TEMPLATE = "audit/part-{shard:05d}.parquet"
 OUTPUT_SHARD_ROWS = 100000
 
 
@@ -66,8 +69,8 @@ class ReviewConfig:
     model_revision: str
     prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
     max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
-    max_attempts: int = 2
-    retry_max_tokens: int = 8192
+    max_attempts: int = DEFAULT_REVIEW_MAX_ATTEMPTS
+    retry_max_tokens: int = DEFAULT_REVIEW_RETRY_MAX_TOKENS
     retry_prompt_budget: int = DEFAULT_PROMPT_CHARACTERS
     base_rubric_sha256: str = hashlib.sha256(BASE_RUBRIC.encode()).hexdigest()
 
@@ -106,7 +109,7 @@ def canonicalize_sources(merged_path: str, output_path: str) -> dict[str, Any]:
             sort_by=canonical_representative_order,
             num_output_shards=max(1, ceil(expected / OUTPUT_SHARD_ROWS)),
         )
-        .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
+        .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA)
     )
     with ZephyrContext(name="canonical-task-merge") as context:
         context.execute(dataset)
@@ -277,7 +280,7 @@ def audit_source(
         )
         .window(execution.review_batch_size)
         .flat_map(partial(_audit_batch, recipe=recipe, reviewer=reviewer, output_path=output))
-        .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA, skip_existing=True)
+        .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA, skip_existing=True)
     )
     with ZephyrContext(max_workers=execution.max_workers, name=f"audit-{recipe.name}") as context:
         context.execute(dataset)
@@ -301,7 +304,7 @@ def filter_source(audit_path: str, output_path: str, policy: FilterPolicy) -> di
         Dataset.from_files(str(source / "audit/*.parquet"))
         .load_parquet()
         .map(partial(filter_row, policy=policy))
-        .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
+        .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA)
     )
     with ZephyrContext(name="filter-tasks") as context:
         context.execute(annotated)
@@ -503,7 +506,7 @@ def rewrite_audit_source(
                 output=output,
             )
         )
-        .write_parquet(str(output / "audit/part-{shard:05d}.parquet"), schema=TASK_SCHEMA, skip_existing=True)
+        .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA, skip_existing=True)
     )
     with ZephyrContext(max_workers=max_workers, name=f"rewrite-{recipe.name}") as context:
         context.execute(dataset)

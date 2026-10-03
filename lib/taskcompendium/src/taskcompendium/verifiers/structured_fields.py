@@ -14,8 +14,21 @@ from verifyit.modes.grade_xml import grade as grade_xml
 from verifyit.spec import CsvColumnsSpec, XmlElementsSpec
 
 from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.submission import extract_answer
-from taskcompendium.verifiers.base import GradingAttempt, Verifier
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_extracted
+
+
+def _grade_named_fields(
+    mode: Literal["xml-elements", "csv-columns"], required: tuple[str, ...], any_of: tuple[str, ...], text: str
+) -> GradeResult:
+    # The upstream graders own parsing and name matching. Only delivery changes.
+    with TemporaryDirectory(prefix="structured-fields-") as directory:
+        workspace = Path(directory)
+        (workspace / "answer.txt").write_text(text)
+        if mode == "xml-elements":
+            result = grade_xml(XmlElementsSpec(required, any_of, "/app/answer.txt"), workspace, workspace)
+        else:
+            result = grade_csv(CsvColumnsSpec(required, any_of, "/app/answer.txt"), workspace, workspace)
+    return GradeResult(Outcome.GRADED, result.reward, json.dumps(result.detail))
 
 
 class NamedFieldsVerifier(Verifier):
@@ -30,16 +43,4 @@ class NamedFieldsVerifier(Verifier):
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            text = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        # The upstream graders own parsing and name matching. Only delivery changes.
-        with TemporaryDirectory(prefix="structured-fields-") as directory:
-            workspace = Path(directory)
-            (workspace / "answer.txt").write_text(text)
-            if self.mode == "xml-elements":
-                result = grade_xml(XmlElementsSpec(self.required, self.any_of, "/app/answer.txt"), workspace, workspace)
-            else:
-                result = grade_csv(CsvColumnsSpec(self.required, self.any_of, "/app/answer.txt"), workspace, workspace)
-        return GradeResult(Outcome.GRADED, result.reward, json.dumps(result.detail))
+        return grade_extracted(attempt, lambda text: _grade_named_fields(self.mode, self.required, self.any_of, text))

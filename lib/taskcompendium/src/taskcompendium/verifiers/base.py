@@ -4,6 +4,7 @@
 """TaskCompendium verifiers that need source-specific or runtime evidence."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -12,7 +13,7 @@ from verifyit.grade import Reward, Status
 
 from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.models import ConversationEvent
-from taskcompendium.submission import Submission
+from taskcompendium.submission import Submission, extract_answer
 
 
 class VerifierKind(StrEnum):
@@ -61,3 +62,12 @@ def grade_result(result: Reward) -> GradeResult:
     if result.status != Status.SCORED:
         return GradeResult(Outcome.INFRA_ERROR, None, result.detail.get("error"))
     return GradeResult(Outcome.GRADED, result.reward, result.detail.get("error"))
+
+
+def grade_extracted(attempt: GradingAttempt, score: Callable[[str], GradeResult]) -> GradeResult:
+    """Extract a submission, preserving extraction errors separately from scorer failures."""
+    try:
+        candidate = extract_answer(attempt.conversation[-1], attempt.convention)
+    except (ValueError, TypeError) as error:
+        return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+    return score(candidate)

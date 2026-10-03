@@ -8,8 +8,7 @@ from typing import Literal
 from pydantic import JsonValue, model_validator
 
 from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.submission import extract_answer
-from taskcompendium.verifiers.base import GradingAttempt, Verifier
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_extracted
 
 
 class RubricJudgeVerifier(Verifier):
@@ -29,8 +28,6 @@ class RubricJudgeVerifier(Verifier):
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return GradeResult(Outcome.INFRA_ERROR, None, "The source semantic rubric judge is not bound")
+        return grade_extracted(
+            attempt, lambda _: GradeResult(Outcome.INFRA_ERROR, None, "The source semantic rubric judge is not bound")
+        )

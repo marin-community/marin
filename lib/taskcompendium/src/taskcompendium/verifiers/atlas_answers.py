@@ -8,9 +8,8 @@ from typing import Literal
 from verifyit.modes.grade_judge import grade_abstention_candidate
 from verifyit.spec import MathSpec, MathType
 
-from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.submission import extract_answer
-from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
+from taskcompendium.grading import GradeResult
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_extracted, grade_result
 from taskcompendium.verifiers.reasoning import grade_answer
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
 
@@ -22,11 +21,12 @@ class MathAnswerVerifier(Verifier):
     math_type: Literal["scalar", "equation", "interval", "set", "tuple", "list"]
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return grade_answer(MathSpec(expected=self.expected, math_type=MathType(self.math_type)), candidate)
+        return grade_extracted(
+            attempt,
+            lambda candidate: grade_answer(
+                MathSpec(expected=self.expected, math_type=MathType(self.math_type)), candidate
+            ),
+        )
 
 
 class AbstentionAnswersVerifier(Verifier):
@@ -36,8 +36,9 @@ class AbstentionAnswersVerifier(Verifier):
     abstention_token: str | None
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return grade_result(grade_abstention_candidate(self.reference.references, self.abstention_token, candidate))
+        return grade_extracted(
+            attempt,
+            lambda candidate: grade_result(
+                grade_abstention_candidate(self.reference.references, self.abstention_token, candidate)
+            ),
+        )

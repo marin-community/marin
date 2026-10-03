@@ -34,6 +34,7 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.shell import INTERFACE
 from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.repository_patch import RepositoryPatchVerifier
 
@@ -90,7 +91,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
             capabilities=("shell", "filesystem", "git_repository"),
             tool_providers={
                 "shell": ProviderRequirement(
-                    action_interface="shell:v1",
+                    action_interface=INTERFACE,
                     initial_state={
                         "repository": repository,
                         "source_ref": checkout[1],

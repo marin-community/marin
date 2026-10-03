@@ -15,9 +15,8 @@ from verifyit.modes.grade_ifeval import grade_ifeval_chat_candidate, resolve_che
 from verifyit.modes.grade_json_schema import grade_json_document
 from verifyit.spec import Constraint, SchemaFormat
 
-from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.submission import extract_answer
-from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
+from taskcompendium.grading import GradeResult
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_extracted, grade_result
 
 
 def required_object_conflicts(schema: dict[str, Any], path: str = "$") -> list[str]:
@@ -62,12 +61,12 @@ class IfevalVerifier(Verifier):
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            text = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        constraints = tuple(Constraint(c.name, c.parameters) for c in self.constraints)
-        return grade_result(grade_ifeval_chat_candidate(constraints, text))
+        return grade_extracted(
+            attempt,
+            lambda text: grade_result(
+                grade_ifeval_chat_candidate(tuple(Constraint(c.name, c.parameters) for c in self.constraints), text)
+            ),
+        )
 
 
 class JsonSchemaVerifier(Verifier):
@@ -86,9 +85,9 @@ class JsonSchemaVerifier(Verifier):
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            text = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        schema = json.loads(self.document_schema_json)
-        return grade_result(scored(grade_json_document(schema, self.schema_format, text).reward))
+        return grade_extracted(
+            attempt,
+            lambda text: grade_result(
+                scored(grade_json_document(json.loads(self.document_schema_json), self.schema_format, text).reward)
+            ),
+        )

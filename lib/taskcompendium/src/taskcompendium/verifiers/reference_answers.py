@@ -6,9 +6,8 @@
 from pydantic import JsonValue, model_validator
 from verifyit.modes.grade_judge import grade_reference_candidate, normalize
 
-from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.submission import extract_answer
-from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
+from taskcompendium.grading import GradeResult
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_extracted, grade_result
 
 
 class ReferenceAnswersVerifier(Verifier):
@@ -31,8 +30,6 @@ class ReferenceAnswersVerifier(Verifier):
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return grade_result(grade_reference_candidate(self.references, candidate))
+        return grade_extracted(
+            attempt, lambda candidate: grade_result(grade_reference_candidate(self.references, candidate))
+        )

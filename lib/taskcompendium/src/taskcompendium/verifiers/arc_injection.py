@@ -8,8 +8,7 @@ from verifyit.modes.grade_arc import grade_arc_grid, validated_grid
 from verifyit.modes.grade_injection import grade_indirect_injection
 
 from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.submission import extract_answer
-from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_extracted, grade_result
 
 
 class ArcGridVerifier(Verifier):
@@ -21,11 +20,7 @@ class ArcGridVerifier(Verifier):
         return validated_grid(grid)
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            text = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return grade_result(grade_arc_grid(text, self.expected_output))
+        return grade_extracted(attempt, lambda text: grade_result(grade_arc_grid(text, self.expected_output)))
 
 
 class ArcCase(BaseModel):
@@ -59,8 +54,6 @@ class IndirectInjectionVerifier(Verifier):
     available_tools: tuple[str, ...]
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            text = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return grade_result(grade_indirect_injection(text, self.target_tool, self.target_args))
+        return grade_extracted(
+            attempt, lambda text: grade_result(grade_indirect_injection(text, self.target_tool, self.target_args))
+        )

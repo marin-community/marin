@@ -21,6 +21,8 @@ from taskcompendium.verifiers.base import VerifierKind
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
 DEFAULT_REVIEW_MAX_TOKENS = 4096
+DEFAULT_REVIEW_MAX_ATTEMPTS = 2
+DEFAULT_REVIEW_RETRY_MAX_TOKENS = 8192
 DEFAULT_PROMPT_CHARACTERS = 512000
 RESOURCE_PREVIEW_CHARACTERS = 8192
 PRIVATE_REASONING_PREVIEW_CHARACTERS = 512
@@ -358,8 +360,8 @@ class BatchReviewer:
     max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
     max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS
     poll_seconds: float = 5.0
-    max_attempts: int = 2
-    retry_max_tokens: int = 8192
+    max_attempts: int = DEFAULT_REVIEW_MAX_ATTEMPTS
+    retry_max_tokens: int = DEFAULT_REVIEW_RETRY_MAX_TOKENS
     retry_max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS
     query_cache_root: str | None = None
 

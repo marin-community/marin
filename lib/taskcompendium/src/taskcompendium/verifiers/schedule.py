@@ -6,9 +6,8 @@
 from pydantic import JsonValue, model_validator
 from verifyit.modes.grade_schedule import grade_schedule_candidate, normalized_name, parse_time
 
-from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.submission import extract_answer
-from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
+from taskcompendium.grading import GradeResult
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_extracted, grade_result
 
 
 class ScheduleAnswerVerifier(Verifier):
@@ -33,8 +32,6 @@ class ScheduleAnswerVerifier(Verifier):
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            answer = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        return grade_result(grade_schedule_candidate(self.expected_events, answer))
+        return grade_extracted(
+            attempt, lambda answer: grade_result(grade_schedule_candidate(self.expected_events, answer))
+        )
