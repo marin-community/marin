@@ -119,6 +119,28 @@ def test_v2_anonymized_name_is_retained():
     assert documents[0]["messages"][0]["content"][0]["text"] == "Describe NAME_1"
 
 
+def test_science_vendor_blank_tools_are_treated_as_no_tools():
+    row = {
+        "uuid": "science-example",
+        "messages": [
+            {"role": "user", "content": "Explain transcription."},
+            {
+                "role": "assistant",
+                "reasoning_content": "Recall the central dogma.",
+                "content": "RNA polymerase copies DNA into RNA.",
+                "tool_calls": None,
+                "function_call": None,
+            },
+        ],
+        "tools": "",
+    }
+
+    documents = row_to_chat_doc(row, family="science_v2", partition_name="vendor")
+
+    assert len(documents) == 1
+    assert json.loads(documents[0]["chat_template_kwargs"]) == {}
+
+
 def test_repeated_source_lines_are_filtered():
     row = {
         "messages": [

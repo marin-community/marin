@@ -921,6 +921,23 @@ def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
     assert broker.request_lease_timeout_seconds == 3420
 
 
+def test_iris_serve_forwards_streamer_settings_to_workers(monkeypatch):
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--instances",
+        "3",
+        "--streamer-concurrency",
+        "2",
+        "--streamer-s3-request-timeout-ms",
+        "30000",
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert services[0].iris.worker_environment.env_vars["RUNAI_STREAMER_CONCURRENCY"] == "2"
+    assert services[0].iris.worker_environment.env_vars["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "30000"
+
+
 def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
     config = tmp_path / "metrics.toml"
     config.write_text('families = ["vllm:custom_scheduler_pressure"]\n')

@@ -66,6 +66,7 @@ nav:
       - Installation: tutorials/installation.md
       - First Experiment: tutorials/first-experiment.md
       - Add a Chat Dataset: tutorials/add-chat-dataset.md
+      - Add a Text Dataset: tutorials/add-text-dataset.md
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
       - Training on Cloud GPUs: tutorials/cloud-gpu.md
       - Fine-tune Snowball on Your H100 Cluster: tutorials/run-snowball-sft-on-h100.md

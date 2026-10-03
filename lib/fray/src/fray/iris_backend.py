@@ -134,9 +134,7 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray ResourceConfig."""
-    constraints: list[Constraint] = []
-    if not resources.preemptible:
-        constraints.append(preemptible_constraint(False))
+    constraints = [preemptible_constraint(resources.preemptible, soft=False)]
     regions = resources.regions
     if regions and ANY_REGION in regions:
         if len(regions) > 1:

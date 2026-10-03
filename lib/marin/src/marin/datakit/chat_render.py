@@ -116,6 +116,17 @@ def render_chat_record(record: dict) -> dict:
     return {"id": record["id"], "text": render_marin_chat(messages, bos_token="", **kwargs)}
 
 
+def chat_training_record(record: dict) -> dict:
+    """Project Harmony into the chat format consumed by masked SFT tokenization."""
+    messages = [Message.from_dict(message) for message in record["messages"]]
+    kwargs = json.loads(record["chat_template_kwargs"]) if record.get("chat_template_kwargs") else {}
+    return {
+        "id": record["id"],
+        "messages": list(_inference_messages(messages)),
+        "chat_template_kwargs": kwargs,
+    }
+
+
 def render_chat_to_parquet(
     *,
     input_path: str,
