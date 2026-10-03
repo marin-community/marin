@@ -1057,9 +1057,13 @@ def reference_datakit_steps(
         ),
         StepSpec(
             name="datakit/report/quality",
-            deps=[s["quality"] for s in per_source.values()],
-            hash_attrs={"v": 1},
-            fn=lambda op: quality_report(op, {n: read_artifact(p, QualityScores) for n, p in quality_paths.items()}),
+            deps=[*sources.values(), *(s["quality"] for s in per_source.values())],
+            hash_attrs={"v": 2},
+            fn=lambda op: quality_report(
+                op,
+                {n: read_artifact(p, QualityScores) for n, p in quality_paths.items()},
+                {n: read_artifact(normalize_paths[n], NormalizedData) for n in quality_paths},
+            ),
         ),
         StepSpec(
             name="datakit/report/domain",

@@ -50,19 +50,31 @@ def write_report(output_path: str, page: str) -> str:
     return path
 
 
-def sample_rows(directory: str, columns: list[str], limit: int) -> list[dict]:
-    """Read up to ``limit`` rows of ``columns`` from the parquet files under ``directory``.
+def parquet_files(directory: str) -> list[str]:
+    """The parquet files directly under ``directory``, sorted.
 
-    Files are visited in sorted order via a single-level ``*.parquet`` glob (a
-    recursive glob makes s3fs ``HeadObject`` the prefix, which the CW object
-    store rejects), streaming batches until the limit is reached.
+    A single-level ``*.parquet`` glob: a recursive glob makes s3fs ``HeadObject``
+    the prefix, which the CW object store rejects.
     """
+    return sorted(str(m) for m in (StoragePath(directory) / "*.parquet").glob())
+
+
+def head_rows(path: str, columns: list[str], limit: int) -> list[dict]:
+    """Read the first ``limit`` rows of ``columns`` from one parquet file, streaming batches."""
     out: list[dict] = []
-    for f in sorted(str(m) for m in StoragePath(f"{directory.rstrip('/')}/*.parquet").glob()):
-        with StoragePath(f).open("rb") as fh:
-            for batch in pq.ParquetFile(fh).iter_batches(batch_size=min(limit, 4096), columns=columns):
-                rows = batch.to_pylist()
-                out.extend(rows[: limit - len(out)])
-                if len(out) >= limit:
-                    return out
+    with StoragePath(path).open("rb") as fh:
+        for batch in pq.ParquetFile(fh).iter_batches(batch_size=min(limit, 4096), columns=columns):
+            out.extend(batch.to_pylist()[: limit - len(out)])
+            if len(out) >= limit:
+                break
+    return out
+
+
+def sample_rows(directory: str, columns: list[str], limit: int) -> list[dict]:
+    """Read up to ``limit`` rows of ``columns`` from the parquet files under ``directory``, in file order."""
+    out: list[dict] = []
+    for f in parquet_files(directory):
+        out.extend(head_rows(f, columns, limit - len(out)))
+        if len(out) >= limit:
+            break
     return out

@@ -18,22 +18,24 @@ BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
 
 
 class QualityScores(BaseModel):
-    """Outcome of :func:`score.score_normalized`: calibrated quality scores for one source.
+    """Calibrated quality scores for one source.
+
+    Written by :func:`score.score_normalized` or :func:`bucket.bucket_quality_scores`.
 
     Persisted as the step's ``.artifact``. Load via
     ``read_artifact(step.output_path, QualityScores)``.
 
     Attributes:
-        main_output_dir: Directory of lean scored parquet
-            (``source``/``id``/``score``/``quality_bucket``), one file per input
+        main_output_dir: Directory of lean scored parquet, one file per input
             shard, co-partitioned with the source ``NormalizedData`` by basename
-            and row order.
-        samples_output_dir: Directory of the ~``sample_pct`` systematic sample
-            side output (same columns plus truncated ``text``) the stage report
-            reads for spot-checks.
-        model_dir: Scorer artifacts + calibration json used. Model dirs are
-            immutable by convention -- the step hash covers the *path*, not the
-            bytes, so retrained models must land in new dirs.
+            and row order. Every producer writes ``id``, the calibrated ``score``
+            and ``quality_bucket``; :func:`score.score_normalized` adds
+            ``source``, and :func:`bucket.bucket_quality_scores` adds ``source``,
+            ``raw_score`` and ``content_type``.
+        model_dir: Scorer artifacts + calibration json used. The bucket step's
+            hash covers the calibration's digest through its ``QualityPin``;
+            ``score_normalized``'s covers only the path, so a retrained model
+            for it must land in a new dir.
         calib_file: Calibration json name inside ``model_dir``.
         bucket_edges: Score cutpoints behind ``quality_bucket``; the store joins
             on the bucket column and records these in its own artifact.
@@ -42,7 +44,6 @@ class QualityScores(BaseModel):
 
     version: str = "v1"
     main_output_dir: DatakitArtifactPath
-    samples_output_dir: DatakitArtifactPath
     model_dir: DatakitArtifactPath
     calib_file: str
     bucket_edges: list[float]

@@ -211,7 +211,6 @@ def _build_inputs(tmp_path):
     quality = {
         "src": QualityScores(
             main_output_dir=dirs["quality"],
-            samples_output_dir="",
             model_dir="model",
             calib_file="calib.json",
             bucket_edges=[0.2, 0.4, 0.6, 0.8],
