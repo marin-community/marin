@@ -1,0 +1,11 @@
+model,total_flops,basis
+Qwen/Qwen3.6-35B-A3B,6.717849e23,published_family_proxy;cohort_mean_ratio_imputed;RL omitted
+Qwen/Qwen3-Coder-30B-A3B-Instruct,1.539507e23,published_proxy;cohort_mean_ratio_imputed;RL omitted
+Qwen/Qwen3-Next-80B-A3B-Instruct,2.799104e23,published_proxy;cohort_mean_ratio_imputed;RL omitted
+inclusionAI/Ling-lite-1.5,1.539507e23,published_family_proxy;cohort_mean_ratio_imputed;RL omitted
+google/gemma-4-26B-A4B-it,6.618326e23,analyst_guesstimate;cohort_mean_ratio_imputed;RL omitted
+nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16,3.732138e23,published_lower_bound_proxy;cohort_mean_ratio_imputed;RL omitted
+openai/gpt-oss-20b,2.325384e23,published_hardware_inferred;cohort_mean_ratio_imputed;RL omitted
+nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16,4.841876e23,published_proxy;published_proxy;RL omitted
+moonshotai/Kimi-Linear-48B-A3B-Instruct,1.063659e23,published_proxy;cohort_mean_ratio_imputed;RL omitted
+arcee-ai/Trinity-Mini,1.866069e23,published_proxy;cohort_mean_ratio_imputed;RL omitted

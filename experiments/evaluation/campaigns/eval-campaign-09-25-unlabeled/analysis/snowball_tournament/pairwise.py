@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Select a Snowball-lineage checkpoint by paired benchmark win rate.
 
 Adapted from eval-policy-09-17/artifacts/generate_snowball_paired_win_rates.py.

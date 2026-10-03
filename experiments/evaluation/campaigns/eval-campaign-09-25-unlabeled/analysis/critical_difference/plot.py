@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Plot normalized critical differences for the tournament winner and baselines.
 
 The rank simulation and FLOP control are adapted from the September 17
@@ -377,9 +380,11 @@ def main() -> None:
             {
                 "model": model,
                 "total_flops": flops[model],
-                "basis": "September 17 Step92 proxy"
-                if model == winner
-                else next(row["basis"] for row in flops_rows if row["model"] == model),
+                "basis": (
+                    "September 17 Step92 proxy"
+                    if model == winner
+                    else next(row["basis"] for row in flops_rows if row["model"] == model)
+                ),
             }
             for model in models
         ],
