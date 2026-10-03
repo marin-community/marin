@@ -318,6 +318,26 @@ jobs:
         working-directory: lib/taskcompendium
         run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 
+  rolloutengine:
+    name: rolloutengine-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'rolloutengine-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "lib/rolloutengine/uv.lock"
+      - name: Test rollout execution and private grading
+        run: uv run --project lib/rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
+
+      - name: Type-check RolloutEngine
+        working-directory: lib/rolloutengine
+        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+
   iris_e2e_smoke:
     name: iris-e2e-smoke
     needs: select
@@ -373,7 +393,7 @@ jobs:
 
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, taskcompendium, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, taskcompendium, rolloutengine, iris_e2e_smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -384,6 +404,7 @@ jobs:
             "${{ needs.levanter_torch.result }}" \
             "${{ needs.levanter_tpu.result }}" \
             "${{ needs.taskcompendium.result }}" \
+            "${{ needs.rolloutengine.result }}" \
             "${{ needs.iris_e2e_smoke.result }}"
           do
             case "$result" in
