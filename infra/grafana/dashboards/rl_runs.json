@@ -1,7 +1,7 @@
 {
   "uid": "marin-rl-runs",
   "title": "RL Post-training",
-  "description": "Concurrent rollout and Megatron training diagnostics. Select one run and job, then the execution processes to inspect. Missing telemetry is unknown, not zero.",
+  "description": "Training progress, rollout timing and Megatron updates for sync and async runs. Select the training type, run, job and executions to inspect. Panels labelled run-wide cover the whole run. Missing telemetry is unknown.",
   "tags": [
     "marin",
     "rl"
@@ -2006,575 +2006,576 @@
     {
       "id": 210,
       "type": "row",
-      "title": "Staleness (async runs)",
-      "collapsed": false,
+      "title": "Staleness (async runs; a sync run shows staleness 0 only)",
+      "collapsed": true,
       "gridPos": {
         "x": 0,
         "y": 115,
         "w": 24,
         "h": 1
       },
-      "panels": []
-    },
-    {
-      "id": 11,
-      "type": "timeseries",
-      "title": "Policy staleness at training",
-      "description": "p50/p95/max of rollout_staleness_steps: how many optimizer steps behind the model was when each admitted group was consumed. The trainer records one observation per group against max_staleness_steps. Always on when telemetry is configured; rejected groups are excluded.\n\nA sync run shows staleness 0 only.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 116,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No matching records in this window.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
+      "panels": [
+        {
+          "id": 11,
+          "type": "timeseries",
+          "title": "Policy staleness at training",
+          "description": "p50/p95/max of rollout_staleness_steps: how many optimizer steps behind the model was when each admitted group was consumed. The trainer records one observation per group against max_staleness_steps. Always on when telemetry is configured; rejected groups are excluded.\n\nA sync run shows staleness 0 only.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No matching records in this window.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
             }
           },
-          "min": 0,
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "columns": [
+          "targets": [
             {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/attempt",
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ],
+              "targetRef": "rl_attempt",
+              "view": "policy_staleness"
             }
           ],
-          "targetRef": "rl_attempt",
-          "view": "policy_staleness"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 51,
-      "type": "timeseries",
-      "title": "Staleness of trained groups: groups per step",
-      "description": "Count of rollout_staleness_steps observations per optimizer step, split by staleness value: how many admitted groups landed at each staleness. The trainer records one observation per group in record_rollout_staleness. Always on when telemetry is configured; rejected groups are excluded.\n\nA sync run shows staleness 0 only.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 116,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No matching records in this window.",
-          "custom": {
-            "drawStyle": "bars",
-            "lineWidth": 0,
-            "fillOpacity": 70,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
+          "interval": "1m"
+        },
+        {
+          "id": 51,
+          "type": "timeseries",
+          "title": "Staleness of trained groups: groups per step",
+          "description": "Count of rollout_staleness_steps observations per optimizer step, split by staleness value: how many admitted groups landed at each staleness. The trainer records one observation per group in record_rollout_staleness. Always on when telemetry is configured; rejected groups are excluded.\n\nA sync run shows staleness 0 only.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No matching records in this window.",
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 0,
+                "fillOpacity": 70,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "normal",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
             }
           },
-          "min": 0,
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "columns": [
+          "targets": [
             {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/attempt",
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ],
+              "targetRef": "rl_attempt",
+              "view": "staleness_groups"
             }
           ],
-          "targetRef": "rl_attempt",
-          "view": "staleness_groups"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 52,
-      "type": "timeseries",
-      "title": "Staleness of trained groups: tokens per step",
-      "description": "Sum of response_tokens on consumed_staleness events per optimizer step, split by staleness value. The trainer emits one event per consumed group, carrying its admitted staleness and token count. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 124,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No matching records in this window.",
-          "custom": {
-            "drawStyle": "bars",
-            "lineWidth": 0,
-            "fillOpacity": 70,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
+          "interval": "1m"
+        },
+        {
+          "id": 52,
+          "type": "timeseries",
+          "title": "Staleness of trained groups: tokens per step",
+          "description": "Sum of response_tokens on consumed_staleness events per optimizer step, split by staleness value. The trainer emits one event per consumed group, carrying its admitted staleness and token count. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No matching records in this window.",
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 0,
+                "fillOpacity": 70,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "normal",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
             }
           },
-          "min": 0,
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "columns": [
+          "targets": [
             {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/attempt",
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ],
+              "targetRef": "rl_attempt",
+              "view": "staleness_tokens"
             }
           ],
-          "targetRef": "rl_attempt",
-          "view": "staleness_tokens"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 54,
-      "type": "timeseries",
-      "title": "Trainer/vLLM logprob mismatch ρ (staleness 0)",
-      "description": "training_metric_value for policy/mismatch/staleness0/*: log-ratio mean/p99/p999, the fraction outside [0.5x, 2x], ESS fraction, KL and chi-squared, for staleness-zero loss tokens only. Computed by mismatch_ratio_metrics, isolating tokens with no policy drift since generation. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 124,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No matching records in this window.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
+          "interval": "1m"
+        },
+        {
+          "id": 54,
+          "type": "timeseries",
+          "title": "Trainer/vLLM logprob mismatch ρ (staleness 0)",
+          "description": "training_metric_value for policy/mismatch/staleness0/*: log-ratio mean/p99/p999, the fraction outside [0.5x, 2x], ESS fraction, KL and chi-squared, for staleness-zero loss tokens only. Computed by mismatch_ratio_metrics, isolating tokens with no policy drift since generation. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No matching records in this window.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
             }
           },
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "columns": [
+          "targets": [
             {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/attempt",
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ],
+              "targetRef": "rl_attempt",
+              "view": "mismatch_staleness0"
             }
           ],
-          "targetRef": "rl_attempt",
-          "view": "mismatch_staleness0"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 55,
-      "type": "timeseries",
-      "title": "Trainer/vLLM logprob mismatch by staleness bucket",
-      "description": "training_metric_value for policy/mismatch/staleness{0,1,2,3,4-7,8+}/log_ratio_abs_mean: mean absolute trainer/vLLM log-ratio by the group's staleness at consumption. Computed by mismatch_ratio_metrics from the same batch as the staleness-0 panel. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 132,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No matching records in this window.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
+          "interval": "1m"
+        },
+        {
+          "id": 55,
+          "type": "timeseries",
+          "title": "Trainer/vLLM logprob mismatch by staleness bucket",
+          "description": "training_metric_value for policy/mismatch/staleness{0,1,2,3,4-7,8+}/log_ratio_abs_mean: mean absolute trainer/vLLM log-ratio by the group's staleness at consumption. Computed by mismatch_ratio_metrics from the same batch as the staleness-0 panel. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 16,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No matching records in this window.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
             }
           },
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "timeseries",
-          "url": "/v1/rl/attempt",
-          "columns": [
+          "targets": [
             {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/attempt",
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ],
+              "targetRef": "rl_attempt",
+              "view": "mismatch_by_staleness"
             }
           ],
-          "targetRef": "rl_attempt",
-          "view": "mismatch_by_staleness"
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "description": "Per-execution rollups of training_metric_value for optimizer batches whose async/staleness_min equals async/staleness_max: response length, token-weighted mean squared log-ratio, minimum ESS fraction and mean raw reward, one row per staleness value. Built from the same per-step metrics as the drift panels, restricted to uniform-staleness batches. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "No matching diagnostics.",
-          "unit": "none"
+          "interval": "1m"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Token-weighted MSLR"
+        {
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "description": "Per-execution rollups of training_metric_value for optimizer batches whose async/staleness_min equals async/staleness_max: response length, token-weighted mean squared log-ratio, minimum ESS fraction and mean raw reward, one row per staleness value. Built from the same per-step metrics as the drift panels, restricted to uniform-staleness batches. Empty without trainer.training_metrics.\n\nA sync run shows staleness 0 only.",
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No matching diagnostics.",
+              "unit": "none"
             },
-            "properties": [
+            "overrides": [
               {
-                "id": "decimals",
-                "value": 6
+                "matcher": {
+                  "id": "byName",
+                  "options": "Token-weighted MSLR"
+                },
+                "properties": [
+                  {
+                    "id": "decimals",
+                    "value": 6
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Minimum batch ESS fraction"
+                },
+                "properties": [
+                  {
+                    "id": "decimals",
+                    "value": 6
+                  }
+                ]
               }
             ]
           },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Minimum batch ESS fraction"
+          "gridPos": {
+            "x": 0,
+            "y": 24,
+            "w": 24,
+            "h": 8
+          },
+          "id": 47,
+          "options": {
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
             },
-            "properties": [
-              {
-                "id": "decimals",
-                "value": 6
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 140,
-        "w": 24,
-        "h": 8
-      },
-      "id": 47,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        },
-        "showHeader": true
-      },
-      "targets": [
-        {
-          "columns": [
+            "showHeader": true
+          },
+          "targets": [
             {
-              "selector": "status",
-              "text": "Coverage status",
-              "type": "string"
-            },
-            {
-              "selector": "execution",
-              "text": "Execution",
-              "type": "string"
-            },
-            {
-              "selector": "staleness",
-              "text": "Exact group age",
-              "type": "number"
-            },
-            {
-              "selector": "updates",
-              "text": "Updates",
-              "type": "number"
-            },
-            {
-              "selector": "mean_response_tokens",
-              "text": "Response tokens / sequence",
-              "type": "number"
-            },
-            {
-              "selector": "token_weighted_mslr",
-              "text": "Token-weighted MSLR",
-              "type": "number"
-            },
-            {
-              "selector": "minimum_ess_fraction",
-              "text": "Minimum batch ESS fraction",
-              "type": "number"
-            },
-            {
-              "selector": "mean_update_raw_reward",
-              "text": "Mean update raw reward",
-              "type": "number"
+              "columns": [
+                {
+                  "selector": "status",
+                  "text": "Coverage status",
+                  "type": "string"
+                },
+                {
+                  "selector": "execution",
+                  "text": "Execution",
+                  "type": "string"
+                },
+                {
+                  "selector": "staleness",
+                  "text": "Exact group age",
+                  "type": "number"
+                },
+                {
+                  "selector": "updates",
+                  "text": "Updates",
+                  "type": "number"
+                },
+                {
+                  "selector": "mean_response_tokens",
+                  "text": "Response tokens / sequence",
+                  "type": "number"
+                },
+                {
+                  "selector": "token_weighted_mslr",
+                  "text": "Token-weighted MSLR",
+                  "type": "number"
+                },
+                {
+                  "selector": "minimum_ess_fraction",
+                  "text": "Minimum batch ESS fraction",
+                  "type": "number"
+                },
+                {
+                  "selector": "mean_update_raw_reward",
+                  "text": "Mean update raw reward",
+                  "type": "number"
+                }
+              ],
+              "format": "table",
+              "refId": "A",
+              "url": "/v1/rl/attempt",
+              "targetRef": "rl_attempt",
+              "view": "uniform_staleness"
             }
           ],
-          "format": "table",
-          "refId": "A",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
-          "view": "uniform_staleness"
-        }
-      ],
-      "title": "Uniform-staleness batch diagnostics",
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table above. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no tokens were observed.\n\nA sync run shows staleness 0 only.",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 1,
-          "max": 1,
-          "min": 0,
-          "noValue": "No valid token denominator",
-          "unit": "percentunit"
+          "title": "Uniform-staleness batch diagnostics",
+          "type": "table"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 148,
-        "w": 12,
-        "h": 8
-      },
-      "id": 48,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "/uniform_staleness_token_fraction/",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "targets": [
         {
-          "columns": [
-            {
-              "selector": "uniform_staleness_token_fraction",
-              "text": "uniform_staleness_token_fraction",
-              "type": "number"
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table above. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no tokens were observed.\n\nA sync run shows staleness 0 only.",
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 1,
+              "max": 1,
+              "min": 0,
+              "noValue": "No valid token denominator",
+              "unit": "percentunit"
             },
-            {
-              "selector": "observed_loss_tokens",
-              "text": "observed_loss_tokens",
-              "type": "number"
+            "overrides": []
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 32,
+            "w": 12,
+            "h": 8
+          },
+          "id": 48,
+          "options": {
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "/uniform_staleness_token_fraction/",
+              "values": false
             },
+            "textMode": "value"
+          },
+          "targets": [
             {
-              "selector": "represented_loss_tokens",
-              "text": "represented_loss_tokens",
-              "type": "number"
-            },
-            {
-              "selector": "mixed_staleness_loss_tokens",
-              "text": "mixed_staleness_loss_tokens",
-              "type": "number"
-            },
-            {
-              "selector": "uniform_updates",
-              "text": "uniform_updates",
-              "type": "number"
-            },
-            {
-              "selector": "excluded_updates",
-              "text": "excluded_updates",
-              "type": "number"
+              "columns": [
+                {
+                  "selector": "uniform_staleness_token_fraction",
+                  "text": "uniform_staleness_token_fraction",
+                  "type": "number"
+                },
+                {
+                  "selector": "observed_loss_tokens",
+                  "text": "observed_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "represented_loss_tokens",
+                  "text": "represented_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "mixed_staleness_loss_tokens",
+                  "text": "mixed_staleness_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "uniform_updates",
+                  "text": "uniform_updates",
+                  "type": "number"
+                },
+                {
+                  "selector": "excluded_updates",
+                  "text": "excluded_updates",
+                  "type": "number"
+                }
+              ],
+              "format": "table",
+              "refId": "A",
+              "url": "/v1/rl/attempt",
+              "targetRef": "rl_attempt",
+              "view": "uniform_staleness_coverage"
             }
           ],
-          "format": "table",
-          "refId": "A",
-          "url": "/v1/rl/attempt",
-          "targetRef": "rl_attempt",
-          "view": "uniform_staleness_coverage"
+          "title": "Uniform-staleness diagnostic token coverage",
+          "type": "stat"
         }
-      ],
-      "title": "Uniform-staleness diagnostic token coverage",
-      "type": "stat"
+      ]
     },
     {
       "id": 204,
@@ -2583,7 +2584,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 156,
+        "y": 116,
         "w": 24,
         "h": 1
       },
@@ -2600,7 +2601,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 157,
+        "y": 117,
         "w": 12,
         "h": 8
       },
@@ -2671,7 +2672,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 157,
+        "y": 117,
         "w": 12,
         "h": 8
       },
@@ -2772,7 +2773,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 165,
+        "y": 125,
         "w": 12,
         "h": 8
       },
@@ -2844,7 +2845,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 165,
+        "y": 125,
         "w": 12,
         "h": 8
       },
@@ -2916,7 +2917,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 173,
+        "y": 133,
         "w": 12,
         "h": 8
       },
@@ -2991,7 +2992,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 173,
+        "y": 133,
         "w": 12,
         "h": 8
       },
@@ -3062,7 +3063,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 181,
+        "y": 141,
         "w": 24,
         "h": 8
       },
@@ -3147,7 +3148,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 189,
+        "y": 149,
         "w": 24,
         "h": 1
       },
@@ -3164,7 +3165,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 190,
+        "y": 150,
         "w": 12,
         "h": 8
       },
@@ -3239,7 +3240,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 198,
+        "y": 158,
         "w": 24,
         "h": 8
       },
@@ -3310,7 +3311,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 206,
+        "y": 166,
         "w": 24,
         "h": 8
       },
@@ -3404,7 +3405,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 214,
+        "y": 174,
         "w": 12,
         "h": 8
       },
@@ -3474,7 +3475,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 222,
+        "y": 182,
         "w": 24,
         "h": 1
       },
@@ -3491,7 +3492,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 223,
+        "y": 183,
         "w": 12,
         "h": 8
       },
@@ -3564,7 +3565,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 223,
+        "y": 183,
         "w": 12,
         "h": 8
       },
@@ -3637,7 +3638,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 231,
+        "y": 191,
         "w": 12,
         "h": 8
       },
@@ -3708,7 +3709,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 231,
+        "y": 191,
         "w": 12,
         "h": 8
       },
@@ -3780,7 +3781,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 239,
+        "y": 199,
         "w": 24,
         "h": 8
       },
@@ -3830,7 +3831,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 247,
+        "y": 207,
         "w": 24,
         "h": 1
       },
@@ -3847,7 +3848,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 248,
+        "y": 208,
         "w": 12,
         "h": 8
       },
@@ -3922,7 +3923,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 248,
+        "y": 208,
         "w": 12,
         "h": 8
       },
@@ -3997,7 +3998,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 256,
+        "y": 216,
         "w": 12,
         "h": 8
       },
@@ -4073,7 +4074,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 256,
+        "y": 216,
         "w": 12,
         "h": 8
       },
@@ -4176,7 +4177,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 264,
+        "y": 224,
         "w": 12,
         "h": 8
       },
@@ -4246,7 +4247,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 272,
+        "y": 232,
         "w": 24,
         "h": 1
       },
@@ -4263,7 +4264,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 273,
+        "y": 233,
         "w": 12,
         "h": 8
       },
@@ -4337,7 +4338,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 273,
+        "y": 233,
         "w": 12,
         "h": 8
       },
@@ -4411,7 +4412,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 281,
+        "y": 241,
         "w": 12,
         "h": 8
       },
@@ -4485,7 +4486,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 281,
+        "y": 241,
         "w": 12,
         "h": 8
       },
@@ -4559,7 +4560,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 289,
+        "y": 249,
         "w": 12,
         "h": 8
       },
@@ -4634,7 +4635,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 289,
+        "y": 249,
         "w": 12,
         "h": 8
       },
@@ -4708,7 +4709,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 297,
+        "y": 257,
         "w": 12,
         "h": 8
       },
@@ -4782,7 +4783,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 297,
+        "y": 257,
         "w": 12,
         "h": 8
       },
@@ -4852,7 +4853,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 305,
+        "y": 265,
         "w": 24,
         "h": 1
       },
@@ -4869,7 +4870,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 306,
+        "y": 266,
         "w": 12,
         "h": 8
       },
@@ -4943,7 +4944,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 306,
+        "y": 266,
         "w": 12,
         "h": 8
       },
@@ -5017,7 +5018,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 314,
+        "y": 274,
         "w": 12,
         "h": 8
       },
@@ -5091,7 +5092,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 314,
+        "y": 274,
         "w": 12,
         "h": 8
       },
@@ -5165,7 +5166,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 322,
+        "y": 282,
         "w": 12,
         "h": 8
       },
@@ -5239,7 +5240,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 322,
+        "y": 282,
         "w": 12,
         "h": 8
       },
@@ -5309,7 +5310,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 330,
+        "y": 290,
         "w": 24,
         "h": 1
       },
@@ -5326,7 +5327,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 331,
+        "y": 291,
         "w": 12,
         "h": 8
       },
@@ -5392,7 +5393,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 331,
+        "y": 291,
         "w": 12,
         "h": 8
       },
