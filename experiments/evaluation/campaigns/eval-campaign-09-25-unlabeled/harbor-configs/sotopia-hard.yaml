@@ -25,7 +25,7 @@ environment:
   type: daytona
 agents:
 - name: sotopia
-  import_path: marin.evaluation.harbor.sotopia_agent:SotopiaAgent
+  import_path: harbor.agents.installed.sotopia:SotopiaAgent
   override_setup_timeout_sec: 360
   override_timeout_sec: 1800
   kwargs:

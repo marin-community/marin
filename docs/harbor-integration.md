@@ -181,14 +181,18 @@ both values named. A limit neither the model nor the policy states falls back to
 default, 32768 input and 8192 output tokens. `--dry-run` prints the resolved pair per Harbor eval
 and `record.json` keeps it under `eval.harbor`.
 
-Installed harnesses must enforce these limits themselves. The unlabeled September campaign's
-SWE-bench policy selects `marin.evaluation.harbor.mini_swe_agent:ContextLimitedMiniSweAgent`
-and declares `kwargs.max_context_tokens: 32768` alongside `kwargs.model_info`. This adapter
-supports the native mini-SWE 2.1.0 configuration and requires the serving endpoint's `/tokenize`
-route. It counts the rendered prompt with its tool schema, caps the completion to the remaining
-total context, and exits through mini-SWE's limit handling when the prompt leaves no room.
-Its trajectory records the effective input, output, and total context budgets. Declaring
-`model_info` alone does not enforce a limit in Harbor's upstream mini-SWE adapter.
+Installed harnesses must enforce these limits themselves. Harbor's native Mini-SWE
+adapter consumes `model_info` for the Mini-SWE 2.1.0 harness with hosted vLLM. The input limit
+denotes the total context, including the reply. It requires the serving endpoint's
+`/tokenize` route, counts the rendered prompt with tools and the generation prefix,
+and caps the reply to the remaining context and the configured output limit.
+Context exhaustion uses Mini-SWE's native limit handler so Harbor can verify the
+existing patch. No Marin agent subclass is required.
+
+Sotopia uses `harbor.agents.installed.sotopia:SotopiaAgent`, packaged with its
+episode runner in Harbor. Judge API failures and exhausted missing-grade retries
+become `VerifierRuntimeError`. Sotopia's native generation still does not enforce
+`model_info` context limits.
 
 ## Results
 
