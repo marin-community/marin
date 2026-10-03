@@ -59,7 +59,7 @@ MODELS = {
         "50fe2f488aee7730bbccc721024b35229075602e",
         "s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-rlvr1-async/2026.10.02.6/"
         "exports-best-step12/global_step_12/policy",
-        "2026.10.02.12.1",
+        "2026.10.03.12",
     ),
 }
 
