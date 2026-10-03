@@ -749,7 +749,7 @@ def _launch_config_yaml(
     terminal_bench = recipe.get("terminal_bench", {})
     harbor = terminal_bench.get("harbor", {}) if isinstance(terminal_bench, dict) else {}
     agent_name = harbor.get("name") if isinstance(harbor, dict) else None
-    controller_ingress = agent_name == "opencode"
+    controller_ingress = agent_name in {"opencode", "pi"}
     submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
     target_cluster = None if submit_through_ambient_controller else execution.target_cluster
     parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config

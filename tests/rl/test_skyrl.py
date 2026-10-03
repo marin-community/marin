@@ -135,6 +135,20 @@ def _spec() -> SkyRLSpec:
     )
 
 
+@pytest.mark.parametrize("agent_name", ["opencode", "pi"])
+def test_installed_harbor_agents_receive_controller_ingress_with_literal_capture(agent_name: str) -> None:
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=_config_yaml() + f"terminal_bench:\n  harbor:\n    name: {agent_name}\n",
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+
+    assert launch["ingress"]["mode"] == "controller"
+    assert launch["ingress"]["record_literal"] is True
+
+
 def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     return IrisSkyRLExecution(
         cluster=cluster,
