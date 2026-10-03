@@ -129,6 +129,7 @@ class _HFShardWriter:
         self._records: list[HFShardRecord] = []
 
     def resume_shard(self, filename: str, tensor_names: list[str]) -> bool:
+        """Return True after recording a verified existing receipt."""
         if self._resume is None:
             return False
         record = self._resume.completed(filename, tensor_names)

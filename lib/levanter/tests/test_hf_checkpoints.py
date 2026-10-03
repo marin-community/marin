@@ -164,14 +164,14 @@ def test_hf_export_preserves_scalar_and_singleton_shapes(tmp_path):
     weights = {"scalar": jnp.asarray(0.5, dtype=jnp.bfloat16), "singleton": jnp.asarray([0.5], dtype=jnp.bfloat16)}
     with use_test_mesh():
         hf_export.save_hf_shards(
-            {"model.safetensors": weights},
+            {SAFE_TENSORS_MODEL: weights},
             lambda _keys: weights,
             str(tmp_path),
             export_host_budget_bytes=8,
             max_concurrent_shards=1,
         )
 
-    with safetensors.safe_open(tmp_path / "model.safetensors", framework="np") as shard:
+    with safetensors.safe_open(tmp_path / SAFE_TENSORS_MODEL, framework="np") as shard:
         for key, value in weights.items():
             exported = shard.get_tensor(key)
             assert exported.shape == value.shape
