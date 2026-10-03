@@ -124,8 +124,14 @@ fi
 for model in "${models[@]}"; do
   model_config="$MODEL_CONFIG_DIR/$model.yaml"
   [ -f "$model_config" ] || die "unknown model config: $model"
-  if [ "$suite" = agentic ] && [ "${#selected_harbor_names[@]}" -eq 1 ]; then
-    override=$(cd "$MARIN_DIR" && CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" MODEL_NAME="$model" EVAL_NAME="${selected_harbor_names[0]}" uv run python - <<'PY'
+  override_eval=
+  if [ "$suite" = terminal-bench ]; then
+    override_eval=tb2-recovery
+  elif [ "$suite" = agentic ] && [ "${#selected_harbor_names[@]}" -eq 1 ]; then
+    override_eval="${selected_harbor_names[0]}"
+  fi
+  if [ -n "$override_eval" ]; then
+    override=$(cd "$MARIN_DIR" && CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" MODEL_NAME="$model" EVAL_NAME="$override_eval" uv run python - <<'PY'
 import os
 from pathlib import Path
 

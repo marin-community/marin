@@ -1,5 +1,5 @@
-# Qwen3.6-35B-A3B: hybrid gated-delta-net MoE, thinking on by default. Mirrors the Marin catalog
-# entry (TP2 x DP2 on 4xH100) with the policy's pinned revision and 73,728-token MRCR context.
+# Qwen3.6-35B-A3B context ablation: TP2 x DP2 on 4xH100, thinking on.
+# The served context and generation cap are specific to this diagnostic arm.
 # auto_overrides adds --gdn-prefill-backend triton for the compiler-free serve environment.
 name: Qwen-Qwen3.6-35B-A3B-tau3-65k-32k
 location: Qwen/Qwen3.6-35B-A3B
