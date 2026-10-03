@@ -206,7 +206,12 @@ def test_histogram_snapshot_publisher_preserves_exact_bins_and_raw_observations(
     assert "body" not in raw
 
 
-def test_invalid_histogram_family_does_not_poison_valid_family(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "invalid_fields", [{"count": 4}, {"explicit_bounds": (2**53, 2**53 + 1), "bucket_counts": (2, 1, 0)}]
+)
+def test_invalid_histogram_family_does_not_poison_valid_family(
+    monkeypatch: pytest.MonkeyPatch, invalid_fields: dict[str, object]
+) -> None:
     transport = _transport(monkeypatch)
     valid = metrics.HistogramSnapshot(
         name="request_queue_time_seconds",
@@ -221,7 +226,8 @@ def test_invalid_histogram_family_does_not_poison_valid_family(monkeypatch: pyte
         sequence=1,
     )
 
-    result = metrics.HistogramSnapshotPublisher(max_records=2).publish((replace(valid, count=4), valid))
+    invalid = replace(valid, **invalid_fields)
+    result = metrics.HistogramSnapshotPublisher(max_records=2).publish((invalid, valid))
 
     assert result.enqueued_records == 1
     assert result.telemetry_lost_records == 1
