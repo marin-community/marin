@@ -40,6 +40,7 @@ from verifyit.spec import (
 )
 from verifyit.spec import FunctionCall as CandidateCall
 
+from taskcompendium.environment import ExternalVerifierSpec, ShellVerifierSpec
 from taskcompendium.grader import grader_package
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -49,8 +50,11 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     FunctionCall,
     TaskResource,
+    SkippedVerifierSpec,
+    StageVerifierSpec,
     TaskSpec,
     TextMessage,
+    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.runtime.grading import grade_submission
@@ -73,7 +77,17 @@ def resolve_verifier(specification: VerifierSpec) -> Spec:
 
 
 def validate_verifier(specification: VerifierSpec) -> None:
-    resolve_verifier(specification)
+    """Validate the payload for each supported verifier kind."""
+    if specification.kind == VerifierKind.SHELL:
+        ShellVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.EXTERNAL:
+        ExternalVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.STAGED:
+        StageVerifierSpec.model_validate_json(specification.parameters_json)
+    elif specification.kind == VerifierKind.SKIPPED:
+        SkippedVerifierSpec.model_validate_json(specification.parameters_json)
+    else:
+        resolve_verifier(specification)
 
 
 def supports_verifier(specification: VerifierSpec) -> bool:
@@ -289,4 +303,7 @@ def predicted_action_verifier(expected_calls: tuple[FunctionCall, ...]) -> Verif
 
 def skipped_verifier(reason: str) -> VerifierSpec:
     """Describe an explicit rollout-time grading omission."""
-    return VerifierSpec(kind="skipped", parameters_json=json.dumps({"reason": reason}))
+    return VerifierSpec(
+        kind=VerifierKind.SKIPPED,
+        parameters_json=SkippedVerifierSpec(reason=reason).model_dump_json(),
+    )

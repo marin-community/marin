@@ -789,9 +789,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "harbor-config" },
-    { name = "marin-rigging" },
     { name = "marin-shellbox" },
-    { name = "pyarrow" },
     { name = "taskcompendium" },
 ]
 
@@ -806,9 +804,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "harbor-config", git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" },
-    { name = "marin-rigging", editable = "../rigging" },
     { name = "marin-shellbox", editable = "../shellbox" },
-    { name = "pyarrow", specifier = ">=17" },
     { name = "taskcompendium", editable = "../taskcompendium" },
 ]
 
@@ -1409,6 +1405,7 @@ version = "0.1.0"
 source = { editable = "../taskcompendium" }
 dependencies = [
     { name = "marin-rigging" },
+    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "verifyit" },
 ]
@@ -1417,6 +1414,7 @@ dependencies = [
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
     { name = "marin-rigging", editable = "../rigging" },
+    { name = "pyarrow", specifier = ">=17" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "verifyit", editable = "../verifyit" },
 ]

@@ -131,10 +131,11 @@ def _shell_verifier(config: TaskConfig, directory: Path, tests: Path) -> Verifie
         config.verifier.environment_mode == VerifierEnvironmentMode.SEPARATE or config.verifier.environment is not None
     )
     if separate:
+        verifier_config = config.verifier.environment
         verifier_environment = _environment(
-            config.verifier.environment or config.environment,
-            tests,
-            setup_files,
+            verifier_config or config.environment,
+            tests if verifier_config is not None else directory / "environment",
+            setup_files if verifier_config is not None else (*setup_files, *private_files),
         )
         # A separate Harbor verifier image owns /tests, including its entrypoint.
         private_files = ()
@@ -195,9 +196,7 @@ def _stage_config(config: TaskConfig, step: StepConfig) -> TaskConfig:
         )
     )
     environment = (
-        step.verifier.environment or config.verifier.environment or config.environment
-        if mode == VerifierEnvironmentMode.SEPARATE
-        else None
+        step.verifier.environment or config.verifier.environment if mode == VerifierEnvironmentMode.SEPARATE else None
     )
     verifier = step.verifier.model_copy(
         update={
