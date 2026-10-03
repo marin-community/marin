@@ -39,8 +39,8 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
-| `schema_version` | Version of the serialized spec: `0.19`. Readers reject other versions. |
-| `resources` | Copied files and directories grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
+| `schema_version` | Version of the serialized spec: `0.20`. Readers reject other versions. |
+| `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
 A task has one final result. Ordered steps and reward aggregation are deferred.
@@ -110,7 +110,7 @@ private task spec. Direct chat has no agent workspace files. It extracts one
 produces one reward. Solvability labels, expected answers, and verifier settings
 stay in private task files. Verifier infrastructure failures record
 `infra_error` with no reward in `taskcompendium-result.json`.
-The library schema remains 0.19; older serialized specs require regeneration.
+The library schema remains 0.20; older serialized specs require regeneration.
 
 The proof of concept builds paired missing-information arithmetic,
 contradictory integer constraints, and guideline-conflict tasks. Export 192
@@ -164,27 +164,22 @@ Private gold and hidden tests belong in `oracle` or `verifier`. An `all` resourc
 
 Oracle resources are reserved for trusted reference-solution generation. Verifier resources are used when evaluating a candidate result. These groups declare access; they do not require an oracle or evaluator process to run.
 
-The worker mount root is `environment_requirements.working_directory` when declared; otherwise the selected runtime supplies it. For example, a resource at `project` with a working directory of `/app` appears at `/app/project`. Worker mounts are established before setup commands run in that working directory. Oracle and verifier mounts use separate private roots supplied by their runtimes.
+The worker mount root is `environment_requirements.working_directory` when declared; otherwise the selected runtime supplies it. For example, a resource at `project/input.txt` with a working directory of `/app` appears at `/app/project/input.txt`. Worker mounts are established before setup commands run in that working directory. Oracle and verifier mounts use separate private roots supplied by their runtimes.
 
-Each `TaskResource` copies one file or directory, with these fields:
+Each `TaskResource` contains one inline file, with these fields:
 
 | Field | Meaning |
 | --- | --- |
 | `path` | Normalized relative destination under each receiving role's runtime-owned workspace root. |
-| `source` | One discriminated content source from the table below. |
-| `mode` | Optional Unix permission mode as a three- or four-digit octal string, such as `0644` or `0755`. An explicit mode applies to the mounted file or root directory. Omission preserves dataset permissions; inline files default to `0644`. |
-| `mtime_ns` | Optional integer Unix modification timestamp in nanoseconds for the mounted file or root directory. Omission preserves dataset timestamps; inline files have no declared timestamp. |
+| `source` | An `InlineFile` containing the exact file bytes, encoded as canonical base64. |
+| `mode` | Optional Unix permission mode as a three- or four-digit octal string, such as `0644` or `0755`. An explicit mode applies to the mounted file. Files default to `0644` when the mode is omitted. |
+| `mtime_ns` | Optional integer Unix modification timestamp in nanoseconds for the mounted file. Omission leaves the timestamp unspecified. |
 
-| Source `kind` | Fields |
-| --- | --- |
-| `inline_file` | `content_base64`: canonical base64 for the exact file bytes, including UTF-8 text. |
-| `dataset_path` | `path`: normalized relative file or directory path vendored in the containing TaskCompendium dataset. |
+`InlineFile` has `kind="inline_file"` and `content_base64`. UTF-8 text uses the same byte representation as binary files. Resource contents are stored in the task spec; no dataset root, process working directory, or exported package location is used to locate them. Shared external files are deferred until a `TaskSet` contract defines their location and loading.
 
-Dataset paths are relative to the containing TaskCompendium dataset from which the spec is read. `TaskSpec.source` records upstream audit provenance and does not resolve resource paths. A future trusted reader or materializer must receive an explicit containing-dataset root and pinned snapshot; it must not fetch the original upstream source or infer this root from the process working directory or an exported Harbor package's parent. Paths cannot name an arbitrary URI or request a network fetch. Paths also reject trailing dots or spaces and colons in any component to avoid aliases on portable filesystems. Schema decoding performs no filesystem inspection or I/O.
+An archive can be included as ordinary file bytes, but resource mounting does not extract it. Paths may contain directories to locate the file within the workspace. Directory resources and recursive copies are unsupported. Schema decoding performs no filesystem inspection or I/O.
 
-A directory materializer must copy the complete recursive subtree, including empty directories, and preserve member permissions and modification times. A mount's explicit `mode` and `mtime_ns` change only its mounted file or root directory. A member represented by its own mount can declare its own metadata. Archive files are copied as file bytes; they are never extracted during resource mounting. A task need not enumerate every source file or declare the path's type. Before writing any resource, a materializer must reject moving or unresolved snapshots and unsupported or unsafe entry types.
-
-For a spec read from a pinned TaskCompendium dataset snapshot, grouped resources can contain:
+Grouped inline resources can contain:
 
 ```json
 {
@@ -198,19 +193,19 @@ For a spec read from a pinned TaskCompendium dataset snapshot, grouped resources
       }
     ],
     "worker": [
-      {"path": "project", "source": {"kind": "dataset_path", "path": "tasks/example/project"}}
+      {"path": "project/input.txt", "source": {"kind": "inline_file", "content_base64": "cHVibGljIGlucHV0"}}
     ],
     "oracle": [
       {"path": "answer.txt", "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSByZWZlcmVuY2U="}}
     ],
     "verifier": [
-      {"path": "checks", "source": {"kind": "dataset_path", "path": "tasks/example/checks"}}
+      {"path": "checks/grade.py", "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSBjaGVja3M="}}
     ]
   }
 }
 ```
 
-Directory materializers must reject traversal, absolute paths, links, special files, and collisions, and enforce byte limits. These are resource copy requirements; no dataset resolver or resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
+File materializers must reject unsafe destinations and collisions, and enforce byte limits. No resource materializer is implemented here. Direct chat rejects every nonempty resource group before writing a task package.
 
 ## What can we import?
 
