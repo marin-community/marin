@@ -4,9 +4,10 @@
 """DataKit steps for the fast-track end-to-end experiment."""
 
 import logging
+from dataclasses import replace
 
 from fray.types import ResourceConfig
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.datasets import DatasetComponentBase, LmDataConfig
 from levanter.tokenizers import load_tokenizer
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.build_context import resolve_version
@@ -31,8 +32,34 @@ from experiments.datakit.store.mixture import (
     log_store_summary,
     store_mixture,
 )
+from experiments.grug.fast_track.contracts import add_dataset_mixture_weights
 
 logger = logging.getLogger(__name__)
+
+
+def add_prepared_dataset_component(
+    baseline: LmDataConfig,
+    *,
+    name: str,
+    component: DatasetComponentBase,
+    fraction: float,
+    max_train_batches: int,
+) -> LmDataConfig:
+    """Add a prepared dataset at its token share without a second simulated slice."""
+    weights = baseline.train_weights
+    if not isinstance(weights, dict):
+        raise ValueError("add-dataset training requires fixed dictionary weights")
+    if name in baseline.components:
+        raise ValueError(f"new dataset component {name!r} already exists")
+
+    return replace(
+        baseline,
+        components={**baseline.components, name: component},
+        train_weights=add_dataset_mixture_weights(weights, new_component=name, fraction=fraction),
+        max_train_batches={name: max_train_batches},
+        target_budget=None,
+        experiment_budget=None,
+    )
 
 
 class FastTrackDataStore(Artifact):

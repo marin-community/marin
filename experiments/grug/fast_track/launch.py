@@ -26,7 +26,8 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tokenizers import tokenizer_content_hash
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
@@ -53,9 +54,18 @@ from experiments.datakit.testbed.sampler import SampleManifest
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
+from experiments.grug.fast_track.contracts import (
+    TRAIN_SPLIT,
+    AddDatasetConfig,
+    FrozenBaselineComponent,
+    FrozenBaselineManifest,
+    ResolvedTrainingBudget,
+    unique_token_sample_cap,
+)
 from experiments.grug.fast_track.data_pipeline import (
     FAST_TRACK_SAMPLE_PREFIX,
     FastTrackDataStore,
+    add_prepared_dataset_component,
     build_fast_track_data,
     store_mixture_for_step,
 )
@@ -147,6 +157,10 @@ V16384_VOCAB = 16384
 PALOMA_DETOK_VERSION = "2026.09.17"
 # In-process read cache for the tensorstore data loader. 1 GB is ample for the flat cache.
 TENSORSTORE_CACHE_BYTES = 1_000_000_000
+FROZEN_BASELINE = FrozenBaselineManifest(
+    tokenizer=V16384_TOKENIZER,
+    components=(FrozenBaselineComponent(name="train", cache_dir=V16384_CACHE_DIR, weight=1.0),),
+)
 
 # Model geometry shared across rungs.
 SEQ_LEN = 4096
@@ -284,7 +298,7 @@ class TrainingSource(Protocol):
         ctx: StepContext,
         validation: Sequence[ArtifactStep[TokenizedCache]],
         tokenizer: str,
-        training_tokens: int,
+        budget: ResolvedTrainingBudget,
     ) -> LmDataConfig: ...
 
 
@@ -292,7 +306,7 @@ class TrainingSource(Protocol):
 class FlatCacheTrainingSource:
     """Train on one prebuilt flat cache."""
 
-    cache_dir: str = V16384_CACHE_DIR
+    manifest: FrozenBaselineManifest = FROZEN_BASELINE
 
     def dependencies(self) -> tuple[ArtifactStep, ...]:
         return ()
@@ -303,11 +317,16 @@ class FlatCacheTrainingSource:
         ctx: StepContext,
         validation: Sequence[ArtifactStep[TokenizedCache]],
         tokenizer: str,
-        training_tokens: int,
+        budget: ResolvedTrainingBudget,
     ) -> LmDataConfig:
+        if tokenizer != self.manifest.tokenizer:
+            raise ValueError(f"baseline tokenizer {self.manifest.tokenizer!r} does not match requested {tokenizer!r}")
         training_data = flat_cache_mixture(
             tokenizer=tokenizer,
-            caches={"train": FlatCacheComponent(cache_dir=self.cache_dir, weight=1.0)},
+            caches={
+                component.name: FlatCacheComponent(cache_dir=component.cache_dir, weight=component.weight)
+                for component in self.manifest.components
+            },
         )
         return _with_validation_components(ctx=ctx, training_data=training_data, validation=validation)
 
@@ -328,7 +347,7 @@ class DataKitTrainingSource:
         ctx: StepContext,
         validation: Sequence[ArtifactStep[TokenizedCache]],
         tokenizer: str,
-        training_tokens: int,
+        budget: ResolvedTrainingBudget,
     ) -> LmDataConfig:
         data = store_mixture_for_step(
             ctx=ctx,
@@ -336,9 +355,128 @@ class DataKitTrainingSource:
             weighting=self.weighting,
             min_tokens_per_component=SEQ_LEN,
             tokenizer=tokenizer,
-            training_tokens=training_tokens,
+            training_tokens=budget.token_count,
         )
         return _with_validation_components(ctx=ctx, training_data=data, validation=validation)
+
+
+@dataclasses.dataclass(frozen=True)
+class AddDatasetTrainingSource:
+    """Add one prepared Hugging Face token cache to the frozen baseline."""
+
+    config: AddDatasetConfig
+    baseline: FrozenBaselineManifest = FROZEN_BASELINE
+
+    def dependencies(self) -> tuple[ArtifactStep, ...]:
+        return (self.config.token_cache,)
+
+    def data_config(
+        self,
+        *,
+        ctx: StepContext,
+        validation: Sequence[ArtifactStep[TokenizedCache]],
+        tokenizer: str,
+        budget: ResolvedTrainingBudget,
+    ) -> LmDataConfig:
+        baseline = FlatCacheTrainingSource(manifest=self.baseline).data_config(
+            ctx=ctx,
+            validation=validation,
+            tokenizer=tokenizer,
+            budget=budget,
+        )
+        loader_unit = budget.batch_size * budget.sequence_length
+        sample_cap = unique_token_sample_cap(
+            target_production_tokens=self.config.target_production_tokens,
+            fast_track_budget=budget.token_count,
+            available_unique_tokens=self.config.available_unique_tokens,
+            fraction=self.config.fraction,
+            loader_unit=loader_unit,
+        )
+        if sample_cap < loader_unit:
+            raise ValueError("add-dataset share yields fewer than one full training batch")
+
+        cache_format = TextLmDatasetFormat(text_key=self.config.prefix.text_field)
+        if ctx.is_fingerprint:
+            cache_dir = ctx.artifact_path(self.config.token_cache)
+        else:
+            token_cache = ctx.resolved(self.config.token_cache)
+            if token_cache.prefix.tokenizer != tokenizer:
+                raise ValueError(
+                    f"add-dataset tokenizer {token_cache.prefix.tokenizer!r} does not match requested {tokenizer!r}"
+                )
+            expected_prefix = self.config.prefix.model_dump(mode="json")
+            actual_prefix = token_cache.prefix.model_dump(mode="json")
+            if token_cache.prefix != self.config.prefix:
+                differences = {
+                    field: {"expected": expected_value, "actual": actual_prefix.get(field)}
+                    for field, expected_value in expected_prefix.items()
+                    if actual_prefix.get(field) != expected_value
+                }
+                raise ValueError(f"prepared add-dataset prefix differs from its training source: {differences}")
+            if token_cache.actual_num_tokens < sample_cap:
+                raise ValueError(
+                    f"prepared add-dataset cache has {token_cache.actual_num_tokens:,} tokens; "
+                    f"the run requires {sample_cap:,}"
+                )
+            cache_dir = token_cache.cache_dir
+
+        return add_prepared_dataset_component(
+            baseline,
+            name="add-dataset",
+            component=DatasetComponent(
+                cache_dir=cache_dir,
+                format=cache_format,
+                split=TRAIN_SPLIT,
+            ),
+            fraction=self.config.fraction,
+            max_train_batches=sample_cap // loader_unit,
+        )
+
+
+def resolve_h100_ladder_budget(
+    *,
+    size: str,
+    dense: bool,
+    match: MatchMode,
+    num_steps: int | None,
+    batch_size: int | None,
+    model: GrugModelConfig,
+) -> ResolvedTrainingBudget:
+    """Resolve the batch and token budget used by the H100 ladder."""
+    rung = _h100_ladder_rung(size)
+    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
+        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
+    # Keep the recorded baseline active-parameter count fixed so a candidate model cannot move its reference.
+    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
+    baseline_tpp = DENSE_TPP if dense else MOE_TPP
+    baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
+    baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
+    # Use the recorded FLOPs per example so compute-match holds the reference run's true total FLOPs.
+    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
+
+    resolved_batch_size = batch_size if batch_size is not None else rung.baseline_batch
+    if resolved_batch_size <= 0 or resolved_batch_size % rung.global_device_count != 0:
+        raise ValueError(
+            f"batch_size must be positive and divisible by {rung.global_device_count}, got {resolved_batch_size}"
+        )
+    if num_steps is None:
+        if match is MatchMode.DATA:
+            # Data-match keeps the fixed baseline token count.
+            resolved_steps = max(1, round(baseline_tokens / (resolved_batch_size * SEQ_LEN)))
+        else:
+            # Compute-match prices the candidate model against the fixed baseline FLOPs.
+            candidate_flops_per_example, _ = _compute_flops(model_config=model)
+            resolved_steps = max(1, round(baseline_flops / (candidate_flops_per_example * resolved_batch_size)))
+    elif num_steps <= 0:
+        raise ValueError(f"--num-steps must be positive, got {num_steps}")
+    else:
+        resolved_steps = num_steps
+
+    return ResolvedTrainingBudget(
+        batch_size=resolved_batch_size,
+        num_steps=resolved_steps,
+        sequence_length=SEQ_LEN,
+    )
 
 
 def build_h100_ladder_run(
@@ -356,6 +494,8 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    seed: int = 0,
+    data_seed: int | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -381,33 +521,16 @@ def build_h100_ladder_run(
             f"global_device_count ({rung.global_device_count})"
         )
 
-    # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
-    # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
-    # the candidate's FLOPs/token but never the budget it is compared against.
-    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
-        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
-    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
-    baseline_tpp = DENSE_TPP if dense else MOE_TPP
-    baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
-    baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
-    # Baseline's true total training FLOPs (fixed): flops/example * examples, at the baseline batch.
-    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
-
-    batch_size = batch_size if batch_size is not None else rung.baseline_batch
-    if batch_size <= 0 or batch_size % rung.global_device_count != 0:
-        raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
-    if num_steps is None:
-        if match is MatchMode.DATA:
-            # DATA holds the baseline's token budget.
-            num_steps = max(1, round(baseline_tokens / (batch_size * SEQ_LEN)))
-        else:
-            # COMPUTE holds the baseline's *true* training FLOPs, derived from the candidate's own
-            # flops/example (the trainer's `_compute_flops`, which counts the lm_head and attention that
-            # `_active_params` omits) -- so an architecture change never buys or loses compute.
-            candidate_flops_per_example, _ = _compute_flops(model_config=model)
-            num_steps = max(1, round(baseline_flops / (candidate_flops_per_example * batch_size)))
-    elif num_steps <= 0:
-        raise ValueError(f"--num-steps must be positive, got {num_steps}")
+    resolved_budget = resolve_h100_ladder_budget(
+        size=size,
+        dense=dense,
+        match=match,
+        num_steps=num_steps,
+        batch_size=batch_size,
+        model=model,
+    )
+    batch_size = resolved_budget.batch_size
+    num_steps = resolved_budget.num_steps
 
     # Eval at the midpoint and end; no_eval disables it entirely below (the forced final callback would
     # otherwise still run a full eval, so pushing the interval past the end is not enough).
@@ -419,7 +542,7 @@ def build_h100_ladder_run(
         seq_len=SEQ_LEN,
     )
     grug_trainer = GrugTrainerConfig(
-        data_seed=None,
+        data_seed=data_seed,
         log_every=1,
         z_loss_weight=1e-4,
         watch_mode=WatchMode.INLINE,
@@ -450,7 +573,7 @@ def build_h100_ladder_run(
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         trainer = TrainerConfig(
             id=run_id,
-            seed=0,
+            seed=seed,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             jax_config=dict(DEFAULT_JAX_CONFIG),
@@ -488,7 +611,10 @@ def build_h100_ladder_run(
             ),
         )
         data = resolved_training_source.data_config(
-            ctx=ctx, validation=validation, tokenizer=tokenizer, training_tokens=num_steps * batch_size * SEQ_LEN
+            ctx=ctx,
+            validation=validation,
+            tokenizer=tokenizer,
+            budget=resolved_budget,
         )
         return GrugRunConfig(
             model=model,
@@ -659,6 +785,13 @@ def _submit_fast_track(
     help="Override the step budget directly (else derived from --match).",
 )
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
+@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed.")
+@click.option(
+    "--data-seed",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Training data order seed. Omit to derive it from --seed.",
+)
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
 @click.option(
     "--save-checkpoints",
@@ -681,7 +814,7 @@ def _submit_fast_track(
 @click.option(
     "--source-mode",
     type=click.Choice([mode.value for mode in SourceMode]),
-    default=SourceMode.SAMPLE.value,
+    default=SourceMode.CACHE.value,
     show_default=True,
     help="Training-data source. Non-cache modes add DataKit to this experiment.",
 )
@@ -716,6 +849,8 @@ def main(
     batch_size: int | None,
     num_steps: int | None,
     no_eval: bool,
+    seed: int,
+    data_seed: int | None,
     dense: bool,
     save_checkpoints: bool,
     submit: bool,
@@ -769,6 +904,8 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        seed=seed,
+        data_seed=data_seed,
         training_source=(
             DataKitTrainingSource(store=training_store, weighting=MixtureWeighting(weighting))
             if training_store is not None
