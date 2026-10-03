@@ -22,6 +22,7 @@ process exit after a verdict has been written.
 
 | mode | contract |
 |---|---|
+| `predicted_action` | unordered function calls with exact JSON types and optional float tolerance |
 | `mcq` | expected option letter |
 | `math` | expression equality through math-verify |
 | `numeric` | numeric equality with explicit tolerances |
@@ -72,6 +73,14 @@ Harbor's error categories from the pinned config-only `harbor-config` dependency
 `json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
 float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
+
+`candidate_spec(mode, parameters)` validates the shared exact, numeric, MCQ and predicted-action
+contracts for callers that already extracted a submission. `grade_text_candidate` scores extracted
+text; `grade_predicted_action_candidate` scores decoded function calls. These APIs perform no
+filesystem or harness operations. Predicted-action matching preserves duplicate calls and requires
+all calls to match one to one. Argument objects stay decoded in JSON descriptors; `render_spec`
+encodes each argument object as a JSON string in TOML so nested JSON null values survive
+`parse_spec`.
 
 ## Install and use
 

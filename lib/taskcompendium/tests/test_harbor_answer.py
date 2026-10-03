@@ -13,8 +13,9 @@ from threading import Thread
 
 import pytest
 from harbor.models.task.task import Task
+from verifyit.spec import Mode
 
-from taskcompendium.grading import exact_answer, numeric_answer
+from taskcompendium.grading import exact_answer, grade_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -30,16 +31,13 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
-    FinalTools,
     FunctionDefinition,
     Source,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
-from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
 
@@ -172,7 +170,6 @@ def test_numeric_answer_uses_explicit_tolerance(specification, response, reward)
         specification,
         convention,
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-        object(),
     )
 
     assert (result.status, result.reward) == ("graded", reward)
@@ -296,28 +293,18 @@ async def test_answer_call_does_not_dispatch_and_requires_its_submission_functio
 
 
 @pytest.mark.parametrize(
-    "answer_format,tool_choice",
+    "answer_format",
     [
-        (AnswerFormat.PLAIN, None),
-        (AnswerFormat.PLAIN, "auto"),
-        (AnswerFormat.PLAIN, "none"),
-        (AnswerFormat.JSON, "auto"),
-        (AnswerFormat.ANSWER_CALL, None),
-        (AnswerFormat.ANSWER_CALL, "auto"),
-        (AnswerFormat.ANSWER_CALL, "required"),
+        AnswerFormat.PLAIN,
+        AnswerFormat.JSON,
+        AnswerFormat.ANSWER_CALL,
     ],
 )
 async def test_answer_submission_preserves_advertised_tools_and_policy(
-    tmp_path, specification, chat_endpoint, answer_format, tool_choice
+    tmp_path, specification, chat_endpoint, answer_format
 ):
     specification = specification.model_copy(
-        update={
-            "final_tools": FinalTools(
-                functions=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
-                tool_choice=tool_choice,
-                parallel_tool_calls=True,
-            )
-        }
+        update={"final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),)}
     )
     convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
@@ -343,32 +330,15 @@ async def test_answer_submission_preserves_advertised_tools_and_policy(
     assert [tool["function"]["name"] for tool in request["tools"]] == (
         ["lookup", "submit_answer"] if answer_format == AnswerFormat.ANSWER_CALL else ["lookup"]
     )
-    assert request.get("tool_choice") == tool_choice
-    assert request["parallel_tool_calls"] is True
+    assert "tool_choice" not in request
+    assert "parallel_tool_calls" not in request
 
 
-@pytest.mark.parametrize(
-    "answer_format,tool_choice,function_name",
-    [
-        (AnswerFormat.PLAIN, "required", "lookup"),
-        (AnswerFormat.JSON, "required", "lookup"),
-        (AnswerFormat.ANSWER_CALL, "none", "lookup"),
-        (AnswerFormat.ANSWER_CALL, "auto", "submit_answer"),
-    ],
-)
-def test_lowering_rejects_submission_policy_conflicts(
-    tmp_path, specification, answer_format, tool_choice, function_name
-):
+def test_lowering_rejects_answer_call_name_collision(tmp_path, specification):
     specification = specification.model_copy(
-        update={
-            "final_tools": FinalTools(
-                functions=(FunctionDefinition(name=function_name, parameters={"type": "object"}),),
-                tool_choice=tool_choice,
-            )
-        }
+        update={"final_tools": (FunctionDefinition(name="submit_answer", parameters={"type": "object"}),)}
     )
-    convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
-
+    convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
     with pytest.raises(ValueError, match="cannot carry"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
@@ -380,7 +350,7 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
         update={"environment_requirements": EnvironmentRequirements(capabilities=("filesystem",))}
     )
 
-    with pytest.raises(ValueError, match="cannot satisfy"):
+    with pytest.raises(NotImplementedError, match="cannot satisfy"):
         lower_to_harbor(
             specification,
             SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
@@ -393,12 +363,12 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
     "verifier,message",
     [
         (
-            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": 12}'),
-            "Invalid 'exact_answer' verifier parameters",
+            VerifierSpec(kind=Mode.EXACT, parameters_json='{"expected": 12}'),
+            "Invalid 'exact' verifier parameters",
         ),
         (
-            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": "12", "extra": true}'),
-            "Invalid 'exact_answer' verifier parameters",
+            VerifierSpec(kind=Mode.EXACT, parameters_json='{"expected": "12", "extra": true}'),
+            "Invalid 'exact' verifier parameters",
         ),
     ],
 )
@@ -424,7 +394,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     )
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
@@ -432,7 +402,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
         "result = grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='12'))), object()); "
+        "TextMessage(role='assistant', content='12')))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 
@@ -463,7 +433,7 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
-    with pytest.raises(ValueError, match="cannot carry 'file'"):
+    with pytest.raises(NotImplementedError, match="file"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     assert not (tmp_path / "task").exists()
 
