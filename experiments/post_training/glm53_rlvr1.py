@@ -34,6 +34,10 @@ ANTIDOOM_MODEL_EXPORT = (
     "s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-ftpo-dapo-full-window/"
     "2026.10.01.1/exports/global_step_45/policy"
 )
+ANTIDOOM_EXPLORE_MODEL_EXPORT = (
+    "s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-rlvr1-async/"
+    "2026.10.02.6/exports-best-step12/global_step_12/policy"
+)
 DATA_ROOT = (
     "s3://marin-us-east-02a/marin/users/benfeuer/datasets/snowball-ultra-rlvr/"
     "20260920-9e7a35d6c979/ordinary-only-v2-agentic57t-compatible/rlvr1"
@@ -45,14 +49,22 @@ MODEL_VERSION = "2026.09.21"
 DATA_VERSION = "2026.09.23"
 RL_NAME = user_owned_name("checkpoints/glm53-rlvr1-async")
 ANTIDOOM_RL_NAME = user_owned_name("checkpoints/antidoom-rlvr1-async")
+ANTIDOOM_EXPLORE_RL_NAME = user_owned_name("checkpoints/antidoom-rlvr1-async-explore")
 
 
 def build_rl_step(
     tokenizer_revision: str, smoke: bool, sweep_arm: str | None = None, model_variant: str = "datakit"
 ) -> ArtifactStep[SkyRLRun]:
-    if model_variant not in {"datakit", "antidoom"}:
+    if model_variant not in {"datakit", "antidoom", "antidoom-explore"}:
         raise ValueError(f"Unknown model variant: {model_variant}")
-    if model_variant == "antidoom":
+    if model_variant == "antidoom-explore":
+        model = ArtifactStep.adopt(
+            "checkpoints/antidoom-rlvr1-best-step12-hf",
+            "2026.10.03.1",
+            ANTIDOOM_EXPLORE_MODEL_EXPORT,
+            kind=LevanterCheckpoint,
+        )
+    elif model_variant == "antidoom":
         model = ArtifactStep.adopt(
             "checkpoints/antidoom-ftpo-dapo-step45-hf",
             "2026.10.01.1",
@@ -66,10 +78,12 @@ def build_rl_step(
     data = ArtifactStep.adopt("documents/glm53-rlvr1", DATA_VERSION, DATA_ROOT, kind=Artifact)
     if smoke and sweep_arm is not None:
         raise ValueError("The smoke and sweep configurations cannot be selected together")
-    if model_variant == "antidoom" and sweep_arm is not None:
+    if model_variant in {"antidoom", "antidoom-explore"} and sweep_arm is not None:
         raise ValueError("Sweep arms use the September 21 Datakit model")
     if sweep_arm is not None:
         config_path = SWEEP_CONFIG_DIR / f"{sweep_arm}.yaml"
+    elif model_variant == "antidoom-explore":
+        config_path = CONFIG_PATH.with_name(f"glm53_rlvr1_antidoom_explore{'_smoke' if smoke else ''}.yaml")
     elif model_variant == "antidoom":
         config_path = CONFIG_PATH.with_name(f"glm53_rlvr1_antidoom{'_smoke' if smoke else ''}.yaml")
     elif smoke:
@@ -108,7 +122,9 @@ def build_rl_step(
     inference_nodes, remainder = divmod(inference_gpu_count, role_plan.policy_num_gpus_per_node)
     if remainder:
         raise ValueError("The inference GPU allocation must fill complete nodes")
-    if model_variant == "antidoom":
+    if model_variant == "antidoom-explore":
+        name = user_owned_name("checkpoints/antidoom-rlvr1-async-explore-smoke") if smoke else ANTIDOOM_EXPLORE_RL_NAME
+    elif model_variant == "antidoom":
         name = user_owned_name("checkpoints/antidoom-rlvr1-async-smoke") if smoke else ANTIDOOM_RL_NAME
     elif sweep_arm is not None:
         name = user_owned_name(f"checkpoints/glm53-rlvr1-sweep-{sweep_arm}")
@@ -159,7 +175,7 @@ def build_rl_step(
 @click.option("--tokenizer-revision", required=True, help="Published SFT model commit SHA on Hugging Face.")
 @click.option("--smoke", is_flag=True, help="Run one optimizer step with the production geometry and a 64-prompt batch.")
 @click.option("--sweep-arm", type=click.Choice(SWEEP_ARMS), help="Run one frozen sweep arm.")
-@click.option("--model-variant", type=click.Choice(["datakit", "antidoom"]), default="datakit")
+@click.option("--model-variant", type=click.Choice(["datakit", "antidoom", "antidoom-explore"]), default="datakit")
 @rl_build_options
 def main(tokenizer_revision: str, smoke: bool, sweep_arm: str | None, model_variant: str) -> ArtifactStep[SkyRLRun]:
     return build_rl_step(tokenizer_revision, smoke, sweep_arm, model_variant)
