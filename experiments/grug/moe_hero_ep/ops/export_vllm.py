@@ -13,7 +13,7 @@ import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from levanter.compat.hf_export import HFShardProgress, on_export_writer, save_hf_shards, write_export_json
+from levanter.compat.hf_export import HFShardResume, run_on_export_writer, save_hf_shards, write_export_json
 from levanter.distributed import DistributedConfig
 from levanter.grug.sharding import compact_grug_mesh
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -69,7 +69,7 @@ def export(config: ExportConfig) -> None:
             raise FileExistsError(f"Export requires a fresh destination: {root}")
         write_export_json(root / REQUEST_FILENAME, request)
 
-    on_export_writer(prepare)
+    run_on_export_writer(prepare)
     mesh = compact_grug_mesh(expert_axis_size=config.expert_axis_size, replica_axis_size=config.replica_axis_size)
     with jax.set_mesh(mesh):
         model = restore_weights(config.checkpoint, config.metadata_digest, config.model, mesh)
@@ -95,7 +95,7 @@ def export(config: ExportConfig) -> None:
             # One writer and an oversized-shard budget stage only one layer plus serialization buffers.
             export_host_budget_bytes=1,
             max_concurrent_shards=1,
-            progress=HFShardProgress(root, export_id),
+            resume=HFShardResume(root, export_id),
             tensor_names=tensor_names,
         )
         payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
@@ -118,7 +118,7 @@ def export(config: ExportConfig) -> None:
                 },
             )
 
-        on_export_writer(finish)
+        run_on_export_writer(finish)
 
 
 @draccus.wrap()

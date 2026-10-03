@@ -52,7 +52,7 @@ from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
-from levanter.compat.hf_export import on_export_writer, save_hf_shards
+from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -1146,13 +1146,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
         state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None)
-        model_size = sum(v.size * v.dtype.itemsize for v in state_dict_shape.values())
-        pbar = tqdm(
-            total=model_size,
-            unit="B",
-            unit_scale=True,
-            desc="Checkpoint size",
-        )
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
@@ -1229,8 +1222,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
             max_concurrent_shards=max_concurrent_shards,
             upload_to_hf=upload_shard,
         )
-        pbar.update(model_size)
-        pbar.close()
 
         if index is not None:
             logger.info(
@@ -1282,7 +1273,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     source_is_temp=path != local_path,
                 )
 
-        on_export_writer(save_metadata)
+        run_on_export_writer(save_metadata)
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 

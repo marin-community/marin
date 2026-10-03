@@ -26,11 +26,13 @@ from safetensors.numpy import save_file
 from levanter.utils.byte_budget import HostByteBudget
 
 
-def on_export_writer[T](action: Callable[[], T]) -> T | None:
-    """Run rank-zero I/O and broadcast failure before any rank enters its next gather.
+def run_on_export_writer[T](action: Callable[[], T]) -> T | None:
+    """Run a rank-zero action and report its failure collectively.
 
     Every initialized JAX process calls this on its main thread in the same order.
-    Return the result on process zero and None elsewhere. Worker threads never call it.
+    Worker threads never call it. Asynchronous errors propagate when the action
+    observes them, for example by reading a completed writer future.
+    Return the result on process zero and None elsewhere.
     """
     error = None
     result = None
@@ -73,7 +75,7 @@ class HFShardRecord:
 
 
 @dataclass(frozen=True)
-class HFShardProgress:
+class HFShardResume:
     """Opt into verified shard reuse for one immutable request and one exporting gang.
 
     The caller checks its destination/request policy before exporting and publishes
@@ -111,7 +113,7 @@ def save_hf_shards(
     *,
     export_host_budget_bytes: int,
     max_concurrent_shards: int,
-    progress: HFShardProgress | None = None,
+    resume: HFShardResume | None = None,
     tensor_names: Mapping[str, tuple[str, ...]] | None = None,
     upload_to_hf: Callable[[str, str], None] | None = None,
 ) -> list[HFShardRecord]:
@@ -125,9 +127,10 @@ def save_hf_shards(
     Reserve twice each shard's payload for host arrays and serialization buffers;
     an oversized shard runs alone. One writer bounds staging to one shard plus
     serialization buffers. One writer finishes before inspecting the next shard.
-    Concurrent writer failures propagate to every rank through matched collectives.
+    Asynchronous writer errors propagate when the main thread observes completed
+    futures at matched coordination points; intervening gathers can finish first.
 
-    Without progress, existing shard files are overwritten. With progress, verify
+    Without resume, existing shard files are overwritten. With resume, verify
     identity, names, size and freshly computed SHA-256 before skipping any gather.
     Return ordered verified/uploaded receipts on process zero, an empty list elsewhere.
     upload_to_hf receives a temporary directory containing exactly one shard and
@@ -162,9 +165,9 @@ def save_hf_shards(
                 local = Path(directory) / filename
                 save_file(tensors, local, metadata={"format": "pt"})
                 record = None
-                if progress is not None:
+                if resume is not None:
                     record = HFShardRecord(
-                        progress.export_id,
+                        resume.export_id,
                         filename,
                         local.stat().st_size,
                         _sha256(StoragePath(str(local))),
@@ -173,8 +176,8 @@ def save_hf_shards(
                 (root / filename).upload_from(str(local))
                 if upload_to_hf is not None:
                     upload_to_hf(directory, filename)
-                if progress is not None and record is not None:
-                    progress.commit(record)
+                if resume is not None and record is not None:
+                    resume.commit(record)
                 return record
         finally:
             budget.release(reserved_bytes)
@@ -184,8 +187,8 @@ def save_hf_shards(
             names = sorted(
                 output for key in shapes for output in (tensor_names[key] if tensor_names is not None else (key,))
             )
-            if progress is not None:
-                record = on_export_writer(lambda: progress.completed(filename, names))
+            if resume is not None:
+                record = run_on_export_writer(lambda: resume.completed(filename, names))
                 reuse = multihost_utils.broadcast_one_to_all(np.asarray(record is not None))
                 if reuse:
                     if record is not None:
@@ -193,7 +196,7 @@ def save_hf_shards(
                     continue
 
             reserved_bytes = 2 * sum(value.size * value.dtype.itemsize for value in shapes.values())
-            on_export_writer(lambda: reserve(reserved_bytes))
+            run_on_export_writer(lambda: reserve(reserved_bytes))
             tensors: dict[str, np.ndarray] = {}
             try:
                 weights = load_shard(tuple(shapes))
@@ -215,21 +218,21 @@ def save_hf_shards(
                         raise ValueError(f"Incomplete tensor mapping for {filename}")
                     pending.append(pool.submit(write_shard, filename, tensors, reserved_bytes))
 
-                on_export_writer(submit)
+                run_on_export_writer(submit)
             except BaseException:
                 if jax.process_index() == 0:
                     budget.release(reserved_bytes)
                 raise
             del tensors
             if max_concurrent_shards == 1:
-                on_export_writer(drain_one)
+                run_on_export_writer(drain_one)
 
         def finish() -> None:
             while pending:
                 drain_one()
 
-        on_export_writer(finish)
+        run_on_export_writer(finish)
 
     # Reused shards can be encountered before earlier asynchronous writes finish.
     by_filename = {record.filename: record for record in records}
-    return [by_filename[filename] for filename in shards] if progress is not None and jax.process_index() == 0 else []
+    return [by_filename[filename] for filename in shards] if resume is not None and jax.process_index() == 0 else []
