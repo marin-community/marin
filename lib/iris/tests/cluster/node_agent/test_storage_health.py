@@ -191,3 +191,18 @@ def test_storage_probe_network_failures_count_but_missing_credentials_do_not(err
         with patch.object(fs, "cat_file", side_effect=error):
             assert probe_storage("memory:///classification-probe") == expected
     assert not fs.exists("/classification-probe")
+
+
+def test_environment_rotation_rejects_previous_successful_peer_reports(config):
+    k8s = InMemoryK8sService()
+    previous = config.model_copy(update={"environment_revision": "previous-secret-version"})
+    current = config.model_copy(update={"environment_revision": "new-secret-version"})
+    seed_node(k8s, current, "bad", ProbeResult.FAILED, failures=3)
+    seed_node(k8s, previous, "p1")
+    seed_node(k8s, previous, "p2")
+    reconcile_storage_health(k8s, current)
+    assert not k8s.get_json(K8sResource.NODES, "bad")["spec"]["unschedulable"]
+    seed_node(k8s, current, "p1")
+    seed_node(k8s, current, "p2")
+    reconcile_storage_health(k8s, current)
+    assert k8s.get_json(K8sResource.NODES, "bad")["spec"]["unschedulable"]

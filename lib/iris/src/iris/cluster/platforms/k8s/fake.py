@@ -582,6 +582,13 @@ class InMemoryK8sService:
         if resource is K8sResource.PODS and (resource.plural, name) in self._resources:
             return
 
+        if resource is K8sResource.SECRETS:
+            previous = self._resources.get((resource.plural, name))
+            version = int(previous["metadata"].get("resourceVersion", "0")) if previous else 0
+            if previous is None or previous.get("data") != manifest.get("data"):
+                version += 1
+            manifest["metadata"]["uid"] = f"fake-secret-{name}"
+            manifest["metadata"]["resourceVersion"] = str(version)
         self._resources[(resource.plural, name)] = manifest
 
         # Run scheduling for pod-bearing manifests

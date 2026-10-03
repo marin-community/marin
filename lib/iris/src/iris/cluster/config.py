@@ -650,6 +650,7 @@ class NodeStorageHealthConfig(_Config):
     """Opt-in regional S3 viability probes and bounded automatic quarantine."""
 
     scratch_prefix: str
+    environment_revision: str = ""  # populated by deployment from Secret revision and task literals
     interval: float = Field(default=60, gt=0)
     timeout: float = Field(default=15, gt=0)
     failure_threshold: int = Field(default=3, ge=2)
