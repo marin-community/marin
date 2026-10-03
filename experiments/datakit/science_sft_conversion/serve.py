@@ -62,7 +62,7 @@ def _copy_cached_snapshot(source: str, filesystem: fsspec.AbstractFileSystem, de
 
 
 def retain_model(destination: str) -> str:
-    """Retain the cached checkpoint outside TTL storage without downloading its weights."""
+    """Resolve the pinned checkpoint, then copy it outside TTL storage within the regional bucket."""
     bucket = "s3://marin-us-east-02a/"
     if not destination.startswith(bucket):
         raise ValueError("Retained MiniMax weights must stay in the RNO2A CoreWeave bucket")

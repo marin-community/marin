@@ -93,7 +93,7 @@ class GrugTrainerConfig:
     replica_axis_size: int | None = None
     model_axis_size: int = 1
     context_axis_size: int = 1
-    """Shard queries and hidden activations across sequence; gather K/V for attention."""
+    """Size of the context mesh axis; this trainer currently keeps sequence axes replicated."""
 
     reinitialize_token_ids: tuple[int, ...] = ()
     """Reset these LM-head rows and moments when initializing from a base checkpoint or HF export."""
@@ -212,6 +212,7 @@ def build_tagged_evaluator(
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
+    """Build a tagged evaluator when the data config supplies evaluation datasets."""
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:

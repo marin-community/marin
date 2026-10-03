@@ -82,8 +82,8 @@ class GrugTrainerConfig:
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever the other axes leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -93,7 +93,7 @@ class GrugTrainerConfig:
     replica_axis_size: int | None = None
     model_axis_size: int = 1
     context_axis_size: int = 1
-    """Shard queries and hidden activations across sequence; gather K/V for attention."""
+    """Size of the context mesh axis; this trainer currently keeps sequence axes replicated."""
 
     reinitialize_token_ids: tuple[int, ...] = ()
     """Reset these LM-head rows and their moments only when initializing from the base checkpoint."""
@@ -202,7 +202,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -221,6 +221,7 @@ def build_tagged_evaluator(
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
+    """Build a tagged evaluator when the data config supplies evaluation datasets."""
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:
@@ -232,7 +233,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -907,14 +908,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
-        # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
-                # grad_watch runs only on its configured interval.
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )

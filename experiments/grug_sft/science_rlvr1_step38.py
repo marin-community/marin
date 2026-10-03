@@ -105,7 +105,7 @@ class WindowedPrebuiltDataset(AsyncDataset[GrugLmExample]):
         return examples
 
 
-def validated_sources(mix: ScienceMix) -> tuple[int, int]:
+def training_sequence_counts(mix: ScienceMix) -> tuple[int, int]:
     model_manifest = json.loads(StoragePath(prefix_join(MODEL_PATH, "source-revision.json")).read_text())
     if model_manifest["revision"] != MODEL_REVISION or model_manifest["weight_files"] != 39:
         raise ValueError("Step38 model mirror revision or weight count changed")
@@ -134,7 +134,7 @@ def run(
     if train_router_bias_residual and router_bias_update == RouterBiasUpdate.PER_STEP:
         raise ValueError("Per-step QB updates cannot be combined with a learned bias residual")
     configure_coreweave_s3()
-    base_rows, rlvr_rows = validated_sources(mix)
+    base_rows, rlvr_rows = training_sequence_counts(mix)
     total_rows = base_rows + rlvr_rows
     steps = total_rows // BATCH
     if steps < 1:
