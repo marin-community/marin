@@ -18,14 +18,12 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
-from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.store.bucket_writer import write_bucket_cache
 from experiments.datakit.store.datakit_store import BucketCacheStats
 from experiments.datakit.store.mixture import MixtureWeighting, bucket_name, log_store_summary
-from experiments.grug.fast_track.data_pipeline import DATA_POOL_RESOURCES, DATA_POOL_WORKERS, FastTrackDataStore
+from experiments.grug.fast_track.data_pipeline import FastTrackDataStore, data_pool
 from experiments.grug.fast_track.launch import (
     H100_LADDER_SIZES,
     DataKitTrainingSource,
@@ -89,12 +87,7 @@ def shuffle_store(config: ShuffleStoreConfig) -> FastTrackDataStore:
     """Write a separate shuffled store with the baseline's document and token counts."""
     store = FastTrackDataStore.raw_load(config.source).store
     special_ids = tuple(load_tokenizer(store.tokenizer).all_special_ids)
-    with ZephyrContext(
-        name="fast-track-token-shuffle",
-        resources=DATA_POOL_RESOURCES,
-        max_workers=DATA_POOL_WORKERS,
-        stage_runner_factory=SubprocessRunner,
-    ) as pool:
+    with data_pool("fast-track-token-shuffle") as pool:
         buckets = pool.execute(
             Dataset.from_list(store.buckets).map(
                 lambda bucket: shuffle_bucket_tokens(
