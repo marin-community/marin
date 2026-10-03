@@ -310,7 +310,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -418,7 +418,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -509,7 +509,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -573,6 +573,16 @@
               "selector": "reason",
               "text": "reason",
               "type": "string"
+            },
+            {
+              "selector": "export_lost_records",
+              "text": "export lost records",
+              "type": "number"
+            },
+            {
+              "selector": "export_queued_records",
+              "text": "export queued records",
+              "type": "number"
             },
             {
               "selector": "last_record_ms",
@@ -649,7 +659,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -757,7 +767,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -865,7 +875,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -986,7 +996,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1094,7 +1104,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1202,7 +1212,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1323,7 +1333,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1431,7 +1441,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1538,7 +1548,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1642,7 +1652,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1759,7 +1769,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1867,7 +1877,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1988,7 +1998,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2096,7 +2106,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2205,7 +2215,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2312,7 +2322,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2433,7 +2443,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2524,7 +2534,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2629,7 +2639,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2758,7 +2768,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2865,7 +2875,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -2972,7 +2982,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3079,7 +3089,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3187,7 +3197,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3307,7 +3317,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3414,7 +3424,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3521,7 +3531,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3641,7 +3651,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3748,7 +3758,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3836,7 +3846,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -3964,7 +3974,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -4106,7 +4116,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -4262,7 +4272,7 @@
           "refId": "A",
           "source": "url",
           "type": "json",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -4377,7 +4387,7 @@
           "refId": "A",
           "source": "url",
           "type": "json",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -4497,7 +4507,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -4604,7 +4614,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -4712,7 +4722,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -4820,7 +4830,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -4944,7 +4954,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -5078,7 +5088,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -5185,7 +5195,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -5292,7 +5302,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -5399,7 +5409,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [
@@ -5506,7 +5516,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/async-rl/overview",
+          "url": "/v1/rl/attempt",
           "url_options": {
             "method": "GET",
             "params": [

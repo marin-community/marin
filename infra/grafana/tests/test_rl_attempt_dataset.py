@@ -11,15 +11,29 @@ from typing import NamedTuple
 import duckdb
 import pyarrow as pa
 import pytest
-from async_rl_observability import async_rl_overview_dataset
 from config import ClusterTarget
 from conftest import bridge_config, install_finelog_dialect_macros
+from dashboard_stitch import stitch_all
+from rl_attempt_observability import _METRIC_NAMES, RL_ATTEMPT_MAX_RESULT_ROWS, rl_attempt_dataset
 from server import create_app
 from starlette.testclient import TestClient
 
-DASHBOARD = json.loads((Path(__file__).parents[1] / "dashboards/async_rl.json").read_text())
-PANELS = {panel["title"]: panel for panel in DASHBOARD["panels"] if "targets" in panel}
-ENDPOINT = "/v1/async-rl/overview"
+GRAFANA_DIR = Path(__file__).parents[1]
+DASHBOARD = stitch_all(GRAFANA_DIR / "dashboards", GRAFANA_DIR / "dashboards/panels")["async_rl.json"]
+ENDPOINT = "/v1/rl/attempt"
+
+
+def _panels(panels):
+    for panel in panels:
+        yield panel
+        yield from _panels(panel.get("panels", []))
+
+
+PANELS = {
+    panel["title"]: panel
+    for panel in _panels(DASHBOARD["panels"])
+    if any(target["url"] == ENDPOINT for target in panel.get("targets", []))
+}
 
 # The finelog namespace every async panel reads, quoted the way the dashboards spell it.
 TABLE = '"telemetry_v1.marinskyrl"'
@@ -72,7 +86,7 @@ def panel_view(title):
 
 def dataset(*, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
     """The dataset every panel requests for the selected identity over this suite's window."""
-    return async_rl_overview_dataset(
+    return rl_attempt_dataset(
         (CLUSTER,), RUN_ID, JOB_ID, (DRIVER, WORKER), WINDOW_START_MS, WINDOW_START_MS + window_ms, bucket_ms
     )
 
@@ -195,7 +209,11 @@ def store(telemetry_table):
     add("policy_step", 1)
     add("weight_sync_completed", body={"model_version_step": 1})
     for kind, value in [("generated_token", 150), ("consumed_response_token", 100), ("consumed_loss_token", 90)]:
-        add("work_completed", value, attributes={"work_kind": kind})
+        add(
+            "work_completed",
+            value,
+            attributes={"work_kind": kind, **({"weights_step": "0"} if kind == "generated_token" else {})},
+        )
     for phase in (
         "step",
         "wait_for_generation_buffer",
@@ -377,6 +395,8 @@ def store(telemetry_table):
             )
     add("telemetry_lost_records", 0)
     add("telemetry_rejected_records", 0)
+    for n, value in ((1, 0.75), (16, 0.25)):
+        add("training_metric_value", value, attributes={"metric": f"reward/avg_pass_at_{n}", "payload_kind": "train"})
     # One copy of every row per predicate the panels filter on, each copy falsifying one
     # predicate and carrying a value no assertion below expects. The other run is a sync
     # run, which the run picker has to leave out of its dropdown as well.
@@ -396,66 +416,81 @@ def store(telemetry_table):
             if column == "run_id":
                 other = other._replace(resource_attributes_json=sync_resource)
             distractors.append(other)
-    seed(database, rows + distractors)
+    sync_rows = []
+    for row in rows:
+        resource = {**json.loads(row.resource_attributes_json), "training_type": "sync"}
+        body = json.loads(row.body_json)
+        if row.name == "consumed_staleness":
+            body["staleness"] = 0
+        sync_rows.append(
+            row._replace(
+                run_id="sync-run",
+                resource_attributes_json=json.dumps(resource),
+                body_json=json.dumps(body),
+                value=0 if row.name == "rollout_staleness_steps" else row.value,
+            )
+        )
+    seed(database, rows + distractors + sync_rows)
     return database
 
 
-# Rows each panel returns from the fixture. A GROUP BY that drops a dimension, a fan-out
-# that collapses, or a join that duplicates its left side still returns rows, just not this many.
-PANEL_ROWS = {
-    "Optimizer and synced policy steps": 2,
-    "Response tokens generated and trained on / s": 3,
-    "Process lifecycle": 1,
-    "Driver step, preparation and policy walls": 5,
-    "Generation worker await duration": 2,
-    "Completed buffer depth and capacity": 2,
-    "Buffer dwell of trained groups": 3,
-    "Policy staleness at training": 3,
-    "Successful rollout-call latency": 3,
-    "Weight sync and policy offload walls": 3,
-    "Driver event-loop lag": 1,
-    "Signed timing residuals": 2,
-    "Rollouts completing during policy training": 1,
-    "Group dispositions / bucket": 2,
-    "Tokens by group disposition / bucket": 2,
-    "Training reward and informative groups": 1,
-    "Evaluation scores": 8,
-    "Length stops and coverage in trained groups": 2,
-    "Optimizer diagnostics": 2,
-    "Megatron policy wall by rank": 1,
-    "Megatron phase detail": 2,
-    "Exporter and nonfinite observations": 2,
-    "Pre-update model log-ratio drift": 2,
-    "Pre-update PPO-window pressure": 2,
-    "Drift coverage and token-weight concentration": 2,
-    "Mean squared model log-ratio": 1,
-    "Mean correction weight": 2,
-    "Core and cycle duration": 2,
-    "Loss tokens trained per second": 2,
-    "Core wall fractions": 1,
-    "Useful tokens per configured role GPU-second": 1,
-    "Configured role GPU counts": 2,
-    "Learner memory by phase": 1,
-    "Inference sampled throughput by learner phase": 4,
-    "Cumulative core GPU-hours in selected window": 1,
-    "Uniform-staleness batch diagnostics": 1,
-    "Uniform-staleness diagnostic token coverage": 1,
-    "Evaluation response length and stop coverage": 5,
-    "Evaluation score contributions by stop class": 3,
-    "Staleness of trained groups: groups per step": 7,
-    "Staleness of trained groups: tokens per step": 4,
-    "Weight-sync stages": 3,
-    "Trainer/vLLM logprob mismatch \u03c1 (staleness 0)": 6,
-    "Trainer/vLLM logprob mismatch by staleness bucket": 4,
-    "Trainer logprob drift within the update": 4,
-    "Position dependence of |log \u03c1|": 8,
-    "Correction activity": 6,
-}
+# Complete panel results for the seeded observations, including timestamps and identities.
+# The quantiles use linear interpolation; token rates use the endpoint's 30-second bucket.
+EXPECTED_PANELS = json.loads((Path(__file__).parent / "fixtures/rl_attempt_panels.json").read_text())
+ASYNC_ONLY_PANEL_IDS = {11, 47, 48, 51, 52, 54, 55}
 
 
-@pytest.mark.parametrize("title", PANELS)
-def test_every_panel_view_returns_declared_fields_for_selected_attempt(store, title):
-    assert len(query(store, title)) == PANEL_ROWS[title]
+def _target_params(target, *, run=RUN_ID, executions=f"{DRIVER},{WORKER}"):
+    variables = {
+        "${cluster:csv}": CLUSTER,
+        "${run}": run,
+        "${job}": JOB_ID,
+        "${execution:csv}": executions,
+        "${__from}": str(WINDOW_START_MS),
+        "${__to}": str(WINDOW_START_MS + WINDOW_MS),
+    }
+    params = {}
+    for param in target["url_options"]["params"]:
+        value = param["value"]
+        for macro, replacement in variables.items():
+            value = value.replace(macro, replacement)
+        assert "${" not in value, value
+        params[param["key"]] = value
+    return params
+
+
+def _filtered_rows(target, rows):
+    expression = target.get("filterExpression")
+    if not expression:
+        return rows
+    return [
+        row for row in rows if eval(expression.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}}, row)
+    ]
+
+
+def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
+    app, _ = _bridge(store)
+    with TestClient(app) as client:
+        for run in (RUN_ID, "sync-run"):
+            for panel in PANELS.values():
+                if run == "sync-run" and panel["id"] in ASYNC_ONLY_PANEL_IDS:
+                    continue
+                for target in panel["targets"]:
+                    params = _target_params(target, run=run)
+                    response = client.get(f"/finelog/marin{target['url']}", params=params)
+                    assert response.status_code == 200, response.text
+                    expected = EXPECTED_PANELS[str(panel["id"])]
+                    columns = [column["selector"] for column in target["columns"]]
+                    assert columns == expected["columns"]
+                    returned = _filtered_rows(target, response.json())
+                    assert all(set(row) == {"section", *columns} for row in returned)
+                    assert all(row["section"] == params["view"] for row in returned)
+                    actual = sorted([tuple(row[key] for key in columns) for row in returned], key=repr)
+                    wanted = sorted([tuple(row) for row in expected["rows"]], key=repr)
+                    assert actual == [
+                        tuple(pytest.approx(value, rel=1e-12) if isinstance(value, float) else value for value in row)
+                        for row in wanted
+                    ], (run, panel["id"], actual)
 
 
 def _bridge(database, *, max_rows=1000):
@@ -479,17 +514,86 @@ REQUEST = {
 }
 
 
-def test_the_page_reads_finelog_once_per_source_for_every_panel(store):
-    app, queries = _bridge(store)
-
+def test_all_attempts_match_picker_values_and_keep_job_scope(telemetry_table):
+    rows = [telemetry_row("policy_step", i + 1, execution=f"attempt-{i}") for i in range(3)]
+    rows += [
+        telemetry_row("policy_step", 1000, execution=None),
+        telemetry_row("policy_step", 1000, execution="attempt-0", job="other-job"),
+    ]
+    seed(telemetry_table, rows)
+    app, _ = _bridge(telemetry_table)
+    selected = {**REQUEST, "view": "policy_step"}
+    expected = [
+        {"section": "policy_step", "t": BASE_EPOCH_MS, "series": f"policy_step · attempt-{i}", "value": i + 1}
+        for i in range(3)
+    ]
     with TestClient(app) as client:
-        responses = {
-            title: client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "view": panel_view(title)})
-            for title in PANELS
-        }
+        for executions in ("__all", "attempt-0,attempt-1,attempt-2"):
+            response = client.get(f"/finelog/marin{ENDPOINT}", params={**selected, "executions": executions})
+            assert response.status_code == 200, response.text
+            assert sorted(response.json(), key=lambda row: row["series"]) == expected
+        seed(telemetry_table, [telemetry_row("policy_step", i + 1, execution=f"attempt-{i}") for i in range(3, 35)])
+        # A new app has a cold cache after the external source changes.
+    app, _ = _bridge(telemetry_table)
+    with TestClient(app) as client:
+        response = client.get(f"/finelog/marin{ENDPOINT}", params={**selected, "executions": "__all"})
+        assert response.status_code == 200, response.text
+        expected += [
+            {"section": "policy_step", "t": BASE_EPOCH_MS, "series": f"policy_step · attempt-{i}", "value": i + 1}
+            for i in range(3, 35)
+        ]
+        assert sorted(response.json(), key=lambda row: row["series"]) == sorted(expected, key=lambda row: row["series"])
+        explicit = client.get(
+            f"/finelog/marin{ENDPOINT}",
+            params={
+                **selected,
+                "executions": ",".join(f"attempt-{i}" for i in range(35)),
+            },
+        )
+        assert explicit.status_code == 400
+        assert explicit.json() == {"error": "executions must contain between 1 and 32 values"}
 
-    assert len(queries) == len(dataset().sources)
-    assert {response.status_code for response in responses.values()} == {200}
+
+def _long_run_store(database, *, ranks=256, steps=500):
+    window_ms = 7 * 24 * 3600 * 1000
+    spacing = (window_ms - 2 * 60000) // steps
+    database.execute(
+        f"""CREATE TEMP TABLE long_template AS SELECT * FROM {TABLE}
+        WHERE run_id='{RUN_ID}' AND job_id='{JOB_ID}' AND execution_uid IN ('{DRIVER}', '{WORKER}')
+          AND name <> 'training_metric_value'
+          AND COALESCE(json_get(attributes_json, 'backend'), '') <> 'megatron'"""
+    )
+    database.execute(f"DELETE FROM {TABLE}")
+    database.execute(
+        f"""INSERT INTO {TABLE}
+        SELECT cluster, service, run_id, job_id, execution_uid, timestamp_ms + s.step * {spacing}, s.step,
+               name, value,
+               CAST(json_merge_patch(attributes_json, json_object('step', CAST(s.step AS VARCHAR))) AS VARCHAR),
+               resource_attributes_json, body_json
+        FROM long_template, (SELECT range AS step FROM range({steps})) s"""
+    )
+    database.execute(
+        f"""INSERT INTO {TABLE}
+        SELECT '{CLUSTER}', '{SERVICE}', '{RUN_ID}', '{JOB_ID}', '{WORKER}',
+               {BASE_EPOCH_MS} + s.step * {spacing}, s.step, 'phase_duration_seconds', CAST(r.rank + 1 AS DOUBLE),
+               CAST(json_object('step', CAST(s.step AS VARCHAR), 'rank', CAST(r.rank AS VARCHAR),
+                    'phase', p.phase, 'outcome', 'success', 'backend', 'megatron',
+                    'clock_domain', 'cpu_dispatch_wall', 'role', 'worker') AS VARCHAR),
+               '{{"role":"worker","host":"learner"}}', '{{}}'
+        FROM (SELECT range AS step FROM range({steps})) s, (SELECT range AS rank FROM range({ranks})) r,
+             (VALUES ('ppo_train'), ('prepare'), ('forward'), ('backward'), ('optimizer'),
+                     ('finalize'), ('ppo_train_residual')) p(phase)"""
+    )
+    metrics = ",".join("(" + repr(name) + ")" for name in _METRIC_NAMES)
+    database.execute(
+        f"""INSERT INTO {TABLE}
+        SELECT '{CLUSTER}', '{SERVICE}', '{RUN_ID}', '{JOB_ID}', '{DRIVER}',
+               {BASE_EPOCH_MS} + s.step * {spacing}, s.step, 'training_metric_value', 1.0,
+               CAST(json_object('step', CAST(s.step AS VARCHAR), 'role', 'trainer', 'metric', m.metric,
+                                'payload_kind', 'train') AS VARCHAR), '{{"role":"trainer"}}', '{{}}'
+        FROM (SELECT range AS step FROM range({steps})) s, (VALUES {metrics}) m(metric)"""
+    )
+    return window_ms
 
 
 def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
@@ -503,15 +607,79 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
         )
 
     assert capped.status_code == 400
-    assert capped.json()["error"].endswith("narrow the async RL overview filters or time range")
+    assert capped.json()["error"].endswith("narrow the RL attempt filters or time range")
     assert too_wide.status_code == 400
-    assert too_wide.json() == {"error": "async RL overview range must not exceed 7 days"}
+    assert too_wide.json() == {"error": "RL attempt range must not exceed 7 days"}
+    window_ms = _long_run_store(store)
+    selected = dataset(window_ms=window_ms, bucket_ms=30000)
+    app, _ = _bridge(store, max_rows=RL_ATTEMPT_MAX_RESULT_ROWS)
+    long_params = {**REQUEST, "to": WINDOW_START_MS + window_ms}
+    with TestClient(app) as client:
+        response = client.get(f"/finelog/marin{ENDPOINT}", params=long_params)
+        assert response.status_code == 200, response.text
+        assert 0 < len(response.json()) <= RL_ATTEMPT_MAX_RESULT_ROWS
+        for source in selected.sources:
+            rows = store.execute(source.sql).fetch_arrow_table()
+            assert 0 < rows.num_rows <= source.max_rows, (source.name, rows.num_rows, source.max_rows)
+        for panel in PANELS.values():
+            for target in panel["targets"]:
+                params = {**_target_params(target), "to": str(WINDOW_START_MS + window_ms)}
+                response = client.get(f"/finelog/marin{target['url']}", params=params)
+                assert response.status_code == 200, (panel["id"], response.text)
 
 
 def test_the_seeded_row_matches_the_table_it_is_inserted_into():
     # seed() inserts positionally, so a column added to one and not the other would shift every
     # field after it onto the wrong column instead of failing.
     assert TelemetryRow._fields == tuple(SCHEMA.names)
+
+
+def test_step_composition_closes_on_the_mean_step_and_keeps_attempts_separate(telemetry_table):
+    rows = []
+    for execution, step, duration, children in (
+        (DRIVER, 1, 20, (("prepare", 5), ("train", 10))),
+        (DRIVER, 2, 40, (("prepare", 10), ("train", 20), ("checkpoint", 5))),
+        (WORKER, 1, 100, (("train", 90),)),
+    ):
+        for phase, value, parent in (("step", duration, ""), *((p, v, "step") for p, v in children)):
+            rows.append(
+                telemetry_row(
+                    "phase_duration_seconds",
+                    value,
+                    execution=execution,
+                    attributes={
+                        "step": str(step),
+                        "role": "trainer",
+                        "clock_domain": "inclusive_wall",
+                        "root": "step",
+                        "phase": phase,
+                        "parent": parent,
+                        "outcome": "failure" if step == 2 else "success",
+                    },
+                )
+            )
+    seed(telemetry_table, rows)
+    app, _ = _bridge(telemetry_table)
+    with TestClient(app) as client:
+        response = client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "view": "step_composition"})
+        coverage = client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "view": "span_coverage"})
+    assert response.status_code == 200, response.text
+    assert response.json() == [
+        {"section": "step_composition", "t": BASE_EPOCH_MS, "series": phase + " · " + execution, "value": value}
+        for phase, execution, value in (
+            ("checkpoint", DRIVER, 2.5),
+            ("prepare", DRIVER, 7.5),
+            ("step", DRIVER, 5),
+            ("step", WORKER, 10),
+            ("train", DRIVER, 15),
+            ("train", WORKER, 90),
+        )
+    ]
+
+    assert coverage.status_code == 200
+    assert coverage.json() == [
+        {"section": "span_coverage", "role": "trainer", "clock_domain": "inclusive_wall", "steps": 3, "failed_steps": 1}
+    ]
 
 
 def test_wait_means_use_await_counts_and_queue_gauges_use_last_value(store):
@@ -622,6 +790,40 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
         ("other/trainer", "telemetry_lost_records"): 4,
         ("trainer/trainer", "telemetry_rejected_records"): 0,
     }
+    store.execute(
+        f"UPDATE {TABLE} SET body_json=? WHERE name='terminal' AND run_id=? AND job_id=? AND execution_uid=?",
+        [
+            json.dumps(
+                {
+                    "status": "completed",
+                    "reason": "normal_exit",
+                    "export_lost_records": "bad",
+                    "export_queued_records": 7,
+                }
+            ),
+            RUN_ID,
+            JOB_ID,
+            DRIVER,
+        ],
+    )
+    app, _ = _bridge(store)
+    with TestClient(app) as client:
+        response = client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "view": "lifecycle"})
+    assert response.status_code == 200, response.text
+    assert response.json() == [
+        {
+            "section": "lifecycle",
+            "execution_uid": DRIVER,
+            "role": "trainer",
+            "process": "trainer",
+            "event": "terminal",
+            "status": "completed",
+            "reason": "normal_exit",
+            "export_lost_records": None,
+            "export_queued_records": 7,
+            "last_record_ms": BASE_EPOCH_MS + 1,
+        }
+    ]
 
 
 def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(store):
@@ -634,6 +836,68 @@ def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(sto
     residuals = query(store, "Signed timing residuals")
     assert sorted(row["value"] for row in residuals) == [-0.5, -0.25]
     assert query(store, "Training reward and informative groups")[0]["value"] == 0.5
+    store.execute(f"DELETE FROM {TABLE} WHERE name='phase_duration_seconds'")
+    observed = []
+    for rank, old_tail, restart in (("0", range(20, 30), range(1, 4)), ("1", range(50, 60), range(1, 3))):
+        for execution, steps, offset in ((WORKER, old_tail, 1000), ("restart", restart, 10000)):
+            for step in steps:
+                observed.append(
+                    telemetry_row(
+                        "phase_duration_seconds",
+                        step + int(rank),
+                        execution=execution,
+                        timestamp=BASE_EPOCH_MS + offset + step,
+                        attributes={
+                            "backend": "megatron",
+                            "phase": "ppo_train",
+                            "outcome": "success",
+                            "rank": rank,
+                            "step": str(step),
+                            "clock_domain": "cpu_dispatch_wall",
+                            "role": "worker",
+                        },
+                    )
+                )
+    seed(store, observed)
+    app, _ = _bridge(store)
+    with TestClient(app) as client:
+        detail = client.get(
+            f"/finelog/marin{ENDPOINT}", params={**REQUEST, "executions": "__all", "view": "megatron_phases"}
+        )
+        aggregate = client.get(
+            f"/finelog/marin{ENDPOINT}", params={**REQUEST, "executions": "__all", "view": "megatron_policy_wall"}
+        )
+    assert detail.status_code == aggregate.status_code == 200
+    retained = {
+        "0": {(WORKER, i) for i in range(25, 30)} | {("restart", i) for i in range(1, 4)},
+        "1": {(WORKER, i) for i in range(54, 60)} | {("restart", i) for i in range(1, 3)},
+    }
+    wanted = [
+        {
+            "section": "megatron_phases",
+            "execution_uid": row.execution_uid,
+            "step": int(json.loads(row.attributes_json)["step"]),
+            "rank": json.loads(row.attributes_json)["rank"],
+            "phase": "ppo_train",
+            "outcome": "success",
+            "seconds": row.value,
+        }
+        for row in sorted(observed, key=lambda row: (-row.timestamp_ms, json.loads(row.attributes_json)["rank"]))
+        if (row.execution_uid, int(json.loads(row.attributes_json)["step"]))
+        in retained[json.loads(row.attributes_json)["rank"]]
+    ]
+    assert detail.json() == wanted
+    # All 25 rank-step observations, including the older history excluded from detail.
+    assert aggregate.json() == [
+        {"section": "megatron_policy_wall", "t": BASE_EPOCH_MS, "series": "ppo_train max · all ranks", "value": 60},
+        {
+            "section": "megatron_policy_wall",
+            "t": BASE_EPOCH_MS,
+            "series": "ppo_train mean · all ranks",
+            "value": pytest.approx(811 / 25),
+        },
+        {"section": "megatron_policy_wall", "t": BASE_EPOCH_MS, "series": "ppo_train min · all ranks", "value": 1},
+    ]
 
 
 def test_empty_telemetry_is_unknown_and_startup_only_runs_are_discoverable(store):
