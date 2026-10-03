@@ -28,9 +28,11 @@ At executable `a1e3ab278eeb05bb645db641dd3e7dabedf90dbb`, the combined runner
 completed ten synthetic and twenty fresh Harrier updates on 16 H100s with two
 full-width layers, FP32 parameters/BF16 compute and scaled MuonH. The explicit
 SM90 pooled-wave/FA4 adapter disables SYRK and establishes no ragged transport
-parity. All-48-layer main-recipe execution and combined GB200 validation remain
-pending. The H100
-reference records the measured losses, data budget and source boundary.
+parity. The later executable `0da04acccf7b0842319a8668d71ccc697a7b10ec`
+completed two finite updates on eight GB200s with all GPU processes, tasks
+and the coordinator exiting zero, with both coordinator retry caps set to zero.
+All-48-layer main-recipe execution remains unvalidated.
+The H100 reference records the measured losses, data budget and source boundary.
 
 ## Historical full-model result
 
@@ -69,7 +71,7 @@ pieces are:
   original values and shardings.
 
 The runner retains `--synchronize-devices-after-step`: two unsynchronized full
-m8 trials produced NaNs, while synchronized trials passed. This is a timing
+trials with eight microbatches produced NaNs, while synchronized trials passed. This is a timing
 workaround with an unresolved root cause. Do not remove it from the validated
 recipe based only on successful small tests.
 

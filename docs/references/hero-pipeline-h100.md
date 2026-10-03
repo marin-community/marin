@@ -11,15 +11,19 @@ completed successfully. These gates validate this two-layer H100 adapter;
 All-48-layer main-recipe execution remains unvalidated; the H100 adapter
 does not establish ragged transport parity.
 
-Publication targets the existing branch `codex/hero-gb200-pipeline` in
+Publication targets `codex/hero-gb200-pipeline` in
 [PR #9662](https://github.com/marin-community/marin/pull/9662), with executable
-pin `a1e3ab278eeb05bb645db641dd3e7dabedf90dbb`. That commit is currently local;
-publication awaits the combined GB200 gate. Once it is published, use:
+pin `0da04acccf7b0842319a8668d71ccc697a7b10ec`. The measured H100 runs used the
+older `a1e3ab278eeb05bb645db641dd3e7dabedf90dbb` source above. The later pin adds
+installer recovery, neutral run names and an argument parser that rejects
+AdamW with the main recipe; it preserves the valid MuonH configuration and
+runtime overlay. No H100 hardware run was repeated for these changes.
+The executable is published on the PR branch. Use:
 
 ```bash
 git clone --branch codex/hero-gb200-pipeline https://github.com/marin-community/marin.git
 cd marin
-git checkout a1e3ab278eeb05bb645db641dd3e7dabedf90dbb
+git checkout 0da04acccf7b0842319a8668d71ccc697a7b10ec
 git rev-parse HEAD
 ```
 
