@@ -18,11 +18,11 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS
 from experiments.post_training.bfcl_rl.data import (
-    BFCLPartition,
     DATASET_COMMIT,
     FULL_TASK_COUNT,
     PARITY_TASK_COUNT,
     PARTITION_MANIFEST_SHA256,
+    BFCLPartition,
     TaskIdentity,
 )
 from experiments.post_training.bfcl_rl.preferences import select_training_pairs
@@ -126,7 +126,12 @@ def collection_receipt(
     if policy["source_identity"] != locator["identity"] or policy["source_uri"] != expected.uri:
         raise ValueError("worker model source differs from the collection launch")
     retention = skyrl["generator"]["trajectory_retention"]
-    if not retention["enabled"] or not retention["required"] or retention["sample_fraction"] != 1.0 or retention["phases"] != ["eval"]:
+    if (
+        not retention["enabled"]
+        or not retention["required"]
+        or retention["sample_fraction"] != 1.0
+        or retention["phases"] != ["eval"]
+    ):
         raise ValueError("recovery requires complete generation trajectory retention")
     if skyrl["generator"]["n_samples_per_prompt"] != 1:
         raise ValueError("initial recovery requires one paired rollout per model and task")
@@ -151,7 +156,12 @@ def collection_receipt(
     conditions_digest = hashlib.sha256(json.dumps(conditions, sort_keys=True).encode()).hexdigest()
     task_root = Path(actual_sources[0]["local_path"]) / "bfcl_complement"
     identity = CollectionIdentity(
-        retention["run_id"], locator["identity"], expected.revision, "pi@0.87.0", partition.dataset_commit, str(task_root)
+        retention["run_id"],
+        locator["identity"],
+        expected.revision,
+        "pi@0.87.0",
+        partition.dataset_commit,
+        str(task_root),
     )
     return CollectionReceipt(identity, task_names, conditions_digest, retention["output_path"])
 
@@ -190,7 +200,11 @@ def recovery_preference_rows(
         pair = selection.pair
         if pair is None:
             continue
-        rows.append(pretokenized_preference(retained[pair.chosen.trajectory_uri], retained[pair.rejected.trajectory_uri], max_length=max_length))
+        rows.append(
+            pretokenized_preference(
+                retained[pair.chosen.trajectory_uri], retained[pair.rejected.trajectory_uri], max_length=max_length
+            )
+        )
         pairs.append(asdict(pair))
     report = {
         "dataset_commit": partition.dataset_commit,
@@ -236,12 +250,20 @@ def build_recovery_cache(config: RecoveryCacheConfig) -> RecoveryPreferenceCache
         resolved_uri = terminal["config"]["artifacts"]["resolved_config_uri"]
         resolved = json.loads(StoragePath(resolved_uri).read_text())
         receipt = collection_receipt(terminal, resolved, model=model, partition=partition)
-        archives = sorted(str(path) for path in (StoragePath(receipt.trajectory_root) / "schema_v6" / "archives" / "**" / "*.zip").glob())
+        archives = sorted(
+            str(path)
+            for path in (StoragePath(receipt.trajectory_root) / "schema_v6" / "archives" / "**" / "*.zip").glob()
+        )
         records = read_retained_archives(archives, identity=receipt.identity, partition=partition)
         receipts.append(receipt)
         collections.append(records)
     rows, report = recovery_preference_rows(
-        collections[0], collections[1], teacher_receipt=receipts[0], student_receipt=receipts[1], partition=partition, max_length=config.max_length
+        collections[0],
+        collections[1],
+        teacher_receipt=receipts[0],
+        student_receipt=receipts[1],
+        partition=partition,
+        max_length=config.max_length,
     )
     report["terminal_manifests"] = [config.teacher_terminal_uri, config.student_terminal_uri]
     write_recovery_cache(rows, report, config.output_path)
