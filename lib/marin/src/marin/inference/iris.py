@@ -80,6 +80,7 @@ _METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
+_BROKER_ACTOR_MAX_CONCURRENCY = 32
 
 
 class RemoteInferenceStartupError(RuntimeError):
@@ -809,7 +810,11 @@ def _start_brokered_inference(
             count=1,
             request_lease_timeout_seconds=broker.request_lease_timeout_seconds,
             resources=broker.broker_resources,
-            actor_config=ActorConfig(max_task_retries=0, priority=iris.priority),
+            actor_config=ActorConfig(
+                max_concurrency=_BROKER_ACTOR_MAX_CONCURRENCY,
+                max_task_retries=0,
+                priority=iris.priority,
+            ),
         )
         broker_handle = broker_group.wait_ready(count=1, timeout=broker.broker_ready_timeout_seconds)[0]
         request_provider = cast(InferenceRequestProvider, broker_handle)
