@@ -156,56 +156,62 @@ def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_
 
 
 @pytest.mark.parametrize(
-    "expected,candidate,reward",
+    "spec,candidate,reward",
     [
-        ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1,1.0]}', 1.0),
-        ({"values": [None, True, 1, 1.0]}, '{"values":[null,1,1,1.0]}', 0.0),
-        ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1.0,1]}', 1.0),
-        (None, "null", 1.0),
-        (None, "not json", 0.0),
-    ],
-)
-def test_structured_exact_file_grading_preserves_json_types_from_toml(tmp_path, expected, candidate, reward):
-    spec = StructuredExactSpec(expected=expected, output=str(tmp_path / "answer.json"))
-    config = tmp_path / "verifier.toml"
-    config.write_text(render_spec(spec))
-    (tmp_path / "answer.json").write_text(candidate)
-    logs = tmp_path / "logs"
-    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
-    assert _verdict(logs)["status"] == Status.SCORED
-    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
-
-
-@pytest.mark.parametrize("policy,reward", [(NumericTypePolicy.VALUE, 1.0), (NumericTypePolicy.STRICT, 0.0)])
-def test_structured_exact_cli_respects_explicit_numeric_type_policy(tmp_path, policy, reward):
-    spec = StructuredExactSpec(expected={"nested": [16]}, numeric_types=policy, output=str(tmp_path / "answer.json"))
-    config = tmp_path / "verifier.toml"
-    config.write_text(render_spec(spec))
-    (tmp_path / "answer.json").write_text('{"nested":[16.0]}')
-    logs = tmp_path / "logs"
-    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
-    assert _verdict(logs)["status"] == Status.SCORED
-    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
-
-
-@pytest.mark.parametrize(
-    "spec,candidate",
-    [
-        (StructuredExactSpec(expected={"payload": {"id": 1}}), '{"payload":{"id":0,"id":1}}'),
-        (
+        pytest.param(
+            StructuredExactSpec(expected={"values": [None, True, 1, 1.0]}),
+            '{"values":[null,true,1,1.0]}',
+            1.0,
+            id="nested-json-roundtrip",
+        ),
+        pytest.param(
+            StructuredExactSpec(expected={"values": [None, True, 1, 1.0]}),
+            '{"values":[null,1,1,1.0]}',
+            0.0,
+            id="bool-is-not-number",
+        ),
+        pytest.param(
+            StructuredExactSpec(expected={"values": [None, True, 1, 1.0]}),
+            '{"values":[null,true,1.0,1]}',
+            1.0,
+            id="nested-numeric-value-equality",
+        ),
+        pytest.param(StructuredExactSpec(expected=None), "null", 1.0, id="null-roundtrip"),
+        pytest.param(StructuredExactSpec(expected=None), "not json", 0.0, id="malformed-candidate"),
+        pytest.param(
+            StructuredExactSpec(expected={"nested": [16]}, numeric_types=NumericTypePolicy.VALUE),
+            '{"nested":[16.0]}',
+            1.0,
+            id="explicit-value-policy",
+        ),
+        pytest.param(
+            StructuredExactSpec(expected={"nested": [16]}, numeric_types=NumericTypePolicy.STRICT),
+            '{"nested":[16.0]}',
+            0.0,
+            id="explicit-strict-policy",
+        ),
+        pytest.param(
+            StructuredExactSpec(expected={"payload": {"id": 1}}),
+            '{"payload":{"id":0,"id":1}}',
+            0.0,
+            id="structured-duplicate-candidate",
+        ),
+        pytest.param(
             PredictedActionSpec(expected_calls=(FunctionCall("lookup", {"id": 1}),)),
             '[{"name":"lookup","arguments":{"id":0,"id":1}}]',
+            0.0,
+            id="action-duplicate-candidate",
         ),
     ],
 )
-def test_json_candidate_duplicate_keys_cannot_keep_a_matching_last_value(tmp_path, spec, candidate):
+def test_json_file_grading_preserves_contract_from_toml(tmp_path, spec, candidate, reward):
     config = tmp_path / "verifier.toml"
     config.write_text(render_spec(replace(spec, output=str(tmp_path / "answer.json"))))
     (tmp_path / "answer.json").write_text(candidate)
     logs = tmp_path / "logs"
     assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
     assert _verdict(logs)["status"] == Status.SCORED
-    assert json.loads((logs / "reward.json").read_text()) == {"reward": 0.0}
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
 
 
 @pytest.mark.parametrize("malformed_expected", ["true", "42", "[]"])
