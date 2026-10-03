@@ -1,0 +1,31 @@
+# Qwen3.6-35B-A3B: hybrid gated-delta-net MoE, thinking on by default. Mirrors the Marin catalog
+# entry (TP2 x DP2 on 4xH100) with the policy's pinned revision and 73,728-token MRCR context.
+# auto_overrides adds --gdn-prefill-backend triton for the compiler-free serve environment.
+name: Qwen-Qwen3.6-35B-A3B-tau3-65k-16k
+location: Qwen/Qwen3.6-35B-A3B
+revision: 995ad96eacd98c81ed38be0c5b274b04031597b0
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+  # Two data-parallel replicas each stream the full bf16 checkpoint through host RAM; the
+  # launcher's checkpoint-based sizing (160g) assumes one copy and the serve was OOMKilled at
+  # 20% of weight loading on six consecutive attempts (2026-09-17).
+  memory: 320g
+serve:
+  tensor_parallel_size: 2
+  data_parallel_size: 2
+  max_model_len: 65536
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  reasoning_parser: qwen3
+  tool_call_parser: qwen3_coder
+  vllm_extra_args:
+  - --enable-prefix-caching
+generation:
+  max_gen_toks: 16384
+agent:
+  agent_kwargs:
+    thinking_format: qwen-chat-template
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
+# Benchmark configs select thinking mode explicitly. Benchmarks declared as model-default omit the
+# override and retain this checkpoint's native template behavior.
