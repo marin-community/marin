@@ -165,7 +165,7 @@ def plan_large_clusters(
             table = pq.ParquetFile(handle).read(columns=["dup_cluster_id", "n"])
         sampled_rows += table.num_rows
         merged = pa.concat_tables([merged, table]).group_by("dup_cluster_id").aggregate([("n", "sum")])
-        merged = merged.rename_columns(["dup_cluster_id", "n"])
+        merged = merged.rename_columns(["dup_cluster_id", "n"]).cast(_COUNT_SCHEMA)
     logger.info("Aggregated %d sampled count rows", sampled_rows)
     sizes = pc.multiply(merged.column("n"), pa.scalar(params.stride, type=pa.int64()))
     keep = pc.greater_equal(sizes, pa.scalar(params.minimum_size, type=pa.int64()))
