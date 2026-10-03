@@ -14,6 +14,8 @@ class DependencyUpdate(StrEnum):
 
 
 class ExternalRuntime(StrEnum):
+    """Projects admitted to the external-runtime bot's file policy."""
+
     MARIN_SKYRL = "MarinSkyRL"
     EVALCHEMY = "evalchemy"
     HARBOR = "harbor"

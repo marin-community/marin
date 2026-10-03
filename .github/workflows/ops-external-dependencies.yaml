@@ -10,11 +10,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  projects:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      projects: ${{ steps.projects.outputs.projects }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Select automated projects
+        id: projects
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from scripts.ci.dependency_update_policy import EXTERNAL_RUNTIME_POLICIES
+          print(f"projects={json.dumps(list(EXTERNAL_RUNTIME_POLICIES))}")
+          PY
   update:
+    needs: projects
     strategy:
       fail-fast: false
       matrix:
-        project: [MarinSkyRL, evalchemy, harbor]
+        project: ${{ fromJSON(needs.projects.outputs.projects) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: external-runtime-updater

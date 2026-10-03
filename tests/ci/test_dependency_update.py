@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import runpy
 import shutil
@@ -10,6 +11,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.ci.dependency_update import (
     BranchPushMode,
@@ -282,7 +284,10 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     main_sha = _git(repository, "rev-parse", "HEAD")
     locks = {project: repository / f"config/external/{project.value}/uv.lock" for project in ExternalRuntime}
     originals = {project: path.read_bytes() for project, path in locks.items()}
-    distributions = {"MarinSkyRL": "marinskyrl", "evalchemy": "evalchemy", "harbor": "harbor"}
+    distributions = {
+        dependency.config_name: dependency.distribution
+        for dependency in runpy.run_path(str(pins))["EXTERNAL_DEPENDENCIES"]
+    }
     initial_commits = {
         project.value: next(
             entry["source"]["git"].rsplit("#", 1)[1]
@@ -323,8 +328,22 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     resolver.chmod(0o755)
     github.chmod(0o755)
     environment = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "PYTHONPATH": ""}
+    workflow = yaml.safe_load((source / ".github/workflows/ops-external-dependencies.yaml").read_text())
+    select_projects = next(step for step in workflow["jobs"]["projects"]["steps"] if step.get("id") == "projects")
+    matrix_output = tmp_path / "projects-output"
+    subprocess.run(
+        ["bash", "-c", select_projects["run"]],
+        cwd=repository,
+        env={**environment, "GITHUB_OUTPUT": str(matrix_output)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    projects = json.loads(matrix_output.read_text().removeprefix("projects="))
     branches = []
-    for project in ExternalRuntime:
+    for name in projects:
+        project = ExternalRuntime(name)
         subprocess.run(
             [
                 sys.executable,
