@@ -449,7 +449,8 @@ def test_percentile_panels_compute_over_all_executions_in_each_bucket(store) -> 
     ]
 
 
-def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
+@pytest.mark.parametrize("contended", [False, True])
+def test_the_node_agent_joins_through_node_name_without_a_run_id(store, contended) -> None:
     distractors = [
         _row(
             service="iris-node-agent",
@@ -467,6 +468,23 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
         ]
     ]
     store.executemany(f'INSERT INTO "telemetry_v1.node_agent" VALUES ({", ".join("?" for _ in _COLUMNS)})', distractors)
+    if contended:
+        competing = [
+            _row(
+                service="marinskyrl",
+                name="process_cpu_percent",
+                value=1,
+                moment=WINDOW_START + timedelta(minutes=5 * bucket),
+                seq=seq,
+                run_id="another-run",
+                node_name=NODES[0],
+            )
+            for bucket in (1, 2)
+            for seq in range(100)
+        ]
+        store.executemany(
+            f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', competing
+        )
     times = [_WINDOW_START_MS + bucket * 300000 for bucket in range(6)]
     expected = {
         "gpu_utilization": [{"t": t, "series": RUN_ID, "value": 71 + bucket} for bucket, t in enumerate(times)],
@@ -478,11 +496,19 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
         "gpu_memory": [{"t": t, "mean_used_bytes": 50e9, "peak_used_bytes": 60e9} for t in times],
         "fabric_receive": [
             {"t": t, "series": series, "value": value}
-            for t in times
-            for series, value in (("NVLink receive", 400), ("PCIe receive", 40))
+            for bucket, t in enumerate(times)
+            for series, value in (
+                ("NVLink receive", 200 if contended and bucket in (1, 2) else 400),
+                ("PCIe receive", 20 if contended and bucket in (1, 2) else 40),
+            )
         ],
         "pcie_faults": [
-            {"node": NODES[0], "gpu": f"GPU-{NODES[0]}-0", "peak_power_watts": 620, "pcie_replay_increase": 5}
+            {
+                "node": NODES[0],
+                "gpu": f"GPU-{NODES[0]}-0",
+                "peak_power_watts": 620,
+                "pcie_replay_increase": 1 if contended else 5,
+            }
         ],
     }
     for view, wanted in expected.items():
