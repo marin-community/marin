@@ -119,14 +119,16 @@ _HEALTH_METRIC_NAMES = (
 _METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
 _HISTOGRAM_BOUND_ORDER_SQL = "CASE WHEN upper_bound IN ('+Inf', 'Inf') THEN 1e308 ELSE CAST(upper_bound AS DOUBLE) END"
 _PUBLICATION_ID_JSON_FIELD_RE = r'"histogram_publication_id":"(?:\\.|[^"\\])*"'
+_SUMMARY_HISTOGRAM_NAMES = tuple(
+    f"{family}_{component}"
+    for family in ("time_to_first_token_seconds", "inter_token_latency_seconds")
+    for component in _HISTOGRAM_COMPONENTS
+)
 _SUMMARY_METRIC_NAMES = (
     *_TOKEN_COUNTERS,
     *_PREEMPTION_COUNTERS,
     *_OUTCOME_COUNTERS,
-    "time_to_first_token_seconds_count",
-    "time_to_first_token_seconds_sum",
-    "inter_token_latency_seconds_sum",
-    "inter_token_latency_seconds_count",
+    *_SUMMARY_HISTOGRAM_NAMES,
     "time_to_first_token_seconds",
     "inter_token_latency_seconds",
     "num_requests_waiting",
@@ -248,6 +250,81 @@ def _histogram_publication_filter(value_columns: tuple[str, ...]) -> str:
 """.strip()
 
 
+def _histogram_component_ctes(names: tuple[str, ...]) -> str:
+    """Normalize scalar and structured families into cumulative histogram components."""
+    source_family = _case_for(_histogram_source_mapping(), "samples.name")
+    return f"""
+histogram_scalar_samples AS (
+    SELECT samples.origin_cluster, samples.service, samples.resource_attributes_json,
+           CAST(json_merge_patch(CAST(CAST(samples.attributes_json AS VARCHAR) AS JSON), '{{"le":null}}') AS VARCHAR)
+               AS attributes_json,
+           {source_family} AS source_family,
+           {_case_for(_histogram_name_mapping(), "samples.name")} AS family,
+           {_case_for(_histogram_component_mapping(), "samples.name")} AS component,
+           json_get(samples.attributes_json, 'le') AS upper_bound,
+           samples.timestamp_ms, samples.seq, samples.value,
+           CASE WHEN samples.name LIKE '%_sum' THEN NULL
+                WHEN samples.value >= 0 AND samples.value < 9007199254740992
+                     AND samples.value = FLOOR(samples.value)
+                THEN CAST(samples.value AS BIGINT) ELSE NULL END AS integer_value,
+           CAST(NULL AS VARCHAR) AS producer_epoch,
+           CAST(NULL AS BIGINT) AS source_sequence,
+           CAST(NULL AS VARCHAR) AS schema_key,
+           0 AS is_structured, samples.publication_id
+    FROM base AS samples
+    WHERE samples.name IN ({sql_values(names)})
+      AND json_get(samples.attributes_json, 'source_temporality') = 'cumulative_snapshot'
+      AND (samples.service = 'vllm' OR json_get(samples.attributes_json, 'engine_index') IS NOT NULL)
+      AND NOT EXISTS (
+          SELECT 1 FROM histogram_structured_samples AS structured
+          WHERE samples.publication_id IS NOT NULL
+            AND structured.publication_id = samples.publication_id
+            AND structured.source_family = {source_family}
+            AND structured.origin_cluster = samples.origin_cluster
+            AND structured.service = samples.service
+            AND structured.resource_attributes_json = samples.resource_attributes_json
+            AND structured.attributes_json = CAST(json_merge_patch(
+                CAST(CAST(samples.attributes_json AS VARCHAR) AS JSON), '{{"le":null}}') AS VARCHAR)
+      )
+), histogram_structured_buckets AS (
+    SELECT *, bucket.i,
+           CAST(SUM(bins[bucket.i]) OVER (
+               PARTITION BY origin_cluster, service, resource_attributes_json, attributes_json, source_family, seq
+               ORDER BY bucket.i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+           ) AS BIGINT) AS cumulative_count
+    FROM histogram_structured_samples,
+         unnest(range(1, array_length(bounds) + 2)) AS bucket(i)
+), histogram_structured_components AS (
+    SELECT origin_cluster, service, resource_attributes_json, attributes_json,
+           source_family, family, 'bucket' AS component,
+           CASE WHEN bucket.i <= array_length(bounds) THEN CAST(bounds[bucket.i] AS VARCHAR)
+                ELSE '+Inf' END AS upper_bound,
+           timestamp_ms, seq, CAST(cumulative_count AS DOUBLE) AS value, cumulative_count AS integer_value,
+           producer_epoch, source_sequence, schema_key, 1 AS is_structured, publication_id
+    FROM histogram_structured_buckets AS bucket
+
+    UNION ALL
+
+    SELECT origin_cluster, service, resource_attributes_json, attributes_json,
+           source_family, family, 'count' AS component, CAST(NULL AS VARCHAR) AS upper_bound,
+           timestamp_ms, seq, CAST(count AS DOUBLE) AS value, count AS integer_value,
+           producer_epoch, source_sequence, schema_key, 1 AS is_structured, publication_id
+    FROM histogram_structured_samples
+
+    UNION ALL
+
+    SELECT origin_cluster, service, resource_attributes_json, attributes_json,
+           source_family, family, 'sum' AS component, CAST(NULL AS VARCHAR) AS upper_bound,
+           timestamp_ms, seq, total AS value, CAST(NULL AS BIGINT) AS integer_value,
+           producer_epoch, source_sequence, schema_key, 1 AS is_structured, publication_id
+    FROM histogram_structured_samples
+), histogram_components AS (
+    SELECT * FROM histogram_scalar_samples
+    UNION ALL
+    SELECT * FROM histogram_structured_components
+)""".strip()
+
+
 def _histogram_delta_ctes(start_ms: int) -> str:
     """Compute coherent family deltas from normalized histogram components."""
     publication_key = f"""origin_cluster, service, resource_attributes_json, attributes_json, source_family,
@@ -260,7 +337,9 @@ def _histogram_delta_ctes(start_ms: int) -> str:
 histogram_component_counts AS (
     SELECT *,
            COUNT(*) OVER component_publication AS component_samples,
-           COUNT(DISTINCT (component, upper_bound)) OVER family_series AS expected_components
+           COUNT(DISTINCT (component, upper_bound)) OVER family_series AS expected_components,
+           publication_id IS NULL OR MIN(value) OVER component_publication = MAX(value) OVER component_publication
+               AS consistent_component
     FROM histogram_components
     WINDOW family_series AS (
         PARTITION BY origin_cluster, service, resource_attributes_json, attributes_json, source_family
@@ -268,13 +347,14 @@ histogram_component_counts AS (
         PARTITION BY {publication_key}, component, upper_bound
     )
 ), histogram_complete_components AS (
-    SELECT * EXCLUDE (component_samples, expected_components)
+    SELECT * EXCLUDE (component_samples, expected_components, consistent_component)
     FROM histogram_component_counts
     WINDOW publication AS (
         PARTITION BY {publication_key}
     )
     QUALIFY is_structured = 1 OR (
         MIN(component_samples) OVER publication = MAX(component_samples) OVER publication
+        AND BOOL_AND(consistent_component) OVER publication
         AND COUNT(DISTINCT (component, upper_bound)) OVER publication = MAX(expected_components) OVER publication
         AND COUNT(*) FILTER (WHERE component = 'count') OVER publication > 0
         AND COUNT(*) FILTER (WHERE component = 'sum') OVER publication > 0
@@ -311,14 +391,17 @@ histogram_component_counts AS (
 ), coherent_histogram_increments AS (
     SELECT origin_cluster, service, resource_attributes_json, attributes_json,
            COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json) AS producer_identity,
-           source_family, family, component, upper_bound, schema_key, timestamp_ms, delta,
-           timestamp_ms - timestamp_ms % {VLLM_HISTOGRAM_COHERENCE_MS} AS sample_t
+           source_family, family, component, upper_bound, schema_key,
+           MAX(timestamp_ms) OVER publication AS timestamp_ms, delta,
+           MAX(timestamp_ms) OVER publication - MAX(timestamp_ms) OVER publication % {VLLM_HISTOGRAM_COHERENCE_MS}
+               AS sample_t
     FROM histogram_delta_samples
-    WHERE timestamp_ms >= {start_ms}
     WINDOW publication AS (
         PARTITION BY {publication_key}
     )
     QUALIFY BOOL_AND(delta IS NOT NULL) OVER publication
+        AND CASE WHEN publication_id IS NULL AND is_structured = 0 THEN MIN(timestamp_ms) OVER publication
+                 ELSE MAX(timestamp_ms) OVER publication END >= {start_ms}
 )""".strip()
 
 
@@ -349,9 +432,6 @@ def vllm_overview_query(
     gauges = sql_values(_GAUGES)
     histogram_names = sql_values(_HISTOGRAM_NAMES)
     histogram_base_names = sql_values(_HISTOGRAM_BASE_NAMES)
-    histogram_family = _case_for(_histogram_name_mapping(), "samples.name")
-    histogram_component = _case_for(_histogram_component_mapping(), "samples.name")
-    histogram_source_family = _case_for(_histogram_source_mapping(), "samples.name")
     histogram_base_family = _case_for(_HISTOGRAM_FAMILIES, "name")
 
     samples_sql = _vllm_samples_query(identity_field, identity, scan_start_ms, end_ms, _METRIC_NAMES)
@@ -559,75 +639,7 @@ WITH base AS MATERIALIZED (
       AND kind = 'histogram' AND body_json IS NOT NULL
       AND (service = 'vllm' OR json_get(attributes_json, 'engine_index') IS NOT NULL)
     {_histogram_publication_filter(("body_json",))}
-), histogram_scalar_samples AS (
-    SELECT samples.origin_cluster, samples.service, samples.resource_attributes_json,
-           CAST(json_merge_patch(CAST(CAST(samples.attributes_json AS VARCHAR) AS JSON), '{{"le":null}}') AS VARCHAR)
-               AS attributes_json,
-           {histogram_source_family} AS source_family,
-           {histogram_family} AS family,
-           {histogram_component} AS component,
-           json_get(samples.attributes_json, 'le') AS upper_bound,
-           samples.timestamp_ms, samples.seq, samples.value,
-           CASE WHEN samples.name LIKE '%_sum' THEN NULL
-                WHEN samples.value >= 0 AND samples.value < 9007199254740992
-                     AND samples.value = FLOOR(samples.value)
-                THEN CAST(samples.value AS BIGINT) ELSE NULL END AS integer_value,
-           CAST(NULL AS VARCHAR) AS producer_epoch,
-           CAST(NULL AS BIGINT) AS source_sequence,
-           CAST(NULL AS VARCHAR) AS schema_key,
-           0 AS is_structured, samples.publication_id
-    FROM base AS samples
-    WHERE samples.name IN ({histogram_names})
-      AND json_get(samples.attributes_json, 'source_temporality') = 'cumulative_snapshot'
-      AND (samples.service = 'vllm' OR json_get(samples.attributes_json, 'engine_index') IS NOT NULL)
-      AND NOT EXISTS (
-          SELECT 1 FROM histogram_structured_samples AS structured
-          WHERE samples.publication_id IS NOT NULL
-            AND structured.publication_id = samples.publication_id
-            AND structured.source_family = {histogram_source_family}
-            AND structured.origin_cluster = samples.origin_cluster
-            AND structured.service = samples.service
-            AND structured.resource_attributes_json = samples.resource_attributes_json
-            AND structured.attributes_json = CAST(json_merge_patch(
-                CAST(CAST(samples.attributes_json AS VARCHAR) AS JSON), '{{"le":null}}') AS VARCHAR)
-      )
-), histogram_structured_buckets AS (
-    SELECT *, bucket.i,
-           CAST(SUM(bins[bucket.i]) OVER (
-               PARTITION BY origin_cluster, service, resource_attributes_json, attributes_json, source_family, seq
-               ORDER BY bucket.i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-           ) AS BIGINT) AS cumulative_count
-    FROM histogram_structured_samples,
-         unnest(range(1, array_length(bounds) + 2)) AS bucket(i)
-), histogram_structured_components AS (
-    SELECT origin_cluster, service, resource_attributes_json, attributes_json,
-           source_family, family, 'bucket' AS component,
-           CASE WHEN bucket.i <= array_length(bounds) THEN CAST(bounds[bucket.i] AS VARCHAR)
-                ELSE '+Inf' END AS upper_bound,
-           timestamp_ms, seq, CAST(cumulative_count AS DOUBLE) AS value, cumulative_count AS integer_value,
-           producer_epoch, source_sequence, schema_key, 1 AS is_structured, publication_id
-    FROM histogram_structured_buckets AS bucket
-
-    UNION ALL
-
-    SELECT origin_cluster, service, resource_attributes_json, attributes_json,
-           source_family, family, 'count' AS component, CAST(NULL AS VARCHAR) AS upper_bound,
-           timestamp_ms, seq, CAST(count AS DOUBLE) AS value, count AS integer_value,
-           producer_epoch, source_sequence, schema_key, 1 AS is_structured, publication_id
-    FROM histogram_structured_samples
-
-    UNION ALL
-
-    SELECT origin_cluster, service, resource_attributes_json, attributes_json,
-           source_family, family, 'sum' AS component, CAST(NULL AS VARCHAR) AS upper_bound,
-           timestamp_ms, seq, total AS value, CAST(NULL AS BIGINT) AS integer_value,
-           producer_epoch, source_sequence, schema_key, 1 AS is_structured, publication_id
-    FROM histogram_structured_samples
-), histogram_components AS (
-    SELECT * FROM histogram_scalar_samples
-    UNION ALL
-    SELECT * FROM histogram_structured_components
-), {_histogram_delta_ctes(start_ms)}, engine_itl AS (
+), {_histogram_component_ctes(_HISTOGRAM_NAMES)}, {_histogram_delta_ctes(start_ms)}, engine_itl AS (
     SELECT producer_identity || ' @ ' || origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
            SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
                / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS value,
@@ -1346,9 +1358,12 @@ WITH base AS MATERIALIZED (
            point.source_sequence AS source_sequence,
            point.histogram_bins AS histogram_bins
     FROM (SELECT * EXCLUDE (points), unnest(points) AS point FROM series)
-), structured_histograms AS MATERIALIZED (
+), histogram_structured_samples AS MATERIALIZED (
     SELECT origin_cluster, service, name, resource_attributes_json, attributes_json,
+           name AS source_family, {_case_for(_HISTOGRAM_FAMILIES, "name")} AS family,
            timestamp_ms, seq,
+           CAST(histogram_bounds AS DOUBLE[]) AS bounds,
+           CAST(histogram_bins AS BIGINT[]) AS bins,
            histogram_count AS count, histogram_sum AS total,
            producer_epoch, source_sequence, histogram_bounds AS schema_key,
            producer_epoch || ':' || CAST(source_sequence AS VARCHAR) AS publication_id
@@ -1357,57 +1372,8 @@ WITH base AS MATERIALIZED (
       AND kind = 'histogram' AND histogram_count IS NOT NULL
       AND (service = 'vllm' OR json_get(attributes_json, 'engine_index') IS NOT NULL)
     {_histogram_publication_filter(("count", "total", "schema_key", "histogram_bins"))}
-), scalar_histogram_values AS (
-    SELECT samples.origin_cluster, samples.service,
-           samples.resource_attributes_json, samples.attributes_json,
-           CASE WHEN samples.name LIKE 'time_to_first_token_seconds_%'
-                THEN 'time_to_first_token_seconds' ELSE 'inter_token_latency_seconds' END AS source_family,
-           CASE WHEN samples.name LIKE 'time_to_first_token_seconds_%' THEN 'ttft'
-                ELSE 'inter_token_latency' END AS family,
-           CASE WHEN samples.name LIKE '%_count' THEN 'count' ELSE 'sum' END AS component,
-           CAST(NULL AS VARCHAR) AS upper_bound,
-           samples.timestamp_ms, samples.seq, samples.value,
-           CASE WHEN samples.name LIKE '%_count'
-                     AND samples.value >= 0 AND samples.value < 9007199254740992
-                     AND samples.value = FLOOR(samples.value)
-                THEN CAST(samples.value AS BIGINT) ELSE NULL END AS integer_value,
-           CAST(NULL AS VARCHAR) AS producer_epoch,
-           CAST(NULL AS BIGINT) AS source_sequence,
-           CAST(NULL AS VARCHAR) AS schema_key,
-           0 AS is_structured, samples.publication_id
-    FROM base AS samples
-    WHERE samples.name IN (
-        'time_to_first_token_seconds_count', 'time_to_first_token_seconds_sum',
-        'inter_token_latency_seconds_count', 'inter_token_latency_seconds_sum')
-      AND json_get(samples.attributes_json, 'source_temporality') = 'cumulative_snapshot'
-      AND (samples.service = 'vllm' OR json_get(samples.attributes_json, 'engine_index') IS NOT NULL)
-      AND NOT EXISTS (
-          SELECT 1 FROM structured_histograms AS structured
-          WHERE samples.publication_id IS NOT NULL
-            AND structured.publication_id = samples.publication_id
-            AND samples.name IN (structured.name || '_count', structured.name || '_sum')
-            AND structured.origin_cluster = samples.origin_cluster
-            AND structured.service = samples.service
-            AND structured.resource_attributes_json = samples.resource_attributes_json
-            AND structured.attributes_json = samples.attributes_json
-      )
-), histogram_components AS (
-    SELECT * FROM scalar_histogram_values
-    UNION ALL
-    SELECT origin_cluster, service, resource_attributes_json, attributes_json, name AS source_family,
-           CASE WHEN name = 'time_to_first_token_seconds' THEN 'ttft' ELSE 'inter_token_latency' END AS family,
-           'count' AS component, CAST(NULL AS VARCHAR) AS upper_bound,
-           timestamp_ms, seq, CAST(count AS DOUBLE), count, producer_epoch, source_sequence, schema_key,
-           1 AS is_structured, publication_id
-    FROM structured_histograms
-    UNION ALL
-    SELECT origin_cluster, service, resource_attributes_json, attributes_json, name AS source_family,
-           CASE WHEN name = 'time_to_first_token_seconds' THEN 'ttft' ELSE 'inter_token_latency' END AS family,
-           'sum' AS component, CAST(NULL AS VARCHAR) AS upper_bound,
-           timestamp_ms, seq, total, CAST(NULL AS BIGINT), producer_epoch, source_sequence, schema_key,
-           1 AS is_structured, publication_id
-    FROM structured_histograms
-), {_histogram_delta_ctes(overview.start_ms)}, histogram_increments AS (
+), {_histogram_component_ctes(_SUMMARY_HISTOGRAM_NAMES)}, {_histogram_delta_ctes(overview.start_ms)},
+histogram_increments AS (
     SELECT *, source_family || '_' || component AS name
     FROM coherent_histogram_increments
 ), cumulative AS MATERIALIZED (
@@ -1417,8 +1383,7 @@ WITH base AS MATERIALIZED (
     ) AS previous_value
     FROM base
     WHERE json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
-      AND name NOT IN ('time_to_first_token_seconds_count', 'time_to_first_token_seconds_sum',
-                       'inter_token_latency_seconds_count', 'inter_token_latency_seconds_sum')
+      AND name NOT IN ({sql_values(_SUMMARY_HISTOGRAM_NAMES)})
 ), increments AS MATERIALIZED (
     SELECT origin_cluster, service, name, resource_attributes_json, attributes_json, timestamp_ms,
            CASE WHEN previous_value IS NULL OR value < previous_value
@@ -1436,16 +1401,9 @@ WITH base AS MATERIALIZED (
            CASE WHEN name LIKE 'time_to_first_token_seconds_%' THEN 'ttft' ELSE 'itl' END AS family,
            timestamp_ms - timestamp_ms % {VLLM_HISTOGRAM_COHERENCE_MS} AS sample_t,
            SUM(CASE WHEN name LIKE '%_sum' THEN delta ELSE 0 END) AS seconds,
-           SUM(CASE WHEN name LIKE '%_count' THEN delta ELSE 0 END) AS tokens,
-           COUNT(*) AS components,
-           COUNT(delta) AS valid_components,
-           COUNT(*) FILTER (WHERE name LIKE '%_sum') AS sums,
-           COUNT(*) FILTER (WHERE name LIKE '%_count') AS counts
+           SUM(CASE WHEN name LIKE '%_count' THEN delta ELSE 0 END) AS tokens
     FROM histogram_increments
     GROUP BY 1, 2, 3, 4, 5, 6
-    HAVING COUNT(*) = COUNT(delta)
-       AND COUNT(*) FILTER (WHERE name LIKE '%_sum') = COUNT(*) FILTER (WHERE name LIKE '%_count')
-       AND COUNT(*) FILTER (WHERE name LIKE '%_count') > 0
 ), output AS (
     SELECT CAST(NULL AS BIGINT) AS t, 'run_summary' AS section,
            CASE name

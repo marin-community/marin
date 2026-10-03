@@ -92,6 +92,9 @@ def _vllm_projection_database():
     "format_name",
     [
         "scalar",
+        "scalar_conflicting",
+        "scalar_staggered",
+        "scalar_bucket_reset",
         "structured",
         "structured_unidentified",
         "structured_unidentified_fast",
@@ -123,11 +126,15 @@ def test_vllm_histogram_dashboard_format_parity(
         return json.dumps(attributes, sort_keys=True, separators=(",", ":"))
 
     bounds = (0.1 * scale, 1.0 * scale)
-    snapshots = (
+    snapshots = [
         (0, 0, (0, 0, 0), 0.0),
         (15_000, 1, (1, 2, 0), 0.3),
         (30_000, 2, (3, 2, 0), 0.8),
-    )
+    ]
+    if format_name == "scalar_conflicting":
+        snapshots.insert(2, (15_000, 1, (2, 3, 0), 0.5))
+    elif format_name == "scalar_bucket_reset":
+        snapshots[-1] = (30_000, 2, (0, 5, 0), 0.8)
     rows = []
     for timestamp, sequence, bins, total in snapshots:
         if format_name == "structured_unidentified_fast":
@@ -140,8 +147,10 @@ def test_vllm_histogram_dashboard_format_parity(
             "source_kind": "histogram",
             "source_temporality": "cumulative_snapshot",
         }
-        scalar = format_name in ("scalar", "dual", "dual_missing", "dual_partial") or (
-            format_name == "mixed" and sequence < 2
+        scalar = (
+            format_name.startswith("scalar")
+            or format_name in ("dual", "dual_missing", "dual_partial")
+            or (format_name == "mixed" and sequence < 2)
         )
         structured = (
             format_name in ("structured", "structured_unidentified", "structured_unidentified_fast", "dual")
@@ -151,7 +160,11 @@ def test_vllm_histogram_dashboard_format_parity(
         if scalar:
             labels = {
                 **common,
-                **({"histogram_publication_id": f"engine-a:{sequence}"} if format_name.startswith("dual") else {}),
+                **(
+                    {"histogram_publication_id": f"engine-a:{sequence}"}
+                    if format_name.startswith("dual") or format_name in ("scalar_conflicting", "scalar_staggered")
+                    else {}
+                ),
             }
             running = 0
             for bound, bin_count in zip((*bounds, float("inf")), bins, strict=True):
@@ -165,14 +178,28 @@ def test_vllm_histogram_dashboard_format_parity(
                         float(running),
                         None,
                         canonical({**labels, "le": "+Inf" if bound == float("inf") else str(bound)}),
-                        timestamp,
+                        17_000 if format_name == "scalar_staggered" and sequence == 1 else timestamp,
                     )
                 )
             if format_name != "dual_partial" or sequence != 1:
                 rows.extend(
                     (
-                        (f"{family}_count", "gauge", float(count), None, canonical(labels), timestamp),
-                        (f"{family}_sum", "gauge", total * scale, None, canonical(labels), timestamp),
+                        (
+                            f"{family}_count",
+                            "gauge",
+                            float(count),
+                            None,
+                            canonical(labels),
+                            17_000 if format_name == "scalar_staggered" and sequence == 1 else timestamp,
+                        ),
+                        (
+                            f"{family}_sum",
+                            "gauge",
+                            total * scale,
+                            None,
+                            canonical(labels),
+                            16_000 if format_name == "scalar_staggered" and sequence == 1 else timestamp,
+                        ),
                     )
                 )
         if structured:
@@ -196,7 +223,8 @@ def test_vllm_histogram_dashboard_format_parity(
            VALUES ('cw-a', 'marinskyrl', '/train', ?, ?, ?, ?, '{}', ?, ?, ?)""",
         [(*row, seq) for seq, row in enumerate(rows)],
     )
-    overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/train", 0, 45_000, 15_000)
+    start_ms = 30_000 if format_name == "scalar_conflicting" else 16_500 if format_name == "scalar_staggered" else 0
+    overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/train", start_ms, 45_000, 15_000)
     series = database.execute(overview.samples_sql).fetch_arrow_table()
     result = vllm_overview_table(overview, series, nullcontext(), max_rows=10_000).to_pylist()
     statistics = {
@@ -204,26 +232,37 @@ def test_vllm_histogram_dashboard_format_parity(
         for row in result
         if row["section"] == section and row["metric"] == metric and row["t"] is None
     }
-    assert statistics["mean"] == pytest.approx((0.16 * scale, 5))
-    assert statistics["p50"] == pytest.approx((0.1 * scale, 5))
-    assert statistics["p90"] == pytest.approx((1.0 * scale, 5))
-    assert statistics["p99"] == pytest.approx((1.0 * scale, 5))
+    expected_count = 3 if format_name == "scalar_bucket_reset" else 5
+    expected_mean = 0.1 if format_name == "scalar_bucket_reset" else 0.16
+    expected_p50 = 1.0 if format_name == "scalar_bucket_reset" else 0.1
+    assert statistics["mean"] == pytest.approx((expected_mean * scale, expected_count))
+    assert statistics["p50"] == pytest.approx((expected_p50 * scale, expected_count))
+    assert statistics["p90"] == pytest.approx((1.0 * scale, expected_count))
+    assert statistics["p99"] == pytest.approx((1.0 * scale, expected_count))
     if metric == "output_tokens":
         distribution = {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"}
-        assert distribution == {str(bounds[0]): 3, str(bounds[1]): 2, "+Inf": 0}
+        assert distribution == {
+            str(bounds[0]): 1 if format_name == "scalar_bucket_reset" else 3,
+            str(bounds[1]): 2,
+            "+Inf": 0,
+        }
     if metric not in ("ttft", "inter_token_latency"):
         return
     summary_series = database.execute(vllm_run_summary_samples_query(overview)).fetch_arrow_table()
     summary = vllm_run_summary_table(overview, summary_series, nullcontext(), max_rows=1_000).to_pylist()
     if metric == "ttft":
         # Untagged overlap during a format switch adds a zero-delta sample, not observations.
-        expected_samples = 3 if format_name == "mixed" else 1 if format_name == "dual_partial" else 2
+        expected_samples = (
+            3
+            if format_name == "mixed"
+            else 1 if format_name in ("dual_partial", "scalar_conflicting", "scalar_bucket_reset") else 2
+        )
         assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "ttft_observations"] == [
-            (5, expected_samples)
+            (expected_count, expected_samples)
         ]
     elif metric == "inter_token_latency":
         assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "inter_token_latency"] == [
-            (pytest.approx(0.16), 5)
+            (pytest.approx(expected_mean), expected_count)
         ]
 
 
@@ -386,7 +425,12 @@ def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(
                 resource_attributes_json, attributes_json, timestamp_ms, seq)
                VALUES ('cw-a', 'marinskyrl', '/train', ?, 'gauge', ?, '{}', ?, 30000, ?)""",
             [
-                (f"time_to_first_token_seconds_{component}", value, json.dumps(labels), seq + 10)
+                (
+                    f"time_to_first_token_seconds_{component}",
+                    value,
+                    json.dumps(labels, sort_keys=True, separators=(",", ":")),
+                    seq + 10,
+                )
                 for seq, (component, value, labels) in enumerate(scalar_rows)
             ],
         )
