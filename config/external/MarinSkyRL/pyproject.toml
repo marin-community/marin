@@ -8,7 +8,10 @@ dependencies = ["marinskyrl"]
 package = false
 prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
+override-dependencies = [
+    "marin-rigging[prometheus,secrets] @ git+https://github.com/marin-community/marin.git@2855cb4260344f63c08bc52c39783baaaaf6852b#subdirectory=lib/rigging",
+]
 
 [tool.uv.sources]
-# The isolated lock keeps the selected branch revision immutable.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }
+# Select the SkyRL runtime that implements this rollout contract.
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "da6a9ea3fcf54fcf2e5a1040145ea552626a5475" }
