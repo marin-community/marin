@@ -12,7 +12,7 @@ import socket
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -30,6 +30,8 @@ from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
 from marin.inference import iris_vllm
+from marin.inference.backend import ModelSpec
+from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
@@ -64,10 +66,11 @@ from marin.inference.levanter_backend import (
     validate_levanter_dtype,
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
+from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm_backend import vllm_launcher
+from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
     vllm_gpu_wheel_provenance,
@@ -78,6 +81,7 @@ from marin.inference.vllm_server import (
     PreinstalledVllm,
     VllmType,
 )
+from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -218,10 +222,14 @@ def test_mirrored_model_keeps_tokenizer_revision_independent(
 
 def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeypatch):
     observed: dict[str, object] = {}
+    observed_chat_templates: list[str] = []
 
     @contextmanager
     def environment(**kwargs):
         observed.update(kwargs)
+        extra_args = kwargs["extra_args"]
+        template_path = extra_args[extra_args.index("--chat-template") + 1]
+        observed_chat_templates.append(Path(template_path).read_text())
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
@@ -230,6 +238,7 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+
     monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
     model = ServedModelConfig(
         weights="org/model",
@@ -249,6 +258,37 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
     assert extra_args[extra_args.index("--revision") + 1] == "model-sha"
     assert extra_args[extra_args.index("--tokenizer") + 1] == "org/tokenizer"
     assert extra_args[extra_args.index("--tokenizer-revision") + 1] == "tokenizer-sha"
+    assert observed_chat_templates == ["{{ messages }}"]
+
+
+def test_vllm_backend_direct_start_uses_tokenizer_chat_template(monkeypatch):
+    observed_templates = []
+
+    @contextmanager
+    def environment(**kwargs):
+        extra_args = kwargs["extra_args"]
+        observed_templates.append(Path(extra_args[extra_args.index("--chat-template") + 1]).read_text())
+        yield SimpleNamespace()
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
+    spec = ModelSpec(
+        weights="org/model",
+        api_model="public-model",
+        num_chips=None,
+        tensor_parallel_size=None,
+        dtype="auto",
+        max_model_len=1024,
+        chat_template_content=None,
+        tokenizer="org/tokenizer",
+        tokenizer_revision="tokenizer-sha",
+    )
+
+    with VllmBackend(VllmEngineConfig(), port=8000).start(spec):
+        pass
+
+    assert observed_templates == ["{{ messages }}"]
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
@@ -986,6 +1026,12 @@ def _fake_vllm_app() -> Starlette:
     async def metrics(_request):
         return PlainTextResponse("# TYPE vllm:generation_tokens_total counter\nvllm:generation_tokens_total 42\n")
 
+    async def tokenize(request):
+        payload = await request.json()
+        if payload["model"] != "fake-model":
+            return JSONResponse({"error": {"type": "NotFoundError"}}, status_code=404)
+        return JSONResponse({"tokens": [4, 9, 12], "count": 3, "received_request": payload})
+
     return Starlette(
         routes=[
             Route("/health", health),
@@ -993,6 +1039,7 @@ def _fake_vllm_app() -> Starlette:
             Route("/v1/chat/completions", chat, methods=["POST"]),
             Route("/v1/completions", completions, methods=["POST"]),
             Route("/metrics", metrics),
+            Route("/tokenize", tokenize, methods=["POST"]),
         ]
     )
 
@@ -1068,6 +1115,62 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
                 timeout=10,
             )
             assert _collect_sse_text(completion, "text") == "123456"
+
+
+@pytest.mark.parametrize("topology", ["direct", "brokered"])
+def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
+    upstream_sock = bind_serving_socket("127.0.0.1", 0)
+    upstream_port = upstream_sock.getsockname()[1]
+    dashboard_sock = bind_serving_socket("127.0.0.1", 0)
+    dashboard_port = dashboard_sock.getsockname()[1]
+    info = ServingInfo(
+        model="fake-model",
+        backend="vllm",
+        tensor_parallel_size=1,
+        max_model_len=4096,
+        dtype="bfloat16",
+        has_chat_template=True,
+        endpoint="/serve/fake",
+    )
+    with ExitStack() as stack:
+        stack.enter_context(serve_app_background(_fake_vllm_app(), upstream_sock))
+        upstream_base_url = f"http://127.0.0.1:{upstream_port}"
+        if topology == "brokered":
+            broker = InferenceBroker(request_lease_timeout_seconds=30)
+            worker = InferenceWorker(
+                broker=broker,
+                upstream=RunningModel(endpoint=OpenAIEndpoint(base_url=f"{upstream_base_url}/v1", model="fake-model")),
+                request_timeout_seconds=5,
+            )
+            stack.enter_context(run_inference_worker(worker, max_in_flight=2))
+            proxy = stack.enter_context(
+                serve_inference_proxy(
+                    broker=broker,
+                    model="fake-model",
+                    request_timeout_seconds=10,
+                    readiness_timeout_seconds=10,
+                    max_pending_requests=4,
+                    response_fetch_batch_size=4,
+                    server_start_timeout_seconds=10,
+                )
+            )
+            upstream_base_url = proxy.endpoint.base_url.removesuffix("/v1")
+        app = build_dashboard_app(upstream_base_url=upstream_base_url, model_id="fake-model", info=info)
+        stack.enter_context(serve_app_background(app, dashboard_sock))
+        base = f"http://127.0.0.1:{dashboard_port}"
+        tokenization_payload = {
+            "model": "fake-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "add_generation_prompt": True,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        tokenized = requests.post(f"{base}/tokenize", json=tokenization_payload, timeout=10)
+        assert tokenized.status_code == 200
+        assert tokenized.json() == {"tokens": [4, 9, 12], "count": 3, "received_request": tokenization_payload}
+
+        rejected = requests.post(f"{base}/tokenize", json={"model": "missing-model"}, timeout=10)
+        assert rejected.status_code == 404
+        assert rejected.json() == {"error": {"type": "NotFoundError"}}
 
 
 def test_dashboard_health_reports_loading_when_upstream_down():

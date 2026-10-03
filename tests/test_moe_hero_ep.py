@@ -41,12 +41,52 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
-from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
 GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
+
+
+def test_muon_expert_stack_preserves_sharding_and_updates():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
+    env.pop("JAX_NUM_CPU_DEVICES", None)
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding
+        from jax.sharding import PartitionSpec as P
+
+        from experiments.grug.moe_hero_ep.grugmuon_hero import (
+            _newtonschulz_padded_stack_sharded,
+            _zeropower_via_newtonschulz_local,
+        )
+
+        devices = np.asarray(jax.devices())
+        mesh = Mesh(
+            devices.reshape(1, 1, -1, 1), ("replica_dcn", "data", "expert", "model"), axis_types=(AxisType.Explicit,) * 4
+        )
+        sharding = NamedSharding(mesh, P("expert", None, None))
+        values = np.random.default_rng(0).normal(size=(len(devices) * 2, 8, 4)).astype(np.float32)
+        reference = jax.jit(jax.vmap(_zeropower_via_newtonschulz_local))(jnp.asarray(values, dtype=jnp.bfloat16))
+        with jax.set_mesh(mesh):
+            matrices = jax.device_put(jnp.asarray(values, dtype=jnp.bfloat16), sharding)
+            actual = jax.jit(lambda x: _newtonschulz_padded_stack_sharded(x, target_sharding=sharding))(matrices)
+        assert actual.sharding == sharding
+        np.testing.assert_array_equal(np.asarray(actual), np.asarray(reference))
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
@@ -453,7 +493,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     state = _tiny_state(jnp.zeros(4), None)
     master_less = str(tmp_path / "step-1")
     save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
-    assert not train.checkpoint_stores_master(master_less)
+    assert not checkpoint_stores_master(master_less)
     assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DEVICE) is state
     with pytest.raises(ValueError, match="Synthesizing a master"):
         train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
@@ -462,7 +502,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     save_checkpoint(
         {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
     )
-    assert train.checkpoint_stores_master(master_bearing)
+    assert checkpoint_stores_master(master_bearing)
     assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
     migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DEVICE)
     assert migrating.params is None and migrating.master_params is state.params
@@ -478,7 +518,7 @@ def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_p
         checkpoint_path=checkpoint,
     )
 
-    assert train.checkpoint_stores_master(checkpoint)
+    assert checkpoint_stores_master(checkpoint)
 
 
 def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):
@@ -1186,7 +1226,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
         return (loss, metrics), grads
 
-    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
     monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
     train_step = train._make_train_step(
         optimizer,
@@ -1289,7 +1329,7 @@ def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
         return (loss, metrics), grads
 
-    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
     monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
     train_step = train._make_train_step(
         optimizer,

@@ -43,7 +43,7 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
-    "shellsim>=0.1.10",
+    "shellsim>=0.1.20",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",
@@ -67,7 +67,7 @@ test = [
     "pytest-json-report>=1.5",
     "pytest-xdist",
     "pytest-timeout",
-    "tasktrove-verify[answer,reasoning-gym,schema]",
+    "verifyit[answer,reasoning-gym,schema]",
     # for scaling law plotting tests
     "plotly",
 ]

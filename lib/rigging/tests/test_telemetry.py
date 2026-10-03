@@ -374,6 +374,19 @@ def test_invalid_typed_event_cannot_poison_valid_metric(monkeypatch: pytest.Monk
     assert telemetry.runtime_status().lost_records == 1
 
 
+def test_oversized_event_does_not_poison_valid_metric(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = RecordingTransport()
+    configure(monkeypatch, transport, max_batch_bytes=512)
+
+    telemetry.event("oversized", telemetry.serialization.EventBody({"detail": "é" * 200}))
+    telemetry.gauge("valid").set(1)
+
+    assert transport.accepted.wait(1)
+    payload = json.loads(transport.requests[0][1])
+    assert [record["name"] for record in payload["records"]] == ["valid"]
+    assert telemetry.runtime_status().lost_records == 1
+
+
 def test_event_integer_boundaries_match_serde_json(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = RecordingTransport()
     configure(monkeypatch, transport)

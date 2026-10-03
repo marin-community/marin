@@ -25,6 +25,8 @@ import jax
 from rigging.connect import proxy_path
 from rigging.redaction import REDACTED_VALUE, redact_value
 
+from levanter.checkpoint import CheckpointRetention
+
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import EndpointAccess
@@ -35,7 +37,13 @@ logger = logging.getLogger(__name__)
 TRAINING_CONTROL_ENDPOINT = "training-control"
 _REDACTED_ENVIRONMENT_VARIABLES = ("IRIS_JOB_ENV", "IRIS_JOB_SETUP_SCRIPTS", "MARIN_PROVENANCE")
 _PROGRAMMATIC_ACTION_HEADER = "X-Levanter-Training-Control"
-_PROGRAMMATIC_ACTION_VALUE = "request-checkpoint"
+# Header value of a programmatic request, by the retention it asks for. Permanent checkpoints are
+# kept indefinitely, thus only a programmatic request can make one; the page's button saves a
+# temporary checkpoint.
+_PROGRAMMATIC_ACTION_RETENTION = {
+    "request-checkpoint": CheckpointRetention.TEMPORARY,
+    "request-permanent-checkpoint": CheckpointRetention.PERMANENT,
+}
 ConfigT = TypeVar("ConfigT")
 
 
@@ -112,7 +120,7 @@ class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
         self,
         *args,
         snapshot: _TrainingSnapshot,
-        request_checkpoint: Callable[[], None],
+        request_checkpoint: Callable[[CheckpointRetention], None],
         action_token: str,
         **kwargs,
     ):
@@ -138,7 +146,8 @@ class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlsplit(self.path).path.rstrip("/")
         if path == "/checkpoint":
-            if self.headers.get(_PROGRAMMATIC_ACTION_HEADER) != _PROGRAMMATIC_ACTION_VALUE:
+            retention = _PROGRAMMATIC_ACTION_RETENTION.get(self.headers.get(_PROGRAMMATIC_ACTION_HEADER, ""))
+            if retention is None:
                 self.send_error(403)
                 return
         elif path == "":
@@ -147,12 +156,13 @@ class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
             if not hmac.compare_digest(token, self._action_token):
                 self.send_error(403)
                 return
+            retention = CheckpointRetention.TEMPORARY
         else:
             self.send_error(404)
             return
 
-        self._request_checkpoint()
-        body = b"Checkpoint requested. The save will start after the current training step.\n"
+        self._request_checkpoint(retention)
+        body = f"{retention.capitalize()} checkpoint requested. It will be saved after the current step.\n".encode()
         self.send_response(202)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -166,7 +176,9 @@ class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _serve_status_page(snapshot: _TrainingSnapshot, request_checkpoint: Callable[[], None]) -> Iterator[int]:
+def _serve_status_page(
+    snapshot: _TrainingSnapshot, request_checkpoint: Callable[[CheckpointRetention], None]
+) -> Iterator[int]:
     action_token = secrets.token_urlsafe(32)
     handler = partial(
         _TrainingDashboardRequestHandler,
@@ -189,7 +201,7 @@ def _serve_status_page(snapshot: _TrainingSnapshot, request_checkpoint: Callable
 class TrainingDashboard(Generic[ConfigT]):
     """Publish the process-zero training status page through Iris."""
 
-    def __init__(self, config: ConfigT, request_checkpoint: Callable[[], None], run_id: str):
+    def __init__(self, config: ConfigT, request_checkpoint: Callable[[CheckpointRetention], None], run_id: str):
         self._config = config
         self._request_checkpoint = request_checkpoint
         self._run_id = run_id

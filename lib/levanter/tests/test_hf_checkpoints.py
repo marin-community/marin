@@ -5,6 +5,7 @@ import glob
 import json
 import os
 import tempfile
+import threading
 import uuid
 
 import equinox as eqx
@@ -22,6 +23,7 @@ from jax.random import PRNGKey
 from levanter.testing.helpers import skip_if_no_torch
 from transformers import GPT2Config as HfGpt2Config
 
+import levanter.compat.hf_checkpoints as hf_checkpoints
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
@@ -31,6 +33,7 @@ from levanter.compat.hf_checkpoints import (
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.testing.helpers import use_test_mesh
+from levanter.utils.byte_budget import HostByteBudget
 
 
 @skip_if_no_torch
@@ -47,8 +50,15 @@ def test_conversion_to_jnp_bfloat16():
     assert_trees_all_close(x_jnp, jnp.arange(10, dtype=jnp.bfloat16) / 3.14)
 
 
-def test_save_sharded_checkpoints():
-    nano_config = Gpt2Config(hidden_dim=64, num_heads=2, num_layers=2, resid_pdrop=0.0, use_flash_attention=False)
+def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
+    nano_config = Gpt2Config(
+        hidden_dim=64,
+        num_heads=2,
+        num_layers=2,
+        resid_pdrop=0.0,
+        use_flash_attention=False,
+        tokenizer=local_gpt2_tokenizer_path,
+    )
     converter = nano_config.hf_checkpoint_converter()
 
     mp = jmp.get_policy("f32")
@@ -76,6 +86,66 @@ def test_save_sharded_checkpoints():
             nano_model,
             loaded_model,
         )
+
+
+def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch):
+    config = Gpt2Config(
+        hidden_dim=32, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = config.hf_checkpoint_converter()
+    fs = fsspec.filesystem("memory")
+    serial_path = f"memory://levanter/export-serial/{uuid.uuid4().hex}"
+    parallel_path = f"memory://levanter/export-parallel/{uuid.uuid4().hex}"
+    budget_path = f"memory://levanter/export-budget/{uuid.uuid4().hex}"
+
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(5))
+        options = dict(max_shard_size=4096, save_tokenizer=False, save_reference_code=False)
+        converter.save_pretrained(model, serial_path, max_concurrent_shards=1, **options)
+
+        barrier = threading.Barrier(2)
+        upload_count = 0
+        upload_lock = threading.Lock()
+        original_put = type(fs).put
+
+        def concurrent_put(self, *args, **kwargs):
+            nonlocal upload_count
+            with upload_lock:
+                upload_count += 1
+                this_upload = upload_count
+            if this_upload <= 2:
+                barrier.wait(timeout=30)
+            return original_put(self, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(type(fs), "put", concurrent_put)
+            converter.save_pretrained(model, parallel_path, max_concurrent_shards=4, **options)
+
+        serial_files = {os.path.basename(name): fs.cat(name) for name in fs.find(serial_path)}
+        parallel_files = {os.path.basename(name): fs.cat(name) for name in fs.find(parallel_path)}
+        assert parallel_files == serial_files
+
+        budgets = []
+
+        def make_budget(limit_bytes):
+            budget = HostByteBudget(limit_bytes)
+            budgets.append(budget)
+            return budget
+
+        shard_payloads = [
+            len(data) - 8 - int.from_bytes(data[:8], "little")
+            for name, data in serial_files.items()
+            if name.endswith(".safetensors")
+        ]
+        with monkeypatch.context() as patch:
+            patch.setattr(hf_checkpoints, "HostByteBudget", make_budget)
+            converter.save_pretrained(
+                model, budget_path, export_host_budget_bytes=1, max_concurrent_shards=4, **options
+            )
+
+        budget_files = {os.path.basename(name): fs.cat(name) for name in fs.find(budget_path)}
+        assert budget_files == serial_files
+        assert budgets[0].peak_bytes == 2 * max(shard_payloads)
 
 
 # A simple wrapper to include diverse dtypes in a model
@@ -215,11 +285,13 @@ def test_save_pretrained_default_dtype():
         assert tensors.get_tensor("a_bool_buffer").dtype == jnp.bool_
 
 
-def test_save_pretrained_to_memory_fs():
+def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
     fs = fsspec.filesystem("memory")
     path = f"memory://levanter/hf-save/{uuid.uuid4().hex}"
 
-    gpt2_config = Gpt2Config(num_layers=4, num_heads=1, hidden_dim=32, use_flash_attention=False)
+    gpt2_config = Gpt2Config(
+        num_layers=4, num_heads=1, hidden_dim=32, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
     converter = gpt2_config.hf_checkpoint_converter()
 
     try:

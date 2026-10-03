@@ -55,6 +55,23 @@ For accelerator jobs, request the accelerator on the task itself with `--tpu ...
 been obtained (a live, non-erroring slice in the region), and the job waits otherwise; it does not
 attach accelerator devices (use `--tpu`/`--gpu` for that) and does not hold capacity.
 
+### JAX GPU processes
+
+Call `iris.jax.init.initialize_jax()` before JAX initializes its backend. It configures
+the compilation and GPU autotune caches, discovers the coordinator through Iris,
+and installs the distributed GPU compile guard after joining the JAX process
+group. The cache setup lives in `iris.jax.compile_cache`.
+
+For multiple JAX processes in one GPU task, wrap the command with
+`iris.jax.multigpu.MultiGpuHook` or invoke the supervisor directly:
+
+```bash
+python -m iris.jax.multigpu_main --nproc 8 -- python train.py
+```
+
+The supervisor assigns each child a process index and local device IDs. Iris
+runs the submitted command as given, so callers must add the wrapper themselves.
+
 ## Architecture
 
 ```

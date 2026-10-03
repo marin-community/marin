@@ -5,7 +5,7 @@
 
 import ast
 
-from tasktrove_verify.spec import PytestSpec
+from verifyit.spec import PytestSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,

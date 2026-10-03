@@ -11,11 +11,11 @@ Each retained task contains:
 
 - `instruction.md` and `task.toml`;
 - `environment/Dockerfile` with the pinned verifier installed;
-- `tests/test.sh`, which invokes `tasktrove-verify`;
+- `tests/test.sh`, which invokes `verifyit`;
 - `tests/verifier.toml`, which declares one grader mode; and
 - mode-specific hidden data under `tests/`.
 
-`task_format.py` defines this layout. [`tasktrove-verify`](../../../lib/tasktrove-verify/README.md)
+`task_format.py` defines this layout. [`verifyit`](../../../lib/verifyit/README.md)
 defines and executes the grader contract.
 
 ## Run
@@ -66,7 +66,7 @@ columns before reading the packed task payloads.
 | `family` | broad conversion family assigned by `source_verdicts.json` |
 | `template_id` | normalized source template identity |
 | `converter` | converter that produced the task |
-| `mode` | declared `tasktrove-verify` grader mode |
+| `mode` | declared `verifyit` grader mode |
 | `dockerfile_id` | normalized environment/Dockerfile identity |
 | `language` | task language when the converter can determine it |
 | `tags` | list of selection labels preserved or added during conversion |
@@ -156,7 +156,7 @@ states a numeric error tolerance.
 ## Validate and inspect
 
 ```bash
-uv run pytest experiments/post_training/tasktrove/tests lib/tasktrove-verify/tests
+uv run pytest experiments/post_training/tasktrove/tests lib/verifyit/tests
 ./infra/pre-commit.py --changed-files --fix
 
 # Export one Parquet row as a Harbor task directory.

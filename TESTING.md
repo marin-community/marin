@@ -32,6 +32,24 @@ A formatter-only mechanical edit does not require another test run. Rerun the
 repository formatting and lint checks after the edit; rerun tests only when the
 follow-up changes executable behavior or test expectations.
 
+## Adding a New Library
+
+When adding a new `lib/<name>/` package, run its unit tests through
+[unified-unit.yaml](.github/workflows/unified-unit.yaml). Add its short name to
+`SCOPES` and its uv package name to `UV_PACKAGE` in
+[select_tests.py](infra/ci/select_tests.py). The selector uses
+`lib/<name>/tests` by default; update `TEST_DIRS` if its tests live elsewhere.
+These registrations include the library in pull request, push, and full-suite
+runs.
+
+Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
+Levanter TPU lane runs for those changes when the resolved dependencies of
+`marin-levanter` with its `tpu` extra and `test` group change, including
+transitive dependencies. If the selector cannot compare the base and head
+lockfiles, it runs the TPU lane. Levanter or Haliax source changes also select
+the lane. The Levanter Torch lane retains its root manifest trigger. Scheduled
+or manual runs without a base ref run every suite.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an

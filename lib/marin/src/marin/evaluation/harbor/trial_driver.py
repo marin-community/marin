@@ -20,6 +20,10 @@ from typing import Any
 
 import yaml
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-import]
+    is_acp_registry_shorthand,
+    parse_registry_spec,
+)
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
@@ -29,7 +33,7 @@ from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
-from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
+from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.harbor.agent_context import (
     MAX_INPUT_TOKENS_KEY,
@@ -43,6 +47,7 @@ _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
+_PI_ACP_REGISTRY_ID = "pi-acp"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
@@ -63,6 +68,7 @@ class RuntimeOverlay(BaseModel):
     served_model: str
     task_limit: int | None
     model_agent_kwargs: dict[str, Any]
+    verifier_env: dict[str, str]
     archive_root: str
     archive_dataset: str
 
@@ -138,13 +144,23 @@ def _validate_agent(agent: AgentConfig) -> str:
         agent_class = _resolve_import_path(agent.import_path, "agent")
         _validate_agent_callbacks(agent_class, agent.import_path)
         return agent.import_path
-    if agent.name is None or agent.name not in AgentName.values():
+    agent_name = agent.name
+    if agent_name is None:
         raise ValueError("Harbor config agent name is not supported by the pinned runtime")
-    agent_name = AgentName(agent.name)
+    if is_acp_registry_shorthand(agent_name):
+        if agent.mode == "local" or AgentName.ACP not in AgentFactory._AGENT_MAP:
+            raise ValueError("Harbor ACP registry agent is not available in the pinned runtime")
+        agent_id, _ = parse_registry_spec(agent_name)
+        if agent_id != _PI_ACP_REGISTRY_ID:
+            raise ValueError("Marin's hosted model settings support only the pi-acp registry agent")
+        return agent_name
+    if agent_name not in AgentName.values():
+        raise ValueError("Harbor config agent name is not supported by the pinned runtime")
+    agent_name = AgentName(agent_name)
     agent_registry = AgentFactory._LOCAL_AGENT_MAP if agent.mode == "local" else AgentFactory._AGENT_MAP
     if agent_name not in agent_registry:
         raise ValueError("Harbor config agent is not available in the pinned runtime")
-    return agent.name
+    return agent_name.value
 
 
 def _validate_environment(config: JobConfig) -> str:
@@ -316,9 +332,10 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
-            "jobs_dir": UPath(overlay.jobs_dir),
+            "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
             "agents": [agent],
             "datasets": [dataset],
+            "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),
             "archive": ArchiveConfig(
                 root=overlay.archive_root,
                 dataset=overlay.archive_dataset,
@@ -403,10 +420,26 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                 served_model=_STABLE_MODEL,
                 task_limit=None,
                 model_agent_kwargs=dict(model_agent_kwargs),
+                verifier_env={},
                 archive_root=jobs_dir,
                 archive_dataset=dataset_metadata.selector,
             ),
         )
+        effective_agent = effective.agents[0]
+        if effective_agent.name == AgentName.PI:
+            try:
+                AgentFactory.create_agent_from_name(
+                    AgentName.PI,
+                    logs_dir=Path(jobs_dir) / "agent",
+                    model_name=effective_agent.model_name,
+                    **effective_agent.kwargs,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid hosted Pi configuration: {exc}. "
+                    "Check the model YAML's agent.agent_kwargs or the Harbor policy's agents[0].kwargs; "
+                    "hosted Pi requires an explicit thinking_format."
+                ) from exc
         job = asyncio.run(Job.create(effective))
     if len(job.benchmark_metadata) != 1:
         raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")

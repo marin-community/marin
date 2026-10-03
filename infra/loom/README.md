@@ -113,6 +113,11 @@ permanently latches this database into shared-deployment mode. Clearing the
 setting, removing users, or completing workloads never restores implicit
 loopback or machine-token administration.
 
+`github.trigger_allowed_user_ids` grants signed GitHub issue and PR triggers
+to the listed numeric GitHub identities. It does not bind those identities to
+Loom users or grant browser sign-in, so existing account roles are unchanged.
+Remove an ID from the setting to revoke this trigger grant.
+
 The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. The profile names `marin-community/marin` in
@@ -130,6 +135,17 @@ and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
 does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
 reads the mapping's profile from this stack's `githubFederationProfiles` output
 and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
+The `agentic-lint` mapping authorizes the dedicated PR lint profile, and the
+`agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
+with a 16-session concurrency cap and a 40-turn budget, so description rewrites never
+consume the shared automation pool. The remaining GitHub agent workflows have
+individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
+`main`; the shared profile does not make other workflows eligible. Deploy the
+Loom stack before the GitHub Pulumi stack so the latter can publish
+`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`, and
+`LOOM_PROSE_CLEANUP_PROFILE`. Apply the
+Loom stack before the GitHub Pulumi stack whenever these federations or profile
+variables change.
 
 Organization prompt policy lives beside the runtime profiles in
 `profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
@@ -140,6 +156,9 @@ runtime, and the effective text remains inspectable in Settings. The production
 ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
+
+The PR review workflow launches on open, ready-for-review, and reopen events.
+Reopen a PR to retry its latest head if a push invalidates an in-progress review.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only

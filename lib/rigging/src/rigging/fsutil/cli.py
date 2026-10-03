@@ -19,15 +19,23 @@ import click
 
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.hashing import file_md5
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.transfer import (
+    TransferError,
+    copy_plan,
+    execute_copy_plan,
+    execute_sync,
+    remove_sources,
+    sync_plan,
+)
 from rigging.fsutil.deletion import (
     DEFAULT_DELETE_WORKERS,
     MAX_DELETE_WORKERS,
     DeleteProgress,
     delete_prefix,
 )
-from rigging.fsutil.hashing import file_md5, format_digest
 from rigging.fsutil.listing import (
     ROOT,
     Entry,
@@ -38,15 +46,7 @@ from rigging.fsutil.listing import (
     total_size,
 )
 from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
-from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
-from rigging.fsutil.transfer import (
-    TransferError,
-    copy_plan,
-    execute_copy_plan,
-    execute_sync,
-    remove_sources,
-    sync_plan,
-)
+from rigging.fsutil.render import aligned_lines, file_lines, format_digest, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
 from rigging.fsutil.tui import show as show_viewer
 from rigging.fsutil.usage import (
@@ -58,6 +58,7 @@ from rigging.fsutil.usage import (
     render_usage_report,
     scan_usage,
 )
+from rigging.fsutil.verified_copy import DEFAULT_VERIFIED_COPY_WORKERS, VerifiedCopyError, verified_copy_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +372,29 @@ def rsync(source: str, destination: str, delete: bool, dry_run: bool, checksum: 
         click.echo(f"delete {action.location.url}")
 
 
+@click.command("verified-copy")
+@click.argument("source")
+@click.argument("destination")
+@click.option("--status-prefix", default=None, help="Sibling prefix for verified per-object resume records.")
+@click.option(
+    "--workers",
+    default=DEFAULT_VERIFIED_COPY_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1, max=64),
+)
+def verified_copy(source: str, destination: str, status_prefix: str | None, workers: int) -> None:
+    """Stage and verify a prefix, then publish its completion manifest last."""
+    try:
+        result = verified_copy_prefix(source, destination, status_url=status_prefix, workers=workers)
+    except VerifiedCopyError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(
+        f"verified {result.total_files} files ({result.total_bytes} bytes): "
+        f"{result.copied_files} copied, {result.resumed_files} resumed"
+    )
+    click.echo(result.manifest_url)
+
+
 @click.command("hash")
 @click.argument("urls", nargs=-1, required=True)
 @click.option("--hex", "hexadecimal", is_flag=True, help="Print hexadecimal digests instead of base64.")
@@ -548,6 +572,7 @@ _COMMANDS = (
     cp,
     mv,
     rsync,
+    verified_copy,
     hash_command,
     rm,
     browse,
