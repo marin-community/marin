@@ -7,6 +7,7 @@ from dataclasses import asdict
 from typing import Any
 
 import httpx
+from litellm import ModelResponse
 from mini_swe_request import ContextBudgetExhausted, ContextLimits, context_max_tokens  # pyrefly: ignore[missing-import]
 from minisweagent.exceptions import LimitsExceeded
 from minisweagent.models.litellm_model import LitellmModel
@@ -37,7 +38,7 @@ class ContextLimitedModel(LitellmModel):
         result["info"]["config"]["model"].update({**asdict(self.limits), "api_base": self.api_base})
         return result
 
-    def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> Any:
+    def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> ModelResponse:
         request_kwargs = self.config.model_kwargs | kwargs
         try:
             with httpx.Client(timeout=TOKENIZER_TIMEOUT) as client:

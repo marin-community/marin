@@ -1,5 +1,5 @@
 # google/gemma-4-26B-A4B-it: the instruction-tuned Gemma 4 26B-A4B (the cohort list names the
-# pre-trained google/gemma-4-26B-A4B; see google-gemma-4-26B-A4B.yaml). Multimodal MoE served
+# pre-trained google/gemma-4-26B-A4B). Multimodal MoE served
 # text-only, 52 GB bf16, native context 262,144 tokens. Follows the vLLM Gemma 4 recipe
 # (docs.vllm.ai/projects/recipes/en/stable/Google/Gemma4.html): gemma4 reasoning and tool parsers,
 # thinking enabled by default; benchmark chat-template kwargs select the request mode.

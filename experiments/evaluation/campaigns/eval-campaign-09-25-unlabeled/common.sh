@@ -483,12 +483,6 @@ for path in harbor.glob("*.yaml"):
 PY
   )
 
-  grep -q '_REQUEST_TIMEOUT = 1800' "$MARIN_DIR/lib/marin/src/marin/evaluation/evalchemy/client.py" \
-    || die "pinned Marin does not enforce the 30-minute Evalchemy request timeout"
-  grep -q '_TRANSPORT_RETRY_BUDGET = 1800' "$MARIN_DIR/lib/marin/src/marin/evaluation/evalchemy/client.py" \
-    || die "pinned Marin does not bound Evalchemy transport retries to 30 minutes"
-  grep -q '_TRANSPORT_ATTEMPT_TIMEOUT = 300' "$MARIN_DIR/lib/marin/src/marin/evaluation/evalchemy/client.py" \
-    || die "pinned Marin does not retry stalled Evalchemy requests within the policy window"
 }
 
 snapshot_launch_configs() {

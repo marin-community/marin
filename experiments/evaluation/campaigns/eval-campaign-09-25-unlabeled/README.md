@@ -22,6 +22,10 @@ The total context limit and imported adapter are policy inputs recorded in the l
 results from the previous adapter have a different policy digest and cannot be resumed under
 this configuration.
 
+Sotopia's episode runner currently ignores the declared `model_info.max_input_tokens` budget.
+Its results cannot establish conformance to the 32K context policy. The Sotopia harness needs
+separate request-boundary enforcement; the Mini-SWE guard applies only to SWE-bench.
+
 Pass `--version LABEL` only when a submitter-controlled cohort label is useful. The launcher forwards
 the label to Marin unchanged. It remains provenance metadata and does not alter the conformance
 boundary above.

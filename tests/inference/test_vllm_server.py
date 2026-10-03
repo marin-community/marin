@@ -42,6 +42,8 @@ from rigging import telemetry
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper
 from rigging.testing import RecordingTelemetryTransport
 
+from tests.inference.fake_vllm_server import FakeVllmLauncher
+
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
     assert _engine_kwargs_to_cli_args({"dtype": "float16"}) == ["--dtype", "float16"]
@@ -376,24 +378,6 @@ def test_linux_process_group_status_inspects_threads_of_dead_leader(tmp_path, mo
 
 # --- explicit start and readiness lifecycle ---
 
-_FAKE_VLLM_SERVER = str(Path(__file__).parent / "fake_vllm_server.py")
-
-
-class _FakeLauncher:
-    """Runs fake_vllm_server.py (see its modes) in place of the real ``vllm serve`` child."""
-
-    def __init__(self, *mode_args: str) -> None:
-        self._mode_args = mode_args
-
-    def command(self) -> list[str]:
-        return [sys.executable, _FAKE_VLLM_SERVER, *self._mode_args]
-
-    def env(self) -> dict[str, str]:
-        return {}
-
-    def cache_identity(self) -> str:
-        return "fake"
-
 
 def _free_port() -> int:
     with socket.socket() as sock:
@@ -406,7 +390,7 @@ def test_subprocess_environment_overrides_reach_vllm():
         model_name_or_path="fake-model",
         extra_cli_args=None,
         launcher=VllmLauncherWithEnvironment(
-            _FakeLauncher("serve"),
+            FakeVllmLauncher("serve"),
             {
                 "VLLM_HOST_IP": "10.0.0.2",
                 "GLOO_SOCKET_IFNAME": "eth0",
@@ -422,7 +406,7 @@ def test_subprocess_environment_overrides_reach_vllm():
 
 
 def _environment(
-    launcher: _FakeLauncher, *, timeout_seconds: float = 30, extra_args: list[str] | None = None
+    launcher: FakeVllmLauncher, *, timeout_seconds: float = 30, extra_args: list[str] | None = None
 ) -> VllmEnvironment:
     return VllmEnvironment(
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
@@ -450,7 +434,7 @@ def test_eager_without_acknowledgement_fails_before_spawn(monkeypatch, args):
     monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
 
     with pytest.raises(ValueError, match="--i-know-i-am-making-vllm-slow"):
-        with _environment(_FakeLauncher("exit"), extra_args=args):
+        with _environment(FakeVllmLauncher("exit"), extra_args=args):
             pass
 
 
@@ -466,7 +450,7 @@ def test_eager_without_acknowledgement_fails_before_spawn(monkeypatch, args):
 )
 def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_path, caplog, args, expected_eager):
     argv_path = tmp_path / "argv.json"
-    with _environment(_FakeLauncher("record-args", str(argv_path)), extra_args=args) as environment:
+    with _environment(FakeVllmLauncher("record-args", str(argv_path)), extra_args=args) as environment:
         _wait_until_ready(environment)
         argv = json.loads(argv_path.read_text())
 
@@ -483,7 +467,7 @@ def test_eager_aliases_rejected_before_spawn(monkeypatch, arg):
     monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
 
     with pytest.raises(ValueError, match="Use the exact"):
-        with _environment(_FakeLauncher("exit"), extra_args=[arg]):
+        with _environment(FakeVllmLauncher("exit"), extra_args=[arg]):
             pass
 
 
@@ -491,7 +475,7 @@ def test_eager_aliases_rejected_before_spawn(monkeypatch, arg):
 def test_vllm_config_file_rejected_before_spawn(monkeypatch, args):
     monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
     with pytest.raises(ValueError, match="does not support --config"):
-        with _environment(_FakeLauncher("exit"), extra_args=args):
+        with _environment(FakeVllmLauncher("exit"), extra_args=args):
             pass
 
 
@@ -501,7 +485,7 @@ def test_environment_starts_without_waiting_for_http_readiness(tmp_path):
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         extra_args=["--headless"],
-        launcher=_FakeLauncher("hang", str(counter)),
+        launcher=FakeVllmLauncher("hang", str(counter)),
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
         wait_for_ready=False,
     )
@@ -521,7 +505,7 @@ def test_environment_rejects_a_clean_early_exit():
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         extra_args=["--headless"],
-        launcher=_FakeLauncher("exit"),
+        launcher=FakeVllmLauncher("exit"),
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
         wait_for_ready=False,
     )
@@ -534,7 +518,7 @@ def test_environment_rejects_a_clean_early_exit():
 
 
 def test_serves_when_startup_succeeds():
-    with _environment(_FakeLauncher("serve")) as environment:
+    with _environment(FakeVllmLauncher("serve")) as environment:
         _wait_until_ready(environment)
         assert environment.model_id == "fake-model"
 
@@ -549,7 +533,7 @@ def test_serves_when_startup_succeeds():
 def test_streamer_fault_fails_while_parent_is_still_running(tmp_path, error):
     counter = tmp_path / "starts"
     with pytest.raises(RuntimeError, match="Run:ai streamer read fault"):
-        with _environment(_FakeLauncher("stuck-fault", str(counter), error)) as environment:
+        with _environment(FakeVllmLauncher("stuck-fault", str(counter), error)) as environment:
             _wait_until_ready(environment)
     assert counter.read_text() == "1"
 
@@ -557,6 +541,6 @@ def test_streamer_fault_fails_while_parent_is_still_running(tmp_path, error):
 def test_hang_times_out_after_one_start(tmp_path):
     counter = tmp_path / "starts"
     with pytest.raises(TimeoutError):
-        with _environment(_FakeLauncher("hang", str(counter)), timeout_seconds=0.5) as environment:
+        with _environment(FakeVllmLauncher("hang", str(counter)), timeout_seconds=0.5) as environment:
             _wait_until_ready(environment)
     assert counter.read_text() == "1"

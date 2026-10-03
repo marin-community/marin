@@ -42,6 +42,7 @@ from marin.inference.config import (
     ServingGeometry,
     SpeculativeMethod,
     SpeculativeServingConfig,
+    VllmCompilationCacheMode,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -88,6 +89,8 @@ from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
+
+from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 @pytest.mark.parametrize(
@@ -293,21 +296,13 @@ def test_vllm_backend_direct_start_uses_tokenizer_chat_template(monkeypatch):
     assert observed_templates == ["{{ messages }}"]
 
 
-def test_vllm_backend_propagates_startup_timeout_to_engine_processes(monkeypatch):
-    observed = {}
-
-    @contextmanager
-    def environment(**kwargs):
-        observed.update(kwargs)
-        yield SimpleNamespace()
-
-    base_launcher = SimpleNamespace(
-        command=lambda: ["vllm"],
-        env=lambda: {},
-        cache_identity=lambda: "test",
+def test_vllm_backend_propagates_startup_timeout_to_engine_processes(tmp_path, monkeypatch):
+    observed = tmp_path / "engine-timeout.json"
+    monkeypatch.setenv("VLLM_ENGINE_READY_TIMEOUT_S", "17")
+    monkeypatch.setattr(
+        "marin.inference.vllm_backend.vllm_launcher",
+        lambda _config: FakeVllmLauncher("record-engine-timeout", str(observed)),
     )
-    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
-    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: base_launcher)
     monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: None)
     spec = ModelSpec(
         weights="org/model",
@@ -321,10 +316,13 @@ def test_vllm_backend_propagates_startup_timeout_to_engine_processes(monkeypatch
         tokenizer_revision="tokenizer-sha",
     )
 
-    with VllmBackend(VllmEngineConfig(startup_timeout_seconds=1800), port=8000).start(spec):
-        pass
-
-    assert observed["launcher"].env()["VLLM_ENGINE_READY_TIMEOUT_S"] == "1800"
+    config = VllmEngineConfig(
+        startup_timeout_seconds=1800,
+        compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED,
+    )
+    with VllmBackend(config).start(spec) as environment:
+        environment.wait_until_ready(poll_interval_seconds=0.05)
+        assert json.loads(observed.read_text())["engine_ready_timeout"] == "1800"
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):

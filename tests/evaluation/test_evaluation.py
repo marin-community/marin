@@ -2174,7 +2174,7 @@ def test_launch_accepts_registry_ifeval_and_repeated_harbor_configs(tmp_path, mo
 def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     policy = _write_harbor_config(tmp_path / "aime-policy.yaml")
-    output_dir = "memory://existing-harbor-results"
+    output_dir = f"memory://{tmp_path.name}/existing-harbor-results"
     spec = LaunchSpec(
         model=models()["qwen3-8b"],
         evals=(),
@@ -2194,6 +2194,19 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
     (StoragePath(output_dir) / "harbor_resume_identity.json").write_text(
         batch.evaluations[0].executor.resume_identity.model_dump_json()
     )
+    existing_trial = StoragePath(output_dir) / "scored-trial.json"
+    existing_trial.write_text('{"reward": 0.0}')
+    submitted = []
+
+    def launch(batch, _client):
+        evaluation = replace(batch.evaluations[0], executor=_successful_evaluation)
+        execution = replace(batch, records_prefix=str(tmp_path / "records"), evaluations=(evaluation,))
+        evaluate_batch(execution, _remote_session(), orchestrator_job_id="/test", env_vars={})
+        submitted.append(evaluation.identity)
+        return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
+
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(object()))
+    monkeypatch.setattr("experiments.evaluation.cli.launch_group", launch)
     result = CliRunner().invoke(
         cli,
         [
@@ -2204,12 +2217,15 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
             str(policy),
             "--resume-results-path",
             output_dir,
-            "--dry-run",
+            "--no-wait",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert f"results={output_dir}" in result.output
+    assert (StoragePath(output_dir) / "endpoint.txt").read_text() == _remote_session().model.endpoint.base_url
+    assert json.loads(existing_trial.read_text()) == {"reward": 0.0}
+    record = read_record(str(tmp_path / "records" / submitted[0].run_id / "record.json"))
+    assert record.results_path == output_dir
 
 
 def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch):

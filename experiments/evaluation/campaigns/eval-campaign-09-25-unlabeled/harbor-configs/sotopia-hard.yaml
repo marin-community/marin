@@ -30,6 +30,7 @@ agents:
   override_timeout_sec: 1800
   kwargs:
     model_info:
+      # Declared policy budget; Sotopia's native episode runner does not enforce it.
       max_input_tokens: 32768
     partner_model: openai/openai/gpt-oss-120b
     partner_api_base: https://api.together.xyz/v1
