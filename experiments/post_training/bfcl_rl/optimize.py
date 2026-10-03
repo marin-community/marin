@@ -1,0 +1,211 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Optimize the step-12 student with verifier-selected complement preferences."""
+
+from dataclasses import dataclass
+
+import click
+import jmp
+from fray.types import ResourceConfig
+from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
+from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
+from levanter.models.snowball import SnowballConfig
+from levanter.optim.config import AdamConfig
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
+from marin.execution.build_context import resolve_version
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.remote import remote
+from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
+from marin.training.training import (
+    LevanterCheckpoint,
+    TrainDpoOnPodConfig,
+    resolve_training_env,
+    run_levanter_train_dpo,
+)
+
+from experiments.post_training.bfcl_rl.collect import MODELS, SMOKE_TASKS, collection_step
+from experiments.post_training.bfcl_rl.recovery import recovery_cache_step
+from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache
+
+RECOVERY_CONTEXT = 40960
+
+
+@dataclass(frozen=True)
+class RecoveryOptimization:
+    num_train_steps: int
+    batch_size: int
+    beta: float
+    num_nodes: int
+    expert_axis: int
+    context_axis: int
+
+
+def dispatch_recovery_training(config: TrainDpoOnPodConfig) -> None:
+    """Resolve the GPU environment before the worker imports JAX."""
+    env = resolve_training_env(config.env_vars, config.resources)
+    remote(run_levanter_train_dpo, resources=config.resources, env_vars=env)(config)
+
+
+def recovery_optimizer_step(
+    cache: ArtifactStep[RecoveryPreferenceCache], *, selection_name: str, optimization: RecoveryOptimization
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Bind the exact-token cache and initial student to the existing DPO trainer."""
+    source = MODELS["student"]
+    initial_student = ArtifactStep.adopt(
+        user_owned_name("models/bfcl-rl-student"),
+        source.version,
+        source.uri,
+        kind=LevanterCheckpoint,
+        config={"model": source.model, "revision": source.revision},
+    )
+    resources = ResourceConfig.with_gpu(
+        "H100",
+        count=8,
+        replicas=optimization.num_nodes,
+        cpu=48,
+        ram="1611Gi",
+        disk="21745Gi",
+        target_cluster="cw-rno2a",
+    )
+    if resources.chip_count() > 128:
+        raise ValueError("Recovery optimizer exceeds the campaign's 128-H100 limit")
+    mesh = MeshConfig(
+        axes={
+            "data": -1,
+            "replica": 1,
+            "model": 1,
+            "expert": optimization.expert_axis,
+            "context": optimization.context_axis,
+        },
+        compute_mapping={
+            "batch": ["replica_dcn", "data", "expert"],
+            "vocab": "model",
+            "position": "context",
+        },
+    )
+    ici, _ = mesh.axis_shapes(resources.chip_count(), 1)
+    data_parallel_size = ici["data"] * ici["expert"]
+    if optimization.batch_size % data_parallel_size:
+        raise ValueError("Recovery batch must be divisible by the data/expert mesh width")
+    if RECOVERY_CONTEXT % optimization.context_axis:
+        raise ValueError("Recovery context must be divisible by the context mesh width")
+    name = user_owned_name(f"models/bfcl-rl-recovery-dpo-{selection_name}")
+
+    def build_config(ctx: StepContext) -> TrainDpoOnPodConfig:
+        if ctx.is_fingerprint:
+            cache_path = ctx.artifact_path(cache)
+            model_path = ctx.artifact_path(initial_student)
+        else:
+            preferences = ctx.resolved(cache)
+            if preferences.num_preferences == 0:
+                raise ValueError("No verifier-selected preferences; no optimizer update")
+            if preferences.max_length != RECOVERY_CONTEXT:
+                raise ValueError("Preference cache and optimizer context differ")
+            if (preferences.tokenizer_uri, preferences.tokenizer_revision) != (source.model, source.revision):
+                raise ValueError("Preference cache tokenizer differs from the initial student")
+            cache_path = preferences.path
+            model_path = ctx.resolved(initial_student).path
+        data = PreferenceLmDataConfig(
+            tokenizer=f"{source.model}@{source.revision}",
+            auto_build_caches=False,
+            shuffle=True,
+            components={
+                "bfcl_complement": DatasetComponent(
+                    cache_dir=cache_path,
+                    split="train",
+                    format=PreferenceChatLmDatasetFormat(pack=False, mask_user_turns=True, slice_strategy="raise"),
+                )
+            },
+        )
+        trainer = TrainerConfig(
+            seed=42,
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            mesh=mesh,
+            use_explicit_mesh_axes=True,
+            train_batch_size=optimization.batch_size,
+            per_device_parallelism=1,
+            num_train_steps=optimization.num_train_steps,
+            tracker=WandbConfig(project="bfcl-rl", group="verifier-selected-recovery", mode="online"),
+            log_jaxprs=False,
+            log_xla_hlo=False,
+        )
+        train = TrainDpoConfig(
+            data=data,
+            trainer=trainer,
+            model=SnowballConfig(
+                max_seq_len=262144,
+                qk_mult=1.75,
+                initializer_std=0.009882117688026186,
+                attention_implementation="gpu_fa4_cute",
+                moe_implementation="ring",
+            ),
+            train_seq_len=RECOVERY_CONTEXT,
+            optimizer=AdamConfig(
+                learning_rate=4e-6,
+                weight_decay=0.0,
+                max_grad_norm=0.5,
+                beta1=0.9,
+                beta2=0.999,
+                warmup=0.0,
+                lr_schedule="constant",
+            ),
+            initialize_from_hf=model_path,
+            reference=SeparateReferenceConfig(model_path=model_path, is_hf=True),
+            beta=optimization.beta,
+            validation_split_fraction=None,
+            run_initial_eval=False,
+            hf_save_steps=optimization.num_train_steps,
+            hf_save_dtype="bfloat16",
+        )
+        return TrainDpoOnPodConfig(train, resources, output_path=ctx.output_path, auto_build_caches=False)
+
+    return ArtifactStep(
+        name=name,
+        version=resolve_version(name, None),
+        artifact_type=LevanterCheckpoint,
+        run=dispatch_recovery_training,
+        build_config=build_config,
+        deps=(cache, initial_student),
+    )
+
+
+@click.command(help=__doc__)
+@click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
+@click.option("--python-image", required=True)
+@click.option("--java-image", required=True)
+@click.option("--javascript-image", required=True)
+@click.option("--num-train-steps", type=click.IntRange(min=1), required=True)
+@click.option("--batch-size", type=click.IntRange(min=1), required=True)
+@click.option("--beta", type=click.FloatRange(min=0, min_open=True), required=True)
+@click.option("--num-nodes", type=click.IntRange(min=1, max=16), required=True)
+@click.option("--expert-axis", type=click.IntRange(min=1), required=True)
+@click.option("--context-axis", type=click.IntRange(min=1), required=True)
+@rl_build_options
+def main(
+    task: str | None,
+    python_image: str,
+    java_image: str,
+    javascript_image: str,
+    num_train_steps: int,
+    batch_size: int,
+    beta: float,
+    num_nodes: int,
+    expert_axis: int,
+    context_axis: int,
+) -> ArtifactStep:
+    images = (python_image, java_image, javascript_image)
+    teacher = collection_step("teacher", task, images)
+    student = collection_step("student", task, images)
+    selection = task or "full"
+    cache = recovery_cache_step(teacher, student, selection_name=selection, max_length=RECOVERY_CONTEXT)
+    optimization = RecoveryOptimization(num_train_steps, batch_size, beta, num_nodes, expert_axis, context_axis)
+    return recovery_optimizer_step(cache, selection_name=selection, optimization=optimization)
+
+
+if __name__ == "__main__":
+    main()
