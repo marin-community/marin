@@ -15,6 +15,11 @@ and retry or report the failure — do not block waiting for input.
 
 ## Objective
 
+The model and optimizer workflow uses the ladder and metrics below.
+For data changes, use the [add-dataset track](README.md#add-a-dataset) or
+[quality-classifier track](README.md#improve-a-quality-classifier).
+Those tracks start with a matched d512 comparison and use their own data gates.
+
 Determine whether a proposed change outperforms the baseline. The baselines are
 the dense and MoE runs recorded in `experiments/grug/fast_track/README.md` —
 compare against the table there (the `fasttrack-baseline`-tagged W&B runs).
@@ -111,11 +116,11 @@ uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
 ```
 
 `--submit` wraps the launcher in `iris job run … -- python -m experiments.grug.fast_track.launch …
---run` and forwards `$WANDB_API_KEY` to the job. By default, it uses `--reserve H100` to select
-an eligible H100 cluster. The CPU coordinator requests no GPU capacity. Its child jobs request
-the training GPUs on the selected cluster. This placement does not balance jobs by free GPU
-capacity. Add `--target-cluster cw-us-east-02a` or `--target-cluster cw-rno2a` to pin the job to that
-cluster. Omit `--submit` to print the plan without a job submission.
+--run` and forwards `$WANDB_API_KEY` to the job. The default cluster is `cw-us-east-02a`,
+where the frozen cache and testbed sample reside. The CPU coordinator requests no GPU capacity.
+Its child jobs request the training GPUs on the selected cluster.
+Use `--target-cluster` to select another cluster with access to the input data.
+Omit `--submit` to print the plan without a job submission.
 
 `--size` (d512/d768/d1024/d1280) and `--run-id` are required; `--dense` selects
 the dense baseline. The step budget derives from the variant baseline (`--match`,
