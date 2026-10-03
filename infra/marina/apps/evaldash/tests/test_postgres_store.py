@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import sqlalchemy
 from evaldash import app as evaldash_app
-from evaldash import fixtures, results_db
+from evaldash import fixtures, ingest, results_db
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRunRecord, list_records, write_record
 from sqlalchemy.pool import StaticPool
@@ -43,6 +43,7 @@ def _store(engine: sqlalchemy.Engine) -> evaldash_app.PgRecordStore:
 
 
 def _stored(store: evaldash_app.PgRecordStore, run_id: str) -> dict:
+    store.reload_if_changed()
     record = store.get_record(run_id)
     assert record is not None, f"{run_id} is not in the catalog"
     return record
@@ -105,7 +106,7 @@ def test_reconciler_discovers_new_paths_and_only_rereads_known_paths_when_due(tm
     record = _record(tmp_path)
     write_record(record, str(prefix))
     store = _store(engine)
-    ingestor = evaldash_app.PostgresIngestor(store, (str(prefix),), 600, 86400, now=clock)
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=clock)
 
     asyncio.run(ingestor.run_once())
     initial = store.get_record(record.run_id)
@@ -142,7 +143,7 @@ def test_reconciler_promotes_duplicate_only_after_two_successful_absences(tmp_pa
     write_record(record.model_copy(update={"description": "canonical"}), str(canonical))
     write_record(record.model_copy(update={"description": "legacy"}), str(legacy))
     store = _store(engine)
-    ingestor = evaldash_app.PostgresIngestor(store, (str(canonical), str(legacy)), 600, 86400, now=clock)
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(canonical), str(legacy)), 600, 86400, now=clock)
 
     asyncio.run(ingestor.run_once())
     assert _stored(store, record.run_id)["description"] == "canonical"
@@ -171,7 +172,7 @@ def test_reconciler_reappearance_resets_missing_confirmation(tmp_path):
     record = _record(tmp_path)
     write_record(record, str(prefix))
     store = _store(engine)
-    ingestor = evaldash_app.PostgresIngestor(store, (str(prefix),), 600, 86400, now=clock)
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=clock)
     asyncio.run(ingestor.run_once())
 
     state = next(iter(results_db.source_states(engine, str(prefix)).values()))
@@ -212,7 +213,7 @@ def test_first_inventory_failure_does_not_downgrade_migrated_row(tmp_path, monke
         return real_list_record_paths(prefix)
 
     monkeypatch.setattr(evaldash_app, "list_record_paths", list_unless_canonical)
-    ingestor = evaldash_app.PostgresIngestor(store, (str(canonical), str(legacy)), 600, 86400, now=Clock())
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(canonical), str(legacy)), 600, 86400, now=Clock())
     assert asyncio.run(ingestor.run_once()) == (str(canonical),)
 
     assert _stored(store, record.run_id)["description"] == "migrated canonical"
@@ -241,7 +242,7 @@ def test_reconciler_keeps_last_valid_row_when_a_prefix_or_rewritten_record_fails
     record = _record(tmp_path)
     write_record(record, str(prefix))
     store = _store(engine)
-    ingestor = evaldash_app.PostgresIngestor(store, (str(prefix),), 600, 86400, now=clock)
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=clock)
     asyncio.run(ingestor.run_once())
 
     state = next(iter(results_db.source_states(engine, str(prefix)).values()))
@@ -276,7 +277,7 @@ def test_reconciler_preserves_seeded_row_when_first_object_read_is_invalid(tmp_p
     path.parent.mkdir(parents=True)
     path.write_text("not json", encoding="utf-8")
     store = _store(engine)
-    ingestor = evaldash_app.PostgresIngestor(store, (str(prefix),), 600, 86400, now=Clock())
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=Clock())
 
     asyncio.run(ingestor.run_once())
 
@@ -293,12 +294,51 @@ def test_configured_prefix_order_and_membership_select_retained_sources(tmp_path
     write_record(record.model_copy(update={"description": "canonical"}), str(canonical))
     write_record(record.model_copy(update={"description": "legacy"}), str(legacy))
     store = _store(engine)
-    ingestor = evaldash_app.PostgresIngestor(store, (str(canonical), str(legacy)), 600, 86400, now=Clock())
+    ingestor = evaldash_app.PostgresIngestor(engine, (str(canonical), str(legacy)), 600, 86400, now=Clock())
     asyncio.run(ingestor.run_once())
     assert _stored(store, record.run_id)["description"] == "canonical"
 
-    evaldash_app.PostgresIngestor(store, (str(legacy), str(canonical)), 600, 86400, now=Clock())
+    reordered = evaldash_app.PostgresIngestor(engine, (str(legacy), str(canonical)), 600, 86400, now=Clock())
+    reordered.status()
+    assert _stored(store, record.run_id)["description"] == "canonical"
+    asyncio.run(reordered.run_once())
     assert _stored(store, record.run_id)["description"] == "legacy"
 
-    evaldash_app.PostgresIngestor(store, (str(canonical),), 600, 86400, now=Clock())
+    asyncio.run(evaldash_app.PostgresIngestor(engine, (str(canonical),), 600, 86400, now=Clock()).run_once())
     assert _stored(store, record.run_id)["description"] == "canonical"
+
+
+def test_scheduled_ingest_publishes_multiple_batches_without_loading_a_serving_snapshot(tmp_path, monkeypatch):
+    engine = sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'catalog.db'}")
+    results_db.migrate_schema(engine)
+    prefix = tmp_path / "records"
+    record = _record(tmp_path)
+    expected = {f"run-{index}" for index in range(257)}
+    for run_id in expected:
+        write_record(record.model_copy(update={"run_id": run_id}), str(prefix))
+    monkeypatch.setenv("RECORDS_PREFIXES", str(prefix))
+    monkeypatch.setenv("MARINA_DATABASE_URL", str(engine.url))
+    monkeypatch.setenv("EVALDASH_STORE", "postgres")
+    monkeypatch.setattr(ingest, "engine_for", lambda _database, _app: engine)
+
+    materialized_sizes = []
+
+    def inspect_catalog_queries(_conn, _cursor, _statement, parameters, context, _many):
+        if context.compiled is None:
+            return  # Schema reflection uses raw driver SQL, not catalog projections.
+        query = context.compiled.statement
+        if not isinstance(query, sqlalchemy.sql.Select):
+            return
+        if query.selected_columns.contains_column(results_db.catalog_runs.c.record) and query.whereclause is None:
+            raise AssertionError("ingestion must not load the serving catalog")
+        if query.selected_columns.contains_column(results_db.record_sources.c.record):
+            materialized_sizes.append(len(parameters))
+
+    sqlalchemy.event.listen(engine, "before_cursor_execute", inspect_catalog_queries)
+    assert ingest.main() == 0
+    with engine.begin() as conn:
+        stored_ids = set(conn.execute(sqlalchemy.select(results_db.catalog_runs.c.run_id)).scalars())
+    assert stored_ids == expected
+    assert sum(materialized_sizes) == len(expected)
+    assert max(materialized_sizes) < len(expected)
+    assert results_db.prefix_statuses(engine)[0].error is None
