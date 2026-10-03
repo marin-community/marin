@@ -200,7 +200,7 @@ serve:
     assert command[command.index("--from") + 1] == "vllm[runai]==0.29.0"
     requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
     assert "aleph-alpha-inference==1.0.0" in requirements
-    assert "aleph-alpha-inference==1.0.0" in launcher.cache_identity()
+    assert launcher.cache_identity() != vllm_launcher(replace(engine, extra_requirements=())).cache_identity()
 
 
 def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
