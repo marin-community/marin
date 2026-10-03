@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize OpenAI chat messages at the Harbor harness boundary."""
+"""Convert OpenAI chat messages to typed conversation evidence."""
 
 from typing import Any, Literal
 
@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue
 from taskcompendium.models import (
     AssistantToolCalls,
     ConversationEvent,
+    ConversationInput,
     ConversationToolCall,
     ConversationTrace,
     TextMessage,
@@ -60,8 +61,7 @@ def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCal
     return TextMessage(role="assistant", content=validated.content)
 
 
-def chat_conversation(messages: list[dict[str, Any]]) -> ConversationTrace:
-    """Normalize a complete chat transcript for any TaskCompendium verifier."""
+def _conversation_events(messages: list[dict[str, Any]]) -> tuple[ConversationEvent, ...]:
     events: list[ConversationEvent] = []
     for message in messages:
         role = message.get("role")
@@ -71,4 +71,14 @@ def chat_conversation(messages: list[dict[str, Any]]) -> ConversationTrace:
             events.append(ToolResult(call_id=message["tool_call_id"], content=message["content"]))
         else:
             events.append(TextMessage.model_validate(message))
-    return ConversationTrace(events=tuple(events))
+    return tuple(events)
+
+
+def chat_input(messages: list[dict[str, Any]]) -> ConversationInput:
+    """Normalize a public task prefix before model inference."""
+    return ConversationInput(events=_conversation_events(messages))
+
+
+def chat_conversation(messages: list[dict[str, Any]]) -> ConversationTrace:
+    """Normalize a complete chat transcript for a TaskCompendium verifier."""
+    return ConversationTrace(events=_conversation_events(messages))
