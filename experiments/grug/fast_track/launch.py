@@ -422,7 +422,7 @@ def build_h100_ladder_run(
     fact_probe_input: str | None = None,
     weight_attribution_window: tuple[int, ...] = (),
     flip_detector_patterns: tuple[str, ...] = (),
-    fresh_autotune_cache: bool = False,
+    xla_autotune_level: int | None = None,
     fact_probe_every: int = 1,
     fact_probe_ema_every: int = 50,
 ) -> ArtifactStep[ThroughputResult]:
@@ -542,7 +542,7 @@ def build_h100_ladder_run(
         fact_probe_input=fact_probe_input,
         weight_attribution_window=weight_attribution_window,
         flip_detector_patterns=flip_detector_patterns,
-        fresh_autotune_cache=fresh_autotune_cache,
+        xla_autotune_level=xla_autotune_level,
         fact_probe_every=fact_probe_every,
         fact_probe_ema_every=fact_probe_ema_every,
     )
@@ -636,7 +636,7 @@ def build_h100_ladder_run(
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
                 flip_detector_dir=prefix_join(ctx.output_path, "flip_detector") if flip_detector_patterns else None,
-                fresh_autotune_cache=fresh_autotune_cache,
+                xla_autotune_level=xla_autotune_level,
                 fact_probe_dir=(
                     prefix_join(ctx.output_path, "fact_probe")
                     if train_batch_dump_steps or train_text_count_patterns or fact_probe_input
@@ -916,10 +916,11 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Log the step-to-step reversing update directions of the MLA attention matrices (flip_detector.py).",
 )
 @click.option(
-    "--fresh-autotune-cache",
-    is_flag=True,
-    help="Start every process with an empty XLA autotune cache, so a fusion new to this run misses on every "
-    "process alike (sharded autotuning deadlocks when the per-process caches disagree).",
+    "--xla-autotune-level",
+    type=int,
+    default=None,
+    help="--xla_gpu_autotune_level for the run. 0 turns autotuning off: it avoids the sharded-autotuning "
+    "deadlock on programs with new fusions, at slower kernels (compare against a control at the same level).",
 )
 @click.option("--fact-probe-every", default=1, show_default=True, help="Score the fact probe every N steps.")
 @click.option("--fact-probe-ema-every", default=50, show_default=True, help="Score the live EMA weights every N steps.")
@@ -1030,7 +1031,7 @@ def main(
     fact_probe_input: str | None,
     weight_attribution: str,
     flip_detector: bool,
-    fresh_autotune_cache: bool,
+    xla_autotune_level: int | None,
     fact_probe_every: int,
     fact_probe_ema_every: int,
     router_tie_class: tuple[str, ...],
@@ -1090,7 +1091,7 @@ def main(
         fact_probe_input=fact_probe_input,
         weight_attribution_window=tuple(int(step) for step in weight_attribution.split(",") if step),
         flip_detector_patterns=DEFAULT_FLIP_PATTERNS if flip_detector else (),
-        fresh_autotune_cache=fresh_autotune_cache,
+        xla_autotune_level=xla_autotune_level,
         fact_probe_every=fact_probe_every,
         fact_probe_ema_every=fact_probe_ema_every,
         router_tie_specs=router_tie_specs,
