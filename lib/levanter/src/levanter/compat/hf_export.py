@@ -234,7 +234,7 @@ def save_hf_shards(
 
     Without resume, existing shard files are overwritten. With resume, verify
     identity, names, size and freshly computed SHA-256 before skipping any gather.
-    Return ordered verified/uploaded receipts on process zero, an empty list elsewhere.
+    Return ordered receipts on process zero when resume is enabled; return an empty list otherwise.
     upload_to_hf receives a temporary directory containing exactly one shard and
     its filename, on a process-zero worker thread, and must not enter collectives.
     """

@@ -157,7 +157,7 @@ def test_hf_export_preserves_scalar_and_singleton_shapes(tmp_path):
     with use_test_mesh():
         hf_export.save_hf_shards(
             {"model.safetensors": weights},
-            lambda keys: weights,
+            lambda _keys: weights,
             str(tmp_path),
             export_host_budget_bytes=8,
             max_concurrent_shards=1,
@@ -198,18 +198,18 @@ def test_hf_shard_writer_failure_keeps_two_cpu_ranks_matched(tmp_path):
             options = dict(export_host_budget_bytes=1, max_concurrent_shards=2,
                            tensor_names={'bank': tuple(f'expert.{i}' for i in range(4))})
             original_upload = StoragePath.upload_from
-            def failed_upload(path, local_path, **kwargs):
+            def failed_upload(_self, _local_path, **_kwargs):
                 raise OSError('upload interrupted')
             StoragePath.upload_from = failed_upload
             try:
-                save_hf_shards(shards, lambda keys: {'bank': bank}, destination, **options)
+                save_hf_shards(shards, lambda _keys: {'bank': bank}, destination, **options)
             except (OSError, RuntimeError):
                 pass
             else:
                 raise AssertionError('writer failure did not propagate')
             multihost_utils.sync_global_devices('after-failed-export')
             StoragePath.upload_from = original_upload
-            save_hf_shards(shards, lambda keys: {'bank': bank}, destination, **options)
+            save_hf_shards(shards, lambda _keys: {'bank': bank}, destination, **options)
             if rank == 0:
                 for filename in shards:
                     actual = load_file(f'{destination}/{filename}')
