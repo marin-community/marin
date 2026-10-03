@@ -306,44 +306,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "policy_step"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -360,7 +324,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "policy_step"
         }
       ],
       "interval": "1m"
@@ -414,44 +380,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "token_rates"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -468,7 +398,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "token_rates"
         }
       ],
       "interval": "1m"
@@ -505,44 +437,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "table",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "lifecycle"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "execution_uid",
@@ -589,7 +485,9 @@
               "text": "last_record_ms",
               "type": "timestamp_epoch"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "lifecycle"
         }
       ]
     },
@@ -655,44 +553,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "driver_walls"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -709,7 +571,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "driver_walls"
         }
       ],
       "interval": "1m"
@@ -763,44 +627,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "worker_waits"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -817,7 +645,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "worker_waits"
         }
       ],
       "interval": "1m"
@@ -871,44 +701,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "buffer"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -925,7 +719,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "buffer"
         }
       ],
       "interval": "1m"
@@ -992,44 +788,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "buffer_dwell"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -1046,7 +806,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "buffer_dwell"
         }
       ],
       "interval": "1m"
@@ -1100,44 +862,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "policy_staleness"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -1154,7 +880,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "policy_staleness"
         }
       ],
       "interval": "1m"
@@ -1208,44 +936,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "rollout_latency"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -1262,7 +954,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "rollout_latency"
         }
       ],
       "interval": "1m"
@@ -1329,44 +1023,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "sync_walls"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -1383,7 +1041,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "sync_walls"
         }
       ],
       "interval": "1m"
@@ -1437,44 +1097,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "event_loop_lag"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -1491,7 +1115,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "event_loop_lag"
         }
       ],
       "interval": "1m"
@@ -1544,44 +1170,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "residuals"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -1598,7 +1188,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "residuals"
         }
       ],
       "interval": "1m"
@@ -1648,44 +1240,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "table",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "training_overlap"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "execution_uid",
@@ -1712,7 +1268,9 @@
               "text": "returned_tokens",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "training_overlap"
         }
       ]
     },
@@ -1765,44 +1323,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "group_dispositions"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -1819,7 +1341,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "group_dispositions"
         }
       ],
       "interval": "1m"
@@ -1873,44 +1397,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "group_tokens"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -1927,7 +1415,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "group_tokens"
         }
       ],
       "interval": "1m"
@@ -1994,44 +1484,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "reward"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -2048,7 +1502,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "reward"
         }
       ],
       "interval": "1m"
@@ -2102,44 +1558,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "evaluation"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -2156,7 +1576,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "evaluation"
         }
       ],
       "interval": "1m"
@@ -2211,44 +1633,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "length_stops"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -2265,7 +1651,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "length_stops"
         }
       ],
       "interval": "1m"
@@ -2318,44 +1706,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "optimizer"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -2372,7 +1724,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "optimizer"
         }
       ],
       "interval": "1m"
@@ -2439,44 +1793,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "megatron_policy_wall"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -2493,7 +1811,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "megatron_policy_wall"
         }
       ],
       "interval": "1m"
@@ -2530,44 +1850,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "table",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "megatron_phases"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "execution_uid",
@@ -2599,7 +1883,9 @@
               "text": "seconds",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "megatron_phases"
         }
       ]
     },
@@ -2635,44 +1921,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "table",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "exporter"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "execution_uid",
@@ -2699,7 +1949,9 @@
               "text": "last_record_ms",
               "type": "timestamp_epoch"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "exporter"
         }
       ]
     },
@@ -2764,44 +2016,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "drift"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -2818,7 +2034,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "drift"
         }
       ],
       "interval": "1m"
@@ -2871,44 +2089,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "clip_pressure"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -2925,7 +2107,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "clip_pressure"
         }
       ],
       "interval": "1m"
@@ -2978,44 +2162,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "drift_coverage"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -3032,7 +2180,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "drift_coverage"
         }
       ],
       "interval": "1m"
@@ -3085,44 +2235,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "log_ratio_squared"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -3139,7 +2253,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "log_ratio_squared"
         }
       ],
       "interval": "1m"
@@ -3193,44 +2309,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "correction_weights"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -3247,7 +2327,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "correction_weights"
         }
       ],
       "interval": "1m"
@@ -3313,44 +2395,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "core_cycle"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -3367,7 +2413,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "core_cycle"
         }
       ],
       "interval": "1m"
@@ -3420,44 +2468,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "loss_token_rates"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -3474,7 +2486,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "loss_token_rates"
         }
       ],
       "interval": "1m"
@@ -3527,44 +2541,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "core_fractions"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -3581,7 +2559,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "core_fractions"
         }
       ],
       "interval": "1m"
@@ -3647,44 +2627,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "role_gpu_tokens"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -3701,7 +2645,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "role_gpu_tokens"
         }
       ],
       "interval": "1m"
@@ -3754,44 +2700,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "role_gpus"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -3808,7 +2718,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "role_gpus"
         }
       ],
       "interval": "1m"
@@ -3842,44 +2754,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "table",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "learner_memory"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "execution",
@@ -3936,7 +2812,9 @@
               "text": "device_total_gib",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "learner_memory"
         }
       ],
       "interval": "1m"
@@ -3970,44 +2848,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "table",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "inference_service"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "execution",
@@ -4059,7 +2901,9 @@
               "text": "phase_seconds",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "inference_service"
         }
       ],
       "interval": "1m"
@@ -4112,44 +2956,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "core_gpu_hours"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -4166,7 +2974,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "core_gpu_hours"
         }
       ],
       "interval": "1m"
@@ -4268,44 +3078,10 @@
             }
           ],
           "format": "table",
-          "parser": "backend",
           "refId": "A",
-          "source": "url",
-          "type": "json",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "uniform_staleness"
-              }
-            ]
-          }
+          "targetRef": "rl_attempt",
+          "view": "uniform_staleness"
         }
       ],
       "title": "Uniform-staleness batch diagnostics",
@@ -4383,44 +3159,10 @@
             }
           ],
           "format": "table",
-          "parser": "backend",
           "refId": "A",
-          "source": "url",
-          "type": "json",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "uniform_staleness_coverage"
-              }
-            ]
-          }
+          "targetRef": "rl_attempt",
+          "view": "uniform_staleness_coverage"
         }
       ],
       "title": "Uniform-staleness diagnostic token coverage",
@@ -4503,44 +3245,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "evaluation_lengths"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -4557,7 +3263,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "evaluation_lengths"
         }
       ],
       "interval": "1m"
@@ -4610,44 +3318,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "evaluation_contributions"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -4664,7 +3336,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "evaluation_contributions"
         }
       ],
       "interval": "1m"
@@ -4718,44 +3392,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "staleness_groups"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -4772,7 +3410,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "staleness_groups"
         }
       ],
       "interval": "1m"
@@ -4826,44 +3466,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "staleness_tokens"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -4880,7 +3484,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "staleness_tokens"
         }
       ],
       "interval": "1m"
@@ -4950,44 +3556,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "table",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "weight_sync_stages"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "start",
@@ -5009,7 +3579,9 @@
               "text": "state",
               "type": "string"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "weight_sync_stages"
         }
       ],
       "interval": "1m",
@@ -5084,44 +3656,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "mismatch_staleness0"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -5138,7 +3674,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "mismatch_staleness0"
         }
       ],
       "interval": "1m"
@@ -5191,44 +3729,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "mismatch_by_staleness"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -5245,7 +3747,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "mismatch_by_staleness"
         }
       ],
       "interval": "1m"
@@ -5298,44 +3802,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "learner_drift"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -5352,7 +3820,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "learner_drift"
         }
       ],
       "interval": "1m"
@@ -5405,44 +3875,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "position_dependence"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -5459,7 +3893,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "position_dependence"
         }
       ],
       "interval": "1m"
@@ -5512,44 +3948,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/attempt",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "corrections"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -5566,7 +3966,9 @@
               "text": "value",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_attempt",
+          "view": "corrections"
         }
       ],
       "interval": "1m"
