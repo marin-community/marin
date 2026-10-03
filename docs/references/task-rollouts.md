@@ -72,7 +72,7 @@ and the original exception as the cause. The engine releases task resources
 before the caller receives that exception. Token-contract violations propagate
 as `RolloutContractError`.
 Machine startup and setup failures use the `start` operation and retain an empty
-rollout record. The engine releases resources before it returns that failure.
+rollout record. The engine releases resources before it raises the interruption.
 
 `ShellVerifierSpec` defines a command, private files, a timeout, environment
 variables, and a reward source. The engine installs private files after the last
