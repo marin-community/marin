@@ -40,6 +40,6 @@ agents:
 datasets:
 - name: swebench-verified
   version: '1.0'
-  registry_url: https://raw.githubusercontent.com/marin-community/harbor/94b118022fe3e677784a638daf33d57a836fa5fe/registry.json
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/a2adfd7e60c41be528c93f3c4672f8e2a9a0e770/registry.json
 verifier:
   override_timeout_sec: 300
