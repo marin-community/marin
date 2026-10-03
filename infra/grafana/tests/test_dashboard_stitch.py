@@ -12,13 +12,79 @@ FRAGMENT = {"type": "table", "title": "Shared panel", "targets": [{"refId": "A"}
 
 
 def test_stitch_dashboard_merges_fragment_with_local_id_and_grid_pos():
+    grid = {"h": 8, "w": 12, "x": 0, "y": 0}
+    params = [{"key": "identity", "value": "${identity}"}, {"key": "to", "value": "${__to}"}]
+    fragment = {**FRAGMENT, "targets": [{"refId": "A", "url_options": {"params": params}}]}
     source = {
         "panels": [
-            {"id": 7, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "panelRef": "shared"},
+            {"id": 7, "gridPos": grid, "panelRef": "shared"},
+            {"id": 8, "gridPos": grid, "panelRef": "shared", "vars": {"identity": "${run}"}},
         ]
     }
-    (panel,) = stitch_dashboard(source, {"shared": FRAGMENT})["panels"]
-    assert panel == {**FRAGMENT, "id": 7, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}}
+
+    plain, mapped = stitch_dashboard(source, {"shared": fragment})["panels"]
+
+    assert plain == {**fragment, "id": 7, "gridPos": grid}
+    mapped_params = [{"key": "identity", "value": "${run}"}, {"key": "to", "value": "${__to}"}]
+    assert mapped == {
+        **fragment,
+        "targets": [{"refId": "A", "url_options": {"params": mapped_params}}],
+        "id": 8,
+        "gridPos": grid,
+    }
+
+
+@pytest.mark.parametrize("parameter_set", ["rl_run", "rl_attempt"])
+def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(parameter_set):
+    columns = [{"selector": "t", "text": "t", "type": "timestamp"}]
+    short = {
+        "refId": "A",
+        "targetRef": parameter_set,
+        "url": "/v1/rl/overview" if parameter_set == "rl_run" else "/v1/rl/attempt",
+        "view": "spans",
+        "format": "table",
+    }
+    fragment = {"type": "timeseries", "targets": [{**short, "columns": columns, "filterExpression": "x == 1"}]}
+    swap = {"run": "${identity}", "identity": "${run}"}
+    source = {
+        "panels": [
+            {"id": 1, "gridPos": {"y": 0}, "panelRef": "shared"},
+            {"id": 2, "type": "row", "panels": [{"id": 3, "targets": [{**short, "columns": columns}]}]},
+            {"id": 4, "gridPos": {"y": 9}, "panelRef": "shared", "vars": swap},
+        ]
+    }
+
+    first, row, mounted = stitch_dashboard(source, {"shared": fragment})["panels"]
+
+    params = [
+        {"key": "clusters", "value": "${cluster:csv}"},
+        {"key": "run", "value": "${run}"},
+        {"key": "from", "value": "${__from}"},
+        {"key": "to", "value": "${__to}"},
+        {"key": "view", "value": "spans"},
+    ]
+    if parameter_set == "rl_run":
+        params.insert(-1, {"key": "bucket_ms", "value": "60000"})
+    else:
+        params[2:2] = [{"key": "job", "value": "${job}"}, {"key": "executions", "value": "${execution:csv}"}]
+    expanded = {
+        "refId": "A",
+        "type": "json",
+        "source": "url",
+        "format": "table",
+        "parser": "backend",
+        "url": short["url"],
+        "url_options": {"method": "GET", "params": params},
+        "columns": columns,
+    }
+    assert first["targets"] == [{**expanded, "filterExpression": "x == 1"}]
+    assert row["panels"] == [{"id": 3, "targets": [expanded]}]
+    # The mount's vars reach the parameters the target expands to, and a replacement is not
+    # replaced again.
+    swapped = [{"key": "run", "value": "${identity}"} if param["key"] == "run" else param for param in params]
+    assert mounted["targets"] == [
+        {**expanded, "url_options": {"method": "GET", "params": swapped}, "filterExpression": "x == 1"}
+    ]
 
 
 def test_stitch_dashboard_leaves_non_ref_panels_untouched():
