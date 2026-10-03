@@ -7,7 +7,7 @@ from levanter.store.cache import TreeCache, consolidate_shard_cache_ledgers
 
 from experiments.datakit.store.bucket_writer import write_bucket_cache
 from experiments.datakit.store.datakit_store import BucketCacheStats
-from experiments.grug.fast_track.negative_control import shuffle_bucket_tokens
+from experiments.grug.fast_track.negative_control import build_shuffled_store, shuffle_bucket_tokens
 
 
 @pytest.mark.parametrize("layout", ["materialized", "sharded"])
@@ -51,3 +51,14 @@ def test_token_shuffle_preserves_documents_and_special_positions(tmp_path, monke
         np.testing.assert_array_equal(after, repeat)
         np.testing.assert_array_equal(before, retained["input_ids"])
         assert not np.array_equal(before, after)
+
+
+def test_shuffled_store_cache_separates_sources_and_permutations(tmp_path):
+    source = str(tmp_path / "baseline")
+    first = build_shuffled_store(source, 0, version="test-dev")
+    repeated = build_shuffled_store(source, 0, version="test-dev")
+    changed_seed = build_shuffled_store(source, 1, version="test-dev")
+    changed_source = build_shuffled_store(str(tmp_path / "other-baseline"), 0, version="test-dev")
+
+    assert first.path(str(tmp_path)) == repeated.path(str(tmp_path))
+    assert len({step.path(str(tmp_path)) for step in (first, changed_seed, changed_source)}) == 3

@@ -3,6 +3,7 @@
 
 """Compare fast-track training with shuffled tokens from a completed DataKit store."""
 
+import hashlib
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from levanter.store.cache import TreeCache
 from levanter.store.tree_store import TreeStore
 from levanter.tokenizers import load_tokenizer
 from marin.execution.build_context import resolve_version
+from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
@@ -104,12 +106,14 @@ def shuffle_store(config: ShuffleStoreConfig) -> FastTrackDataStore:
     return FastTrackDataStore(store=shuffled)
 
 
-def build_shuffled_store(source: str, seed: int) -> ArtifactStep[FastTrackDataStore]:
+def build_shuffled_store(source: str, seed: int, *, version: str | None = None) -> ArtifactStep[FastTrackDataStore]:
     """Bind token shuffling to a completed baseline data artifact."""
-    name = "datakit/fast-track/shuffled-tokens"
-    version = resolve_version(name, None)
+    source_digest = hashlib.sha256(source.encode()).hexdigest()[:20]
+    digest = hashlib.sha256(canonical_json({"source": source, "seed": seed}).encode()).hexdigest()[:20]
+    name = f"datakit/fast-track/shuffled-tokens/{digest}"
+    version = resolve_version(name, version)
     baseline = ArtifactStep.adopt(
-        user_namespaced_name("datakit/fast-track/control-source", version),
+        user_namespaced_name(f"datakit/fast-track/control-source/{source_digest}", version),
         version,
         source,
         kind=FastTrackDataStore,
@@ -129,13 +133,22 @@ def build_shuffled_store(source: str, seed: int) -> ArtifactStep[FastTrackDataSt
 @click.option("--run-id", required=True)
 @click.option("--size", required=True, type=click.Choice(H100_LADDER_SIZES))
 @click.option("--dense", is_flag=True)
-@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Token permutation seed.")
+@click.option("--shuffle-seed", type=click.IntRange(min=0), default=0, show_default=True, help="Token permutation seed.")
+@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed.")
+@click.option("--data-seed", type=click.IntRange(min=0), default=0, show_default=True, help="Training data seed.")
 @click.option("--stop-after", type=click.Choice([stage.value for stage in Stage]), default=Stage.TRAIN.value)
 @build_options
 def main(
-    source_store: str, run_id: str, size: str, dense: bool, seed: int, stop_after: str
+    source_store: str,
+    run_id: str,
+    size: str,
+    dense: bool,
+    shuffle_seed: int,
+    seed: int,
+    data_seed: int,
+    stop_after: str,
 ) -> ArtifactStep[ThroughputResult] | ArtifactStep[FastTrackDataStore]:
-    store = build_shuffled_store(source_store, seed)
+    store = build_shuffled_store(source_store, shuffle_seed)
     if Stage(stop_after) is Stage.DATAKIT:
         return store
     return build_h100_ladder_run(
@@ -143,6 +156,8 @@ def main(
         size=size,
         dense=dense,
         save_checkpoints=True,
+        seed=seed,
+        data_seed=data_seed,
         training_source=DataKitTrainingSource(store, MixtureWeighting.TOKEN_PROPORTIONAL),
     )
 
