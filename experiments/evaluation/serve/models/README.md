@@ -56,7 +56,7 @@ generation:                     # per-model generation behavior
   max_gen_toks: null            # Evalchemy generation limit and Harbor agent output budget
   extra_gen_kwargs:             # forwarded to Evalchemy, e.g. for a thinking model
     skip_special_tokens: "false"
-  chat_template_kwargs:         # boolean template arguments on Evalchemy chat requests
+  chat_template_kwargs:         # boolean or string template arguments on Evalchemy chat requests
     enable_thinking: false
 
 agent:                          # AgentConfig -> the Harbor/agentic agent

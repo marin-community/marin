@@ -180,9 +180,9 @@ uv run python -m experiments.evaluation.cli launch \
   --no-wait
 ```
 
-The resume option accepts exactly one Harbor evaluation. The Harbor worker verifies the dataset
-identity before running; Harbor keeps compatible completed trials and applies its resume policy to
-the rest.
+The resume option accepts exactly one Harbor evaluation. The launcher and worker check the
+model, hosted judge, dataset, policy, runtime, and task limit against the saved results before
+reuse. Incompatible results are rejected before submission. Compatible completed trials are reused.
 
 Run one OT-TBLite trial with the registered Grug model and OpenCode agent policy:
 
