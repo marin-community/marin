@@ -11,8 +11,6 @@ dependencies = [
     "taskcompendium",
     "marin-shellbox",
     "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
-    "marin-rigging>=0.2.123.dev35633925924",
-    "pyarrow>=17",
 ]
 
 [dependency-groups]
@@ -26,7 +24,6 @@ prerelease = "allow"
 [tool.uv.sources]
 taskcompendium = { path = "../taskcompendium", editable = true }
 marin-shellbox = { path = "../shellbox", editable = true }
-marin-rigging = { path = "../rigging", editable = true }
 
 [tool.hatch.metadata]
 allow-direct-references = true

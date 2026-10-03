@@ -15,13 +15,13 @@ import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import ExitReason, Result, ShellSimBuiltins
-from taskcompendium.environment import EnvironmentKind
+from taskcompendium.environment import DockerBuild, EnvironmentKind, ShellVerifierSpec
 from taskcompendium.grading import Outcome
 from taskcompendium.importers.harbor import harbor_task
 from taskcompendium.models import Source
+from taskcompendium.parquet import read_tasks, write_tasks
 
 from rolloutengine.contracts import RolloutInterrupted, RolloutOperation
-from rolloutengine.parquet import read_tasks, write_tasks
 
 from .test_rollout import ReplayModel, engine, run_task
 
@@ -189,6 +189,29 @@ async def test_harbor_package_grades_private_files_after_parquet_reload(
         with pytest.raises(RuntimeError, match="closed"):
             await machine.upload(tmp_path / "unused", "/unused")
     assert "HARBOR_TEST_EXPECTED" not in json.dumps([request.messages for request in model.requests])
+
+
+def test_separate_verifier_can_reuse_the_agent_build_context(tmp_path):
+    directory = tmp_path / "source"
+    for name in ("environment", "tests", "setup_files"):
+        (directory / name).mkdir(parents=True)
+    (directory / "instruction.md").write_text("Complete the task.")
+    (directory / "task.toml").write_text(
+        '[environment]\nworkdir = "/workspace"\n' '[verifier]\nenvironment_mode = "separate"\ntimeout_sec = 5\n'
+    )
+    (directory / "environment/Dockerfile").write_text("FROM busybox\n")
+    (directory / "tests/test.sh").write_text("echo 1\n")
+
+    task = harbor_task(
+        directory,
+        source=Source(dataset="harbor-fixture", revision="1", row="task", importer_revision="1"),
+    )
+    specification = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
+
+    assert specification.environment is not None
+    assert isinstance(specification.environment.image, DockerBuild)
+    assert {file.path for file in specification.environment.image.files} == {"/Dockerfile"}
+    assert {file.path for file in specification.environment.files} == {"/tests/test.sh"}
 
 
 @pytest.mark.parametrize(

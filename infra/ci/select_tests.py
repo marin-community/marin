@@ -161,7 +161,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "taskcompendium-unit": (
         "lib/taskcompendium/",
         "lib/rigging/",
-        "lib/tasktrove-verify/",
+        "lib/verifyit/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,
@@ -169,7 +169,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "rolloutengine-unit": (
         "lib/rolloutengine/",
         "lib/taskcompendium/",
-        "lib/tasktrove-verify/",
+        "lib/verifyit/",
         "lib/rigging/",
         "lib/shellbox/",
         "infra/ci/select_tests.py",

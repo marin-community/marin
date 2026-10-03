@@ -268,7 +268,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
         ("lib/shellbox/src/shellbox/machine.py", ["rolloutengine-unit"]),
         (
-            "lib/tasktrove-verify/src/tasktrove_verify/grading.py",
+            "lib/verifyit/src/verifyit/grading.py",
             ["rolloutengine-unit", "taskcompendium-unit"],
         ),
         ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit"]),
