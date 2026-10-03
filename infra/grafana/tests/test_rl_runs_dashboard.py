@@ -4,13 +4,17 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
 import pytest
-from conftest import install_finelog_dialect_macros, queried_namespace
+from config import ClusterTarget
+from conftest import bridge_config, install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
 from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
+from server import create_app
+from starlette.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parent.parent
 DASHBOARDS = ROOT / "dashboards"
@@ -198,19 +202,30 @@ def _run_rows() -> list[tuple]:
                 },
             )
         )
-        # The Iris node agent: node_name only. No run_id, no job_id, ever.
         for node in NODES:
-            rows.append(
-                _row(
-                    service="iris-node-agent",
-                    name="gpu_utilization_percent",
-                    value=71.0 + bucket,
-                    moment=moment,
-                    seq=bucket,
-                    node_name=node,
-                    attributes={"gpu_uuid": f"GPU-{node}-0"},
-                )
-            )
+            for gpu in range(2):
+                gauges = {
+                    "gpu_utilization_percent": 71.0 + bucket,
+                    "gpu_sm_active_ratio": 0.5 + gpu * 0.2,
+                    "gpu_tensor_active_ratio": 0.2 + gpu * 0.2,
+                    "gpu_memory_used_bytes": 40e9 + gpu * 20e9,
+                    "gpu_nvlink_receive_bytes_per_second": 100,
+                    "gpu_pcie_receive_bytes_per_second": 10,
+                    "gpu_power_watts": 620 + gpu * 10,
+                    "gpu_pcie_replay_errors": (10, 13, 1, 1, 2, 2)[bucket] if (node, gpu) == (NODES[0], 0) else 4,
+                }
+                for name, value in gauges.items():
+                    rows.append(
+                        _row(
+                            service="iris-node-agent",
+                            name=name,
+                            value=value,
+                            moment=moment,
+                            seq=bucket,
+                            node_name=node,
+                            attributes={"gpu_uuid": f"GPU-{node}-{gpu}"},
+                        )
+                    )
         # Each engine actor publishes its own vLLM registry under `service='vllm'`, carrying the
         # run id it inherited from the task environment. The forwarder strips the `vllm:` prefix
         # and prometheus counters keep `_total`, so these are the names that land. The counters are
@@ -347,6 +362,28 @@ def _panel_sql(title: str) -> str:
     return _view_sql(view)
 
 
+def _overview_rows(store, view):
+    def query_source(sql, *, max_rows):
+        return store.execute(sql).fetch_arrow_table()
+
+    source = SimpleNamespace(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    with TestClient(app) as client:
+        response = client.get(
+            "/finelog/marin/v1/rl/overview",
+            params={
+                "clusters": CLUSTER,
+                "run": RUN_ID,
+                "from": _WINDOW_START_MS,
+                "to": _NOW_MS,
+                "bucket_ms": 300000,
+                "view": view,
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+
 def test_the_run_variable_offers_a_run_the_trainer_reported(store) -> None:
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
     (variable,) = [v for v in dashboard["templating"]["list"] if v["name"] == "run"]
@@ -379,56 +416,94 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
 
 
 def test_percentile_panels_compute_over_all_executions_in_each_bucket(store) -> None:
-    moment = WINDOW_START
-    timestamp_ms = _millis(moment)
     store.execute(
-        "DELETE FROM \"telemetry_v1.marinskyrl\" WHERE timestamp_ms = ? AND name = 'phase_duration_seconds'",
-        [timestamp_ms],
+        "DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='phase_duration_seconds' "
+        "AND json_get(attributes_json, 'phase')='rollout_or_inference_wait'"
     )
     rows = []
-    grouped_values = (("attempt-a", (0.0, 100.0)), ("attempt-b", (10.0, 10.0, 10.0, 10.0, 10.0)))
-    for execution_uid, values in grouped_values:
-        for seq, value in enumerate(values):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="phase_duration_seconds",
-                    value=value,
-                    moment=moment,
-                    seq=seq,
-                    run_id=RUN_ID,
-                    execution_uid=execution_uid,
-                    attributes={
-                        "phase": "rollout_or_inference_wait",
-                        "clock_domain": "critical_path",
-                        "outcome": "success",
-                    },
-                )
+    for seq, (minutes, execution, value) in enumerate(
+        [
+            (0, "attempt-a", 0),
+            (5, "attempt-a", 100),
+            (10, "attempt-b", 10),
+            (15, "attempt-b", 10),
+            (20, "attempt-b", 10),
+            (25, "attempt-b", 10),
+            (29, "attempt-b", 10),
+            (35, "attempt-a", 20),
+            (40, "attempt-b", 40),
+        ]
+    ):
+        rows.append(
+            _row(
+                service="marinskyrl",
+                name="phase_duration_seconds",
+                value=value,
+                moment=WINDOW_START + timedelta(minutes=minutes),
+                seq=seq,
+                run_id=RUN_ID,
+                execution_uid=execution,
+                attributes={"phase": "rollout_or_inference_wait", "clock_domain": "critical_path", "outcome": "success"},
             )
+        )
     store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', rows)
-    expected_p50, expected_p99 = store.execute(
-        "SELECT quantile_cont(value, 0.5), quantile_cont(value, 0.99) "
-        'FROM "telemetry_v1.marinskyrl" '
-        "WHERE timestamp_ms = ? AND name = 'phase_duration_seconds'",
-        [timestamp_ms],
-    ).fetchone()
-
-    straggler = store.execute(_panel_sql("Straggler proxy: rollout wait p99 ÷ p50")).fetchall()
-    first_bucket = min(row[0] for row in straggler)
-    first_straggler = next(row[2] for row in straggler if row[0] == first_bucket)
-
-    assert first_straggler == pytest.approx(expected_p99 / expected_p50)
+    assert _overview_rows(store, "straggler") == [
+        {"section": "straggler", "t": _WINDOW_START_MS, "series": "p99 / p50", "value": pytest.approx(94.6 / 10)},
+        {
+            "section": "straggler",
+            "t": _WINDOW_START_MS + 1800000,
+            "series": "p99 / p50",
+            "value": pytest.approx(39.8 / 30),
+        },
+    ]
 
 
 def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
-    # The node agent stamps no run identity at all, so the run's own rows have to name
-    # its nodes. This is the join that breaks first if MarinSkyRL stops stamping
-    # node_name, and it breaks silently.
-    rows = store.execute(_panel_sql("GPU utilization on this run's nodes")).fetchall()
-
-    assert rows, "no accelerator series joined to the run"
-    assert {row[1] for row in rows} == {RUN_ID}
-    assert rows[0][2] == pytest.approx(71.0)
+    distractors = [
+        _row(
+            service="iris-node-agent",
+            name=name,
+            value=value,
+            moment=moment,
+            seq=0,
+            node_name=node,
+            attributes={"gpu_uuid": gpu},
+        )
+        for node, gpu, moment, name, value in [
+            (NODES[0], f"GPU-{NODES[0]}-0", WINDOW_START - timedelta(seconds=1), "gpu_pcie_replay_errors", 10000),
+            ("other-node", "other-gpu", WINDOW_START, "gpu_sm_active_ratio", 1000),
+            ("other-node", "other-gpu", WINDOW_START, "gpu_pcie_replay_errors", 1000),
+        ]
+    ]
+    store.executemany(f'INSERT INTO "telemetry_v1.node_agent" VALUES ({", ".join("?" for _ in _COLUMNS)})', distractors)
+    times = [_WINDOW_START_MS + bucket * 300000 for bucket in range(6)]
+    expected = {
+        "gpu_utilization": [{"t": t, "series": RUN_ID, "value": 71 + bucket} for bucket, t in enumerate(times)],
+        "sm_activity": [
+            {"t": t, "series": series, "value": pytest.approx(value)}
+            for t in times
+            for series, value in (("SM active", 60), ("tensor pipe active", 30))
+        ],
+        "gpu_memory": [{"t": t, "mean_used_bytes": 50e9, "peak_used_bytes": 60e9} for t in times],
+        "fabric_receive": [
+            {"t": t, "series": series, "value": value}
+            for t in times
+            for series, value in (("NVLink receive", 400), ("PCIe receive", 40))
+        ],
+        "pcie_faults": [
+            {"node": NODES[0], "gpu": f"GPU-{NODES[0]}-0", "peak_power_watts": 620, "pcie_replay_increase": 5}
+        ],
+    }
+    for view, wanted in expected.items():
+        actual = _overview_rows(store, view)
+        for row in wanted:
+            row["section"] = view
+        assert sorted(actual, key=lambda row: (row.get("t", 0), row.get("series", ""))) == sorted(
+            wanted, key=lambda row: (row.get("t", 0), row.get("series", ""))
+        )
+    store.execute('UPDATE "telemetry_v1.marinskyrl" SET node_name = NULL')
+    for view in expected:
+        assert _overview_rows(store, view) == []
 
 
 def test_the_engine_panels_select_by_metric_name_alone(store) -> None:

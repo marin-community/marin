@@ -15,6 +15,7 @@ from config import ClusterTarget
 from conftest import bridge_config, install_finelog_dialect_macros
 from dashboard_stitch import stitch_all
 from rl_attempt_observability import _METRIC_NAMES, RL_ATTEMPT_MAX_RESULT_ROWS, rl_attempt_dataset
+from rl_observability import _DCGM_SERIES, rl_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
 
@@ -596,6 +597,54 @@ def _long_run_store(database, *, ranks=256, steps=500):
     return window_ms
 
 
+def _long_run_nodes(database, nodes):
+    if nodes == 1:
+        database.execute(f"ALTER TABLE {TABLE} ADD COLUMN node_name VARCHAR")
+        database.execute(f"ALTER TABLE {TABLE} ADD COLUMN process_index VARCHAR")
+        database.execute(f"UPDATE {TABLE} SET node_name='long-node-0'")
+        database.execute(f'CREATE TABLE "telemetry_v1.vllm" AS SELECT * FROM {TABLE} LIMIT 0')
+        database.execute(f'CREATE TABLE "telemetry_v1.node_agent" AS SELECT * FROM {TABLE} LIMIT 0')
+        database.execute(
+            f"CREATE TEMP TABLE long_node_template AS SELECT * FROM {TABLE} "
+            f"WHERE name='policy_step' AND execution_uid='{DRIVER}'"
+        )
+        names = ",".join("(" + repr(name) + ")" for name in (*_DCGM_SERIES, "gpu_power_watts", "gpu_pcie_replay_errors"))
+        database.execute(
+            f"""INSERT INTO "telemetry_v1.node_agent"
+            SELECT cluster, 'iris-node-agent', NULL, NULL, NULL, timestamp_ms, seq,
+                   n.name, CAST(seq AS DOUBLE),
+                   CAST(json_object('gpu_uuid', 'GPU-0-' || CAST(g.gpu AS VARCHAR)) AS VARCHAR),
+                   '{{}}', '{{}}', 'long-node-0', NULL
+            FROM long_node_template, (VALUES {names}) n(name), (SELECT range AS gpu FROM range(8)) g"""
+        )
+        database.execute(
+            """INSERT INTO "telemetry_v1.vllm"
+            SELECT cluster, 'vllm', run_id, job_id, execution_uid, timestamp_ms, seq,
+                   'generation_tokens_total', CAST(seq AS DOUBLE), '{}', '{}', '{}', node_name, process_index
+            FROM long_node_template"""
+        )
+    else:
+        database.execute(
+            f"""INSERT INTO {TABLE}
+            SELECT cluster, service, run_id, job_id, execution_uid, timestamp_ms, seq,
+                   name, value, attributes_json, resource_attributes_json, body_json,
+                   'long-node-' || CAST(n.node AS VARCHAR), process_index
+            FROM long_node_template, (SELECT range AS node FROM range(1, {nodes})) n"""
+        )
+        database.execute(
+            f"""INSERT INTO "telemetry_v1.node_agent"
+            SELECT cluster, service, run_id, job_id, execution_uid, timestamp_ms, seq,
+                   name, value,
+                   CAST(json_merge_patch(attributes_json, json_object('gpu_uuid',
+                        'GPU-' || CAST(n.node AS VARCHAR) || '-' ||
+                        RIGHT(json_get(attributes_json, 'gpu_uuid'), 1))) AS VARCHAR),
+                   resource_attributes_json, body_json,
+                   'long-node-' || CAST(n.node AS VARCHAR), process_index
+            FROM "telemetry_v1.node_agent", (SELECT range AS node FROM range(1, {nodes})) n
+            WHERE node_name='long-node-0'"""
+        )
+
+
 def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
     app, _ = _bridge(store, max_rows=3)
 
@@ -626,6 +675,25 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
                 params = {**_target_params(target), "to": str(WINDOW_START_MS + window_ms)}
                 response = client.get(f"/finelog/marin{target['url']}", params=params)
                 assert response.status_code == 200, (panel["id"], response.text)
+
+    _long_run_nodes(store, 1)
+    overview = rl_overview_dataset((CLUSTER,), RUN_ID, WINDOW_START_MS, WINDOW_START_MS + window_ms, 60000)
+    narrow_counts = {source.name: store.execute(source.sql).fetch_arrow_table().num_rows for source in overview.sources}
+    _long_run_nodes(store, 8)
+    for source in overview.sources:
+        rows = store.execute(source.sql).fetch_arrow_table()
+        assert 0 < rows.num_rows <= source.max_rows, (source.name, rows.num_rows, source.max_rows)
+        assert rows.num_rows == narrow_counts[source.name] + (7 * 8 * 2 if source.name == "gpu" else 0)
+    app, _ = _bridge(store, max_rows=RL_ATTEMPT_MAX_RESULT_ROWS)
+    with TestClient(app) as client:
+        response = client.get("/finelog/marin/v1/rl/overview", params={**long_params, "bucket_ms": 60000})
+        assert response.status_code == 200, response.text
+        assert 0 < len(response.json()) <= overview.max_result_rows
+        for view in overview.views:
+            response = client.get(
+                "/finelog/marin/v1/rl/overview", params={**long_params, "bucket_ms": 60000, "view": view}
+            )
+            assert response.status_code == 200, (view, response.text)
 
 
 def test_the_seeded_row_matches_the_table_it_is_inserted_into():
