@@ -191,7 +191,8 @@ coordinator runs the embedding, quality, assignment, and centroid-sampling drive
 with bounded concurrency. These drivers do not create per-source Iris jobs.
 Centroid training remains a separate CPU job. Model training uses a separate 8×H100 job.
 The pipeline coordinator requests 8 CPUs and 32 GB RAM. The data pool contains
-one worker with 120 CPUs, 1 TiB RAM, and 1 TiB disk, without a GPU reservation.
+one worker with 120 CPUs, 1900 GiB RAM, and 25 TiB disk, without a GPU reservation.
+This profile reserves about 94% of the allocatable CPU, RAM, and disk on an RNO2A H100 node.
 Up to 64 pipeline steps can submit work to this pool at the same time. This lets
 more sources supply tasks at once when each source has few shards.
 The coordinator allows 68 concurrent pipelines, including capacity for the
