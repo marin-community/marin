@@ -29,8 +29,8 @@ error-signature list and treats the first pass as lead gathering, not a diagnosi
 A run is watched while either an `iris.task_state` row fresh within 90 seconds reports running tasks
 (the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract) or a `hero-`-prefixed
 `run_id` published `phase` telemetry in the last hour. The Levanter side takes the longest
-prefix of its `job_id` that is a hero coordinator root, so
-`/rav/hero-20260819-coord/grug-train-hero-20260819` is watched as `/rav/hero-20260819-coord`.
+prefix of its `job_id` that is a hero coordinator root under `/marin`, so
+`/marin/hero-20260819-coord/grug-train-hero-20260819` is watched as `/marin/hero-20260819-coord`.
 
 The stall and loss rules enroll from the Iris side alone, so a break in that path stops them watching
 a training run with no signal that it happened. That is what `iris_state_stale` reports.

@@ -9,7 +9,7 @@ from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from pydantic import BaseModel, ConfigDict, Field
-from tasktrove_verify.spec import PredictedActionSpec
+from verifyit.spec import PredictedActionSpec
 
 from taskcompendium.grading import resolve_verifier
 from taskcompendium.lowering import (

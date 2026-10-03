@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
-from tasktrove_verify.spec import StructuredExactSpec
+from verifyit.spec import StructuredExactSpec
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.grading import resolve_verifier, supports_verifier, validate_verifier

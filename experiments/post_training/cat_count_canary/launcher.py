@@ -103,9 +103,7 @@ class Preset:
 PRESETS = MappingProxyType(
     {
         "dry": Preset(1, None),
-        "calibrate": Preset(30, None),
         "gate": Preset(30, 0.65),
-        "on-policy": Preset(30, None),
     }
 )
 
@@ -254,7 +252,7 @@ def training_config(
             "gradient_checkpointing": False,
             "epochs": 1,
             "max_steps": max_steps,
-            "update_epochs_per_batch": 1 if preset == "on-policy" else 2,
+            "update_epochs_per_batch": 2,
             "micro_forward_batch_size_per_gpu": micro_train_batch_size,
             "eval_batch_size": len(cat_count_eval_ns(train_ns)),
             "eval_interval": 1 if preset == "dry" else 5,
@@ -289,7 +287,7 @@ def training_config(
             },
             "ref": {"megatron_config": geometry},
             "rollout_buffer": {
-                "max_staleness_steps": 0 if lane == "sync" or preset == "on-policy" else 2,
+                "max_staleness_steps": 0 if lane == "sync" else 2,
                 "batch_policy": "full_batch",
                 "max_in_flight": batch_size,
                 "object_store_root": None,

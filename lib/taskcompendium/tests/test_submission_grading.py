@@ -8,7 +8,7 @@ from typing import Literal
 
 import pytest
 from pydantic import JsonValue, PrivateAttr, TypeAdapter
-from tasktrove_verify.spec import Mode
+from verifyit.spec import Mode
 
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
 from taskcompendium.models import (

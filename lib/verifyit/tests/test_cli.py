@@ -1,0 +1,168 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+from verifyit import grade as grade_module
+from verifyit.grade import Status, main, scored
+from verifyit.spec import FunctionCall, Mode, PredictedActionSpec, StructuredExactSpec, render_spec
+
+
+def _verdict(logs: Path) -> dict:
+    return json.loads((logs / "verdict.json").read_text())
+
+
+def test_malformed_spec_writes_invalid_task_and_exits_zero(tmp_path):
+    spec = tmp_path / "tests" / "verifier.toml"
+    spec.parent.mkdir()
+    spec.write_text('mode = "mcq"\n')
+    logs = tmp_path / "logs"
+    assert main([str(spec), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
+
+
+def test_crashing_grader_writes_infra_error(tmp_path, monkeypatch):
+    def boom(spec, tests_dir, workspace):
+        raise RuntimeError("no toolchain")
+
+    monkeypatch.setitem(grade_module.GRADERS, Mode.MCQ, boom)
+    spec = tmp_path / "verifier.toml"
+    spec.write_text('mode = "mcq"\nexpected = "C"\n')
+    logs = tmp_path / "logs"
+    main([str(spec), "--logs-dir", str(logs)])
+    assert _verdict(logs) == {"reward": 0.0, "status": "infra_error", "detail": {"error": "RuntimeError: no toolchain"}}
+    assert not (logs / "reward.json").exists()
+
+
+def test_scored_reward_writes_the_verdict_and_harbor_reward_files(tmp_path, monkeypatch):
+    monkeypatch.setitem(grade_module.GRADERS, Mode.MCQ, lambda spec, tests_dir, workspace: scored(1.0, extracted="C"))
+    spec = tmp_path / "verifier.toml"
+    spec.write_text('mode = "mcq"\nexpected = "C"\n')
+    logs = tmp_path / "logs"
+    main([str(spec), "--logs-dir", str(logs)])
+    assert _verdict(logs) == {"reward": 1.0, "status": "scored", "detail": {"extracted": "C"}}
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
+    assert (logs / "reward.txt").read_text() == "1.0\n"
+
+
+def test_unscored_rerun_removes_prior_harbor_reward_files(tmp_path, monkeypatch):
+    spec = tmp_path / "verifier.toml"
+    spec.write_text('mode = "mcq"\nexpected = "C"\n')
+    logs = tmp_path / "logs"
+    monkeypatch.setitem(grade_module.GRADERS, Mode.MCQ, lambda _spec, _tests_dir, _workspace: scored(1.0))
+    main([str(spec), "--logs-dir", str(logs)])
+
+    spec.write_text('mode = "mcq"\n')
+    main([str(spec), "--logs-dir", str(logs)])
+
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
+
+
+def test_pytest_setup_failure_opt_in_clears_previous_reward(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "test_candidate.py").write_text("def test_ok():\n    assert True\n")
+    spec = tmp_path / "verifier.toml"
+    spec.write_text(
+        'mode = "pytest"\npaths = ["test_candidate.py"]\n'
+        f'python = "{sys.executable}"\n'
+        "setup_failure_is_infra = true\n"
+    )
+    logs = tmp_path / "logs"
+    assert main([str(spec), "--logs-dir", str(logs), "--workspace", str(workspace)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert (logs / "reward.txt").read_text() == "1.0\n"
+
+    spec.write_text(spec.read_text() + 'setup = "exit 3"\n')
+    assert main([str(spec), "--logs-dir", str(logs), "--workspace", str(workspace)]) == 0
+    assert _verdict(logs)["status"] == Status.INFRA_ERROR
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "candidate,reward",
+    [
+        ('[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"value"}]}}]', 1.0),
+        ('[{"name":"lookup","arguments":{"values":[null,true,1,1.0,{"text":"wrong"}]}}]', 0.0),
+        ("not json", 0.0),
+    ],
+)
+def test_predicted_action_file_grading_preserves_nested_json_from_toml(tmp_path, candidate, reward):
+    spec = PredictedActionSpec(
+        expected_calls=(FunctionCall("lookup", {"values": [None, True, 1, 1.0, {"text": "value"}]}),),
+        output=str(tmp_path / "answer.json"),
+    )
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(spec))
+    (tmp_path / "answer.json").write_text(candidate)
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
+
+
+def test_predicted_action_overflowing_private_tolerance_clears_stale_reward(tmp_path):
+    specification = PredictedActionSpec(
+        expected_calls=(FunctionCall("lookup", {"id": 1}),),
+        output=str(tmp_path / "answer.json"),
+    )
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(specification))
+    (tmp_path / "answer.json").write_text('[{"name":"lookup","arguments":{"id":1}}]')
+    logs = tmp_path / "logs"
+    arguments = [str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]
+    assert main(arguments) == 0
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
+    assert (logs / "reward.txt").read_text() == "1.0\n"
+
+    config.write_text(config.read_text() + f"numeric_tolerance = {10**400}\n")
+    assert main(arguments) == 0
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "expected,candidate,reward",
+    [
+        ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1,1.0]}', 1.0),
+        ({"values": [None, True, 1, 1.0]}, '{"values":[null,1,1,1.0]}', 0.0),
+        ({"values": [None, True, 1, 1.0]}, '{"values":[null,true,1.0,1]}', 0.0),
+        (None, "null", 1.0),
+        (None, "not json", 0.0),
+    ],
+)
+def test_structured_exact_file_grading_preserves_json_types_from_toml(tmp_path, expected, candidate, reward):
+    spec = StructuredExactSpec(expected=expected, output=str(tmp_path / "answer.json"))
+    config = tmp_path / "verifier.toml"
+    config.write_text(render_spec(spec))
+    (tmp_path / "answer.json").write_text(candidate)
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.SCORED
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": reward}
+
+
+@pytest.mark.parametrize("malformed_expected", ["true", "42", "[]"])
+def test_structured_exact_malformed_contract_clears_prior_reward(tmp_path, malformed_expected):
+    config = tmp_path / "verifier.toml"
+    spec = StructuredExactSpec(expected={"answer": 12}, output=str(tmp_path / "answer.json"))
+    config.write_text(render_spec(spec))
+    (tmp_path / "answer.json").write_text('{"answer":12}')
+    logs = tmp_path / "logs"
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert json.loads((logs / "reward.json").read_text()) == {"reward": 1.0}
+
+    config.write_text(f'mode = "structured_exact"\nexpected = {malformed_expected}\n')
+    assert main([str(config), "--logs-dir", str(logs), "--workspace", str(tmp_path)]) == 0
+    assert _verdict(logs)["status"] == Status.INVALID_TASK
+    assert not (logs / "reward.json").exists()
+    assert not (logs / "reward.txt").exists()

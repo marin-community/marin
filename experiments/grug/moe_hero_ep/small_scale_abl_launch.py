@@ -450,6 +450,7 @@ def build_small_run(
             mesh=grug_trainer_mesh_config(context_axis_size),
             mp=jmp.get_policy(SMALL_SCALE_MIXED_PRECISION),
             tracker=WandbConfig(
+                save_code=False,
                 entity="marin-community",
                 project=os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT,
                 tags=[

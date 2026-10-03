@@ -13,7 +13,7 @@ from threading import Thread
 
 import pytest
 from harbor.models.task.task import Task
-from tasktrove_verify.spec import Mode
+from verifyit.spec import Mode
 
 from taskcompendium.grading import exact_answer, grade_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
