@@ -9,6 +9,10 @@ results and per-sample artifacts. The app's own Postgres schema is the serving c
 full validated record snapshot before answering, and object storage stays the durable producer and
 recovery input. The EvalDash Marina runner scans object storage and commits catalog changes; serving
 instances do no background reconciliation work.
+The runner writes through the database engine without loading a serving snapshot. Catalog
+materialization reads and writes at most 128 run IDs per batch within the prefix transaction.
+Object checks finish before that transaction begins; parsed records from those checks remain in
+memory until commit.
 Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
 value as `None`. Current writers include the field.
 
