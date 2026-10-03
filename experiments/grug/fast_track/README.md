@@ -9,7 +9,7 @@ below from 9.4e16 to 4.3e19 FLOPs.
 |------|----------|
 | [`launch.py`](launch.py) | ladder rungs, budget resolution (`--match`), Iris/W&B wiring |
 | [`data_pipeline.py`](data_pipeline.py) | raw sources, DataKit artifact, and store mixture |
-| [`add_dataset.py`](add_dataset.py) | Bounded Hugging Face prefix and simulated exposure |
+| [`add_dataset.py`](add_dataset.py), [`add_dataset_cli.py`](add_dataset_cli.py) | Bounded Hugging Face prefix and simulated exposure |
 | [`quality_pipeline.py`](quality_pipeline.py) | Frozen embedding head, pool audit, and selected training cache |
 | [`quality_cli.py`](quality_cli.py) | Quality-track command |
 | [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
@@ -204,10 +204,10 @@ centroid sampler's four nested pipelines.
 CPU and RAM requests control concurrent task admission. Task disk requests must
 fit the worker, but Zephyr does not account for concurrent disk use.
 
-The data artifact records the terminal DataKit store identity. Changes to
-upstream source recipes, tokenizer identity, or cluster configuration change
-its fingerprint. A changed recipe at a fixed version produces a drift warning
-and retains the cached result. Set a new `fast-track --version` to build the changed recipe.
+The data artifact path includes the terminal DataKit store identity and tokenizer vocabulary size.
+Runs with the same recipe and version reuse that artifact, independent of their training run IDs.
+Changes to source recipes, tokenizer identity, or cluster configuration select a different artifact path.
+Set a new `fast-track --version` to rebuild the outer artifact while retaining unchanged upstream caches.
 
 The following command defines the DataKit sample from all registered sources:
 
@@ -250,7 +250,8 @@ uv run iris --cluster marin job run --no-wait \
   --extra cpu --extra datakit -e WANDB_API_KEY "$WANDB_API_KEY" -- \
   python -m experiments.grug.fast_track.negative_control \
   --source-store '<completed-baseline-data-artifact>' \
-  --run-id shuffled-d512-dense --size d512 --dense --seed 0 --version 2026.10.02 --run
+  --run-id shuffled-d512-dense --size d512 --dense \
+  --shuffle-seed 0 --seed 0 --data-seed 0 --version 2026.10.02 --run
 ```
 
 For the mixture-of-experts (MoE) comparison, omit `--dense` and select different job
@@ -259,6 +260,7 @@ seed, and version match. Each run uses its variant's default training budget and
 saves its final checkpoint. Compare final Paloma and uncheatable bits per byte
 (BPB) with a baseline of the same size, variant, training seed, and token budget.
 Higher BPB means worse prediction of the evaluation data.
+`--shuffle-seed` controls token permutation. `--seed` and `--data-seed` control model initialization and training data order.
 Use `--stop-after datakit` to build only the shuffled store.
 
 ## Add a dataset
@@ -285,7 +287,7 @@ A first-row prefix supports a result about that prefix. Sorted data can make the
 The baseline keeps its existing exposure policy. This track simulates production exposure only for the new dataset.
 
 ```bash
-uv run python -m experiments.grug.fast_track.add_dataset \
+uv run python -m experiments.grug.fast_track.add_dataset_cli \
   --run-id new-data-d512 --size d512 --dense \
   --repository org/dataset --revision <immutable-commit-hash> \
   --split train --text-field text --fraction 0.1 \
@@ -293,7 +295,18 @@ uv run python -m experiments.grug.fast_track.add_dataset \
   --max-rows 100000 --seed 0 --data-seed 0 --version 2026.10.03
 ```
 
-The command prints a plan without network reads. Add `--run` inside an Iris CPU coordinator to prepare the cache and submit training.
+Use `--prepare-only` to build one bounded prefix for reuse across runs. This mode requires `--prepare-token-cap` and does not require training fields or `--run-id`.
+Use the same repository, revision, subset, split, text field, tokenizer, token cap, and version in training commands to reuse the prepared artifact.
+
+```bash
+uv run python -m experiments.grug.fast_track.add_dataset_cli \
+  --prepare-only --repository org/dataset --revision <immutable-commit-hash> \
+  --split train --text-field text --max-rows 100000 \
+  --prepare-token-cap 1000000000 --version 2026.10.03
+```
+
+The command prints a plan without network reads. Add `--run` inside an Iris CPU coordinator to build the cache.
+For a training run, add `--run` inside the coordinator to prepare the cache and submit training.
 The coordinator requires the CPU and DataKit dependencies. The training stage requests eight H100 GPUs.
 Increase `--max-rows` only when the selected prefix cannot supply the calculated cap.
 Use the same `--prepare-token-cap` for several rungs to reuse one larger prepared prefix.
@@ -304,15 +317,16 @@ Use identical model settings, token budgets, and evaluation data for both runs.
 
 ## Improve a quality classifier
 
-The quality track fits a ridge head on frozen embeddings and GLM labels.
+The quality track fits a candidate head on frozen embeddings and GLM labels.
 It selects whole documents until their token count reaches the requested fraction of a separate frozen pool.
 The selected cache supplies all training tokens for the experiment.
-The default fraction is 10%. The default downstream model is dense d512.
+The CLI uses a ridge head and a 10% fraction by default. The downstream model is dense d512.
 
 The label split depends on the duplicate-group ID and a fixed split seed.
 SHA-256 of the seed and group ID assigns the entire group to one partition.
 Training, development, and audit groups receive approximately 80%, 10%, and 10% of groups.
-Candidate changes cannot change this split. Training and development metrics exclude audit labels.
+The pipeline owns this split. A candidate head receives training rows only.
+The pipeline measures development error and does not pass audit labels to the head.
 Keep the audit labels for a separate final assessment after candidate selection; this command does not score them.
 The pool must exclude all labelled duplicate groups, including duplicates from other sources.
 
@@ -349,14 +363,19 @@ uv run python -m experiments.grug.fast_track.quality_cli \
   --regularization 0.01 --seed 0 --data-seed 0 --version 2026.10.03
 ```
 
-Add `--prepare-only --run` for the CPU selection stage. Add `--run` without `--prepare-only` to include training.
+The CLI uses `RidgeHeadConfig`. For another candidate head, implement `QualityHeadConfig` and `QualityScorer` in a small Python module.
+Use a frozen dataclass for the head config. Its identity must include the implementation name, code revision, and all fit parameters.
+Pass the config to `QualitySpec` and `build_quality_data` from a Python entry point.
+The identity selects the artifact and appears in the report.
+Add `--prepare-only --run` for the CPU selection stage. This mode does not need `--run-id`.
+Add `--run-id` and `--run` without `--prepare-only` to include training.
 The stage verifies each pinned file in local scratch storage before it reads embedding batches.
 The largest input file must fit on local disk. Document metadata stays in coordinator memory.
 Production-scale memory use and runtime have not been measured.
 It writes a selected cache, `selected_ids.jsonl`, and `selection.json`.
 Selected documents are shuffled before the cache is written, because the training loader shuffles blocks.
 The report contains development errors by source, pool composition, duplicate concentration, cutoff ties, and token overlap with the incumbent selection.
-Selection identity includes the bundle, method, fraction, regularization, and tie seed. The same selection can serve several model rungs.
+Selection identity includes the bundle, method, candidate-head identity, fraction, and tie seed. The same selection can serve several model rungs.
 
 Use `--selection-method incumbent` for the fixed incumbent scores and `--selection-method random` for a random-selection control.
 Use the same pool, token fraction, training budget, model seed, and data seed for matched comparisons.
