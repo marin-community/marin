@@ -431,8 +431,9 @@ def build_h100_ladder_run(
     ``num_steps`` overrides the step count directly, else it is derived to data- or compute-match the
     variant's baseline at that batch. ``recipe`` picks the architecture; ``attn_res_remat_attention``
     forces the KMA attention-branch remat on rungs that do not default to it. Evaluation runs at the
-    midpoint and end. Permanent checkpoints
-    default to the final step, with one rolling hourly checkpoint on region-local temporary storage.
+    end only. Permanent checkpoints
+    default to the final step, with one rolling checkpoint every ``RESUME_SAVE_INTERVAL`` on region-local
+    temporary storage.
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
     ``routing_dump_steps`` writes expert-routing count dumps to ``<output>/routing/`` (see
@@ -500,9 +501,9 @@ def build_h100_ladder_run(
     elif num_steps <= 0:
         raise ValueError(f"--num-steps must be positive, got {num_steps}")
 
-    # Eval at the midpoint and end; no_eval disables it entirely below (the forced final callback would
-    # otherwise still run a full eval, so pushing the interval past the end is not enough).
     # Only the end-of-run eval: the periodic one lands on the last step, where the forced final pass skips it.
+    # no_eval disables it entirely below (the forced final callback would otherwise still run a full eval, so
+    # pushing the interval past the end is not enough).
     steps_per_eval = num_steps
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_steps,
