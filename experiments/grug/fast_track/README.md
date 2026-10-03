@@ -46,6 +46,32 @@ moe: [d512](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d512) 
 [d1024](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d1024) ·
 [d1280](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d1280)
 
+## DataKit sample results
+
+These runs use the completed 25B-target sample across all 292 registered sources,
+with token-proportional training weights and training seed 0.
+DataKit produced 29,858,746,027 usable tokens, above the largest ladder budget.
+The input target estimates token counts. Filtering and the training tokenizer
+set the measured usable-token count.
+
+All eight runs completed on October 3, 2026, with verified final evaluations and
+permanent checkpoints at their full training budgets.
+BPB means bits per byte. Lower scores are better.
+Each macro score is the unweighted mean across evaluation dataset tags with observed tokens.
+
+| Model | Training tokens | Paloma macro BPB | Uncheatable macro BPB |
+|---|---:|---:|---:|
+| [d512 dense](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-dense) | 361,758,720 | 1.5345 | 1.2554 |
+| [d512 MoE](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-moe) | 1,250,426,880 | 1.3241 | 1.0166 |
+| [d768 dense](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d768-dense) | 1,069,547,520 | 1.3750 | 1.0715 |
+| [d768 MoE](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d768-moe) | 3,633,315,840 | 1.2067 | 0.8925 |
+| [d1024 dense](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d1024-dense) | 2,894,069,760 | 1.2635 | 0.9517 |
+| [d1024 MoE](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d1024-moe) | 9,720,299,520 | 1.1077 | 0.7950 |
+| [d1280 dense](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d1280-dense) | 5,230,297,088 | 1.1980 | 0.8868 |
+| [d1280 MoE](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d1280-moe) | 17,478,713,344 | 1.0573 | 0.7448 |
+
+The tokenizer comparison and scaling fit below use the existing-cache results.
+
 ## Tokenizer impact (16k vs 128k)
 
 Same MoE geometry and token budget, swapping the 16k BPE tokenizer for the 128k Marin (llama3-family)
@@ -240,8 +266,10 @@ The comparison uses token-proportional mixture weights and default fast-track
 training settings. Select a baseline with the same weighting, model settings,
 and training budget. Evaluation data stays the same.
 
-After the baseline finishes training and evaluation, submit the comparison with
-its `FastTrackDataStore` artifact directory as `--source-store`:
+After the baseline data store finishes, submit the comparison with its
+`FastTrackDataStore` artifact directory as `--source-store`.
+The [end-to-end data commands](#end-to-end-data-runs) produce this artifact.
+Baseline and control training can run at the same time:
 
 ```bash
 uv run iris --cluster marin job run --no-wait \
@@ -262,6 +290,38 @@ saves its final checkpoint. Compare final Paloma and uncheatable bits per byte
 Higher BPB means worse prediction of the evaluation data.
 `--shuffle-seed` controls token permutation. `--seed` and `--data-seed` control model initialization and training data order.
 Use `--stop-after datakit` to build only the shuffled store.
+
+### Completed d512 controls on the 25B sample
+
+The October 3, 2026 controls use the completed sample across all 292 sources.
+The 25B target estimates input tokens from registry corpus sizes.
+Filtering and the training tokenizer determine the measured usable-token count.
+DataKit produced 29,858,746,027 usable tokens across 39 training buckets.
+The shuffled store preserves the document and token counts of all 40 output buckets.
+One output bucket contains only 974 tokens and has no training weight.
+
+The d512 models have a width of 512.
+The dense comparison uses 361,758,720 training tokens and 690 updates.
+The MoE comparison uses 1,250,426,880 training tokens and 2,385 updates.
+Each control matches its baseline's model, optimizer, training seed, mixture weights,
+token budget, and evaluation data. Training and token shuffling use seed 0.
+
+| Model | Paloma baseline BPB | Paloma shuffled BPB | Uncheatable baseline BPB | Uncheatable shuffled BPB |
+|---|---:|---:|---:|---:|
+| Dense | 1.5345 | 2.8840 | 1.2554 | 2.7451 |
+| MoE | 1.3241 | 2.8311 | 1.0166 | 2.6906 |
+
+The four runs succeeded with final evaluation records and permanent checkpoints.
+Token shuffling increased BPB on the two evaluation suites.
+These comparisons use one seed and do not estimate variation across seeds.
+
+For these controls, `--source-store` is
+`s3://marin-us-east-02a/marin/datakit/fast-track/ft-testbed-25b-20261002-rno-d512-dense/2026.10.02`.
+
+W&B records: [dense baseline](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-dense),
+[dense control](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-dense-negative),
+[MoE baseline](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-moe),
+and [MoE control](https://wandb.ai/marin-community/marin_moe/runs/ft-testbed-25b-20261002-rno-d512-moe-negative).
 
 ## Add a dataset
 
