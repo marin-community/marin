@@ -43,8 +43,8 @@ trainer:
   eval_interval: 2
   ckpt_interval: 2
   max_ckpts_to_keep: 5
-  resume_mode: none
-  resume_path: null
+  resume_mode: from_path
+  resume_path: s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-rlvr1-reference-kl/2026.10.03.2/preserved-best/global_step_4
   logger: wandb
   project_name: snowball-ultra-rlvr
   policy:
@@ -71,6 +71,7 @@ trainer:
     model:
       path: s3://marin-us-east-02a/marin/users/benfeuer/checkpoints/antidoom-rlvr1-async/2026.10.02.6/exports-best-step12/global_step_12/policy
   ref:
+    nccl_buffer_size_bytes: 262144
     megatron_config:
       tensor_model_parallel_size: 1
       pipeline_model_parallel_size: 2
@@ -89,7 +90,7 @@ trainer:
     ref_num_nodes: 10
     ref_num_gpus_per_node: 8
     policy_strict_spread_pg: true
-  run_name: antidoom-step12-rlvr1-reference-kl-prod-v1-20261003
+  run_name: antidoom-step12-rlvr1-reference-kl-resume-step4-v2-20261003
   hf_hub_repo_id: null
   debug_mode: light
   restore_dataloader_state: true
@@ -101,7 +102,7 @@ trainer:
     # 128 groups × 16 responses exceed the engines' 768 sequence slots.
     max_in_flight: 128
     # Expiring checkpoint prefix: checkpoints store URIs instead of copying route payloads.
-    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/antidoom-step12-rlvr1-reference-kl-2026.10.03.2
+    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/antidoom-step12-rlvr1-reference-kl-2026.10.03.8
 generator:
   # Frozen EAGLE-3 recipe from Echo wiki 541; no online draft training.
   speculative_decoding:
