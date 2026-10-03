@@ -15,7 +15,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
@@ -341,8 +340,6 @@ class GrugTrainerConfig:
     flip_detector_every: int = 10
     flip_detector_k: int = 4
     flip_detector_beta: float = 0.98
-    # Start every process with an empty XLA per-fusion autotune cache (see ``_use_fresh_autotune_cache``).
-    fresh_autotune_cache: bool = False
     flip_detector_dir: str | None = None
     weight_attribution_exclude: str = r"token_embed2"
     fact_probe_every: int = 1
@@ -1103,7 +1100,6 @@ _captured_params = jax.jit(capture_matrices)
 # (lc1-fact20h-ue) hung every process in the program's collectives: the latency-hiding scheduler orders async
 # collectives by per-process cost estimates, so the processes can issue them in different orders. Program order
 # is identical everywhere.
-_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
 _FACT_PROBE_COMPILER_OPTIONS = {"xla_gpu_shard_autotuning": False, "xla_gpu_enable_latency_hiding_scheduler": False}
 
 
@@ -2069,20 +2065,6 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
     return dump
 
 
-def _use_fresh_autotune_cache() -> None:
-    """Point this process's XLA per-fusion autotune cache at a new empty directory, before JAX initializes.
-
-    Each process of a multigpu task keeps its own node-local cache, and the caches can disagree. Sharded
-    autotuning then deadlocks in its key-value exchange: a fusion that misses on only some processes is tuned
-    by those alone while the rest wait for its result. An empty cache misses on every process alike. The
-    iris runtime keeps an explicit cache-dir flag, so it does not install its shared one.
-    """
-    path = tempfile.mkdtemp(prefix="xla-autotune-")
-    flags = [f for f in os.environ.get("XLA_FLAGS", "").split() if f.partition("=")[0] != _AUTOTUNE_CACHE_DIR_FLAG]
-    os.environ["XLA_FLAGS"] = " ".join([*flags, f"{_AUTOTUNE_CACHE_DIR_FLAG}={path}"])
-    logger.info("fresh XLA autotune cache: %s", path)
-
-
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     marker = config.trainer.completion_marker_path
@@ -2092,8 +2074,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.tensorstore_cache_bytes is not None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
 
-    if config.trainer.fresh_autotune_cache:
-        _use_fresh_autotune_cache()
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
