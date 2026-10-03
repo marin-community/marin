@@ -2482,7 +2482,7 @@
             "type": "yesoreyeram-infinity-datasource",
             "uid": "finelog-marin"
           },
-          "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table above. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no tokens were observed.\n\nA sync run shows staleness 0 only.",
+          "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no tokens were observed.\n\nA sync run shows staleness 0 only.",
           "fieldConfig": {
             "defaults": {
               "decimals": 1,
