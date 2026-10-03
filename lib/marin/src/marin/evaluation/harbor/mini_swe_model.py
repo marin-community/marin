@@ -1,17 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mini-SWE model extension uploaded beside mini_swe_request.py in the sandbox."""
+"""Mini-SWE model extension uploaded beside mini_swe_request.py in the sandbox.
+
+The installed harness supplies LiteLLM and Mini-SWE; the base lint environment omits them.
+"""
 
 from dataclasses import asdict
 from typing import Any
 
 import httpx
-from litellm import ModelResponse
+from litellm import ModelResponse  # pyrefly: ignore[missing-import]
 from mini_swe_request import ContextBudgetExhausted, ContextLimits, context_max_tokens  # pyrefly: ignore[missing-import]
-from minisweagent.exceptions import LimitsExceeded
-from minisweagent.models.litellm_model import LitellmModel
-from minisweagent.models.utils.actions_toolcall import BASH_TOOL
+from minisweagent.exceptions import LimitsExceeded  # pyrefly: ignore[missing-import]
+from minisweagent.models.litellm_model import LitellmModel  # pyrefly: ignore[missing-import]
+from minisweagent.models.utils.actions_toolcall import BASH_TOOL  # pyrefly: ignore[missing-import]
 
 TOKENIZER_TIMEOUT = 60.0
 
