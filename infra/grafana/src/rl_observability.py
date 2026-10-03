@@ -91,14 +91,12 @@ WITH selected AS (
            {bucket} AS bucket_t,
            name,
            execution_uid,
-           json_get(attributes_json, 'work_kind') AS work_kind,
            json_get(attributes_json, 'phase') AS phase,
            json_get(attributes_json, 'outcome') AS outcome,
            json_get(attributes_json, 'clock_domain') AS clock_domain,
            json_get(attributes_json, 'metric_source') AS metric_source,
            json_get(attributes_json, 'source_temporality') AS source_temporality,
            json_get(attributes_json, 'state') AS state,
-           CAST(json_get(attributes_json, 'weights_step') AS DOUBLE) AS weights_step,
            value
     FROM "telemetry_v1.marinskyrl"
     WHERE run_id = {run_sql}
@@ -107,28 +105,25 @@ WITH selected AS (
       AND name IN ({sql_values(_CORE_NAMES)})
 ), aggregates AS (
     SELECT 'aggregate' AS statistic,
-       bucket_t AS t, name, execution_uid, work_kind, phase, outcome, clock_domain,
+       bucket_t AS t, name, execution_uid, phase, outcome, clock_domain,
        metric_source, source_temporality, state,
-       MAX(weights_step) AS weights_step,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,
        MAX(value) AS max_value,
        CAST(NULL AS DOUBLE) AS p50,
        CAST(NULL AS DOUBLE) AS p99
     FROM selected
-    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
+    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10
 ), phase_percentiles AS (
     SELECT 'percentile' AS statistic,
        {straggler_bucket} AS t, name,
        CAST(NULL AS VARCHAR) AS execution_uid,
-       CAST(NULL AS VARCHAR) AS work_kind,
        phase,
        CAST(NULL AS VARCHAR) AS outcome,
        clock_domain,
        CAST(NULL AS VARCHAR) AS metric_source,
        CAST(NULL AS VARCHAR) AS source_temporality,
        CAST(NULL AS VARCHAR) AS state,
-       CAST(NULL AS DOUBLE) AS weights_step,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,
        MAX(value) AS max_value,
@@ -359,7 +354,7 @@ GROUP BY 1, 2 ORDER BY 1
 
 
 def recent_rl_runs_dataset(start_ms: int, end_ms: int) -> DashboardDataset:
-    """List recent RL runs with their training type and policy-step observation windows."""
+    """List recent RL runs with their training type and classification observation windows."""
     validate_time_window(
         start_ms,
         end_ms,
@@ -371,8 +366,8 @@ SELECT run_id AS run,
        COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
        MAX(value) FILTER (WHERE name = 'policy_step') AS step,
        COUNT(DISTINCT execution_uid) FILTER (WHERE name = 'policy_step') AS attempts,
-       MIN(timestamp_ms) FILTER (WHERE name = 'policy_step') - {RL_RECENT_WINDOW_PADDING_MS} AS window_from_ms,
-       MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') + {RL_RECENT_WINDOW_PADDING_MS} AS window_to_ms,
+       MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS} AS window_from_ms,
+       MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS} AS window_to_ms,
        MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') AS last_seen,
        MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
 FROM "telemetry_v1.marinskyrl"

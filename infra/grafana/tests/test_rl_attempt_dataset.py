@@ -12,7 +12,7 @@ import duckdb
 import pyarrow as pa
 import pytest
 from config import ClusterTarget
-from conftest import bridge_config, install_finelog_dialect_macros
+from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros
 from dashboard_stitch import stitch_all
 from rl_attempt_observability import _METRIC_NAMES, RL_ATTEMPT_MAX_RESULT_ROWS, rl_attempt_dataset
 from rl_observability import _DCGM_SERIES, rl_overview_dataset
@@ -24,15 +24,9 @@ DASHBOARD = stitch_all(GRAFANA_DIR / "dashboards", GRAFANA_DIR / "dashboards/pan
 ENDPOINT = "/v1/rl/attempt"
 
 
-def _panels(panels):
-    for panel in panels:
-        yield panel
-        yield from _panels(panel.get("panels", []))
-
-
 PANELS = {
     panel["title"]: panel
-    for panel in _panels(DASHBOARD["panels"])
+    for panel in dashboard_panels(DASHBOARD["panels"])
     if any(target["url"] == ENDPOINT for target in panel.get("targets", []))
 }
 
@@ -526,6 +520,9 @@ REQUEST = {
 
 
 def test_all_attempts_match_picker_values_and_keep_job_scope(telemetry_table):
+    all_value = next(
+        variable["allValue"] for variable in DASHBOARD["templating"]["list"] if variable["name"] == "execution"
+    )
     rows = [telemetry_row("policy_step", i + 1, execution=f"attempt-{i}") for i in range(3)]
     rows += [
         telemetry_row("policy_step", 1000, execution=None),
@@ -539,7 +536,7 @@ def test_all_attempts_match_picker_values_and_keep_job_scope(telemetry_table):
         for i in range(3)
     ]
     with TestClient(app) as client:
-        for executions in ("__all", "attempt-0,attempt-1,attempt-2"):
+        for executions in (all_value, "attempt-0,attempt-1,attempt-2"):
             response = client.get(f"/finelog/marin{ENDPOINT}", params={**selected, "executions": executions})
             assert response.status_code == 200, response.text
             assert sorted(response.json(), key=lambda row: row["series"]) == expected
@@ -547,7 +544,7 @@ def test_all_attempts_match_picker_values_and_keep_job_scope(telemetry_table):
         # A new app has a cold cache after the external source changes.
     app, _ = _bridge(telemetry_table)
     with TestClient(app) as client:
-        response = client.get(f"/finelog/marin{ENDPOINT}", params={**selected, "executions": "__all"})
+        response = client.get(f"/finelog/marin{ENDPOINT}", params={**selected, "executions": all_value})
         assert response.status_code == 200, response.text
         expected += [
             {"section": "policy_step", "t": BASE_EPOCH_MS, "series": f"policy_step · attempt-{i}", "value": i + 1}
