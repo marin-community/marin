@@ -1,23 +1,11 @@
-n_concurrent_trials: 4
+# Diagnostic only: deliberately too small for the first SOTOPIA prompt.
+# Paired with the canonical config at --limit 1 to test boundary enforcement.
+n_concurrent_trials: 1
 release_trial_payloads_in_memory: true
 retry:
-  max_retries: 3
+  max_retries: 0
   exclude_exceptions: []
   include_exceptions:
-  - InternalServerError
-  - APIConnectionError
-  - APITimeoutError
-  - AgentSetupTimeoutError
-  - DaytonaSandboxStopError
-  - DaytonaProcessError
-  - LLMRequestTimeoutError
-  - TrialTimeoutError
-  - ArtifactWriteTimeoutError
-  - ContainerRegistryThrottledError
-  - Tau3RuntimeInfrastructureError
-  - Tau3TargetInfrastructureError
-  - VerifierTimeoutError
-  - VerifierRuntimeError
   - ContextManagementInfrastructureError
   wait_multiplier: 2.0
   min_wait_sec: 1.0
@@ -31,8 +19,7 @@ agents:
   override_timeout_sec: 1800
   kwargs:
     model_info:
-      # The native SOTOPIA agent enforces this total prompt-plus-completion budget.
-      max_input_tokens: 32768
+      max_input_tokens: 64
     partner_model: openai/openai/gpt-oss-120b
     partner_api_base: https://api.together.xyz/v1
     evaluator_model: openai/openai/gpt-oss-120b
