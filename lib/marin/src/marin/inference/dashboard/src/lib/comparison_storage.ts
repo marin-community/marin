@@ -13,10 +13,12 @@ export function loadComparison(): Comparison | null {
     if (!raw) return null
     const parsed = JSON.parse(raw)
     if (!parsed.left || !parsed.right || !Array.isArray(parsed.left.messages) || !Array.isArray(parsed.right.messages)) {
+      console.warn('ignoring invalid saved comparison')
       return null
     }
     return { ...parsed, votes: parsed.votes ?? {} } as Comparison
-  } catch {
+  } catch (error) {
+    console.warn('failed to load comparison', error)
     return null
   }
 }

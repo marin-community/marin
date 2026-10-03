@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { fetchHealth, fetchInfo } from '../lib/api'
 import { comparisonBaseUrl, comparisonTurns } from '../lib/comparison'
-import type { PreferenceWinner } from '../lib/comparison'
+import type { PreferenceChoice } from '../lib/comparison'
 import { loadComparison, newComparison, saveComparison } from '../lib/comparison_storage'
 import type { SamplingParams, ServingInfo } from '../lib/types'
 import type { ThinkingMode } from '../lib/chat_template'
@@ -88,12 +88,12 @@ function stop() {
   rightView.value?.stopStreaming()
 }
 
-function selectWinner(winner: PreferenceWinner) {
+function selectPreference(choice: PreferenceChoice) {
   const turnIndex = selectedTurn.value
   if (turnIndex === null || sending.value) return
   const nextVotes = { ...votes.value }
-  if (nextVotes[turnIndex] === winner) delete nextVotes[turnIndex]
-  else nextVotes[turnIndex] = winner
+  if (nextVotes[turnIndex] === choice) delete nextVotes[turnIndex]
+  else nextVotes[turnIndex] = choice
   votes.value = nextVotes
   persist()
 }
@@ -158,7 +158,7 @@ function onKeydown(event: KeyboardEvent) {
           :has-chat-template="info?.has_chat_template ?? true"
           :chat-template-protocol="info?.chat_template_protocol ?? null"
           :streaming="info?.streaming ?? true"
-          shared-composer
+          composer-mode="external"
           @persist="persist"
         />
       </section>
@@ -176,7 +176,7 @@ function onKeydown(event: KeyboardEvent) {
           :chat-template-protocol="rightInfo.chat_template_protocol"
           :streaming="rightInfo.streaming"
           :base-url="rightBase"
-          shared-composer
+          composer-mode="external"
           @persist="persist"
         />
         <div v-else class="flex flex-1 items-center justify-center px-6 text-center text-sm text-text-muted">
@@ -200,7 +200,7 @@ function onKeydown(event: KeyboardEvent) {
         :class="selectedTurn !== null && votes[selectedTurn] === choice.value ? 'border-accent bg-accent-subtle text-accent' : 'border-surface-border hover:border-accent hover:text-text'"
         :aria-pressed="selectedTurn !== null && votes[selectedTurn] === choice.value"
         :disabled="sending"
-        @click="selectWinner(choice.value)"
+        @click="selectPreference(choice.value)"
       >
         {{ choice.label }}
       </button>

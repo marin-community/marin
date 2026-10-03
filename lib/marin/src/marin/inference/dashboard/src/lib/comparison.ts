@@ -3,10 +3,10 @@ import type { Conversation } from './types'
 export interface Comparison {
   left: Conversation
   right: Conversation
-  votes: Record<number, PreferenceWinner>
+  votes: Record<number, PreferenceChoice>
 }
 
-export type PreferenceWinner = 'left' | 'right' | 'tie' | 'both_bad'
+export type PreferenceChoice = 'left' | 'right' | 'tie' | 'both_bad'
 
 export interface ComparisonTurn {
   index: number

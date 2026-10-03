@@ -49,7 +49,7 @@ const props = defineProps<{
   chatTemplateProtocol: ChatTemplateProtocol | null
   streaming: boolean
   baseUrl?: string
-  sharedComposer?: boolean
+  composerMode?: 'embedded' | 'external'
 }>()
 
 const emit = defineEmits<{ persist: [] }>()
@@ -347,7 +347,7 @@ async function complete(
           <div class="mb-5 text-center text-sm text-text-muted">
             Send a message to start. Conversations stay in this browser.
           </div>
-          <div v-if="!sharedComposer" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div v-if="composerMode !== 'external'" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               v-for="example in CHAT_EXAMPLES"
               :key="example.label"
@@ -383,7 +383,7 @@ async function complete(
       </div>
     </div>
 
-    <div v-if="!sharedComposer" class="border-t border-surface-border px-4 py-3">
+    <div v-if="composerMode !== 'external'" class="border-t border-surface-border px-4 py-3">
       <div class="mx-auto max-w-3xl">
         <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
           <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
