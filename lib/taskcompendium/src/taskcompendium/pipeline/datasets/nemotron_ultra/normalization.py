@@ -14,14 +14,12 @@ from taskcompendium.models import (
     ConversationEvent,
     ConversationInput,
     ConversationToolCall,
-    EnvironmentFixture,
     EnvironmentRequirements,
-    FinalTools,
     FunctionDefinition,
+    ProviderRequirement,
     TaskSpec,
     TextMessage,
     ToolResult,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.nemotron.placeholders import restore_placeholder
@@ -31,6 +29,7 @@ from taskcompendium.pipeline.models import (
     NormalizedTask,
     RawRow,
 )
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 DATASET = "nvidia/Nemotron-RL-Ultra-Training-Blends"
@@ -166,27 +165,18 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
         runtime_requirements=requirements,
     )
     state = {key: data[key] for key in ("environment", "scenario", "info", "metadata", "exp_cal_state") if key in data}
-    fixture = (
-        EnvironmentFixture(
-            interface=requirements[0],
-            revision=VERIFIER_REVISION,
-            initial_state_json=json.dumps(state, ensure_ascii=False),
-        )
+    providers = (
+        {"nemotron_agent": ProviderRequirement(action_interface=requirements[0], initial_state=state)}
         if tools or (state and family in {"tool-use", "agentic-safety", "swe-repo"})
-        else None
+        else {}
     )
     task = TaskSpec(
         id=row.id,
         source=row.source,
         context=context,
-        environment_requirements=EnvironmentRequirements(action_interfaces=requirements),
-        final_tools=FinalTools(
-            functions=tools,
-            tool_choice=request.get("tool_choice") if isinstance(request.get("tool_choice"), str) else None,
-            parallel_tool_calls=request.get("parallel_tool_calls"),
-        ),
+        environment_requirements=EnvironmentRequirements(capabilities=requirements, tool_providers=providers),
+        final_tools=tools,
         interaction_tools=tools,
-        fixture=fixture,
         answer_type=(
             AnswerType.NATIVE_ACTION
             if data.get("expected_action", {}).get("type") == "function_call" and tools

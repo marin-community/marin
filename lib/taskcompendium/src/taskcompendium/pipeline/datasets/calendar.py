@@ -14,12 +14,11 @@ from typing import Any
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
-    EnvironmentFixture,
     EnvironmentRequirements,
     FunctionDefinition,
+    ProviderRequirement,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
@@ -32,6 +31,7 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
 )
 from taskcompendium.runtime.calendar import INTERFACE
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.runtime import CalendarState, CalendarStateVerifier
 
 TOOLS = (
@@ -87,9 +87,12 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     return TaskSpec(
         id=row.id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
-        environment_requirements=EnvironmentRequirements(action_interfaces=(INTERFACE,)),
+        environment_requirements=EnvironmentRequirements(
+            tool_providers={
+                "calendar": ProviderRequirement(action_interface=INTERFACE, initial_state=state.model_dump(mode="json"))
+            }
+        ),
         interaction_tools=TOOLS,
-        fixture=EnvironmentFixture(interface=INTERFACE, revision="1", initial_state_json=state.model_dump_json()),
         answer_type=AnswerType.STATE,
         verifier=VerifierSpec(kind=VerifierKind.CALENDAR_STATE, parameters_json=verifier.model_dump_json()),
         source=row.source,

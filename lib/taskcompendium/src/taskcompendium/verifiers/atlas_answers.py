@@ -8,8 +8,9 @@ from typing import Literal
 from verifyit.modes.grade_judge import grade_abstention_candidate
 from verifyit.spec import MathSpec, MathType
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, grade_result
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.submission import extract_answer
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
 from taskcompendium.verifiers.reasoning import grade_answer
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
 

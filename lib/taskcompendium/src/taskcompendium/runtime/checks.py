@@ -10,8 +10,8 @@ does not use them.
 import asyncio
 from dataclasses import replace
 
-from taskcompendium.grading import GradingAttempt, Outcome
-from taskcompendium.models import ResourceVisibility, TaskSpec
+from taskcompendium.grading import Outcome
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, CheckSuite, VerificationReport
 from taskcompendium.pipeline.verification import PLAIN
 from taskcompendium.runtime.calendar import calendar_controls
@@ -19,12 +19,13 @@ from taskcompendium.runtime.controls import Control, tool_turn
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.models import EnvironmentFactory, Termination
 from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH, ShellFactory
-from taskcompendium.verifier_registry import resolve_verifier
+from taskcompendium.verifiers.base import GradingAttempt
+from taskcompendium.verifiers.dispatch import resolve_custom_verifier
 from taskcompendium.verifiers.runtime import CalendarStateVerifier, CaptureOutputVerifier
 
 
 async def check_episodes(task: TaskSpec, factory: EnvironmentFactory, *, max_steps: int) -> VerificationReport:
-    verifier = resolve_verifier(task.verifier)
+    verifier = resolve_custom_verifier(task.verifier)
     if isinstance(verifier, CalendarStateVerifier):
         controls = calendar_controls(verifier)
     elif isinstance(verifier, CaptureOutputVerifier) and isinstance(factory, ShellFactory):
@@ -46,7 +47,7 @@ async def check_episodes(task: TaskSpec, factory: EnvironmentFactory, *, max_ste
         # The scripted oracle alone gets the private witness files.
         bound_factory = factory
         if isinstance(factory, ShellFactory) and control.name in {"reference", "reset"}:
-            bound_factory = replace(factory, visibility=(ResourceVisibility.AGENT, ResourceVisibility.CONTROL))
+            bound_factory = replace(factory, mounted_roles=("worker", "oracle"))
         rollout = await run_episode(
             task, ScriptedActor(control.responses), bound_factory, max_steps=max_steps, control=control.name
         )

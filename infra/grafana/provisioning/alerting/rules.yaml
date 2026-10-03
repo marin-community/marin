@@ -559,7 +559,7 @@ groups:
                 - evaluator: { type: gt, params: [0] }
 
   # Hero-run stalled-training detection. A fresh running task-state row whose
-  # root is named hero-*-coord or hero-*-coord-<retry> enrolls the job.
+  # root is named /marin/hero-*-coord or /marin/hero-*-coord-<retry> enrolls the job.
   # Structured run_id telemetry supplies current-execution progress;
   # task-to-node GPU attribution is not required.
   - orgId: 1

@@ -14,7 +14,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
@@ -32,6 +31,7 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.constraints import JsonSchemaVerifier, required_object_conflicts
 
 CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"

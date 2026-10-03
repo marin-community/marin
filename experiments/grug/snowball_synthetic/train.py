@@ -5,8 +5,9 @@
 
 A single-process, one-node harness (for example one Slurm job) that measures Snowball's real training
 step: mixed precision, Adam, the model's per-layer remat, and the trainer's own throughput and MFU
-logging. It uses the portable code paths only: reference attention, and XLA ragged_dot when
-``RAGGED_DOT_IMPL=xla`` is set, which AMD GPUs need because the default kernels are CUDA-only.
+logging. By default it uses the portable code paths: reference attention, and XLA ragged_dot when
+``RAGGED_DOT_IMPL=xla`` is set, which AMD GPUs need because the default kernels are CUDA-only. ``--attention``
+selects any Grug attention implementation.
 
 Every step sees fresh uniform-random tokens and no example repeats, so no model can get below a loss of
 ln(vocab_size) (11.76 at full vocab). A loss that drops below that floor means something is leaking the
@@ -28,6 +29,7 @@ import logging
 import statistics
 import time
 from pathlib import Path
+from typing import get_args
 
 import jax
 import jax.random as jrandom
@@ -43,6 +45,7 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import NamedLmDataset
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.grug.attention import GrugAttentionImplementation
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -124,6 +127,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expert-axis", type=int, default=1, help="Mesh expert-parallel axis size.")
     parser.add_argument("--context-axis", type=int, default=1, help="Mesh context-parallel axis size.")
     parser.add_argument("--moe-impl", help="MoE backend override, e.g. scatter (default: ring).")
+    parser.add_argument(
+        "--attention",
+        choices=get_args(GrugAttentionImplementation),
+        default="reference",
+        help="Attention implementation; reference and xla_flash run on any backend.",
+    )
     parser.add_argument("--profile-steps", type=int, default=0, help="Profile this many steps (0 disables).")
     parser.add_argument("--profile-start", type=int, default=10, help="First profiled step.")
     parser.add_argument("--log-dir", type=Path, default=Path("logs/snowball-synthetic"))
@@ -206,7 +215,9 @@ def log_throughput_summary(
 def main() -> None:
     args = parse_args()
     preset = PRESETS[args.size]
-    model_cfg = dataclasses.replace(preset.model, attention_implementation="reference", moe_implementation=args.moe_impl)
+    model_cfg = dataclasses.replace(
+        preset.model, attention_implementation=args.attention, moe_implementation=args.moe_impl
+    )
     if args.layers is not None:
         model_cfg = dataclasses.replace(model_cfg, num_layers=args.layers)
     seq_len = preset.seq_len if args.seq_len is None else args.seq_len

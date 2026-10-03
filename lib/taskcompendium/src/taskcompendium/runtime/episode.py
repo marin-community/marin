@@ -11,11 +11,9 @@ from taskcompendium.models import (
     AssistantMessage,
     ConversationEvent,
     FunctionCall,
-    ResourceVisibility,
     TaskSpec,
     TextMessage,
     ToolResult,
-    task_resource,
 )
 from taskcompendium.runtime.models import (
     Actor,
@@ -26,6 +24,7 @@ from taskcompendium.runtime.models import (
     RuntimeEvidence,
     Termination,
 )
+from taskcompendium.runtime.resources import inline_resource
 
 
 @dataclass
@@ -91,9 +90,7 @@ async def run_episode(
         control=control,
         events=tuple(events),
         termination=termination,
-        artifacts=tuple(
-            task_resource(path, data, ResourceVisibility.AGENT) for path, data in sorted(evidence.files.items())
-        ),
+        artifacts=tuple(inline_resource(path.removeprefix("/"), data) for path, data in sorted(evidence.files.items())),
         state_json=evidence.state_json,
         detail=detail,
     )

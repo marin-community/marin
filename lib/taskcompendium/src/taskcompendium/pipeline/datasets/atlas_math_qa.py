@@ -14,12 +14,10 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceVisibility,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
-    task_resource,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
@@ -36,7 +34,9 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.verifiers.atlas_answers import AbstentionAnswersVerifier, MathAnswerVerifier
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
 
@@ -146,13 +146,17 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
     except (KeyError, ValueError, TypeError, ValidationError) as error:
         return ImportRejection(reason="unsupported_answer_contract", detail=str(error))
     files = row.data.get("files", {})
-    resources = tuple(
-        task_resource(
-            "/source/" + path,
-            base64.b64decode(encoded, validate=True),
-            ResourceVisibility.VERIFIER if path.startswith("tests/") else ResourceVisibility.CONTROL,
-        )
-        for path, encoded in files.items()
+    resources = ResourceGroups(
+        verifier=tuple(
+            inline_resource("source/" + path, base64.b64decode(encoded, validate=True))
+            for path, encoded in files.items()
+            if path.startswith("tests/")
+        ),
+        oracle=tuple(
+            inline_resource("source/" + path, base64.b64decode(encoded, validate=True))
+            for path, encoded in files.items()
+            if not path.startswith("tests/")
+        ),
     )
     return TaskSpec(
         id=row.id,

@@ -10,15 +10,13 @@ from typing import Any
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
-    EnvironmentFixture,
     EnvironmentRequirements,
     FunctionDefinition,
-    ResourceVisibility,
+    ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
-    task_resource,
 )
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -29,7 +27,9 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.runtime import CaptureOutputVerifier
 
 BASH = FunctionDefinition(
@@ -72,11 +72,12 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         for path, encoded in mapping.items()
     ):
         return ImportRejection(reason="malformed_files", detail="File paths and base64 content must be strings")
-    resources = [task_resource(CONTROL_PATH, data["reference_script"].encode(), ResourceVisibility.CONTROL)]
+    worker = []
+    oracle = [inline_resource(CONTROL_PATH.lstrip("/"), data["reference_script"].encode())]
     try:
-        for visibility, mapping in ((ResourceVisibility.AGENT, files), (ResourceVisibility.CONTROL, controls)):
-            resources.extend(
-                task_resource(path, base64.b64decode(encoded, validate=True), visibility)
+        for destination, mapping in ((worker, files), (oracle, controls)):
+            destination.extend(
+                inline_resource(path.lstrip("/"), base64.b64decode(encoded, validate=True))
                 for path, encoded in mapping.items()
             )
         verifier = CaptureOutputVerifier(output_path=OUTPUT_PATH, expected_output=data["expected_output"])
@@ -84,11 +85,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
             id=row.id,
             context=ConversationInput(events=(TextMessage(role="user", content=data["instruction"]),)),
             environment_requirements=EnvironmentRequirements(
-                capabilities=("shell", "filesystem"), action_interfaces=("shell:v1",)
+                capabilities=("shell", "filesystem"),
+                tool_providers={"shell": ProviderRequirement(action_interface="shell:v1", initial_state={})},
             ),
             interaction_tools=(BASH,),
-            fixture=EnvironmentFixture(interface="shell:v1", revision="1", initial_state_json="{}"),
-            resources=tuple(resources),
+            resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle)),
             output_paths=(OUTPUT_PATH,),
             answer_type=AnswerType.FILE,
             verifier=VerifierSpec(kind=VerifierKind.CAPTURE_OUTPUT, parameters_json=verifier.model_dump_json()),

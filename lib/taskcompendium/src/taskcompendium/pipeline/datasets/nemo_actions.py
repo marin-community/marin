@@ -5,7 +5,9 @@
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
+from verifyit.spec import PredictedActionSpec
 
+from taskcompendium.grading import resolve_verifier
 from taskcompendium.importers.nemo_predicted_action import DATASET, REVISION, canonical_sha256, import_row
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
@@ -22,7 +24,6 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:
@@ -36,9 +37,9 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
 
 def verification_report(task: TaskSpec) -> VerificationReport:
     """Check reference arguments against public schemas before comparator controls."""
-    assert task.final_tools is not None
-    functions = {function.name: function for function in task.final_tools.functions}
-    verifier = PredictedActionVerifier.model_validate_json(task.verifier.parameters_json)
+    functions = {function.name: function for function in task.final_tools}
+    verifier = resolve_verifier(task.verifier)
+    assert isinstance(verifier, PredictedActionSpec)
     checks = []
     for call in verifier.expected_calls:
         schema = functions[call.name].parameters

@@ -8,11 +8,13 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal
 
 from shellbox.machine import Command, Machine, MachineFactory, MachineSpec
 
-from taskcompendium.models import FunctionCall, ResourceVisibility, TaskSpec
+from taskcompendium.models import FunctionCall, TaskSpec
 from taskcompendium.runtime.models import RuntimeEvidence
+from taskcompendium.runtime.resources import resource_bytes
 
 INTERFACE = "shell:v1"
 OUTPUT_PATH = "/output/command_capture.txt"
@@ -85,7 +87,7 @@ class ShellFactory:
     backend_identity: dict
     command_timeout: float
     output_limit_bytes: int
-    visibility: tuple[ResourceVisibility, ...] = (ResourceVisibility.AGENT,)
+    mounted_roles: tuple[Literal["worker", "oracle"], ...] = ("worker",)
 
     @property
     def identity(self) -> dict:
@@ -97,12 +99,23 @@ class ShellFactory:
             "env_sha256": hashlib.sha256(json.dumps(self.machine_spec.env, sort_keys=True).encode()).hexdigest(),
             "command_timeout": self.command_timeout,
             "output_limit_bytes": self.output_limit_bytes,
-            "visibility": [value.value for value in self.visibility],
+            "mounted_roles": self.mounted_roles,
         }
 
     async def create(self, task: TaskSpec) -> ShellEnvironment:
-        if task.fixture is None or task.fixture.interface != INTERFACE or task.fixture.revision != "1":
+        provider = task.environment_requirements.tool_providers.get("shell")
+        if provider is None or provider.action_interface != INTERFACE or provider.initial_state != {}:
             raise ValueError("Unsupported shell fixture")
+        requirements = task.environment_requirements
+        if (
+            set(requirements.capabilities) - {"shell", "filesystem"}
+            or requirements.docker_image is not None
+            or requirements.working_directory is not None
+            or requirements.setup_commands
+            or requirements.environment_variables
+            or set(requirements.tool_providers) != {"shell"}
+        ):
+            raise ValueError("Shell factory cannot satisfy these environment requirements")
         machine = await self.machine_factory.create(self.machine_spec)
         try:
             initialized = await machine.run(
@@ -111,12 +124,19 @@ class ShellFactory:
             if initialized.exit_code != 0:
                 raise RuntimeError("Could not initialize shell workspace")
             with TemporaryDirectory() as directory:
-                for index, resource in enumerate(task.resources):
-                    if resource.visibility not in self.visibility:
-                        continue
+                roles = {
+                    "worker": task.resources.worker,
+                    "oracle": task.resources.oracle,
+                }
+                resources = list(task.resources.all)
+                for role in self.mounted_roles:
+                    resources.extend(roles[role])
+                for index, resource in enumerate(resources):
+                    if resource.mode is not None or resource.mtime_ns is not None:
+                        raise ValueError("Shell factory cannot mount resource metadata")
                     local = Path(directory) / str(index)
-                    local.write_bytes(resource.data())
-                    await machine.upload(local, resource.path)
+                    local.write_bytes(resource_bytes(resource))
+                    await machine.upload(local, f"/{resource.path}")
         except BaseException:
             await machine.close()
             raise

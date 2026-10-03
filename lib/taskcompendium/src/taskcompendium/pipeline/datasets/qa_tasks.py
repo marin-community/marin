@@ -11,7 +11,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
@@ -29,6 +28,7 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import answer_checks
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
 
 KNOWLEDGE_CONFIG = "laion__nemotron-gym-knowledge-openqa-v4"

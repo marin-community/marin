@@ -1,20 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade submissions with typed private verifiers."""
+"""Extract TaskCompendium submission evidence for shared pure candidate graders."""
 
-from abc import ABC, abstractmethod
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
-from verifyit.grade import InvalidTask, Reward, Status, numeric_tolerance
-from verifyit.modes.grade_exact import grade_exact_candidate
-from verifyit.modes.grade_math import grade_numeric_candidate
-from verifyit.spec import ExactSpec, NumericSpec
+from verifyit.candidate import (
+    CandidateSpec,
+    candidate_spec,
+    grade_text_candidate,
+    supports_candidate_mode,
+)
+from verifyit.grade import InvalidTask
+from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
+from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec, Spec, mode_of, spec_to_table
+from verifyit.spec import FunctionCall as CandidateCall
 
-from taskcompendium.models import ConversationEvent, VerifierKind, VerifierSpec
-from taskcompendium.submission import SubmissionConvention, extract_answer
+from taskcompendium.models import (
+    AssistantToolCalls,
+    ConversationTrace,
+    EnvironmentRequirements,
+    TaskSpec,
+    TextMessage,
+    VerifierSpec,
+)
+from taskcompendium.submission import AnswerFormat, FinalAction, Submission, extract_answer
 
 
 class Outcome(StrEnum):
@@ -30,96 +42,74 @@ class GradeResult:
     error: str | None = None
 
 
-def grade_result(result: Reward) -> GradeResult:
-    """Translate a standalone scorer result into the task grading contract."""
-    if result.status != Status.SCORED:
-        return GradeResult(Outcome.INFRA_ERROR, None, result.detail.get("error"))
-    return GradeResult(Outcome.GRADED, result.reward, result.detail.get("error"))
+def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
+    """Read a shared verifier spec without any TaskCompendium registration step."""
+    if specification.environment_requirements != EnvironmentRequirements():
+        raise NotImplementedError("Pure verifiers cannot satisfy private environment requirements")
+    try:
+        return candidate_spec(specification.kind, json.loads(specification.parameters_json))
+    except (ValueError, InvalidTask) as error:
+        raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error
 
 
-@dataclass(frozen=True)
-class GradingAttempt:
-    """Submission evidence available to a verifier."""
-
-    convention: SubmissionConvention
-    conversation: tuple[ConversationEvent, ...]
-    environment: object
+def validate_verifier(specification: VerifierSpec) -> None:
+    resolve_verifier(specification)
 
 
-class Verifier(BaseModel, ABC):
-    """Validated private configuration that grades one submission."""
+def supports_verifier(specification: VerifierSpec) -> bool:
+    if specification.environment_requirements != EnvironmentRequirements() or not supports_candidate_mode(
+        specification.kind
+    ):
+        return False
+    validate_verifier(specification)
+    return True
 
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    @abstractmethod
-    def grade(self, attempt: GradingAttempt) -> GradeResult:
-        """Grade a submission using this verifier's configuration."""
-
-
-class ExactAnswerVerifier(Verifier):
-    """Compare a text answer using pinned normalization rules."""
-
-    expected: str
-    ignore_case: bool = True
-    collapse_whitespace: bool = True
-
-    @field_validator("expected")
-    @classmethod
-    def nonempty_expected(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("An exact answer is required")
-        return value
-
-    def grade(self, attempt: GradingAttempt) -> GradeResult:
+def grade_answer(specification: TaskSpec, convention: Submission, conversation: ConversationTrace) -> GradeResult:
+    """Score terminal evidence and return its grading status and reward."""
+    verifier = resolve_verifier(specification.verifier)
+    final = conversation.events[-1]
+    if isinstance(convention, FinalAction):
         try:
-            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
+            convention.validate_final_message(final)
+        except ValueError as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        contract = ExactSpec(
-            expected=(self.expected,), ignore_case=self.ignore_case, ignore_whitespace=self.collapse_whitespace
+    if isinstance(verifier, PredictedActionSpec):
+        if convention.answer_format != AnswerFormat.FINAL_ACTION:
+            return GradeResult(Outcome.INFRA_ERROR, None, "Incompatible final-action convention")
+        if not isinstance(final, (TextMessage, AssistantToolCalls)):
+            return GradeResult(Outcome.INFRA_ERROR, None, "Missing final assistant message")
+        calls = (
+            tuple(CandidateCall(call.name, call.arguments) for call in final.calls)
+            if isinstance(final, AssistantToolCalls)
+            else ()
         )
-        return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, candidate).reward)
+        return GradeResult(Outcome.GRADED, grade_predicted_action_candidate(verifier, calls).reward)
+    try:
+        candidate = extract_answer(final, convention)
+    except (ValueError, TypeError) as error:
+        return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+    if isinstance(verifier, McqSpec):
+        letter = candidate.strip()
+        if len(letter) != 1 or not "A" <= letter.upper() <= "Z":
+            return GradeResult(Outcome.EXTRACTION_ERROR, None, "MCQA response requires one option letter")
+    return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, candidate).reward)
 
 
-class NumericAnswerVerifier(Verifier):
-    """Compare a submitted number with explicit absolute and relative tolerances."""
-
-    expected: float
-    tolerance_abs: float
-    tolerance_rel: float
-
-    @model_validator(mode="after")
-    def validate_contract(self) -> "NumericAnswerVerifier":
-        contract = NumericSpec(
-            expected=self.expected, tolerance_abs=self.tolerance_abs, tolerance_rel=self.tolerance_rel
-        )
-        try:
-            numeric_tolerance(contract)
-        except InvalidTask as error:
-            raise ValueError(f"Invalid numeric verifier contract: {error}") from error
-        return self
-
-    def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        try:
-            value = float(candidate.strip())
-        except ValueError:
-            return GradeResult(Outcome.GRADED, 0.0)
-        contract = NumericSpec(
-            expected=self.expected, tolerance_abs=self.tolerance_abs, tolerance_rel=self.tolerance_rel
-        )
-        return GradeResult(Outcome.GRADED, grade_numeric_candidate(contract, value).reward)
+def verifier_descriptor(spec: Spec) -> VerifierSpec:
+    """Store a conversion-selected shared verifier contract in the private task slot."""
+    parameters = spec_to_table(spec)
+    parameters.pop("mode")
+    descriptor = VerifierSpec(kind=mode_of(spec), parameters_json=json.dumps(parameters))
+    validate_verifier(descriptor)
+    return descriptor
 
 
 def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
-    """Construct a pinned exact-answer verifier descriptor."""
-    verifier = ExactAnswerVerifier(expected=expected, ignore_case=ignore_case, collapse_whitespace=collapse_whitespace)
-    return VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json=verifier.model_dump_json())
+    return verifier_descriptor(
+        ExactSpec(expected=(expected,), ignore_case=ignore_case, ignore_whitespace=collapse_whitespace)
+    )
 
 
 def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
-    verifier = NumericAnswerVerifier(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel)
-    return VerifierSpec(kind=VerifierKind.NUMERIC_ANSWER, parameters_json=verifier.model_dump_json())
+    return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))

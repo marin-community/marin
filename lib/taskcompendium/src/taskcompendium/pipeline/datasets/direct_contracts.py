@@ -11,10 +11,10 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.models import RawRow
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 

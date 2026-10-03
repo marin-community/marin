@@ -11,10 +11,12 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from taskcompendium.models import ResourceVisibility, TaskSpec, VerifierKind
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import cached_batch_output
 from taskcompendium.pipeline.review_transport import BatchClient, batch_output, typed_batch_records
+from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.verifiers.base import VerifierKind
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -95,15 +97,16 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
     contract = parameters["contract"]
     messages = [event for event in payload["context"]["events"] if event["type"] == "message"]
     public = {(message["role"], message["content"]): index for index, message in enumerate(messages)}
-    fixture = payload["fixture"]
-    if fixture is not None:
-        state = json.loads(fixture["initial_state_json"])
+    providers = payload["environment_requirements"]["tool_providers"]
+    for provider in providers.values():
+        state = provider["initial_state"]
+        if not isinstance(state, dict):
+            continue
         for field, value in state.items():
             if field in contract and contract[field] == value:
                 state[field] = private_evidence_summary(
                     value, f"Shared evidence is represented in verifier.contract.{field}; full value retained in audit"
                 )
-        fixture["initial_state_json"] = json.dumps(state, ensure_ascii=False)
     context = contract.get("context")
     if isinstance(context, str) and duplicate_public_context(context, messages):
         contract["context"] = private_evidence_summary(context, "Complete transcript occurs in public context.events")
@@ -185,11 +188,21 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
     payload = task.model_dump(mode="json")
     remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
     previews = []
-    priority = {ResourceVisibility.AGENT: 0, ResourceVisibility.CONTROL: 1, ResourceVisibility.VERIFIER: 2}
-    resources = sorted(task.resources, key=lambda resource: priority[resource.visibility])
-    for resource in resources[:MAX_RESOURCE_PREVIEWS]:
-        data = resource.data()
-        preview = resource.model_dump(mode="json", exclude={"data_base64"})
+    resources = [
+        (role, resource)
+        for role, group in (
+            ("all", task.resources.all),
+            ("worker", task.resources.worker),
+            ("oracle", task.resources.oracle),
+            ("verifier", task.resources.verifier),
+        )
+        for resource in group
+    ]
+    for role, resource in resources[:MAX_RESOURCE_PREVIEWS]:
+        data = resource_bytes(resource)
+        preview = resource.model_dump(mode="json", exclude={"source"})
+        preview["role"] = role
+        preview["sha256"] = hashlib.sha256(data).hexdigest()
         preview["byte_count"] = len(data)
         try:
             text = data.decode("utf-8")
@@ -201,7 +214,14 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
             remaining -= length
         previews.append(preview)
     payload["resources"] = previews
-    manifest = [resource.model_dump(mode="json", exclude={"data_base64"}) for resource in resources]
+    manifest = [
+        {
+            "role": role,
+            **resource.model_dump(mode="json", exclude={"source"}),
+            "sha256": hashlib.sha256(resource_bytes(resource)).hexdigest(),
+        }
+        for role, resource in resources
+    ]
     payload["resource_manifest"] = {
         "total_count": len(resources),
         "preview_count": len(previews),
@@ -235,7 +255,7 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
         project_source_contract(parameters, payload)
     payload["verifier"]["parameters_json"] = json.dumps(parameters)
     payload["resource_preview_policy"] = (
-        "Resources are private reviewer evidence, with visibility identifying what the actor sees. "
+        "Resources are private reviewer evidence, with roles identifying what the actor sees. "
         "Text previews are bounded and carry truncation markers; original bytes remain in the audit. "
         f"At most {MAX_RESOURCE_PREVIEWS} files are previewed, prioritizing public inputs and control scripts "
         "over private test cases. "

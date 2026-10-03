@@ -10,6 +10,20 @@ The artifact graph lives in
 Reusable readers, normalizers, checks and review logic live under
 `lib/taskcompendium/src/taskcompendium/pipeline/`.
 
+## Task contracts
+
+Tasks use the shared TaskSpec schema. Standard exact, numeric, multiple-choice and
+final-action contracts use VerifyIT candidate specs. Source-specific adapters live
+in `taskcompendium/verifiers/`; unknown or unbound evaluators remain explicit in
+the audit. Resources use `all`, `worker`, `oracle` and `verifier` groups with
+relative paths. Executable prototypes bind named tool providers and retain their
+interaction-tool declarations and capture paths. Direct-chat export rejects those
+execution requirements.
+
+Artifact identity includes the TaskSpec schema version, so schema changes cannot
+reuse incompatible normalized Parquet. Exact-query review caching remains scoped
+to the query and model revision.
+
 ## Run a source
 
 Plan a ten-record run without downloading data or contacting GLM:

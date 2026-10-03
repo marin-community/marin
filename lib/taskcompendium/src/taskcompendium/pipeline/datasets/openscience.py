@@ -7,15 +7,16 @@ import json
 import re
 
 from verifyit.modes.extract import extract_boxed
+from verifyit.spec import McqSpec
 
+from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceVisibility,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    task_resource,
 )
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
@@ -29,7 +30,8 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
-from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier, multiple_choice_answer
+from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 DATASET = "nvidia/OpenScience"
 REVISION = "7bd0437e4756f761768fe7e5cebeaa75480a4fd6"
@@ -75,19 +77,16 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=prompt + "\n\nReturn one option letter."),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        resources=(
-            task_resource(
-                "/reference/generated-response.json",
-                json.dumps({"output": reference}).encode(),
-                ResourceVisibility.VERIFIER,
-            ),
+        resources=ResourceGroups(
+            verifier=(inline_resource("reference/generated-response.json", json.dumps({"output": reference}).encode()),)
         ),
         verifier=multiple_choice_answer(expected, options=len(choices)),
     )
 
 
 def controls(task: TaskSpec) -> VerificationReport:
-    verifier = MultipleChoiceVerifier.model_validate_json(task.verifier.parameters_json)
+    verifier = resolve_verifier(task.verifier)
+    assert isinstance(verifier, McqSpec)
     wrong = next(chr(65 + index) for index in range(verifier.options) if chr(65 + index) != verifier.expected)
     return VerificationReport(checks=verify_witness(task, verifier.expected, wrong))
 

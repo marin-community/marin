@@ -8,8 +8,9 @@ from verifyit.modes.grade_calendar import CalendarEvent as CalendarRecord
 from verifyit.modes.grade_calendar import score_calendar
 from verifyit.modes.grade_nl2bash import score_capture
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, grade_result
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.runtime.models import RuntimeEvidence
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
 
 
 class CaptureOutputVerifier(Verifier):

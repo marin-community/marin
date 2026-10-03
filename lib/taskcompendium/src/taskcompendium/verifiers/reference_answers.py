@@ -6,8 +6,9 @@
 from pydantic import JsonValue, model_validator
 from verifyit.modes.grade_judge import grade_reference_candidate, normalize
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, grade_result
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.submission import extract_answer
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
 
 
 class ReferenceAnswersVerifier(Verifier):

@@ -13,8 +13,9 @@ from verifyit.modes.grade_csv import grade as grade_csv
 from verifyit.modes.grade_xml import grade as grade_xml
 from verifyit.spec import CsvColumnsSpec, XmlElementsSpec
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.submission import extract_answer
+from taskcompendium.verifiers.base import GradingAttempt, Verifier
 
 
 class NamedFieldsVerifier(Verifier):

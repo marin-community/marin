@@ -15,7 +15,6 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationToolCall,
     EnvironmentRequirements,
-    FinalTools,
     FunctionCall,
     FunctionDefinition,
     Source,
@@ -23,7 +22,7 @@ from taskcompendium.models import (
     TextMessage,
     ToolResult,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import FinalAction, Submission
 from taskcompendium.verifiers.predicted_action import predicted_action_verifier
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
@@ -148,7 +147,7 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
     return tuple(events)
 
 
-def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, SubmissionConvention]:
+def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Submission]:
     """Verify row identity and retain the expected action only in private TaskSpec data."""
     if canonical_sha256(row) != expected_sha256:
         raise ValueError("source row does not match its pinned canonical hash")
@@ -183,17 +182,14 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
         id=f"nemo-predicted-action-{expected_sha256}",
         context=ConversationInput(events=events),
         environment_requirements=EnvironmentRequirements(),
-        final_tools=FinalTools(
-            functions=functions,
-            tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
-        ),
+        final_tools=functions,
         answer_type=AnswerType.NATIVE_ACTION,
         verifier=predicted_action_verifier(expected_calls),
         source=source,
     )
-    convention = SubmissionConvention(
+    convention = FinalAction(
         id="native-final-action",
-        answer_format=AnswerFormat.FINAL_ACTION,
+        require_call=tool_choice == "required",
+        max_calls=1 if parallel_tool_calls is False else None,
     )
     return specification, convention

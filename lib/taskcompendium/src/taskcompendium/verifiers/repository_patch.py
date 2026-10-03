@@ -5,7 +5,8 @@
 
 from pydantic import JsonValue
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.verifiers.base import GradingAttempt, Verifier
 
 
 class RepositoryPatchVerifier(Verifier):

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from taskcompendium.grading import GradingAttempt, Outcome
+from taskcompendium.grading import Outcome
 from taskcompendium.models import Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import nemo_actions, qa_tasks
 from taskcompendium.pipeline.filtering import task_decision
@@ -26,6 +26,7 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
 )
 from taskcompendium.pipeline.verification import PLAIN
+from taskcompendium.verifiers.base import GradingAttempt
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
 
 

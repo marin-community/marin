@@ -8,12 +8,15 @@ import json
 
 import pytest
 
-from taskcompendium.grading import GradingAttempt, Outcome
-from taskcompendium.models import ResourceVisibility, Source, TaskSpec, TextMessage
+from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_math_qa
 from taskcompendium.pipeline.models import ImportRejection, RawRow
 from taskcompendium.pipeline.verification import PLAIN
-from taskcompendium.verifier_registry import resolve_verifier
+from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.verifiers.base import GradingAttempt
+from taskcompendium.verifiers.dispatch import resolve_custom_verifier
 
 
 def row(name, instruction, data):
@@ -31,7 +34,13 @@ def row(name, instruction, data):
 
 
 def grade(task, answer):
-    return resolve_verifier(task.verifier).grade(
+    if task.verifier.kind in {"numeric", "mcq"}:
+        return grade_answer(
+            task,
+            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
+        )
+    return resolve_custom_verifier(task.verifier).grade(
         GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
     )
 
@@ -56,8 +65,10 @@ def test_typed_math_grades_equivalent_expressions_without_losing_answer_type(mat
     assert isinstance(task, TaskSpec)
     assert (grade(task, equivalent).status, grade(task, equivalent).reward) == (Outcome.GRADED, 1.0)
     assert grade(task, wrong).reward == 0.0
-    assert task.resources[0].visibility == ResourceVisibility.VERIFIER
-    assert json.loads(task.resources[0].data()) == {"answer_type": math_type, "expected_answer": reference}
+    assert json.loads(resource_bytes(task.resources.verifier[0])) == {
+        "answer_type": math_type,
+        "expected_answer": reference,
+    }
 
 
 def test_numeric_scope_and_tolerance_survive_delivery_normalization():
@@ -92,7 +103,7 @@ def test_mcqa_keeps_choices_public_and_key_private_after_replacing_submission_wr
     assert grade(task, "B").reward == 1.0
     assert grade(task, "A").reward == 0.0
     assert grade(task, "Answer: B").status == Outcome.EXTRACTION_ERROR
-    assert all(resource.visibility != ResourceVisibility.AGENT for resource in task.resources)
+    assert not task.resources.worker and not task.resources.all
 
 
 def test_abstention_is_zero_while_paraphrases_remain_ungraded():

@@ -2347,10 +2347,10 @@ class K8sTaskProvider:
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
     # Terminal-resource GC runs on its own thread. _gc_lock guards the deferred-cleanup
-    # hash set, the one piece of state it shares with the control loop.
+    # pod-name set, the one piece of state it shares with the control loop.
     _gc_emitter: PeriodicEmitter | None = field(default=None, init=False, repr=False)
     _gc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
-    _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
+    _pending_gc_pods: set[str] = field(default_factory=set, init=False, repr=False)
     _output_finalization_started: dict[RunningTaskEntry, float] = field(default_factory=dict, init=False, repr=False)
     _released_output_attempts: set[RunningTaskEntry] = field(default_factory=set, init=False, repr=False)
 
@@ -2438,9 +2438,7 @@ class K8sTaskProvider:
         cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node
         refresh) run at most once per ``cluster_scan_interval``, and continue to
         run on an idle cluster (the controller never gates a cluster backend's
-        reconcile on having work) so orphaned pods are reaped. Terminal-resource
-        GC only takes the active-pod snapshot here; its pass runs on its own
-        thread.
+        reconcile on having work) so orphaned pods are reaped.
         """
         apply_failures: list[TaskUpdate] = []
         for run_req in request.tasks_to_run:
@@ -2710,25 +2708,26 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
-        self.kubectl.apply_json(manifest)
         task_id = run_req.task_id
+        if _is_coordinator_task(run_req):
+            # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
+            pdb = _build_pdb_manifest(
+                pod_name,
+                self.pods.namespace,
+                _task_hash(task_id),
+                run_req.priority,
+                managed_label=self.pods.managed_label,
+            )
+            self.kubectl.apply_json(pdb)
+            logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
+
+        self.kubectl.apply_json(manifest)
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
             task_id,
             run_req.attempt_id,
         )
-
-        if _is_coordinator_task(run_req):
-            pdb = _build_pdb_manifest(
-                pod_name,
-                self.pods.namespace,
-                _task_hash(run_req.task_id),
-                run_req.priority,
-                managed_label=self.pods.managed_label,
-            )
-            self.kubectl.apply_json(pdb)
-            logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
         """Delete pods that aren't in the desired ``(task_hash, attempt_id)`` set.
@@ -2744,7 +2743,6 @@ class K8sTaskProvider:
         path.
         """
         stray_pod_names: list[str] = []
-        stray_hashes: set[str] = set()
         stray_pod_groups: set[str] = set()
         stray_gang_pod_names: list[str] = []
         for pod in cached_pods:
@@ -2762,7 +2760,6 @@ class K8sTaskProvider:
             pod_name = pod.get("metadata", {}).get("name")
             if pod_name:
                 stray_pod_names.append(pod_name)
-                stray_hashes.add(task_hash)
                 pod_group = labels.get(_KUEUE_POD_GROUP_NAME)
                 if pod_group:
                     stray_pod_groups.add(pod_group)
@@ -2771,17 +2768,16 @@ class K8sTaskProvider:
         if not stray_pod_names:
             return
 
+        # Retain exact attempt names even if deletion or reservation release fails.
+        with self._gc_lock:
+            self._pending_gc_pods.update(stray_pod_names)
         self.kubectl.delete_many(K8sResource.PODS, stray_pod_names, wait=False)
         # The GC pass re-drives any gang pods that survive this teardown.
         self._release_gang_reservations(stray_gang_pod_names, stray_pod_groups)
-        # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
-        with self._gc_lock:
-            self._pending_gc_hashes.update(stray_hashes)
 
         logger.info(
-            "Deleted %d stray pods for %d task hashes (%d Kueue workloads released, CM/PDB cleanup deferred to GC)",
+            "Deleted %d stray pods (%d Kueue workloads released, CM/PDB cleanup deferred to GC)",
             len(stray_pod_names),
-            len(stray_hashes),
             len(stray_pod_groups),
         )
 
@@ -2858,12 +2854,6 @@ class K8sTaskProvider:
         cutoff = now - _GC_MAX_AGE_SECONDS
         gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
 
-        # Task hashes that still have active (Pending/Running) pods must NOT have their
-        # configmaps/PDBs deleted, even if an older attempt of the same task is
-        # terminal — task_hash is shared across attempts.
-        active_hashes = {
-            h for pod in active_pods if (h := pod.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH))
-        }
         # Pod-groups with live (Pending/Running) members share one Kueue
         # Workload across the gang; releasing it would evict the running
         # siblings, so the gang sweep must skip those groups entirely.
@@ -2871,45 +2861,34 @@ class K8sTaskProvider:
             g for pod in active_pods if (g := pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME))
         }
 
-        # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
-        #    since last GC, by task_hash label selector.
-        #    Only discard hashes actually cleaned up: skipped hashes (still active)
-        #    and any the sweep did not reach stay in the set for the next GC cycle,
-        #    so a failed delete retries instead of leaking the resources forever.
+        # Resource names include the pod's attempt UID. Never delete by task hash:
+        # dispatch can create a retry's ConfigMap after the active-pod snapshot.
         with self._gc_lock:
-            safe_pending = self._pending_gc_hashes - active_hashes
+            pending = self._pending_gc_pods.copy()
         cleaned: set[str] = set()
         try:
-            for task_hash in safe_pending:
-                labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
-                self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
-                self.kubectl.delete_by_labels(K8sResource.PDBS, labels, wait=False)
-                cleaned.add(task_hash)
-        except Exception:
-            # Isolated from the pod sweep below: a persistently failing CM/PDB delete
-            # must not be what stops terminal pods from ever being collected.
-            logger.exception("GC: CM/PDB cleanup failed after %d of %d hashes", len(cleaned), len(safe_pending))
+            for pod_name in pending:
+                self.kubectl.delete(K8sResource.CONFIGMAPS, f"{pod_name}-wf", wait=False)
+                self.kubectl.delete(K8sResource.PDBS, _pdb_name(pod_name), wait=False)
+                cleaned.add(pod_name)
+        except KubectlError:
+            # Keep failed cleanup queued without preventing the terminal-pod sweep.
+            logger.exception("GC: CM/PDB cleanup failed after %d of %d pods", len(cleaned), len(pending))
         finally:
             with self._gc_lock:
-                self._pending_gc_hashes -= cleaned
+                self._pending_gc_pods -= cleaned
         if cleaned:
-            logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(cleaned))
+            logger.info("GC: cleaned up CMs/PDBs for %d pods", len(cleaned))
 
-        # 2. Age-based sweep: delete terminal pods older than the cutoff and enqueue
-        #    their task hashes, so step 1 of a later pass cleans up the configmaps and
-        #    PDBs once it has confirmed no attempt of that task is active.
         old_pod_names: list[str] = []
-        old_task_hashes: set[str] = set()
         gang_pod_names: list[str] = []
         gang_pod_groups: set[str] = set()
-        gang_task_hashes: set[str] = set()
         for pod in self._iter_terminal_pods():
             meta = pod.get("metadata", {})
             created = meta.get("creationTimestamp", "")
             if not created:
                 continue
             ts = parse_k8s_timestamp(created).timestamp()
-            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
             pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
             # Gang sweep: a deletionTimestamp means a prior delete is
             # wedged on the Kueue finalizer; otherwise the shorter gang
@@ -2923,13 +2902,14 @@ class K8sTaskProvider:
             if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
                 gang_pod_names.append(meta["name"])
                 gang_pod_groups.add(pod_group)
-                if task_hash:
-                    gang_task_hashes.add(task_hash)
                 continue
             if ts < cutoff:
                 old_pod_names.append(meta["name"])
-                if task_hash:
-                    old_task_hashes.add(task_hash)
+
+        # Queue before deleting the pods so a partial failure cannot orphan their resources.
+        with self._gc_lock:
+            self._pending_gc_pods.update(gang_pod_names)
+            self._pending_gc_pods.update(old_pod_names)
 
         if gang_pod_names:
             # force (gracePeriodSeconds=0): these pods are already terminal, so
@@ -2937,10 +2917,6 @@ class K8sTaskProvider:
             # deletion when the node's kubelet is gone (node failure).
             self.kubectl.delete_many(K8sResource.PODS, gang_pod_names, force=True, wait=False)
             self._release_gang_reservations(gang_pod_names, gang_pod_groups)
-            # CM/PDB cleanup follows the deferred path so active retry
-            # attempts sharing the task hash keep their resources.
-            with self._gc_lock:
-                self._pending_gc_hashes.update(gang_task_hashes)
             logger.info(
                 "GC: swept %d terminal gang pods, released %d Kueue workloads",
                 len(gang_pod_names),
@@ -2949,18 +2925,9 @@ class K8sTaskProvider:
 
         if old_pod_names:
             self.kubectl.delete_many(K8sResource.PODS, old_pod_names, wait=False)
-            # CM/PDB cleanup follows the deferred path, as the gang sweep does. Doing
-            # it inline here would hang the only record of these hashes on a local:
-            # the pods that named them are deleted above, so no later pass could
-            # rediscover them, and anything that raised in between would orphan their
-            # configmaps and PDBs for good. Step 1 of the next pass deletes them
-            # against its own fresh active-pod read, and retries whatever fails.
-            with self._gc_lock:
-                self._pending_gc_hashes.update(old_task_hashes)
             logger.info(
-                "GC: deleted %d terminal pods, deferred CM/PDB cleanup for %d task hashes (age > %ds)",
+                "GC: deleted %d terminal pods, deferred CM/PDB cleanup (age > %ds)",
                 len(old_pod_names),
-                len(old_task_hashes),
                 _GC_MAX_AGE_SECONDS,
             )
 

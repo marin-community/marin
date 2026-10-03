@@ -17,7 +17,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
@@ -36,6 +35,7 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 
 NUMBERED = re.compile(r"^\s*\d+[.)]\s*")

@@ -13,7 +13,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
@@ -30,6 +29,7 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.constraints import IfevalVerifier, InstructionConstraint
 
 REVISION = "02923004846e4e73862c20962f823a6d05100e7a"

@@ -7,12 +7,13 @@ from dataclasses import replace
 
 import pytest
 
-from taskcompendium.grading import GradingAttempt, Outcome
+from taskcompendium.grading import Outcome
 from taskcompendium.models import Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import calendar_tasks, reasoning_tasks
 from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.pipeline.verification import PLAIN
-from taskcompendium.verifier_registry import resolve_verifier
+from taskcompendium.verifiers.base import GradingAttempt
+from taskcompendium.verifiers.dispatch import resolve_custom_verifier
 
 
 @pytest.fixture
@@ -25,7 +26,7 @@ def encoded_file(value):
 
 
 def answer_grade(task, answer):
-    return resolve_verifier(task.verifier).grade(
+    return resolve_custom_verifier(task.verifier).grade(
         GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
     )
 

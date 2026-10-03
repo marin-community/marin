@@ -82,9 +82,6 @@ from .metrics import (
 )
 from .record_reconciliation import VerificationSchedule, inspect_record_paths
 from .results_db import (
-    PrefixStatus,
-    RecordObservation,
-    SourceState,
     catalog_generation,
     configure_prefixes,
     fetch_archived_models,
@@ -671,39 +668,9 @@ class PgRecordStore(RecordStore):
         with self._lock:
             self._catalog_error = error
 
-    def configure_prefixes(self, prefixes: tuple[str, ...]) -> None:
-        configure_prefixes(self._engine, prefixes)
-        self.reload_if_changed()
-
-    def source_states(self, prefix: str) -> dict[str, SourceState]:
-        return source_states(self._engine, prefix)
-
-    def reconcile_prefix(
-        self,
-        prefix: str,
-        paths: list[str],
-        observations: list[RecordObservation],
-        probe_at: datetime,
-        confirm_missing_after: float,
-    ) -> None:
-        reconcile_prefix(
-            self._engine,
-            prefix,
-            paths,
-            observations,
-            probe_at,
-            confirm_missing_after,
-        )
-
-    def mark_prefix_failed(self, prefix: str, probe_at: datetime, error: str) -> None:
-        mark_prefix_failed(self._engine, prefix, probe_at, error)
-
-    def finish_reconciliation(self, prefixes: tuple[str, ...]) -> None:
-        prune_untracked_records(self._engine, prefixes)
-        self.reload_if_changed()
-
-    def prefix_statuses(self) -> list[PrefixStatus]:
-        return prefix_statuses(self._engine)
+    @property
+    def engine(self) -> Engine:
+        return self._engine
 
     def archived_models(self) -> set[str]:
         return fetch_archived_models(self._engine)
@@ -865,29 +832,29 @@ class PostgresIngestor:
 
     def __init__(
         self,
-        store: PgRecordStore,
+        engine: Engine,
         prefixes: tuple[str, ...],
         interval: float,
         revalidate_after: float,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        self._store = store
+        self._engine = engine
         self._prefixes = prefixes
         self.interval = interval
         self.revalidate_after = revalidate_after
         self._now = now
-        store.configure_prefixes(prefixes)
 
     async def run_once(self) -> tuple[str, ...]:
         """Run one reconciliation pass and return the prefixes whose listings failed."""
         if not self._prefixes:
             return ()
+        await asyncio.to_thread(configure_prefixes, self._engine, self._prefixes)
         failed_prefixes: list[str] = []
         for prefix in self._prefixes:
             probe_at = self._now()
             try:
                 paths = await asyncio.to_thread(list_record_paths, prefix)
-                states = await asyncio.to_thread(self._store.source_states, prefix)
+                states = await asyncio.to_thread(source_states, self._engine, prefix)
                 observations = await asyncio.to_thread(
                     inspect_record_paths,
                     paths,
@@ -898,16 +865,9 @@ class PostgresIngestor:
                         revalidate_after=self.revalidate_after,
                     ),
                 )
-                failures = {
-                    path: state.error for path, state in states.items() if path in paths and state.error is not None
-                }
-                for observation in observations:
-                    if observation.error is None:
-                        failures.pop(observation.path, None)
-                    else:
-                        failures[observation.path] = observation.error
                 await asyncio.to_thread(
-                    self._store.reconcile_prefix,
+                    reconcile_prefix,
+                    self._engine,
                     prefix,
                     paths,
                     observations,
@@ -917,22 +877,21 @@ class PostgresIngestor:
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
-                await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
+                await asyncio.to_thread(mark_prefix_failed, self._engine, prefix, probe_at, error)
                 failed_prefixes.append(prefix)
                 continue
             logger.info(
-                "reconcile: %d candidates, %d checked, %d invalid from %s",
+                "reconcile: %d candidates, %d checked from %s",
                 len(paths),
                 len(observations),
-                len(failures),
                 prefix,
             )
-        await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
+        await asyncio.to_thread(prune_untracked_records, self._engine, self._prefixes)
         return tuple(failed_prefixes)
 
     def status(self) -> dict:
         probes = []
-        rows = {row.prefix: row for row in self._store.prefix_statuses()}
+        rows = {row.prefix: row for row in prefix_statuses(self._engine)}
         for prefix in self._prefixes:
             row = rows.get(prefix)
             probe = PrefixProbe(prefix=prefix)
@@ -943,7 +902,7 @@ class PostgresIngestor:
                 probe.error = row.error
             probe.parse_failures = [
                 RecordParseFailure(path=path, error=state.error)
-                for path, state in sorted(self._store.source_states(prefix).items())
+                for path, state in sorted(source_states(self._engine, prefix).items())
                 if state.error is not None
             ]
             probes.append(probe)
@@ -1127,7 +1086,7 @@ def _ingestor_and_loop(
 ) -> tuple[IngestorLike, Callable[[], Awaitable[None]] | None]:
     ingestor: IngestorLike
     if isinstance(store, PgRecordStore):
-        ingestor = PostgresIngestor(store, config.prefixes, config.ingest_interval, config.revalidate_after)
+        ingestor = PostgresIngestor(store.engine, config.prefixes, config.ingest_interval, config.revalidate_after)
         return ingestor, None
     local_ingestor = Ingestor(store, config.prefixes, config.ingest_interval)
     return local_ingestor, local_ingestor.run_loop

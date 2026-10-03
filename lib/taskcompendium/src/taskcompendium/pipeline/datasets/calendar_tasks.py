@@ -11,12 +11,10 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceVisibility,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
-    task_resource,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.reasoning_tasks import snapshot_file
@@ -34,6 +32,8 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.schedule import ScheduleAnswerVerifier
 
 CONFIG = "laion__nemotron-gym-agent-calendar-v2"
@@ -76,13 +76,15 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
         verifier=VerifierSpec(kind=VerifierKind.SCHEDULE_ANSWER, parameters_json=verifier.model_dump_json()),
-        resources=(task_resource(WITNESS_PATH, witness, ResourceVisibility.CONTROL),) if witness is not None else (),
+        resources=ResourceGroups(
+            oracle=(inline_resource(WITNESS_PATH.lstrip("/"), witness),) if witness is not None else ()
+        ),
         source=row.source,
     )
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    witness = next((resource for resource in task.resources if resource.path == WITNESS_PATH), None)
+    witness = next((resource for resource in task.resources.oracle if resource.path == WITNESS_PATH.lstrip("/")), None)
     if witness is None:
         return VerificationReport(
             checks=[
@@ -94,7 +96,7 @@ def verification_report(task: TaskSpec) -> VerificationReport:
             ]
         )
     try:
-        witness_json = witness.data().decode()
+        witness_json = resource_bytes(witness).decode()
         events = json.loads(witness_json)
     except ValueError as error:
         return VerificationReport(

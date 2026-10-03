@@ -7,8 +7,9 @@ from pydantic import BaseModel, ConfigDict, JsonValue, field_validator
 from verifyit.modes.grade_arc import grade_arc_grid, validated_grid
 from verifyit.modes.grade_injection import grade_indirect_injection
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, grade_result
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.submission import extract_answer
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
 
 
 class ArcGridVerifier(Verifier):

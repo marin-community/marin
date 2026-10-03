@@ -13,7 +13,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
@@ -25,6 +24,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 NEMOTRON_IF_SOURCE = HFSource(

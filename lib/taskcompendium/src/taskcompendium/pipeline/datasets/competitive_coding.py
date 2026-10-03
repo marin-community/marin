@@ -12,6 +12,7 @@ from taskcompendium.pipeline.datasets import python_tasks
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, DatasetRecipe, ReviewRubric, VerificationReport
+from taskcompendium.runtime.resources import resource_bytes
 
 CONFIG = "laion__nemotron-gym-competitive-coding-v2"
 RUBRIC = ReviewRubric(
@@ -55,7 +56,9 @@ def recipe(
     def checks(task: TaskSpec) -> VerificationReport:
         report = suite.run(task)
         inputs = [
-            resource.data().decode() for resource in task.resources if resource.path.startswith("/tests/cases/input_")
+            resource_bytes(resource).decode()
+            for resource in task.resources.verifier
+            if resource.path.startswith("tests/cases/input_")
         ]
         instruction = task.context.events[0]
         assert isinstance(instruction, TextMessage)

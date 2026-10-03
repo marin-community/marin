@@ -16,7 +16,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
@@ -36,6 +35,7 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.constraints import JsonSchemaVerifier
 from taskcompendium.verifiers.structured_fields import NamedFieldsVerifier
 

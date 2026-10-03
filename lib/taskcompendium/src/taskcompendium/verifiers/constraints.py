@@ -15,8 +15,9 @@ from verifyit.modes.grade_ifeval import grade_ifeval_chat_candidate, resolve_che
 from verifyit.modes.grade_json_schema import grade_json_document
 from verifyit.spec import Constraint, SchemaFormat
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier, grade_result
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.submission import extract_answer
+from taskcompendium.verifiers.base import GradingAttempt, Verifier, grade_result
 
 
 def required_object_conflicts(schema: dict[str, Any], path: str = "$") -> list[str]:

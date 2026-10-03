@@ -18,6 +18,7 @@ from taskcompendium.models import (
     TaskResource,
     TaskSpec,
 )
+from taskcompendium.runtime.resources import resource_bytes
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,9 @@ class RolloutRecord(BaseModel):
     detail: str
 
     def evidence(self) -> RuntimeEvidence:
-        return RuntimeEvidence({resource.path: resource.data() for resource in self.artifacts}, self.state_json)
+        return RuntimeEvidence(
+            {f"/{resource.path}": resource_bytes(resource) for resource in self.artifacts}, self.state_json
+        )
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Semantic answer tasks and Harbor direct-chat lowerings"
 requires-python = ">=3.12,<3.14"
-dependencies = ["pyarrow>=15.0", "pydantic>=2.0", "verifyit[answer,judge,reasoning-gym,schema]", "marin-shellbox"]
+dependencies = ["marin-rigging", "pyarrow>=15.0", "pydantic>=2.0", "verifyit[answer,judge,reasoning-gym,schema]", "marin-shellbox"]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
@@ -58,5 +58,5 @@ known-first-party = ["taskcompendium"]
 disable-project-excludes-heuristics = true
 use-ignore-files = false
 project-includes = ["src/**/*.py"]
-search-path = ["src"]
+search-path = ["src", "../verifyit/src", "../rigging/src"]
 python-interpreter = ".venv/bin/python"

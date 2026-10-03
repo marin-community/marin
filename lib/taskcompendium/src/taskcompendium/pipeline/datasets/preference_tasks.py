@@ -15,7 +15,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.source_definitions import SourceDefinition
@@ -28,6 +27,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.preference import BinaryPreference, PairwisePreference, PreferenceEvidenceVerifier
 
 PREFERENCE_CRITERIA = (

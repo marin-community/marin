@@ -9,17 +9,15 @@ import json
 
 from pydantic import ValidationError
 
-from taskcompendium.grading import GradingAttempt, Outcome
+from taskcompendium.grading import Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceVisibility,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
-    task_resource,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
@@ -36,7 +34,9 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import PLAIN, verify_witness
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.verifiers.arc_injection import ArcGridVerifier, ArcTransformVerifier, IndirectInjectionVerifier
+from taskcompendium.verifiers.base import GradingAttempt, VerifierKind
 
 CONFIGS = {
     "arc_transductive": "laion__nemotron-gym-arc-agi-transductive-v3",
@@ -96,14 +96,13 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             kind = VerifierKind.INDIRECT_INJECTION
     except (ValidationError, KeyError, TypeError, ValueError) as error:
         return ImportRejection(reason="invalid_verifier_data", detail=str(error))
-    resources = tuple(
-        task_resource(
-            "/" + path,
-            value,
-            ResourceVisibility.VERIFIER if path.startswith("tests/") else ResourceVisibility.CONTROL,
-        )
-        for path, value in files.items()
-        if path.startswith(("tests/", "environment/", "solution/"))
+    resources = ResourceGroups(
+        verifier=tuple(inline_resource(path, value) for path, value in files.items() if path.startswith("tests/")),
+        oracle=tuple(
+            inline_resource(path, value)
+            for path, value in files.items()
+            if path.startswith(("environment/", "solution/"))
+        ),
     )
     inductive = name == "arc_inductive"
     return TaskSpec(

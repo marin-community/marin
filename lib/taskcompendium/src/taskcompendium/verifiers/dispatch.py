@@ -1,22 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve pinned verifier kinds without import-order-dependent registration."""
+"""Resolve TaskCompendium-specific verifier contracts."""
 
 from collections.abc import Mapping
 from types import MappingProxyType
 
 from pydantic import ValidationError
 
-from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, NumericAnswerVerifier, Verifier
-from taskcompendium.models import ConversationTrace, TaskSpec, VerifierKind, VerifierSpec
-from taskcompendium.submission import SubmissionConvention
+from taskcompendium.models import EnvironmentRequirements, VerifierSpec
 from taskcompendium.verifiers.arc_injection import ArcGridVerifier, ArcTransformVerifier, IndirectInjectionVerifier
 from taskcompendium.verifiers.atlas_answers import AbstentionAnswersVerifier, MathAnswerVerifier
+from taskcompendium.verifiers.base import Verifier, VerifierKind
 from taskcompendium.verifiers.constraints import IfevalVerifier, JsonSchemaVerifier
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier
-from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
-from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 from taskcompendium.verifiers.preference import PreferenceEvidenceVerifier
 from taskcompendium.verifiers.reasoning import PuzzleAnswerVerifier, ReasoningGymVerifier
 from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
@@ -27,12 +24,8 @@ from taskcompendium.verifiers.schedule import ScheduleAnswerVerifier
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 from taskcompendium.verifiers.structured_fields import NamedFieldsVerifier
 
-VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
+CUSTOM_VERIFIERS: Mapping[str, type[Verifier]] = MappingProxyType(
     {
-        VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
-        VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
-        VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
-        VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
         VerifierKind.CAPTURE_OUTPUT: CaptureOutputVerifier,
         VerifierKind.CALENDAR_STATE: CalendarStateVerifier,
         VerifierKind.IFEVAL: IfevalVerifier,
@@ -56,22 +49,14 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
 )
 
 
-def resolve_verifier(specification: VerifierSpec) -> Verifier:
-    verifier_type = VERIFIERS.get(specification.kind)
+def resolve_custom_verifier(specification: VerifierSpec) -> Verifier:
+    """Validate a source-specific or runtime verifier selected by task conversion."""
+    if specification.environment_requirements != EnvironmentRequirements():
+        raise NotImplementedError("Custom verifier requires an unbound private environment")
+    verifier_type = CUSTOM_VERIFIERS.get(specification.kind)
     if verifier_type is None:
-        raise ValueError(f"Unknown verifier kind: {specification.kind!r}")
+        raise ValueError(f"Unknown custom verifier kind: {specification.kind!r}")
     try:
         return verifier_type.model_validate_json(specification.parameters_json)
     except ValidationError as error:
-        raise ValueError(f"Invalid {specification.kind.value!r} verifier parameters: {error}") from error
-
-
-def validate_verifier(specification: VerifierSpec) -> None:
-    resolve_verifier(specification)
-
-
-def grade_answer(
-    specification: TaskSpec, convention: SubmissionConvention, conversation: ConversationTrace, environment: object
-) -> GradeResult:
-    verifier = resolve_verifier(specification.verifier)
-    return verifier.grade(GradingAttempt(convention, conversation.events, environment))
+        raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error

@@ -7,9 +7,10 @@ import base64
 
 from verifyit.spec import StdioSpec, spec_to_table
 
-from taskcompendium.models import ResourceVisibility, Source, TaskSpec
+from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.datasets import atlas_code
 from taskcompendium.pipeline.models import RawRow
+from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier
 
 
@@ -36,13 +37,10 @@ def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle():
     normalized = atlas_code.normalize(row, "sha256:local", 30.0, 256)
     assert isinstance(normalized, TaskSpec)
     task = TaskSpec.model_validate_json(normalized.model_dump_json())
-    public = [resource for resource in task.resources if resource.visibility == ResourceVisibility.AGENT]
-    assert public == []
-    assert {resource.path: resource.data() for resource in task.resources} == {
-        **{"/" + path: content for path, content in payloads.items()},
-        "/solution/solve.sh": oracle,
+    assert not task.resources.worker and not task.resources.all
+    assert {resource.path: resource_bytes(resource) for resource in task.resources.verifier} == payloads
+    assert {resource.path: resource_bytes(resource) for resource in task.resources.oracle} == {
+        "solution/solve.sh": oracle
     }
     verifier = TaskTroveExecutableVerifier.model_validate_json(task.verifier.parameters_json)
-    assert {resource.path: resource.data() for resource in verifier.resources} == {
-        "/" + path: content for path, content in payloads.items()
-    }
+    assert {resource.path: resource_bytes(resource) for resource in verifier.resources} == payloads

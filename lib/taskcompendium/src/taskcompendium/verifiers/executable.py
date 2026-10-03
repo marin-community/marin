@@ -14,9 +14,11 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.machine import Command, DockerImage, MachineFactory, MachineSpec, NetworkPolicy
 from verifyit.spec import PytestSpec, ScriptSpec, StdioSpec, render_spec, spec_from_table
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.models import TaskResource
 from taskcompendium.runtime.models import RuntimeEvidence
+from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.verifiers.base import GradingAttempt, Verifier
 
 SPEC_PATH = "/tests/verifier.toml"
 VERDICT_PATH = "/logs/verifier/verdict.json"
@@ -76,7 +78,7 @@ async def _sandbox_grade(
             archive_path = root / "submission.tar"
             with tarfile.open(archive_path, "w") as archive:
                 for path, data in [
-                    *((resource.path, resource.data()) for resource in verifier.resources),
+                    *((resource.path, resource_bytes(resource)) for resource in verifier.resources),
                     *submissions.items(),
                     (SPEC_PATH, render_spec(spec).encode()),
                 ]:

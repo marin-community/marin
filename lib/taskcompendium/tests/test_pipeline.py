@@ -19,13 +19,11 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceVisibility,
+    ResourceGroups,
     Source,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
-    task_resource,
 )
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.datasets import gpqa, instruction_following, preference_tasks, rubric_tasks
@@ -61,8 +59,10 @@ from taskcompendium.pipeline.stages import (
     filter_source,
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.verifiers.atlas_answers import MathAnswerVerifier
-from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
+from taskcompendium.verifiers.base import VerifierKind
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
@@ -787,7 +787,7 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
     assert task.model_dump_json() == original
 
 
-@pytest.mark.parametrize("kind", [VerifierKind.MATH_ANSWER, VerifierKind.MCQ_ANSWER])
+@pytest.mark.parametrize("kind", [VerifierKind.MATH_ANSWER, "mcq"])
 def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_conflicts(tmp_path, kind):
     references = ["5", "5", "1", "2", "5"] if kind == VerifierKind.MATH_ANSWER else ["A", "A", "B", "C", "A"]
     rows = []
@@ -796,19 +796,16 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
         name = chr(97 + index)
         source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
         verifier = (
-            MathAnswerVerifier(expected=expected, math_type="scalar")
+            VerifierSpec(
+                kind=kind,
+                parameters_json=MathAnswerVerifier(expected=expected, math_type="scalar").model_dump_json(),
+            )
             if kind == VerifierKind.MATH_ANSWER
-            else MultipleChoiceVerifier(expected=expected, options=4)
+            else multiple_choice_answer(expected, 4)
         )
-        resources = (
-            task_resource(
-                "/reference/source-evidence.json", json.dumps({"solution": name}).encode(), ResourceVisibility.VERIFIER
-            ),
-            task_resource(
-                "/input/context.txt",
-                b"different public input" if index == 4 else b"public input",
-                ResourceVisibility.AGENT,
-            ),
+        resources = ResourceGroups(
+            verifier=(inline_resource("reference/source-evidence.json", json.dumps({"solution": name}).encode()),),
+            worker=(inline_resource("input/context.txt", b"different public input" if index == 4 else b"public input"),),
         )
         task = TaskSpec(
             id=name,
@@ -819,7 +816,7 @@ def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_co
                 events=(TextMessage(role="user", content="conflict" if index in (2, 3) else "duplicate"),)
             ),
             resources=resources,
-            verifier=VerifierSpec(kind=kind, parameters_json=verifier.model_dump_json()),
+            verifier=verifier,
         )
         original_resources[name] = resources
         audit = TaskAudit(

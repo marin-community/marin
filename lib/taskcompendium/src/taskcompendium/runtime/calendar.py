@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
-from taskcompendium.models import AssistantToolCalls, FunctionCall, TaskSpec
+from taskcompendium.models import AssistantToolCalls, FunctionCall, ResourceGroups, TaskSpec
 from taskcompendium.runtime.controls import Control, tool_turn
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.verifiers.runtime import CalendarEvent, CalendarState, CalendarStateVerifier
@@ -99,7 +99,19 @@ class CalendarFactory:
         return {"backend": "in-memory-calendar", "interface": INTERFACE, "revision": "1"}
 
     async def create(self, task: TaskSpec) -> CalendarEnvironment:
-        if task.fixture is None or task.fixture.interface != INTERFACE or task.fixture.revision != "1":
+        requirements = task.environment_requirements
+        provider = requirements.tool_providers.get("calendar")
+        if provider is None or provider.action_interface != INTERFACE:
             raise ValueError("Unsupported calendar fixture")
-        state = CalendarState.model_validate_json(task.fixture.initial_state_json)
+        if (
+            requirements.capabilities
+            or requirements.docker_image is not None
+            or requirements.working_directory is not None
+            or requirements.setup_commands
+            or requirements.environment_variables
+            or set(requirements.tool_providers) != {"calendar"}
+            or task.resources != ResourceGroups()
+        ):
+            raise ValueError("Calendar factory cannot satisfy these environment requirements")
+        state = CalendarState.model_validate(provider.initial_state)
         return CalendarEnvironment(list(state.events))

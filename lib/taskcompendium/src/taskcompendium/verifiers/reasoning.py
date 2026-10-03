@@ -12,8 +12,9 @@ from verifyit.grade import Status, grade
 from verifyit.modes.grade_puzzle import PuzzleAnswerType, puzzle_spec
 from verifyit.spec import ReasoningGymSpec, Spec
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.submission import extract_answer
+from taskcompendium.verifiers.base import GradingAttempt, Verifier
 
 
 def grade_answer(spec: Spec, answer: str, entry_json: str | None = None) -> GradeResult:

@@ -6,12 +6,13 @@
 import base64
 import json
 
-from taskcompendium.grading import GradingAttempt, Outcome
-from taskcompendium.models import ResourceVisibility, Source, TaskSpec, TextMessage
+from taskcompendium.grading import Outcome
+from taskcompendium.models import Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_arc_injection
 from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.pipeline.verification import PLAIN
 from taskcompendium.verifiers.arc_injection import ArcGridVerifier, ArcTransformVerifier
+from taskcompendium.verifiers.base import GradingAttempt
 
 
 def grade(verifier, answer):
@@ -61,7 +62,7 @@ def test_injection_ingestion_keeps_target_private_and_filters_grader_exploit():
     )
     task = atlas_arc_injection.normalize(row, "indirect_injection")
     assert isinstance(task, TaskSpec)
-    assert all(resource.visibility == ResourceVisibility.VERIFIER for resource in task.resources)
+    assert task.resources.verifier and not task.resources.worker and not task.resources.all
     assert "external@example.org" not in task.context.events[0].content
     checks = {check.check: check.status for check in atlas_arc_injection.verification_report(task).checks}
     assert checks == {

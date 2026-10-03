@@ -16,15 +16,13 @@ from taskcompendium.grading import Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
-    EnvironmentFixture,
     EnvironmentRequirements,
     FunctionCall,
-    ResourceVisibility,
+    ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
-    task_resource,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
@@ -42,7 +40,9 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import INTERFACE, ShellFactory
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier, grade_submission
 
 CONFIGS = {
@@ -91,18 +91,20 @@ def normalize(row: RawRow, image: str, timeout: float, memory_mb: int) -> TaskSp
         return ImportRejection(reason="missing_conversion", detail="Run the source converter binding first")
     instruction = converted["instruction"]
     spec = converted["grader_spec"]
-    resources = []
+    worker = []
+    oracle = []
+    trusted = []
     private = []
     for path, encoded in converted["data_files"].items():
         data = base64.b64decode(encoded, validate=True)
-        visibility = ResourceVisibility.VERIFIER if path.startswith("tests/") else ResourceVisibility.AGENT
+        destination = trusted if path.startswith("tests/") else worker
         if path.startswith("tests/setup_files/"):
-            visibility = ResourceVisibility.CONTROL
-        resource = task_resource("/" + path, data, visibility)
-        resources.append(resource)
+            destination = oracle
+        resource = inline_resource(path, data)
+        destination.append(resource)
         private.append(resource)
-    resources.extend(
-        task_resource("/" + path, base64.b64decode(encoded, validate=True), ResourceVisibility.CONTROL)
+    oracle.extend(
+        inline_resource(path, base64.b64decode(encoded, validate=True))
         for path, encoded in converted["control_files"].items()
     )
     paths = ("/output/command_capture.txt",) if spec["mode"] == "script" else ("/app/solution.py", "/app/solution.cpp")
@@ -119,11 +121,11 @@ def normalize(row: RawRow, image: str, timeout: float, memory_mb: int) -> TaskSp
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
-            capabilities=("shell", "filesystem"), action_interfaces=(INTERFACE,)
+            capabilities=("shell", "filesystem"),
+            tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
         ),
-        fixture=EnvironmentFixture(interface=INTERFACE, revision="1", initial_state_json="{}"),
         interaction_tools=(BASH,),
-        resources=tuple(resources),
+        resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle), verifier=tuple(trusted)),
         output_paths=paths,
         answer_type=AnswerType.FILE,
         verifier=VerifierSpec(kind=VerifierKind.TASKTROVE_EXECUTABLE, parameters_json=verifier.model_dump_json()),
@@ -198,7 +200,7 @@ async def executable_checks(task: TaskSpec) -> VerificationReport:
                 check=name, status=status, detail=f"{result.status}: reward={result.reward}; {result.error or ''}"
             )
         )
-    oracle = next((resource for resource in task.resources if resource.path == "/solution/solve.sh"), None)
+    oracle = next((resource for resource in task.resources.oracle if resource.path == "solution/solve.sh"), None)
     if oracle is None:
         checks.append(
             CheckResult(
@@ -220,9 +222,7 @@ async def executable_checks(task: TaskSpec) -> VerificationReport:
         output_limit_bytes=1_048_576,
     )
     try:
-        environment = await replace(factory, visibility=(ResourceVisibility.AGENT, ResourceVisibility.CONTROL)).create(
-            task
-        )
+        environment = await replace(factory, mounted_roles=("worker", "oracle")).create(task)
     except (RuntimeError, OSError) as error:
         checks.append(CheckResult(check="oracle", status=CheckStatus.INFRA_ERROR, detail=str(error)))
         return VerificationReport(checks)

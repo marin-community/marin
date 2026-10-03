@@ -18,12 +18,10 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceVisibility,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
-    task_resource,
 )
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat, UrlDownload, hub_inputs
 from taskcompendium.pipeline.models import (
@@ -37,7 +35,9 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.verifiers.atlas_answers import MathAnswerVerifier
+from taskcompendium.verifiers.base import VerifierKind
 
 
 def answer_type(expected: str) -> Literal["scalar", "equation", "interval", "set", "tuple", "list"]:
@@ -70,7 +70,7 @@ def normalize_math(row: RawRow, problem_field: str, reference_field: str) -> Tas
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=problem),)),
         environment_requirements=EnvironmentRequirements(),
-        resources=(task_resource("/reference/source-evidence.json", private, ResourceVisibility.VERIFIER),),
+        resources=ResourceGroups(verifier=(inline_resource("reference/source-evidence.json", private),)),
         answer_type=AnswerType.TEXT,
         verifier=VerifierSpec(kind=VerifierKind.MATH_ANSWER, parameters_json=verifier.model_dump_json()),
     )
@@ -91,10 +91,10 @@ def math_task(
     task = normalize_math(replace(row, data={"problem": problem, "answer": expected}), "problem", "answer")
     if isinstance(task, ImportRejection):
         return task
-    resource = task_resource(
-        "/reference/source-evidence.json", json.dumps(evidence, ensure_ascii=False).encode(), ResourceVisibility.VERIFIER
+    resource = inline_resource("reference/source-evidence.json", json.dumps(evidence, ensure_ascii=False).encode())
+    return task.model_copy(
+        update={"context": ConversationInput(events=events), "resources": ResourceGroups(verifier=(resource,))}
     )
-    return task.model_copy(update={"context": ConversationInput(events=events), "resources": (resource,)})
 
 
 def field_math_task(

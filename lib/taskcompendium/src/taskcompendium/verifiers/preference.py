@@ -7,8 +7,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.models import ConversationEvent
+from taskcompendium.verifiers.base import GradingAttempt, Verifier
 
 
 class PairwisePreference(BaseModel):

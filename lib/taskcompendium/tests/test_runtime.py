@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, Result
 
-from taskcompendium.grading import GradingAttempt
 from taskcompendium.models import FunctionCall, Source, TaskSpec
 from taskcompendium.pipeline.datasets import calendar, nemo_actions, shell_files
 from taskcompendium.pipeline.models import CheckStatus, RawRow
@@ -22,7 +21,8 @@ from taskcompendium.runtime.controls import tool_turn
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.models import ActorTask, RolloutRecord, Termination
 from taskcompendium.runtime.shell import ShellFactory
-from taskcompendium.verifier_registry import resolve_verifier
+from taskcompendium.verifiers.base import GradingAttempt
+from taskcompendium.verifiers.dispatch import resolve_custom_verifier
 from taskcompendium.verifiers.runtime import CalendarStateVerifier
 
 from .pipeline_stages import run_stages
@@ -48,13 +48,16 @@ async def test_calendar_alternative_solutions_preserve_state_and_reset(calendar_
     reference_state, alternate_state = json.loads(reference.state_json), json.loads(alternate.state_json)
     assert reference_state["events"][-1]["start"] != alternate_state["events"][-1]["start"]
     assert reference.state_json == reset.state_json
-    assert reference_state["events"][:2] == json.loads(calendar_task.fixture.initial_state_json)["events"]
+    assert (
+        reference_state["events"][:2]
+        == calendar_task.environment_requirements.tool_providers["calendar"].initial_state["events"]
+    )
     saved = RolloutRecord.model_validate_json(reference.model_dump_json())
     assert saved.evidence() == reference.evidence()
 
 
 async def test_calendar_deleting_existing_meeting_cannot_satisfy_goal(calendar_task):
-    verifier = resolve_verifier(calendar_task.verifier)
+    verifier = resolve_custom_verifier(calendar_task.verifier)
     assert isinstance(verifier, CalendarStateVerifier)
     valid = calendar_controls(verifier)[1].responses[0]
     rollout = await run_episode(
@@ -84,7 +87,7 @@ async def test_episode_budget_keeps_tool_observations_without_private_actor_inpu
     assert rollout.termination == Termination.STEP_LIMIT
     assert (
         json.loads(rollout.events[-1].content)["events"]
-        == json.loads(calendar_task.fixture.initial_state_json)["events"]
+        == calendar_task.environment_requirements.tool_providers["calendar"].initial_state["events"]
     )
     assert actor.public[0].tools[0].name == "list_events"
 
@@ -135,7 +138,7 @@ async def test_shell_uploads_public_files_without_oracle_and_captures_submission
     env = await factory.create(task)
     assert "/workspace/people.csv" in machines.machines[0].files
     assert shell_files.CONTROL_PATH not in machines.machines[0].files
-    verifier = resolve_verifier(task.verifier)
+    verifier = resolve_custom_verifier(task.verifier)
     missing = verifier.grade(GradingAttempt(PLAIN, (), await env.evidence()))
     assert missing.reward == 0.0
     machines.machines[0].files[shell_files.OUTPUT_PATH] = b"person-0-2\nperson-0-0\n"

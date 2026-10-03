@@ -7,8 +7,9 @@ from typing import Literal
 
 from pydantic import JsonValue, model_validator
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.submission import extract_answer
+from taskcompendium.verifiers.base import GradingAttempt, Verifier
 
 
 class RubricJudgeVerifier(Verifier):

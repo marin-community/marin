@@ -11,14 +11,12 @@ import re
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
-    EnvironmentFixture,
     EnvironmentRequirements,
-    ResourceVisibility,
+    ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
-    task_resource,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.shell_files import BASH
@@ -35,6 +33,8 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
+from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.repository_patch import RepositoryPatchVerifier
 
 CHECKOUT = re.compile(r"\bgit checkout\s+([^\s;&]+)")
@@ -71,37 +71,34 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         source_grader_paths=tuple(sorted("/" + path for path in files if path.startswith("tests/"))),
         source_environment_sha256=hashlib.sha256(files["environment/Dockerfile"]).hexdigest(),
     )
-    resources = tuple(
-        task_resource(
-            "/" + path,
-            content,
-            (
-                ResourceVisibility.VERIFIER
-                if path.startswith("tests/")
-                else (ResourceVisibility.AGENT if path.startswith("setup_files/") else ResourceVisibility.CONTROL)
-            ),
-        )
-        for path, content in files.items()
-        if path.startswith(("tests/", "environment/", "solution/", "setup_files/"))
+    resources = ResourceGroups(
+        worker=tuple(
+            inline_resource(path, content) for path, content in files.items() if path.startswith("setup_files/")
+        ),
+        oracle=tuple(
+            inline_resource(path, content)
+            for path, content in files.items()
+            if path.startswith(("environment/", "solution/"))
+        ),
+        verifier=tuple(inline_resource(path, content) for path, content in files.items() if path.startswith("tests/")),
     )
     return TaskSpec(
         id=row.id,
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
-            capabilities=("shell", "filesystem", "git_repository"), action_interfaces=("shell:v1",)
-        ),
-        fixture=EnvironmentFixture(
-            interface="shell:v1",
-            revision="repository-unbound-v1",
-            initial_state_json=json.dumps(
-                {
-                    "repository": repository,
-                    "source_ref": checkout[1],
-                    "workspace": WORKSPACE,
-                    "binding_status": "unbound",
-                }
-            ),
+            capabilities=("shell", "filesystem", "git_repository"),
+            tool_providers={
+                "shell": ProviderRequirement(
+                    action_interface="shell:v1",
+                    initial_state={
+                        "repository": repository,
+                        "source_ref": checkout[1],
+                        "workspace": WORKSPACE,
+                        "binding_status": "unbound",
+                    },
+                )
+            },
         ),
         interaction_tools=(BASH,),
         resources=resources,

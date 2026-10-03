@@ -22,7 +22,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat, UrlDownload
@@ -39,6 +38,7 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
+from taskcompendium.verifiers.base import VerifierKind
 from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 DATASET = "open-thought/reasoning-gym"
