@@ -3,7 +3,7 @@
 
 """Optimize the step-12 student with verifier-selected complement preferences."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import click
 import jmp
@@ -21,6 +21,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
+from marin.rl.skyrl import SkyRLRun
 from marin.training.training import (
     LevanterCheckpoint,
     TrainDpoOnPodConfig,
@@ -28,7 +29,7 @@ from marin.training.training import (
     run_levanter_train_dpo,
 )
 
-from experiments.post_training.bfcl_rl.collect import MODELS, SMOKE_TASKS, collection_step
+from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS, SMOKE_TASKS, collection_step
 from experiments.post_training.bfcl_rl.recovery import recovery_cache_step
 from experiments.post_training.bfcl_rl.recovery_data import RecoveryPreferenceCache
 
@@ -70,7 +71,6 @@ def recovery_optimizer_step(
         cpu=48,
         ram="1611Gi",
         disk="21745Gi",
-        target_cluster="cw-rno2a",
     )
     if resources.chip_count() > 128:
         raise ValueError("Recovery optimizer exceeds the campaign's 128-H100 limit")
@@ -177,6 +177,7 @@ def recovery_optimizer_step(
 @click.command(help=__doc__)
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
 @click.option("--cache-version", default=None, help="Reuse a completed recovery cache without scheduling collection.")
+@click.option("--collection-version", default=None, help="Build preferences from completed paired collection artifacts.")
 @click.option("--python-image", required=True)
 @click.option("--java-image", required=True)
 @click.option("--javascript-image", required=True)
@@ -190,6 +191,7 @@ def recovery_optimizer_step(
 def main(
     task: str | None,
     cache_version: str | None,
+    collection_version: str | None,
     python_image: str,
     java_image: str,
     javascript_image: str,
@@ -201,6 +203,8 @@ def main(
     context_axis: int,
 ) -> ArtifactStep:
     selection = task or "full"
+    if cache_version is not None and collection_version is not None:
+        raise ValueError("Specify a cache version or a collection version, not both")
     if cache_version is not None:
         cache_name = user_owned_name(f"data/bfcl-rl-recovery-preferences-{selection}")
         cache = ArtifactStep.adopt(
@@ -209,13 +213,25 @@ def main(
             f"{cache_name}/{cache_version}",
             kind=RecoveryPreferenceCache,
         )
+    elif collection_version is not None:
+        rollouts = tuple(
+            ArtifactStep.adopt(
+                user_owned_name(f"rollouts/bfcl-rl-recovery-{model}-{selection}-input"),
+                collection_version,
+                f"{user_owned_name(f'rollouts/bfcl-rl-recovery-{model}-{selection}')}/{collection_version}",
+                kind=SkyRLRun,
+            )
+            for model in ("teacher", "student")
+        )
+        cache = recovery_cache_step(*rollouts, selection_name=selection, max_length=RECOVERY_CONTEXT)
     else:
         images = (python_image, java_image, javascript_image)
         teacher = collection_step("teacher", task, images)
         student = collection_step("student", task, images)
         cache = recovery_cache_step(teacher, student, selection_name=selection, max_length=RECOVERY_CONTEXT)
     optimization = RecoveryOptimization(num_train_steps, batch_size, beta, num_nodes, expert_axis, context_axis)
-    return recovery_optimizer_step(cache, selection_name=selection, optimization=optimization)
+    optimizer = recovery_optimizer_step(cache, selection_name=selection, optimization=optimization)
+    return replace(optimizer, runtime_args={"execution": COLLECTION_EXECUTION})
 
 
 if __name__ == "__main__":

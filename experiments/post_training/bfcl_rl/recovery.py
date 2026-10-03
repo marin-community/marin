@@ -41,7 +41,7 @@ def recovery_cache_step(
 
     work = remote(
         build_recovery_cache,
-        resources=ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi", target_cluster="cw-rno2a"),
+        resources=ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi"),
     )
     return ArtifactStep(
         name=name,
