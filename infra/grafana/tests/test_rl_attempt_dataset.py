@@ -474,9 +474,10 @@ def _filtered_rows(target, rows):
 
 
 def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
-    app, _ = _bridge(store)
+    app, queries = _bridge(store)
     with TestClient(app) as client:
         for run in (RUN_ID, "sync-run"):
+            initial_queries = len(queries)
             for panel in PANELS.values():
                 if run == "sync-run" and panel["id"] in ASYNC_ONLY_PANEL_IDS:
                     continue
@@ -496,6 +497,7 @@ def test_every_panel_view_returns_declared_fields_for_selected_attempt(store):
                         tuple(pytest.approx(value, rel=1e-12) if isinstance(value, float) else value for value in row)
                         for row in wanted
                     ], (run, panel["id"], actual)
+            assert len(queries) - initial_queries == len(dataset().sources), run
 
 
 def _bridge(database, *, max_rows=1000):

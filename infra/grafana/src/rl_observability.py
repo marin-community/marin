@@ -201,6 +201,7 @@ WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, counter_samples A
            MAX(value) AS max_value
     FROM "telemetry_v1.node_agent"
     WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
+      AND node_name IN (SELECT node FROM run_node WHERE run = {sql_string(run)})
     GROUP BY 1, 2, 3, 4, 5
     UNION ALL BY NAME
     SELECT origin_cluster, t, node, gpu, name,
