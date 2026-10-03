@@ -15,8 +15,7 @@ from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, Registr
 from taskcompendium.grading import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import Source
-
-from rolloutengine.parquet import read_tasks, write_tasks
+from taskcompendium.parquet import read_tasks, write_tasks
 
 from .test_rollout import ReplayModel, engine, run_task
 

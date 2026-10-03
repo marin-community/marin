@@ -12,8 +12,8 @@ from dataclasses import replace
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.models import AnswerType, StageVerifierSpec, TaskSpec
-from taskcompendium.submission import FinalAction, Submission, conversation_messages
+from taskcompendium.models import StageVerifierSpec, TaskSpec
+from taskcompendium.submission import Submission, conversation_messages
 
 from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
@@ -28,7 +28,7 @@ from rolloutengine.contracts import (
     RolloutStep,
     TaskSession,
 )
-from rolloutengine.grading import _combined_stage_grade, _remove_stage_grader, validate_task_verifiers
+from rolloutengine.grading import _combined_stage_grade, _remove_stage_grader, _validate_task
 from rolloutengine.machines import _task_machine
 from rolloutengine.task_session import _ShellboxTaskSession
 
@@ -69,8 +69,8 @@ class ShellboxRolloutEngine:
         self.sessions = {} if sessions is None else sessions
 
     async def run(self, task: TaskSpec) -> RolloutData:
-        """Run one task and release its session and machine after failure."""
-        validate_task_verifiers(task)
+        """Run one task and always release its session and machine."""
+        _validate_task(task)
         deadline = asyncio.timeout(task.attempt_timeout)
         async with AsyncExitStack() as resources:
             try:
@@ -82,18 +82,15 @@ class ShellboxRolloutEngine:
                 raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.ATTEMPT) from error
 
     async def _run_task(self, task: TaskSpec, resources: AsyncExitStack) -> RolloutData:
-        convention = self.convention
-        if task.answer_type == AnswerType.NATIVE_ACTION:
-            convention = FinalAction(id="final-action")
         try:
             machine = await resources.enter_async_context(_task_machine(task.environment, self.factories))
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
         if task.stages:
             assert machine is not None
-            return await self._run_stages(task, machine, convention)
+            return await self._run_stages(task, machine, self.convention)
         if task.environment.interaction is None:
-            session = _ShellboxTaskSession(task, machine, convention, self.command_timeout, self.factories)
+            session = _ShellboxTaskSession(task, machine, self.convention, self.command_timeout, self.factories)
         else:
             session = self.sessions[task.environment.interaction](task)
         resources.push_async_callback(session.close)
