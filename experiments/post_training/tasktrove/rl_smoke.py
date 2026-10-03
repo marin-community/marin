@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke-train Qwen3-0.6B directly from a packed TaskTrove Clean release.
+"""Smoke-train Qwen3-0.6B from a packed TaskTrove Clean release.
 
 The run uses a packed release as the input to the shared rollout engine.
 MarinSkyRL converts the selected tasks to TaskCompendium Parquet before training.
@@ -219,7 +219,6 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
             coordinator_timeout_hours=12,
             wandb_entity=None,
         ),
-        export_hf=True,
     )
 
 

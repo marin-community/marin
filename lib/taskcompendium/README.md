@@ -71,6 +71,8 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 `answer_type=file` names a file result. `answer_type=state` names the resulting environment state. The Shellbox engine executes these tasks with the environment and private shell verifier in the task spec. Direct-chat Harbor export does not accept executable environments. `environment_requirements` declares capabilities and tool-provider contracts. `environment` supplies the executable resources.
 
+`resources` keeps inline files in `all`, `worker`, `oracle`, and `verifier` groups. Worker files are model-visible. Oracle and verifier files are private. Each `TaskResource` has a relative destination, base64 file content, and optional mode and modification time. Runtimes must reject unsafe paths and collisions. The Shellbox rollout engine does not implement this legacy mount contract; use `environment.files` and private verifier files for executable tasks.
+
 ## What can we import?
 
 ### TaskTrove MCQA
@@ -141,11 +143,10 @@ lower_to_harbor(spec, chosen.convention, chosen.environment_config, Path("/tmp/a
 
 ## Dataset conversion
 
-TaskSpec defines the serialized task contract. Dataset conversion pipelines own
-storage layout and streaming I/O, using Zephyr for Parquet processing. The
-TaskCompendium package has no Parquet reader or writer. JSON decoding preserves
-valid unsupported requirements; export and launch validate runtime support
-separately.
+TaskSpec defines the serialized task contract. `taskcompendium.parquet` reads
+and writes bounded batches with one serialized task per row. Dataset conversion
+pipelines own higher-level storage layout and streaming. JSON decoding preserves
+valid unsupported requirements; export and launch validate runtime support separately.
 
 ## How does Harbor run it?
 
