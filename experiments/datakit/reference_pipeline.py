@@ -127,7 +127,7 @@ from marin.datakit.decon import (
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
-from marin.execution.remote import remote
+from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_dedup import ClusterDedupParams
@@ -301,6 +301,19 @@ def stage_driver(fn: Callable[[str], Any], placement: DriverPlacement) -> Callab
     if placement is DriverPlacement.COORDINATOR:
         return fn
     return remote(fn, resources=DRIVER_RESOURCES, pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS))
+
+
+def coordinator_source_steps(sources: dict[str, StepSpec]) -> dict[str, StepSpec]:
+    """Run source-recipe drivers in the coordinator and retain their cache paths."""
+    placed: dict[int, StepSpec] = {}
+
+    def place(step: StepSpec) -> StepSpec:
+        if id(step) not in placed:
+            fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
+            placed[id(step)] = replace(step, fn=fn, resources=None, deps=[place(dep) for dep in step.deps])
+        return placed[id(step)]
+
+    return {name: place(step) for name, step in sources.items()}
 
 
 @dataclass(frozen=True)
@@ -671,7 +684,7 @@ class DatakitSteps:
     """Result of :func:`reference_datakit_steps`."""
 
     sources: dict[str, StepSpec]
-    """Echo of the input sources mapping (``{name: normalize_step}``)."""
+    """Source recipes with the selected driver placement (``{name: normalize_step}``)."""
 
     output_buckets: StepSpec
     """Final store StepSpec. Its ``output_path`` is the per-(cluster, quality)
@@ -945,10 +958,12 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
         output_prefix: Root for every step output, for example a temporary
             prefix below ``MARIN_PREFIX``. ``None`` uses ``MARIN_PREFIX``.
-        driver_placement: Location of lightweight stage drivers. Centroid training remains remote.
+        driver_placement: Location of source-recipe and lightweight stage drivers. Centroid training remains remote.
         tokenizer: Tokenizer location and stable content identity. Uses the
             pinned reference tokenizer by default.
     """
+    if driver_placement is DriverPlacement.COORDINATOR:
+        sources = coordinator_source_steps(sources)
     cluster = scale.cluster
     fuzzy = scale.fuzzy
     if fuzzy.plan.minimum_size > fuzzy.text.max_cluster_size:
