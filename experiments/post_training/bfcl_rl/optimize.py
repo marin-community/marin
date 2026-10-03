@@ -28,6 +28,7 @@ from marin.training.training import (
     resolve_training_env,
     run_levanter_train_dpo,
 )
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS, SMOKE_TASKS, collection_step
 from experiments.post_training.bfcl_rl.recovery import recovery_cache_step
@@ -116,8 +117,9 @@ def recovery_optimizer_step(
             shuffle=True,
             components={
                 "bfcl_complement": DatasetComponent(
-                    cache_dir=cache_path,
+                    cache_dir=prefix_join(cache_path, "train"),
                     split="train",
+                    flat_cache=True,
                     format=PreferenceChatLmDatasetFormat(pack=False, mask_user_turns=True, slice_strategy="raise"),
                 )
             },
