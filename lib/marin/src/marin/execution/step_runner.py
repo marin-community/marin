@@ -28,7 +28,7 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
-from rigging.log_setup import configure_logging
+from rigging.log_setup import configure_logging_if_unset
 from rigging.timing import log_time
 
 from marin.execution.artifact import (
@@ -204,10 +204,7 @@ class StepRunner:
         Concurrency is bounded by the thread pool (``max_concurrent``
         workers, default 8).
         """
-        # Make step progress visible by default. Idempotent and non-clobbering:
-        # skipped when the driver (or a wrapping app) already installed handlers.
-        if not logging.getLogger().handlers:
-            configure_logging(level=logging.INFO)
+        configure_logging_if_unset()
 
         # A non-primary Iris task loses the per-step lock race and never enters the
         # step; warn before doing any work in case an SPMD launch was intended (#7080).

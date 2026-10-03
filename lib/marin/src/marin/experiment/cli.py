@@ -37,12 +37,11 @@ invocations keeps its first resolved version.
 """
 
 import functools
-import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
 import click
-from rigging.log_setup import configure_logging
+from rigging.log_setup import configure_logging_if_unset
 from rigging.timing import log_time
 
 from marin.execution.artifact import is_mutable_version, validate_version
@@ -153,8 +152,7 @@ def build_options_with_runner(fn: Callable[..., BuildResult], runner: BuildRunne
     def wrapper(
         *args: Any, default_version: str, overrides: dict[str, str], do_run: bool, max_concurrent: int, **kwargs: Any
     ) -> None:
-        if not logging.getLogger().handlers:
-            configure_logging(level=logging.INFO)
+        configure_logging_if_unset()
         codex = VersionCodex(default=default_version, overrides=overrides)
         with build_context(BuildContext(versions=codex)):
             with log_time("experiment/build"):
