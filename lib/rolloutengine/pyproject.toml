@@ -6,11 +6,11 @@ build-backend = "hatchling.build"
 name = "marin-rolloutengine"
 version = "0.1.0"
 description = "Task execution and exact-token rollout records"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "taskcompendium",
     "marin-shellbox",
-    "harbor-config",
+    "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
     "marin-rigging>=0.2.123.dev35633925924",
     "pyarrow>=17",
 ]
@@ -25,10 +25,11 @@ prerelease = "allow"
 
 [tool.uv.sources]
 taskcompendium = { path = "../taskcompendium", editable = true }
-tasktrove-verify = { path = "../tasktrove-verify", editable = true }
 marin-shellbox = { path = "../shellbox", editable = true }
 marin-rigging = { path = "../rigging", editable = true }
-harbor-config = { url = "https://github.com/marin-community/harbor/releases/download/harbor-config-952a005353273590631b8f970f4664a121710b32/harbor_config-0.1.0-py3-none-any.whl" }
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rolloutengine"]
