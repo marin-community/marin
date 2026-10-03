@@ -364,10 +364,9 @@ def tokenize_attributes_step(
         validation_normalize: Upstream normalize step whose output feeds the validation split.
         tokenizer: Tokenizer name/path forwarded to :class:`TokenizeAttributesConfig`.
         tokenizer_backend: Tokenizer backend.
-        tokenizer_revision: Optional immutable HF commit to pin. When set it is folded
-            into the step hash so a retag invalidates the cache. NOTE: identity-only
-            today -- ``levanter.tokenizers.load_tokenizer`` does not yet accept a
-            revision, so it does not change which bytes are fetched (tracked follow-up).
+        tokenizer_revision: Optional tokenizer identity, such as an immutable HF commit or content hash.
+            The identity changes the step hash. This builder does not pass it to the tokenizer loader,
+            so it does not select different tokenizer files.
         data_format: Levanter :class:`LmDatasetFormatBase`. Defaults to ``TextLmDatasetFormat()``.
         sample_count: Per-shard sample cap, or ``None`` for full data.
         text_field: Record field used for id fallback when input lacks ``id``.
