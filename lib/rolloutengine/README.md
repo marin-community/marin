@@ -1,7 +1,8 @@
 # Rollout engine
 
 `marin-rolloutengine` executes TaskCompendium tasks through Shellbox and returns
-the original prompt and generated token IDs, loss masks, log probabilities, grades, and failure records.
+the original prompt and generated token IDs, loss masks, log probabilities, and grades.
+Callers can add a failure record when they convert an interrupted rollout.
 
 The `rolloutengine.contracts` module defines `TaskSession`, `SessionStart`, and
 the model and result data classes. The `rolloutengine.engine` module implements
