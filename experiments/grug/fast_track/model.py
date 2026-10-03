@@ -146,6 +146,10 @@ ROUTING_SELECTED_KEY = "routing_selected_per_layer"
 # Per-layer routed-expert inputs and shared-expert pre-activations for ``Transformer.neuron_inputs`` (the
 # neuron-health dump); passthroughs, so the training forward drops them.
 _ROUTED_INPUT = "routed_input"
+# Per-layer moe_compress / moe_shadow_width loss and metrics, stacked over layers like the router stats.
+_COMPRESS_LOSS = "compress_loss"
+_COMPRESS_PREFIX = "compress/"
+_SHADOW_SALT = 0x5AD0
 _SHARED_PRE = "shared_pre"
 ROUTED_INPUT_KEY = "routed_input_per_layer"
 SHARED_PRE_KEY = "shared_pre_per_layer"
@@ -240,6 +244,19 @@ class UngatedExpertActivation(StrEnum):
     POLYNORM = "polynorm"
     """PolyNorm (Motif 2.6B / Motif 3, arXiv 2608.09119): ``sum_{n=1..3} (1/3) u^n / RMS(u^n)``, each power
     RMS-normalized per token over the expert's hidden units. Fixed coefficients (Motif learns them per expert)."""
+
+
+class MoeCompress(StrEnum):
+    """Auxiliary pressure that moves what the shared expert can express out of the routed experts
+    (``moe_compress``; ``s`` = shared output, ``r`` = routed output, ``y = s + r``, ``sg`` = stop-gradient)."""
+
+    NONE = "none"
+    TRANSFER = "transfer"
+    """``||s - sg(s + r)||^2 / sg(mean ||y||^2)``: pushes the shared expert along the routed output until the
+    routed side holds nothing the shared expert can express; the LM loss then sheds the overshoot from ``r``."""
+    ROUTED_PENALTY = "routed_penalty"
+    """``||r||^2 / sg(mean ||y||^2)``: routed output is costly, so the LM gradient moves onto the shared expert
+    whatever it can express."""
 
 
 class ExpertVisitBias(StrEnum):
@@ -1033,6 +1050,13 @@ class GrugModelConfig:
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
+    moe_shadow_width: int = 0
+    """Width of a detached per-layer ReLU^2 MLP trained on ``sg(shared input) -> sg(routed output)`` (0: off).
+    Its gradient reaches only its own weights, so training is unchanged; its explained variance of the routed
+    output (``train/compress/shadow_r2_L*``) measures how much of it a shared-sized expert could absorb."""
+    moe_compress: MoeCompress = MoeCompress.NONE
+    moe_compress_weight: float = 0.0
+    """Per-MoE-layer weight of the ``moe_compress`` term (summed over layers)."""
     moe_expert_waves: int = 1
     """Static dispatch waves in the pooled-wave EP backend. Waves are independent, so the scheduler can overlap
     one wave's all-to-all with another's expert compute (the all-to-all was ~13% exposed at d512)."""
@@ -1491,6 +1515,12 @@ class GrugModelConfig:
             raise ValueError(
                 "latent_out_dim needs routed experts and no latent_write_select, moe_bank2 or zero-computation experts"
             )
+        if (self.moe_shadow_width or self.moe_compress != MoeCompress.NONE) and (
+            self.dense_mlp or self.shared_expert_intermediate_dim <= 0 or self.moe_shared_overlap
+        ):
+            raise ValueError("moe_shadow_width / moe_compress need a MoE with shared experts and no moe_shared_overlap")
+        if (self.moe_compress != MoeCompress.NONE) != (self.moe_compress_weight > 0):
+            raise ValueError("moe_compress and moe_compress_weight > 0 go together")
         if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
             raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
 
@@ -3708,6 +3738,7 @@ def moe_and_shared_fused(
     shared_gate: Float[Array, " D"] | None = None,
     router_tok_rows: Float[Array, "B S r"] | None = None,
     router_seed_bias: Float[Array, "B S E"] | None = None,
+    shadow: DenseMLP | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -3771,7 +3802,59 @@ def moe_and_shared_fused(
     shared_out = _shared_experts_tail(
         mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, x_flat, gate, _batch_spec()
     )
-    return routed + _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s)), stats
+    shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
+    if shadow is not None or mlp.cfg.moe_compress != MoeCompress.NONE:
+        shared_in = part_inputs["shared"] if part_inputs and "shared" in part_inputs else x
+        # The transfer term reads the shared expert on a stop-gradient input so it moves only the shared expert.
+        detached = rearrange(jax.lax.stop_gradient(shared_in), "b s d -> (b s) d")
+        detached_parts = [jnp.einsum("td,de->te", detached, w, out_sharding=_batch_spec()) for w in shared_weights]
+        shared_detached = _shared_experts_tail(
+            mlp.cfg, detached_parts, len(shared), gated, w_down, detached, gate, _batch_spec()
+        )
+        shared_detached = _batch_reshard(rearrange(shared_detached, "(b s) d -> b s d", b=b, s=s))
+        stats = {**stats, **_compress_terms(mlp.cfg, shared_out, shared_detached, routed, shadow, shared_in)}
+    return routed + shared_out, stats
+
+
+def _compress_terms(
+    cfg: "GrugModelConfig",
+    shared_out: Float[Array, "B S D"],
+    shared_detached: Float[Array, "B S D"],
+    routed: Float[Array, "B S D"],
+    shadow: DenseMLP | None,
+    shared_in: Float[Array, "B S D"],
+) -> dict[str, jax.Array]:
+    """Per-layer ``moe_compress`` / ``moe_shadow_width`` loss (``_COMPRESS_LOSS``) and their metrics.
+    ``shared_detached`` is the shared expert on a stop-gradient input. The routed penalty reaches the routed
+    output's inputs too, but only in direction: the routed path RMS-normalizes its input."""
+    s32, r32 = shared_out.astype(jnp.float32), routed.astype(jnp.float32)
+    y_energy = jax.lax.stop_gradient(jnp.mean(jnp.sum((s32 + r32) ** 2, axis=-1)))
+    r_energy = jnp.mean(jnp.sum(r32**2, axis=-1))
+    sr = jnp.mean(jnp.sum(s32 * r32, axis=-1))
+    s_energy = jnp.mean(jnp.sum(s32**2, axis=-1))
+    loss = jnp.zeros((), jnp.float32)
+    if cfg.moe_compress == MoeCompress.TRANSFER:
+        # ||s - sg(s + r)||^2 has the gradient of -2 <s, sg(r)> in s, and that is the form computed.
+        detached = shared_detached.astype(jnp.float32)
+        loss = -2.0 * jnp.mean(jnp.sum(detached * jax.lax.stop_gradient(r32), axis=-1)) / y_energy
+        loss = cfg.moe_compress_weight * loss
+    elif cfg.moe_compress == MoeCompress.ROUTED_PENALTY:
+        loss = cfg.moe_compress_weight * r_energy / y_energy
+    terms = {
+        _COMPRESS_LOSS: loss,
+        "r_share": jax.lax.stop_gradient(r_energy / y_energy),
+        "cos_sr": jax.lax.stop_gradient(sr / jnp.sqrt(jnp.maximum(s_energy * r_energy, 1e-30))),
+    }
+    if shadow is not None:
+        x_flat = rearrange(jax.lax.stop_gradient(shared_in), "b s d -> (b s) d")
+        hidden = jnp.square(jax.nn.relu(jnp.einsum("td,dm->tm", x_flat, shadow.w_up.astype(x_flat.dtype))))
+        pred = jnp.einsum("tm,md->td", hidden, shadow.w_down.astype(x_flat.dtype), out_sharding=_batch_spec())
+        pred = _batch_reshard(rearrange(pred, "(b s) d -> b s d", b=routed.shape[0])).astype(jnp.float32)
+        target = jax.lax.stop_gradient(r32)
+        shadow_loss = jnp.mean(jnp.sum((pred - target) ** 2, axis=-1)) / jax.lax.stop_gradient(r_energy)
+        terms[_COMPRESS_LOSS] = loss + shadow_loss
+        terms["shadow_r2"] = 1.0 - jax.lax.stop_gradient(shadow_loss)
+    return {f"{_COMPRESS_PREFIX}{k}" if k != _COMPRESS_LOSS else k: v for k, v in terms.items()}
 
 
 def _sconv_segment_ids(mask: AttentionMask | jax.Array) -> jax.Array | None:
@@ -4108,6 +4191,7 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: "MoEMLP | DenseMLP"
     shared: tuple[DenseMLP, ...] | None
+    shadow: DenseMLP | None  # cfg.moe_shadow_width
     sconv_attn: "ShortConv | None"
     sconv_mlp: "ShortConv | None"
     sconv_mlp_in: "ShortConv | None"  # Canon-C conv on the normed MLP input ("mlp_in" in cfg.sconv_sites)
@@ -4166,6 +4250,12 @@ class Block(eqx.Module):
                 )
                 if cfg.shared_ungated_relu2:
                     shared = tuple(eqx.tree_at(lambda m: m.w_gate, e, None, is_leaf=lambda x: x is None) for e in shared)
+        shadow = None
+        if cfg.moe_shadow_width:
+            shadow = DenseMLP.init(
+                cfg.hidden_dim, cfg.moe_shadow_width, cfg.initializer_std, key=random.fold_in(shared_key, _SHADOW_SALT)
+            )
+            shadow = eqx.tree_at(lambda m: m.w_gate, shadow, None, is_leaf=lambda x: x is None)
         return Block(
             rms_attn=(
                 DyT.init(cfg.hidden_dim, cfg.dyt_alpha_attn)
@@ -4182,6 +4272,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=mlp,
             shared=shared,
+            shadow=shadow,
             sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if use_attn_sconv else None),
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
@@ -4323,6 +4414,7 @@ class Block(eqx.Module):
                 self.shared_gate,
                 router_tok_rows,
                 router_seed_bias,
+                self.shadow,
             )
         else:
             out, stats = self.mlp(
@@ -5415,8 +5507,9 @@ def _attn_res_layer_remat_bwd(
     residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps, noise_key
 ):
     del residuals, perturbed
-    # Router stats are logging-only and carry no cotangent.
-    d_partial, d_blocks, d_block_logits, _d_stats = grad_out
+    # Router stats are logging-only and carry no cotangent, except the moe_compress / shadow loss.
+    d_partial, d_blocks, d_block_logits, d_stats = grad_out
+    d_compress = d_stats.get(_COMPRESS_LOSS) if isinstance(d_stats, dict) else None
     _, blocks, block_logits, _, _, _ = diff_args
     d_blocks = jax.tree.map(lambda d, x: jnp.zeros_like(x) if d is None else d, d_blocks, blocks, is_leaf=_is_none)
     d_block_logits = jax.tree.map(
@@ -5426,10 +5519,20 @@ def _attn_res_layer_remat_bwd(
         diff_args, d_partial, d_blocks, d_block_logits = jax.lax.optimization_barrier(
             (diff_args, d_partial, d_blocks, d_block_logits)
         )
-        _, vjp_fn = jax.vjp(
-            lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps, noise_key)[0], diff_args
-        )
-        ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_logit_bias),) = vjp_fn(d_partial)
+        if d_compress is None:
+            _, vjp_fn = jax.vjp(
+                lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps, noise_key)[0], diff_args
+            )
+            cotangent = d_partial
+        else:
+
+            def with_compress(args):
+                partial, stats = _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps, noise_key)
+                return partial, stats[_COMPRESS_LOSS]
+
+            _, vjp_fn = jax.vjp(with_compress, diff_args)
+            cotangent = (d_partial, d_compress)
+        ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_logit_bias),) = vjp_fn(cotangent)
         d_blocks = tuple(a + b for a, b in zip(d_blocks, d_blocks_own, strict=True))
         d_block_logits = tuple(a + b for a, b in zip(d_block_logits, d_block_logits_own, strict=True))
         # One barrier over every cotangent: the weight gradients are off the critical path, and without
@@ -6363,6 +6466,9 @@ class Transformer(eqx.Module):
                 "margin_min_per_layer": stacked_router_stats["margin_min"],
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
+            router_metrics.update(
+                {k: v for k, v in stacked_router_stats.items() if k == _COMPRESS_LOSS or k.startswith(_COMPRESS_PREFIX)}
+            )
             if return_routing:
                 if cfg.loop_passes != 1:
                     raise ValueError("return_routing needs loop_passes=1 (passes merge the per-layer stats)")
@@ -6957,6 +7063,8 @@ class Transformer(eqx.Module):
         nitp_target = router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
         mtp_embed = router_metrics.pop(_MTP_EMBED, None)
+        compress_loss = router_metrics.pop(_COMPRESS_LOSS, None)
+        compress_stats = {k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith(_COMPRESS_PREFIX)}
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
         if head_replay is not None and self.output_bigram_w is not None:
@@ -7009,6 +7117,8 @@ class Transformer(eqx.Module):
                 aux_in,
             )
             loss = loss + aux_loss_weight.astype(loss_dtype) * aux_loss
+        if compress_loss is not None and train_terms:
+            loss = loss + jnp.sum(compress_loss).astype(loss_dtype)
         if attn_res_z is not None and train_terms:
             loss = loss + self.config.attn_res_z_loss * attn_res_z.astype(loss_dtype)
         mtp_loss = None
@@ -7123,6 +7233,11 @@ class Transformer(eqx.Module):
             if erc_loss is not None:
                 summarized_metrics["train/aux/erc_loss"] = erc_loss
                 summarized_metrics.update(erc_ratios)
+            if compress_loss is not None:
+                summarized_metrics["train/compress/loss"] = jnp.sum(compress_loss)
+                for name, per_layer in compress_stats.items():
+                    for i in range(per_layer.shape[0]):
+                        summarized_metrics[f"train/{name}_L{i}"] = per_layer[i]
             if nitp_loss is not None:
                 summarized_metrics["train/aux/nitp_loss"] = nitp_loss
                 summarized_metrics["train/aux/nitp_cos"] = nitp_cos
