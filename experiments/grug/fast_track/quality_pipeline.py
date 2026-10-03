@@ -20,7 +20,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.store.cache import SerialCacheWriter, TreeCache
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
-from marin.execution.fingerprint import register_fingerprint
+from marin.execution.fingerprint import canonical_json, register_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -33,10 +33,14 @@ from experiments.grug.fast_track.quality import (
     LabelledEmbedding,
     PoolDocument,
     PoolRequirements,
+    QualityHeadConfig,
     audit_pool,
-    fit_ridge_head,
+    development_metrics,
+    quality_head_identity,
+    score_embeddings,
     select_top_tokens,
     selection_token_overlap,
+    split_labelled_embeddings,
 )
 
 PARQUET_BATCH_ROWS = 1024
@@ -74,7 +78,7 @@ class QualityBundle(BaseModel):
 
 
 class SelectionMethod(StrEnum):
-    RIDGE = "ridge"
+    CANDIDATE = "candidate"
     INCUMBENT = "incumbent"
     RANDOM = "random"
 
@@ -90,14 +94,24 @@ class QualityData(Artifact):
 class QualitySpec:
     bundle: PinnedFile
     selection_method: SelectionMethod
+    head: QualityHeadConfig
     fraction: float
-    regularization: float
     tie_seed: int
 
 
 @dataclass(frozen=True)
 class QualityConfig:
     spec: QualitySpec
+    output_path: str
+
+
+@dataclass(frozen=True)
+class QualityBuildConfig:
+    bundle: PinnedFile
+    selection_method: SelectionMethod
+    head_identity: dict[str, str | int | float | bool]
+    fraction: float
+    tie_seed: int
     output_path: str
 
 
@@ -150,7 +164,10 @@ def prepare_quality_data(config: QualityConfig) -> QualityData:
                     row["source"], row["id"], row["duplicate_group"], tuple(embedding.tolist()), float(row["label"])
                 )
             )
-    head, development = fit_ridge_head(labels, regularization=spec.regularization, split_seed=bundle.split_seed)
+    training_labels, development_labels = split_labelled_embeddings(labels, split_seed=bundle.split_seed)
+    head_identity = quality_head_identity(spec.head)
+    head = spec.head.fit(training_labels)
+    development = development_metrics(head, development_labels)
     documents: list[PoolDocument] = []
     candidate_scores: list[float] = []
     incumbent_scores: list[float] = []
@@ -158,7 +175,7 @@ def prepare_quality_data(config: QualityConfig) -> QualityData:
     for batch in parquet_batches(bundle.pool):
         rows = batch.drop_columns(["embedding"]).to_pylist()
         embeddings = embedding_matrix(batch, bundle.embedding_scale)
-        candidate_scores.extend(head.scores(embeddings).tolist())
+        candidate_scores.extend(score_embeddings(head, embeddings).tolist())
         for row in rows:
             incumbent_score = float(row["incumbent_score"])
             if not np.isfinite(incumbent_score) or not edges[0] <= incumbent_score <= edges[-1]:
@@ -229,7 +246,7 @@ def prepare_quality_data(config: QualityConfig) -> QualityData:
         "incumbent_revision": bundle.incumbent_revision,
         "pool_seed": bundle.pool_seed,
         "split_seed": bundle.split_seed,
-        "head": asdict(head),
+        "head": head_identity,
         "development": asdict(development),
         "pool": asdict(audit),
         "selection": {key: value for key, value in asdict(selection).items() if key != "indices"},
@@ -285,20 +302,37 @@ class QualityTrainingSource:
 
 
 def build_quality_data(spec: QualitySpec, *, version: str | None = None) -> ArtifactStep[QualityData]:
+    head_identity = quality_head_identity(spec.head)
     identity = {
         "bundle": spec.bundle.model_dump(),
         "method": spec.selection_method.value,
         "fraction": spec.fraction,
-        "regularization": spec.regularization,
+        "head": head_identity,
         "tie_seed": spec.tie_seed,
     }
-    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:20]
+    digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:20]
     name = f"fast-track/quality/{digest}"
     version = resolve_version(name, version)
+
+    def build_config(ctx: StepContext) -> QualityBuildConfig:
+        return QualityBuildConfig(
+            bundle=spec.bundle,
+            selection_method=spec.selection_method,
+            head_identity=head_identity,
+            fraction=spec.fraction,
+            tie_seed=spec.tie_seed,
+            output_path=ctx.output_path,
+        )
+
+    def run(config: QualityBuildConfig) -> QualityData:
+        if config.head_identity != quality_head_identity(spec.head):
+            raise ValueError("quality head identity changed after artifact construction")
+        return prepare_quality_data(QualityConfig(spec, config.output_path))
+
     return ArtifactStep(
         name=user_namespaced_name(name, version),
         version=version,
         artifact_type=QualityData,
-        run=prepare_quality_data,
-        build_config=lambda ctx: QualityConfig(spec, ctx.output_path),
+        run=run,
+        build_config=build_config,
     )
