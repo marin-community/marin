@@ -217,8 +217,10 @@ Use a new destination and job name for a new sample version.
 `negative_control.py` reads a completed `FastTrackDataStore` and writes a separate
 training store. It shuffles tokens other than special tokens within each document,
 using a fixed seed.
-Document order, lengths, token counts, special-token positions, and mixture weights
-stay the same. Evaluation data, model configuration, and training settings stay the same.
+Document order, lengths, token counts, and special-token positions stay the same.
+The comparison uses token-proportional mixture weights and default fast-track
+training settings. Select a baseline with the same weighting, model settings,
+and training budget. Evaluation data stays the same.
 
 After the baseline finishes training and evaluation, submit the comparison with
 its `FastTrackDataStore` artifact directory as `--source-store`:
