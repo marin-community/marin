@@ -29,7 +29,9 @@ def mini_swe_capture_step(task: str, images: tuple[str, str, str]) -> ArtifactSt
     recipe["trainer"]["algorithm"]["off_policy_correction"] = "none"
     recipe["trainer"]["algorithm"]["tito_full"] = False
     name = user_owned_name(f"rollouts/bfcl-rl-mini-swe-capture-{task}")
-    spec = replace(spec, name=name, version=resolve_version(name, None), config_yaml=yaml.safe_dump(recipe, sort_keys=False))
+    spec = replace(
+        spec, name=name, version=resolve_version(name, None), config_yaml=yaml.safe_dump(recipe, sort_keys=False)
+    )
     return skyrl_step(spec, COLLECTION_EXECUTION)
 
 

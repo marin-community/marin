@@ -176,6 +176,7 @@ def recovery_optimizer_step(
 
 @click.command(help=__doc__)
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
+@click.option("--cache-version", default=None, help="Reuse a completed recovery cache without scheduling collection.")
 @click.option("--python-image", required=True)
 @click.option("--java-image", required=True)
 @click.option("--javascript-image", required=True)
@@ -188,6 +189,7 @@ def recovery_optimizer_step(
 @rl_build_options
 def main(
     task: str | None,
+    cache_version: str | None,
     python_image: str,
     java_image: str,
     javascript_image: str,
@@ -198,11 +200,20 @@ def main(
     expert_axis: int,
     context_axis: int,
 ) -> ArtifactStep:
-    images = (python_image, java_image, javascript_image)
-    teacher = collection_step("teacher", task, images)
-    student = collection_step("student", task, images)
     selection = task or "full"
-    cache = recovery_cache_step(teacher, student, selection_name=selection, max_length=RECOVERY_CONTEXT)
+    if cache_version is not None:
+        cache_name = user_owned_name(f"data/bfcl-rl-recovery-preferences-{selection}")
+        cache = ArtifactStep.adopt(
+            f"{cache_name}-input",
+            cache_version,
+            f"{cache_name}/{cache_version}",
+            kind=RecoveryPreferenceCache,
+        )
+    else:
+        images = (python_image, java_image, javascript_image)
+        teacher = collection_step("teacher", task, images)
+        student = collection_step("student", task, images)
+        cache = recovery_cache_step(teacher, student, selection_name=selection, max_length=RECOVERY_CONTEXT)
     optimization = RecoveryOptimization(num_train_steps, batch_size, beta, num_nodes, expert_axis, context_axis)
     return recovery_optimizer_step(cache, selection_name=selection, optimization=optimization)
 
