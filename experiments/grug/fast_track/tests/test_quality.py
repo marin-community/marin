@@ -11,11 +11,13 @@ from experiments.grug.fast_track.quality import (
     LabelSplit,
     PoolDocument,
     PoolRequirements,
+    RidgeHeadConfig,
     audit_pool,
-    fit_ridge_head,
+    development_metrics,
     label_split,
     select_top_tokens,
     selection_token_overlap,
+    split_labelled_embeddings,
 )
 
 
@@ -41,11 +43,15 @@ def _requirements() -> PoolRequirements:
 
 def test_ridge_head_uses_fixed_training_groups_and_keeps_audit_labels_private():
     rows = [LabelledEmbedding("source", str(i), str(i), (float(i),), 2.0 * i + 3.0) for i in range(100)]
-    head, metrics = fit_ridge_head(rows, regularization=0.001, split_seed=9)
+    training, development = split_labelled_embeddings(rows, split_seed=9)
+    head = RidgeHeadConfig(0.001).fit(training)
+    metrics = development_metrics(head, development)
     altered = [
         replace(row, label=-1e9) if label_split(row.duplicate_group, 9) is LabelSplit.AUDIT else row for row in rows
     ]
-    other_head, other_metrics = fit_ridge_head(altered, regularization=0.001, split_seed=9)
+    other_training, other_development = split_labelled_embeddings(altered, split_seed=9)
+    other_head = RidgeHeadConfig(0.001).fit(other_training)
+    other_metrics = development_metrics(other_head, other_development)
 
     np.testing.assert_allclose(head.scores(np.array([[10.0], [20.0]])), [23.0, 43.0], rtol=1e-4)
     assert other_head == head
