@@ -3,6 +3,7 @@
 
 from dataclasses import replace
 
+import click
 import pytest
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import ArtifactRecord, write_artifact, write_record
@@ -126,7 +127,6 @@ def test_fast_track_data_fingerprint_tracks_tokenizer_content(tmp_path, monkeypa
 
     def data_step(tokenizer_identity: str) -> ArtifactStep[FastTrackDataStore]:
         return build_fast_track_data(
-            run_id="tokenizer-content-test",
             sources={"source": StepSpec(name="normalized-source", hash_attrs={"v": 1})},
             quality_model="quality-model",
             quality_model_version="test",
@@ -135,7 +135,9 @@ def test_fast_track_data_fingerprint_tracks_tokenizer_content(tmp_path, monkeypa
             version="test-dev",
         )
 
-    assert data_step("sha256:first").fingerprint() != data_step("sha256:second").fingerprint()
+    first, second = data_step("sha256:first"), data_step("sha256:second")
+    assert first.fingerprint() != second.fingerprint()
+    assert first.path(str(tmp_path)) != second.path(str(tmp_path))
 
 
 def test_fast_track_keeps_data_store_when_it_adds_validation_data():
@@ -171,22 +173,26 @@ def test_fast_track_keeps_data_store_when_it_adds_validation_data():
 def test_fast_track_fingerprint_tracks_upstream_recipe(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
-    def fingerprint(source_version: int = 1) -> str:
+    def data_step(source_version: int = 1) -> ArtifactStep[FastTrackDataStore]:
         return build_fast_track_data(
-            run_id="recipe-test",
             sources={"source": StepSpec(name="normalized-source", hash_attrs={"v": source_version})},
             quality_model="quality-model",
             quality_model_version="test",
             tokenizer=TokenizerSpec("test-tokenizer", "sha256:test"),
             tokenizer_vocab=16_384,
             version="test-dev",
-        ).fingerprint()
+        )
 
-    original = fingerprint()
-    assert fingerprint(source_version=2) != original
+    original = data_step()
+    assert data_step().path(str(tmp_path)) == original.path(str(tmp_path))
+    changed_source = data_step(source_version=2)
+    assert changed_source.fingerprint() != original.fingerprint()
+    assert changed_source.path(str(tmp_path)) != original.path(str(tmp_path))
     scale = data_pipeline.SMOKE_SCALE
     monkeypatch.setattr(data_pipeline, "SMOKE_SCALE", replace(scale, cluster=replace(scale.cluster, cluster_view=16)))
-    assert fingerprint() != original
+    changed_recipe = data_step()
+    assert changed_recipe.fingerprint() != original.fingerprint()
+    assert changed_recipe.path(str(tmp_path)) != original.path(str(tmp_path))
 
 
 def test_sample_selection_requires_completed_source_set(tmp_path):
@@ -210,3 +216,5 @@ def test_sample_selection_requires_completed_source_set(tmp_path):
     assert {name: step.output_path for name, step in selected.items()} == {
         name: f"{prefix}/{name}" for name in source_paths
     }
+    with pytest.raises(click.UsageError, match="Unknown sample sources"):
+        _data_source_from_options(source_mode=SourceMode.SAMPLE, sources="missing", sample_prefix=prefix)
