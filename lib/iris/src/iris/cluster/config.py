@@ -661,7 +661,7 @@ class NodeStorageHealthConfig(_Config):
     def _s3_prefix(cls, value: str) -> str:
         if not value.startswith("s3://") or not value.removeprefix("s3://").partition("/")[2].strip("/"):
             raise ValueError("scratch_prefix must be an s3://bucket/prefix dedicated to health probes")
-        return value.rstrip("/")
+        return value
 
 
 class KubernetesProviderConfig(_Config):

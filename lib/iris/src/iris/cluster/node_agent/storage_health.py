@@ -20,6 +20,7 @@ from botocore.exceptions import (
 )
 from pydantic import BaseModel, ValidationError
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 
 from iris.cluster.config import NodeStorageHealthConfig
@@ -133,7 +134,7 @@ def run_storage_health(k8s: K8sService, node_name: str, config: NodeStorageHealt
                 failure_since = 0.0
                 incarnation = f"{uid}/{boot_id}"
             started_at = Timestamp.now().epoch_seconds()
-            result = bounded_probe(f"{config.scratch_prefix}/{uid}/{boot_id}", config.timeout)
+            result = bounded_probe(str(StoragePath.parse(config.scratch_prefix) / uid / boot_id), config.timeout)
             if result == ProbeResult.FAILED:
                 failure_since = failure_since if failures else started_at
                 failures += 1
