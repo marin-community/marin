@@ -80,6 +80,13 @@ from experiments.grug.fast_track.fact_probe import (
     write_text_counts,
     write_train_batch,
 )
+from experiments.grug.fast_track.flip_detector import (
+    FLIP_DETECTOR_FILE,
+    flagged_cosines,
+    flip_directions,
+    side_stats,
+    subspace_overlap,
+)
 from experiments.grug.fast_track.grad_capture import CaptureWriter, add_to_captured, capture_matrices, capture_steps
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
@@ -326,6 +333,14 @@ class GrugTrainerConfig:
     # layer, with the Bi-Maxwell rails, into ``fact_probe_dir``. Tensors matching ``weight_attribution_exclude`` are
     # skipped (the probe keeps previous-step copies of the rest).
     weight_attribution_window: tuple[int, ...] = ()
+    # Flip detector (``flip_detector.py``, diagnostic only): for parameters matching ``flip_detector_patterns``,
+    # find the update directions that reverse step to step; every ``flip_detector_every`` steps log their
+    # correlations and write ``<flip_detector_dir>/flip_detector_<i>.npz``.
+    flip_detector_patterns: tuple[str, ...] = ()
+    flip_detector_every: int = 10
+    flip_detector_k: int = 4
+    flip_detector_beta: float = 0.98
+    flip_detector_dir: str | None = None
     weight_attribution_exclude: str = r"token_embed2"
     fact_probe_every: int = 1
     fact_probe_ema_every: int = 50
@@ -1324,6 +1339,99 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
     return hook
 
 
+def _flip_detector_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[..., None]:
+    """The ``flip_detector_patterns`` hook (see ``flip_detector.py``)."""
+    cfg = config.trainer
+    if cfg.flip_detector_dir is None:
+        raise ValueError("flip_detector_patterns needs flip_detector_dir")
+    patterns = [re.compile(p) for p in cfg.flip_detector_patterns]
+    beta, k, every = cfg.flip_detector_beta, cfg.flip_detector_k, cfg.flip_detector_every
+    sides = ("in", "out")
+
+    def selected(tree) -> dict[str, jax.Array]:
+        out = {}
+        for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
+            name = leaf_name(path)
+            if isinstance(leaf, jax.Array) and leaf.ndim in (2, 3) and any(p.search(name) for p in patterns):
+                out[name] = leaf.astype(jnp.float32) if leaf.ndim == 3 else leaf.astype(jnp.float32)[None]
+        return out
+
+    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
+    def step(params, prev, dprev, stats, bases):
+        cur = selected(params)
+        new_stats, cosines = {}, {}
+        for name, theta in cur.items():
+            d = theta - prev[name]
+            for side in sides:
+                cross, energy = side_stats(d, dprev[name], side)
+                key = f"{name}|{side}"
+                c0, e0 = stats[key]
+                new_stats[key] = (beta * c0 + (1 - beta) * cross, beta * e0 + (1 - beta) * energy)
+                cosines[key] = flagged_cosines(d, dprev[name], bases[key], side)
+        return new_stats, cosines, {n: x + 0.0 for n, x in cur.items()}, {n: cur[n] - prev[n] for n in cur}
+
+    carry: dict = {"seen": set(), "block": [], "index": 0, "old_bases": {}}
+
+    def hook(info, force: bool = False) -> None:
+        count = info.next_step
+        if info.model is None or count in carry["seen"]:
+            return
+        carry["seen"].add(count)
+        with set_mesh(mesh), _pgle_disabled():
+            if "prev" not in carry:
+                cur = selected(info.model)
+                carry["prev"] = {n: x + 0.0 for n, x in cur.items()}
+                carry["dprev"] = {n: jnp.zeros_like(x) for n, x in cur.items()}
+                shapes = {
+                    f"{n}|{s}": (x.shape[0], x.shape[1] if s == "in" else x.shape[2])
+                    for n, x in cur.items()
+                    for s in sides
+                }
+                carry["stats"] = {key: (jnp.zeros((l, m, m)), jnp.zeros((l, m, m))) for key, (l, m) in shapes.items()}
+                carry["bases"] = {key: jnp.zeros((l, m, k)) for key, (l, m) in shapes.items()}
+                return
+            carry["stats"], cosines, carry["prev"], carry["dprev"] = step(
+                info.model, carry["prev"], carry["dprev"], carry["stats"], carry["bases"]
+            )
+        carry["block"].append(jax.tree.map(np.asarray, multihost_utils.process_allgather(cosines, tiled=True)))
+        if count % every:
+            return
+        stats = multihost_utils.process_allgather(carry["stats"], tiled=True)
+        record, logs, new_bases = {}, {}, {}
+        for key, (cross, energy) in stats.items():
+            cross, energy = np.asarray(cross), np.asarray(energy)
+            rhos, bases = [], []
+            for layer in range(cross.shape[0]):
+                rho, basis = flip_directions(cross[layer], energy[layer], k)
+                rhos.append(rho)
+                bases.append(basis)
+                old = carry["old_bases"].get((key, layer))
+                tag = f"flip/{key.replace('|', '/')}/L{layer}"
+                block = np.asarray([b[key] for b in carry["block"]])  # [steps, 3, layers]
+                if old is not None and len(block):
+                    logs[f"{tag}/flagged_cos"] = float(np.mean(block[:, 0, layer]))
+                    logs[f"{tag}/rest_cos"] = float(np.mean(block[:, 1, layer]))
+                    logs[f"{tag}/flagged_share"] = float(np.mean(block[:, 2, layer]))
+                    logs[f"{tag}/overlap"] = subspace_overlap(old, basis)
+                logs[f"{tag}/rho_min"] = float(rho[0])
+                logs[f"{tag}/rho_max"] = float(rho[-1])
+                carry["old_bases"][(key, layer)] = basis
+            record[f"rho/{key}"] = np.stack(rhos)
+            record[f"cos/{key}"] = np.asarray([b[key] for b in carry["block"]])
+            new_bases[key] = np.stack(bases).astype(np.float32)
+        with set_mesh(mesh):
+            carry["bases"] = {key: jnp.asarray(v) for key, v in new_bases.items()}
+        carry["block"] = []
+        if jax.process_index() == 0:
+            levanter.tracker.log(logs, step=info.step)
+            path = f"{cfg.flip_detector_dir.rstrip('/')}/{FLIP_DETECTOR_FILE.format(index=carry['index'])}"
+            with fsspec.open(path, "wb") as f:
+                np.savez(f, step=count, **record)
+        carry["index"] += 1
+
+    return hook
+
+
 def _host_batch(batch) -> tuple[np.ndarray, np.ndarray]:
     gather = functools.partial(multihost_utils.process_allgather, tiled=True)
     return np.asarray(gather(batch.tokens)), np.asarray(gather(batch.loss_weight))
@@ -2241,6 +2349,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
+        if config.trainer.flip_detector_patterns:
+            state_callbacks.add_hook(_flip_detector_hook(config, mesh), every=1)
         if config.trainer.weight_attribution_window:
             state_callbacks.add_hook(_weight_attribution_hook(config, mesh, trainer.mp), every=1)
         if config.trainer.fact_probe_input is not None and not config.trainer.weight_attribution_window:

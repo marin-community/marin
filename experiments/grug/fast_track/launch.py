@@ -47,6 +47,7 @@ from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.analyze_routing import token_strings_from_tokenizer
+from experiments.grug.fast_track.flip_detector import DEFAULT_FLIP_PATTERNS
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import (
     AttnResLayerBackward,
@@ -420,6 +421,7 @@ def build_h100_ladder_run(
     train_text_count_patterns: tuple[str, ...] = (),
     fact_probe_input: str | None = None,
     weight_attribution_window: tuple[int, ...] = (),
+    flip_detector_patterns: tuple[str, ...] = (),
     fact_probe_every: int = 1,
     fact_probe_ema_every: int = 50,
 ) -> ArtifactStep[ThroughputResult]:
@@ -538,6 +540,7 @@ def build_h100_ladder_run(
         train_text_count_patterns=train_text_count_patterns,
         fact_probe_input=fact_probe_input,
         weight_attribution_window=weight_attribution_window,
+        flip_detector_patterns=flip_detector_patterns,
         fact_probe_every=fact_probe_every,
         fact_probe_ema_every=fact_probe_ema_every,
     )
@@ -630,6 +633,7 @@ def build_h100_ladder_run(
                 loader_buffer_batches=loader_buffer_batches,
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
+                flip_detector_dir=prefix_join(ctx.output_path, "flip_detector") if flip_detector_patterns else None,
                 fact_probe_dir=(
                     prefix_join(ctx.output_path, "fact_probe")
                     if train_batch_dump_steps or train_text_count_patterns or fact_probe_input
@@ -903,6 +907,11 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="START,END step counts: attribute each step's change in log p at the --fact-probe-input spot to the "
     "parameter updates (weight_attribution.py); results in <output>/fact_probe/.",
 )
+@click.option(
+    "--flip-detector",
+    is_flag=True,
+    help="Log the step-to-step reversing update directions of the MLA attention matrices (flip_detector.py).",
+)
 @click.option("--fact-probe-every", default=1, show_default=True, help="Score the fact probe every N steps.")
 @click.option("--fact-probe-ema-every", default=50, show_default=True, help="Score the live EMA weights every N steps.")
 @click.option(
@@ -1011,6 +1020,7 @@ def main(
     count_train_text: tuple[str, ...],
     fact_probe_input: str | None,
     weight_attribution: str,
+    flip_detector: bool,
     fact_probe_every: int,
     fact_probe_ema_every: int,
     router_tie_class: tuple[str, ...],
@@ -1069,6 +1079,7 @@ def main(
         train_text_count_patterns=tuple(count_train_text),
         fact_probe_input=fact_probe_input,
         weight_attribution_window=tuple(int(step) for step in weight_attribution.split(",") if step),
+        flip_detector_patterns=DEFAULT_FLIP_PATTERNS if flip_detector else (),
         fact_probe_every=fact_probe_every,
         fact_probe_ema_every=fact_probe_ema_every,
         router_tie_specs=router_tie_specs,
