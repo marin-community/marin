@@ -14,4 +14,4 @@ uv run python -m experiments.evaluation.cli launch \
   --description 'Unlabeled K2 screen: compiled TP2/DP1, low reasoning on thinking-off tasks'
 ```
 
-Change only the model-config basename and description to run the `high` arm. Do not use `--version` or a policy label.
+Change only the model-config basename and description to run the other three arms (`tp2-dp1-high`, `tp2-dp4-low`, and `tp2-dp4-high`). The TP2/DP4 configs otherwise match the TP2/DP1 pair, so they isolate the MoE topology change. Do not use `--version` or a policy label.
