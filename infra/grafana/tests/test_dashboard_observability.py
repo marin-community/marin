@@ -228,8 +228,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "zephyr.json": {"/v1/zephyr/overview": (4, sections["zephyr"])},
         "training.json": {"/v1/training/overview": (16, sections["training"])},
         "runs.json": {"/v1/runs/overview": (8, sections["runs"])},
-        "rl_runs.json": {"/v1/rl/overview": (13, sections["rl"])},
-        "async_rl.json": {"/v1/rl/attempt": (47, sections["rl_attempt"])},
+        "rl_runs.json": {"/v1/rl/overview": (15, sections["rl"]), "/v1/rl/attempt": (50, sections["rl_attempt"])},
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
         "home.json": {

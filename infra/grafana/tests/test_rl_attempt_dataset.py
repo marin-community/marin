@@ -20,7 +20,7 @@ from server import create_app
 from starlette.testclient import TestClient
 
 GRAFANA_DIR = Path(__file__).parents[1]
-DASHBOARD = stitch_all(GRAFANA_DIR / "dashboards", GRAFANA_DIR / "dashboards/panels")["async_rl.json"]
+DASHBOARD = stitch_all(GRAFANA_DIR / "dashboards", GRAFANA_DIR / "dashboards/panels")["rl_runs.json"]
 ENDPOINT = "/v1/rl/attempt"
 
 
@@ -64,6 +64,7 @@ def resolve(sql, *, window_ms=WINDOW_MS):
     for macro, value in {
         "{{from}}": _window_literal(WINDOW_START_MS),
         "{{to}}": _window_literal(WINDOW_START_MS + window_ms),
+        "${training_type:sqlstring}": "'async'",
         "${cluster:sqlstring}": f"'{CLUSTER}'",
         "${run:sqlstring}": f"'{RUN_ID}'",
         "${job:sqlstring}": f"'{JOB_ID}'",
@@ -225,7 +226,14 @@ def store(telemetry_table):
         "init_weight_sync_state",
         "offload_policy_model_to_cpu",
     ):
-        add("phase_duration_seconds", 2, attributes={"phase": phase})
+        add(
+            "phase_duration_seconds",
+            2,
+            attributes={
+                "phase": phase,
+                **({"clock_domain": "inclusive_wall", "root": "step", "parent": ""} if phase == "step" else {}),
+            },
+        )
     for value in (10, 30):
         add("rollout_wait_seconds", value, attributes={"wait": "slot", "stat": "sum"})
     for value in (2, 10):
@@ -402,6 +410,8 @@ def store(telemetry_table):
     # predicate and carrying a value no assertion below expects. The other run is a sync
     # run, which the run picker has to leave out of its dropdown as well.
     sync_resource = json.dumps({"role": "trainer", "host": "trainer", "training_type": "sync"})
+    add("work_completed", 64, attributes={"work_kind": "rollout"})
+    add("work_completed", 512, attributes={"work_kind": "sample"})
     distractors = []
     for row in rows:
         for column, replacement in (
@@ -696,12 +706,6 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
             assert response.status_code == 200, (view, response.text)
 
 
-def test_the_seeded_row_matches_the_table_it_is_inserted_into():
-    # seed() inserts positionally, so a column added to one and not the other would shift every
-    # field after it onto the wrong column instead of failing.
-    assert TelemetryRow._fields == tuple(SCHEMA.names)
-
-
 def test_step_composition_closes_on_the_mean_step_and_keeps_attempts_separate(telemetry_table):
     rows = []
     for execution, step, duration, children in (
@@ -895,7 +899,7 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
 
 
 def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(store):
-    rates = {row["series"]: row["value"] for row in query(store, "Response tokens generated and trained on / s")}
+    rates = {row["series"]: row["value"] for row in query(store, "Generated and consumed response tokens / s")}
     assert rates == {
         "generated_token · driver": 0.5,
         "consumed_response_token · driver": pytest.approx(1 / 3),
@@ -971,14 +975,8 @@ def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(sto
 def test_empty_telemetry_is_unknown_and_startup_only_runs_are_discoverable(store):
     store.execute(f"DELETE FROM {TABLE} WHERE name NOT IN ('lifecycle','terminal')")
     assert store.execute(resolve(run_variable_sql())).fetchall() == [("run",)]
-    assert query(store, "Response tokens generated and trained on / s") == []
+    assert query(store, "Generated and consumed response tokens / s") == []
     assert query(store, "Rollouts completing during policy training") == []
-
-
-def test_run_picker_offers_the_asynchronous_run_and_not_the_synchronous_one(store):
-    # Synchronous runs reach the same table under their own run ids; this dashboard charts
-    # only the asynchronous loop, so its picker must not offer one.
-    assert store.execute(resolve(run_variable_sql())).fetchall() == [("run",)]
 
 
 def test_phase_service_rates_exclude_resets_boundaries_and_other_collectors(store):

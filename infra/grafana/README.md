@@ -30,10 +30,11 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
-GET /finelog/{cluster}/v1/{node,training,runs,rl,async-rl,accelerator,jobs}/overview
+GET /finelog/{cluster}/v1/{node,training,runs,rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
+GET /finelog/{cluster}/v1/rl/attempt             bounded selected-job attempts
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/relay_status                  direct regional relay heartbeats
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
@@ -312,17 +313,18 @@ of repeating the Kubernetes object name.
 | Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
-| Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
-| Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
+| Workload | RL Post-training | `rl_runs.json` | How is one RL run doing, sync or async? | training type, cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
 
-Getting a run onto an RL Post-training view is a MarinSkyRL-side question: which launch paths export
-the telemetry environment, what a run id should look like, and which training loop the run stamps on
-its records. Each view's run picker offers only its own loop. MarinSkyRL documents it at
-`docs/grafana-rl-runs.md`.
+The training-type picker filters the RL Post-training run picker. A run is async when any
+lifecycle, policy-step or rollout-call record in the selected clusters and window carries
+`training_type=async`; every other run, including a run with no stamp, is sync. The Job and
+Execution pickers select the same attempt data for both types. All executions includes every
+identified execution of the selected job. Run-wide panels state that they ignore these two
+pickers. MarinSkyRL documents telemetry export at `docs/grafana-rl-runs.md`.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old

@@ -17,7 +17,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/v1/runs/overview       bounded shared multi-run dataset
     GET /finelog/{cluster}/v1/rl/overview         bounded shared RL dataset
     GET /finelog/{cluster}/v1/rl/recent           bounded recent RL runs
-    GET /finelog/{cluster}/v1/rl/attempt   bounded shared RL attempt dataset
+    GET /finelog/{cluster}/v1/rl/attempt          bounded shared RL attempt dataset
     GET /finelog/{cluster}/v1/accelerator/overview bounded shared accelerator dataset
     GET /finelog/{cluster}/v1/jobs/overview       five namespace-bounded Jobs sources
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
