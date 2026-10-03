@@ -5,41 +5,36 @@
 
 import dataclasses
 import hashlib
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
-import click
 import numpy as np
 from datasets import load_dataset
 from levanter.data._preprocessor import BatchProcessor
+from levanter.data.text.datasets import DatasetComponent, DatasetComponentBase, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, write_levanter_cache
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.cli import build_options
+from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.store_builder import write_stats_json
+from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.fast_track.contracts import (
     TRAIN_SPLIT,
     AddDatasetConfig,
-    AddDatasetSamplingPolicy,
     DatasetPrefix,
+    FrozenBaselineManifest,
     PreparedAddDatasetCache,
+    ResolvedTrainingBudget,
+    add_dataset_mixture_weights,
     unique_token_sample_cap,
 )
-from experiments.grug.fast_track.launch import (
-    H100_LADDER_SIZES,
-    V16384_TOKENIZER,
-    AddDatasetTrainingSource,
-    MatchMode,
-    _h100_ladder_model,
-    _h100_ladder_rung,
-    build_h100_ladder_run,
-    resolve_h100_ladder_budget,
-)
+from experiments.grug.fast_track.launch import FROZEN_BASELINE, FlatCacheTrainingSource
 
 
 @dataclasses.dataclass(frozen=True)
@@ -146,12 +141,13 @@ def add_dataset_cache_step(
     identity_hash = hashlib.sha256(canonical_json(identity).encode()).hexdigest()
     name = f"fast-track/add-dataset/{identity_hash}"
     resolved_version = resolve_version(name, version)
+    namespaced_name = user_namespaced_name(name, resolved_version)
 
     def build_config(ctx: StepContext) -> AddDatasetPreparationConfig:
         return dataclasses.replace(config, output_path=ctx.output_path)
 
     return ArtifactStep(
-        name=name,
+        name=namespaced_name,
         version=resolved_version,
         artifact_type=PreparedAddDatasetCache,
         run=_build_prepared_cache,
@@ -159,107 +155,98 @@ def add_dataset_cache_step(
     )
 
 
-@click.command()
-@click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
-@click.option("--size", type=click.Choice(H100_LADDER_SIZES), default="d512", show_default=True)
-@click.option("--dense/--moe", default=True, show_default=True, help="Select the dense or MoE model.")
-@click.option("--match", type=click.Choice([mode.value for mode in MatchMode]), default="data", show_default=True)
-@click.option("--batch-size", type=click.IntRange(min=1), default=None)
-@click.option("--num-steps", type=click.IntRange(min=1), default=None)
-@click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True, help="Model initialization seed.")
-@click.option("--data-seed", type=click.IntRange(min=0), default=0, show_default=True, help="Training data seed.")
-@click.option("--repository", required=True, help="Hugging Face dataset repository.")
-@click.option("--revision", required=True, help="Immutable Hugging Face commit hash.")
-@click.option("--subset", default=None, help="Hugging Face dataset subset.")
-@click.option("--split", required=True, help="Hugging Face split to stream.")
-@click.option("--text-field", required=True, help="String field to tokenize.")
-@click.option("--fraction", type=click.FloatRange(min=0, max=1, min_open=True, max_open=True), required=True)
-@click.option("--target-production-tokens", type=click.IntRange(min=1), required=True)
-@click.option("--available-unique-tokens", type=click.IntRange(min=1), required=True)
-@click.option("--max-rows", type=click.IntRange(min=1), required=True)
-@click.option("--max-overshoot-tokens", type=click.IntRange(min=0), default=16_384, show_default=True)
-@click.option("--prepare-token-cap", type=click.IntRange(min=1), default=None)
-@build_options
-def main(
-    run_id: str,
-    size: str,
-    dense: bool,
-    match: str,
-    batch_size: int | None,
-    num_steps: int | None,
-    seed: int,
-    data_seed: int,
-    repository: str,
-    revision: str,
-    subset: str | None,
-    split: str,
-    text_field: str,
+def add_prepared_dataset_component(
+    baseline: LmDataConfig,
+    *,
+    name: str,
+    component: DatasetComponentBase,
     fraction: float,
-    target_production_tokens: int,
-    available_unique_tokens: int,
-    max_rows: int,
-    max_overshoot_tokens: int,
-    prepare_token_cap: int | None,
-) -> ArtifactStep:
-    if not run_id.strip():
-        raise click.UsageError("--run-id must not be empty")
-    model = _h100_ladder_model(_h100_ladder_rung(size), dense=dense)
-    budget = resolve_h100_ladder_budget(
-        size=size,
-        dense=dense,
-        match=MatchMode(match),
-        num_steps=num_steps,
-        batch_size=batch_size,
-        model=model,
-    )
-    requested_token_cap = unique_token_sample_cap(
-        target_production_tokens=target_production_tokens,
-        fast_track_budget=budget.token_count,
-        available_unique_tokens=available_unique_tokens,
-        fraction=fraction,
-        loader_unit=budget.batch_size * budget.sequence_length,
-    )
-    if requested_token_cap < budget.batch_size * budget.sequence_length:
-        raise click.UsageError("dataset share yields fewer than one full training batch")
+    max_train_batches: int,
+) -> LmDataConfig:
+    """Add a prepared dataset at its token share without a second simulated slice."""
+    weights = baseline.train_weights
+    if not isinstance(weights, dict):
+        raise ValueError("add-dataset training requires fixed dictionary weights")
+    if name in baseline.components:
+        raise ValueError(f"new dataset component {name!r} already exists")
 
-    prepared_token_cap = requested_token_cap if prepare_token_cap is None else prepare_token_cap
-    if prepared_token_cap < requested_token_cap:
-        raise click.UsageError("--prepare-token-cap must be at least the training sample cap")
-    prefix = DatasetPrefix(
-        repo=repository,
-        revision=revision,
-        subset=subset,
-        split=split,
-        text_field=text_field,
-        tokenizer=V16384_TOKENIZER,
-        sampling_policy=AddDatasetSamplingPolicy.PREFIX,
-        max_rows=max_rows,
-        max_overshoot_tokens=max_overshoot_tokens,
-        requested_token_cap=prepared_token_cap,
+    return replace(
+        baseline,
+        components={**baseline.components, name: component},
+        train_weights=add_dataset_mixture_weights(weights, new_component=name, fraction=fraction),
+        max_train_batches={name: max_train_batches},
+        target_budget=None,
+        experiment_budget=None,
     )
-    preparation = AddDatasetPreparationConfig(prefix=prefix, output_path="<output_path>")
-    cache_step = add_dataset_cache_step(config=preparation)
-    source = AddDatasetTrainingSource(
-        config=AddDatasetConfig(
-            token_cache=cache_step,
-            prefix=prefix,
-            fraction=fraction,
-            target_production_tokens=target_production_tokens,
-            available_unique_tokens=available_unique_tokens,
+
+
+@dataclasses.dataclass(frozen=True)
+class AddDatasetTrainingSource:
+    """Add one prepared Hugging Face token cache to the frozen baseline."""
+
+    config: AddDatasetConfig
+    baseline: FrozenBaselineManifest = FROZEN_BASELINE
+
+    def dependencies(self) -> tuple[ArtifactStep, ...]:
+        return (self.config.token_cache,)
+
+    def data_config(
+        self,
+        *,
+        ctx: StepContext,
+        validation: Sequence[ArtifactStep[TokenizedCache]],
+        tokenizer: str,
+        budget: ResolvedTrainingBudget,
+    ) -> LmDataConfig:
+        baseline = FlatCacheTrainingSource(manifest=self.baseline).data_config(
+            ctx=ctx,
+            validation=validation,
+            tokenizer=tokenizer,
+            budget=budget,
         )
-    )
-    return build_h100_ladder_run(
-        run_id=run_id,
-        size=size,
-        match=MatchMode(match),
-        batch_size=budget.batch_size,
-        num_steps=budget.num_steps,
-        dense=dense,
-        seed=seed,
-        data_seed=data_seed,
-        training_source=source,
-    )
+        loader_unit = budget.batch_size * budget.sequence_length
+        sample_cap = unique_token_sample_cap(
+            target_production_tokens=self.config.target_production_tokens,
+            fast_track_budget=budget.token_count,
+            available_unique_tokens=self.config.available_unique_tokens,
+            fraction=self.config.fraction,
+            loader_unit=loader_unit,
+        )
+        if sample_cap < loader_unit:
+            raise ValueError("add-dataset share yields fewer than one full training batch")
 
+        if ctx.is_fingerprint:
+            cache_dir = ctx.artifact_path(self.config.token_cache)
+        else:
+            token_cache = ctx.resolved(self.config.token_cache)
+            if token_cache.prefix.tokenizer != tokenizer:
+                raise ValueError(
+                    f"add-dataset tokenizer {token_cache.prefix.tokenizer!r} does not match requested {tokenizer!r}"
+                )
+            if token_cache.prefix != self.config.prefix:
+                expected = self.config.prefix.model_dump(mode="json")
+                actual = token_cache.prefix.model_dump(mode="json")
+                differences = {
+                    field: {"expected": value, "actual": actual[field]}
+                    for field, value in expected.items()
+                    if value != actual[field]
+                }
+                raise ValueError(f"prepared add-dataset prefix differs from the training source: {differences}")
+            if token_cache.actual_num_tokens < sample_cap:
+                raise ValueError(
+                    f"prepared add-dataset cache has {token_cache.actual_num_tokens:,} tokens; "
+                    f"the run requires {sample_cap:,}"
+                )
+            cache_dir = token_cache.cache_dir
 
-if __name__ == "__main__":
-    main()
+        return add_prepared_dataset_component(
+            baseline,
+            name="add-dataset",
+            component=DatasetComponent(
+                cache_dir=prefix_join(cache_dir, TRAIN_SPLIT),
+                format=TextLmDatasetFormat(text_key=self.config.prefix.text_field),
+                flat_cache=True,
+            ),
+            fraction=self.config.fraction,
+            max_train_batches=sample_cap // loader_unit,
+        )
