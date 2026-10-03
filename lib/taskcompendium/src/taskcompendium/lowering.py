@@ -7,7 +7,7 @@ import base64
 import hashlib
 import json
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -20,7 +20,6 @@ from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.grading import resolve_verifier, supports_verifier, validate_verifier
 from taskcompendium.models import (
     SCHEMA_VERSION,
-    DatasetPath,
     EnvironmentRequirements,
     TaskResource,
     TaskSpec,
@@ -43,7 +42,7 @@ SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
 TASK_CONFIG_FILE = "task.toml"
 INSTRUCTION_FILE = "instruction.md"
-DOCKER_DEFINITION_FILES = ("Dockerfile", "docker-compose.yaml")
+DOCKER_DEFINITION_FILES = ("Dockerfile", "docker-compose.yaml", "docker-compose.yml")
 DEFAULT_INLINE_FILE_MODE = "0644"
 
 
@@ -57,7 +56,7 @@ class HarborEnvironmentConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_environment(self) -> "HarborEnvironmentConfig":
-        if self.environment not in (DIRECT_CHAT_ENVIRONMENT, DOCKER_ENVIRONMENT) or self.tools:
+        if self.environment not in {provider.environment for provider in ENVIRONMENT_PROVIDERS} or self.tools:
             raise ValueError("This lowering supports direct chat or Harbor Docker without task-owned tools")
         return self
 
@@ -132,29 +131,23 @@ def select_lowerings(
 
 
 def _resource_content(resource: TaskResource) -> bytes:
-    if isinstance(resource.source, DatasetPath):
-        raise NotImplementedError("Harbor Docker supports inline file resources only")
     content = base64.b64decode(resource.source.content_base64, validate=True)
     if len(content) > MAX_RESOURCE_BYTES:
         raise ValueError("Resource exceeds the inline byte limit")
     return content
 
 
-def validate_environment_config(
-    specification: TaskSpec,
-    environment_config: HarborEnvironmentConfig,
-    convention: SubmissionConvention | None = None,
-) -> None:
-    """Reject semantic features the selected Harbor runtime cannot preserve."""
-    if environment_config.environment == DIRECT_CHAT_ENVIRONMENT:
-        unsupported = unsupported_direct_chat_features(specification)
-        if unsupported:
-            raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
-        if not direct_chat_verifier_supported(specification.verifier):
-            raise NotImplementedError(f"Direct chat cannot submit to verifier: {specification.verifier.kind!r}")
-        if isinstance(convention, (TextFile, JsonFile)):
-            raise NotImplementedError("Direct chat cannot submit a workspace file")
-        return
+def _validate_direct_chat(specification: TaskSpec, convention: SubmissionConvention | None) -> None:
+    unsupported = unsupported_direct_chat_features(specification)
+    if unsupported:
+        raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
+    if not direct_chat_verifier_supported(specification.verifier):
+        raise NotImplementedError(f"Direct chat cannot submit to verifier: {specification.verifier.kind!r}")
+    if isinstance(convention, (TextFile, JsonFile)):
+        raise NotImplementedError("Direct chat cannot submit a workspace file")
+
+
+def _validate_docker(specification: TaskSpec, convention: SubmissionConvention | None) -> None:
     requirements = specification.environment_requirements
     if requirements.docker_image is None or requirements.working_directory is None:
         raise ValueError("Harbor Docker requires a pinned image and declared working_directory")
@@ -199,6 +192,58 @@ def validate_environment_config(
             raise NotImplementedError("Harbor Docker public inline files require owner-read permission for upload")
         if resource.path.split("/")[0] in DOCKER_DEFINITION_FILES:
             raise ValueError("Worker resources cannot override the Docker definition")
+
+
+async def _direct_chat_launch_kwargs() -> dict[str, str]:
+    return {}
+
+
+async def _docker_launch_kwargs() -> dict[str, str]:
+    # The optional execution dependency is needed only when a trial launches.
+    from shellbox.backends.docker.terminal import docker_control_plane  # noqa: PLC0415 - optional execution dependency
+
+    control = await docker_control_plane()
+    return {"archive_socket": control.socket, "archive_api_version": control.api_version}
+
+
+@dataclass(frozen=True)
+class EnvironmentProvider:
+    environment: str
+    harbor_import_path: str
+    validate: Callable[[TaskSpec, SubmissionConvention | None], None]
+    launch_kwargs: Callable[[], Awaitable[dict[str, str]]]
+
+
+ENVIRONMENT_PROVIDERS = (
+    EnvironmentProvider(
+        DIRECT_CHAT_ENVIRONMENT,
+        "taskcompendium.harbor.adapter:NoToolEnvironment",
+        _validate_direct_chat,
+        _direct_chat_launch_kwargs,
+    ),
+    EnvironmentProvider(
+        DOCKER_ENVIRONMENT,
+        "taskcompendium.harbor.docker:DockerWorkspaceEnvironment",
+        _validate_docker,
+        _docker_launch_kwargs,
+    ),
+)
+
+
+def environment_provider(environment_config: HarborEnvironmentConfig) -> EnvironmentProvider:
+    for provider in ENVIRONMENT_PROVIDERS:
+        if provider.environment == environment_config.environment:
+            return provider
+    raise ValueError(f"Unsupported Harbor execution environment: {environment_config.environment!r}")
+
+
+def validate_environment_config(
+    specification: TaskSpec,
+    environment_config: HarborEnvironmentConfig,
+    convention: SubmissionConvention | None = None,
+) -> None:
+    """Reject semantic features the selected Harbor runtime cannot preserve."""
+    environment_provider(environment_config).validate(specification, convention)
 
 
 def _task_config(specification: TaskSpec, environment_config: HarborEnvironmentConfig) -> dict:

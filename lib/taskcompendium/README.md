@@ -272,7 +272,7 @@ Use `HarborEnvironmentConfig(environment="docker")` with canonical worker
 requirements declaring `docker_image="repository@sha256:digest"` and an absolute
 `working_directory`. The digest-pinned Linux image must already be available to
 Docker and contain Bash. Final-file collection runs on the host without invoking worker programs. The
-bridge uses Harbor's normal Docker container lifecycle with internet disabled,
+bridge uses a Shellbox Docker machine underneath the Harbor Trial with internet disabled,
 forbids build/compose overrides, prevents automatic image pulls, and retains the
 shared image during cleanup.
 
@@ -286,13 +286,16 @@ result paths fail before export. File extraction needs no conversation trace.
 It refuses symlink workdirs, symlink results, and nonregular result files before
 downloading candidate bytes. Missing, invalid, or oversized files receive `submission_failure`
 with reward `0.0`; a valid wrong result receives `graded` with reward `0.0`.
-Collection pauses this trial container, checks daemon-side path metadata, and
+Collection pauses a running trial container, checks daemon-side path metadata, and
 streams one uncompressed regular-file archive to the host without extraction.
 Unexpected compression is an infrastructure error. Metadata is bounded to
 8 KiB; the archive is bounded to the file byte limit plus 64 KiB of
 metadata/padding. One 30-second timeout bounds collection. Cleanup unpauses the
-trial before Harbor removes its containers and volumes, including on errors or
-cancellation. This acquires one file at the collection cutoff; it does not
+trial before explicit container removal, including on errors or
+cancellation. A command timeout or cancellation stops the machine and retains its
+files until Harbor finishes diagnostic recovery and closes it. Terminal collection
+from a stopped machine first verifies the stopped Engine state; failed stop or
+unpause operations remain infrastructure errors. This acquires one file at the collection cutoff; it does not
 provide a general workspace snapshot or shared process-state contract.
 
 Pass the caller's Harbor `AgentConfig` directly to `run_trial`; for example,
@@ -303,13 +306,14 @@ configuration. TaskCompendium defines no shell tool or agent-owned harness.
 The bridge materializes only `InlineFile` resources in `resources.all` and
 `resources.worker` under `environment/`, which Harbor uploads to the worker
 workdir. Private oracle/verifier resources and expected answers stay in the
-host-side specification. Only Harbor's agent/artifact log directories are
-mounted into the worker; verifier logs stay on the host. Dataset
-paths, setup commands, task environment variables, tool providers, final tools,
+host-side specification. No host directories are mounted into the worker. Harbor
+uses its native best-effort directory downloads for the worker's agent and artifact
+logs before closing the machine; verifier logs stay on the host. Setup commands, task environment variables, tool providers, final tools,
 additional capabilities, private verifier runtimes, and whole workspace-state
 results are unsupported and fail before export or launch.
 
-Workspace setup resolves the pinned image's default numeric UID/GID with `id`
+Workspace setup rejects a symlink workdir before public upload or ownership changes,
+then resolves the pinned image's default numeric UID/GID with `id`
 and uses root `chown`/`chmod` to assign the workdir and public inputs to that
 identity. It preserves each supported declared file mode, including read-only
 `0400` and executable `0500`, and gives public parent directories mode `0755`.
@@ -321,7 +325,7 @@ the host must read these files for validation and upload. The image must provide
 Unix commands. Caller agents retain their configuration; an agent that chooses
 a different per-command user must manage that identity's access itself.
 
-CPU tests run the actual Harbor Trial and Docker environment against a fake
+CPU tests run the actual Harbor Trial and Shellbox Docker environment against a fake
 Docker CLI and a local Unix-socket Engine endpoint. `run_trial` resolves the
 standard Docker CLI context and the installed daemon's API version once, before
 creating a Trial. Remote TCP/SSH/TLS contexts are unsupported; package export

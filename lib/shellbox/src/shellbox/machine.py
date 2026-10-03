@@ -83,8 +83,9 @@ class ShellSimBuiltins:
 
 @dataclass(frozen=True)
 class MachineSpec:
-    """Machine inputs, with a provider startup timeout for Daytona.
+    """Machine inputs, with startup timeouts for Daytona and Docker.
 
+    Docker bounds container creation; Daytona bounds sandbox preparation.
     Other factories do not apply startup_timeout. Callers enforce their own
     deadline for the complete create operation.
     """
@@ -129,6 +130,17 @@ class Result:
 
 class UnsupportedMachineSpec(ValueError):
     """The selected backend cannot create the requested machine."""
+
+
+class InvalidWorkspaceFile(Exception):
+    """The terminal candidate is missing its required regular-file properties."""
+
+
+@runtime_checkable
+class TerminalFileReader(Protocol):
+    """Read one bounded terminal file relative to the machine workdir."""
+
+    async def read_file(self, path: str, max_bytes: int) -> bytes | None: ...
 
 
 class Machine(Protocol):

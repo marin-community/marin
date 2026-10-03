@@ -8,6 +8,12 @@ import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
+from shellbox.backends.docker.terminal import (
+    DockerControlPlane,
+    DockerMachineState,
+    DockerTerminalReader,
+    validate_linux_image,
+)
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, load_docker_image, process_image_cache
 from shellbox.machine import (
     Command,
@@ -18,6 +24,8 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
+
+MACHINE_CLEANUP_TIMEOUT = 30
 
 
 @dataclass(frozen=True)
@@ -47,11 +55,12 @@ class DockerMachine:
     def __init__(self, name: str, spec: MachineSpec):
         self.name = name
         self.spec = spec
-        self._closed = False
+        self.state = DockerMachineState.RUNNING
+        self.control: DockerControlPlane | None = None
 
     async def run(self, command: Command) -> Result:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
+        if self.state is not DockerMachineState.RUNNING:
+            raise RuntimeError("Docker machine is not running")
         if not command.argv:
             raise ValueError("Command argv is empty")
         args = ["exec", "-i"]
@@ -66,11 +75,11 @@ class DockerMachine:
         try:
             completed = await docker(*args, stdin=command.stdin, timeout=command.timeout)
         except TimeoutError:
-            # docker exec has no reliable process-tree cancellation; dispose of the trial.
-            await self.close()
+            # Stop all trial processes, retaining files for Harbor output recovery.
+            await self._stop()
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError:
-            await self.close()
+            await self._stop()
             raise
         limit = command.output_limit_bytes
         return Result(
@@ -83,6 +92,8 @@ class DockerMachine:
         )
 
     async def upload(self, source: Path, target: str) -> None:
+        if self.state is not DockerMachineState.RUNNING:
+            raise RuntimeError("Docker machine is not running")
         parent = str(PurePosixPath(target).parent)
         result = await docker("exec", "--user", "0", self.name, "mkdir", "-p", parent)
         if result.exit_code:
@@ -97,19 +108,41 @@ class DockerMachine:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
+        if self.state is DockerMachineState.CLOSED:
+            raise RuntimeError("Machine is closed")
         target.parent.mkdir(parents=True, exist_ok=True)
         copy_source = f"{source}/." if target.is_dir() else source
         result = await docker("cp", f"{self.name}:{copy_source}", str(target))
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
-    async def close(self) -> None:
-        if self._closed:
+    async def read_file(self, path: str, max_bytes: int) -> bytes | None:
+        if self.state is DockerMachineState.CLOSED:
+            raise RuntimeError("Machine is closed")
+        if self.state is DockerMachineState.STOP_FAILED:
+            raise RuntimeError("Docker machine stop failed; terminal collection is unavailable")
+        if self.control is None:
+            raise UnsupportedMachineSpec("Terminal collection requires a local Docker control plane")
+        return await DockerTerminalReader(self.name, self.spec.workdir, self.control, self.state).read_file(
+            path, max_bytes
+        )
+
+    async def _stop(self) -> None:
+        if self.state is not DockerMachineState.RUNNING:
             return
-        self._closed = True
-        result = await docker("rm", "-f", self.name)
+        self.state = DockerMachineState.STOP_FAILED
+        result = await docker("stop", "--time", "0", self.name, timeout=MACHINE_CLEANUP_TIMEOUT)
         if result.exit_code:
             raise RuntimeError(result.stderr.decode(errors="replace"))
+        self.state = DockerMachineState.STOPPED
+
+    async def close(self) -> None:
+        if self.state is DockerMachineState.CLOSED:
+            return
+        result = await docker("rm", "-f", self.name, timeout=MACHINE_CLEANUP_TIMEOUT)
+        if result.exit_code:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
+        self.state = DockerMachineState.CLOSED
 
 
 class DockerMachineFactory:
@@ -123,12 +156,14 @@ class DockerMachineFactory:
         authfile: Path | None = None,
         policy: Path | None = None,
         runtime: str | None = None,
+        control: DockerControlPlane | None = None,
     ):
         self.skopeo = skopeo
         self.image_cache = image_cache
         self.authfile = authfile
         self.policy = policy
         self.runtime = runtime
+        self.control = control
 
     async def create(self, spec: MachineSpec) -> DockerMachine:
         if isinstance(spec.source, (RegistryImage, DockerfileSource)):
@@ -144,10 +179,11 @@ class DockerMachineFactory:
             spec = replace(spec, source=DockerImage(reference))
         if not isinstance(spec.source, DockerImage):
             raise UnsupportedMachineSpec("Docker requires a DockerImage source")
+        if self.control is not None:
+            await validate_linux_image(spec.source.reference)
         name = f"harbor-machine-{uuid.uuid4().hex}"
         args = [
             "run",
-            "--rm",
             "--pull=never",
             "-d",
             "--name",
@@ -169,10 +205,14 @@ class DockerMachineFactory:
             args.extend(("-e", f"{key}={value}"))
         args.extend(("--entrypoint", "/bin/sh", spec.source.reference, "-c", "while :; do sleep 3600; done"))
         try:
-            result = await docker(*args)
-        except BaseException:
-            await docker("rm", "-f", name)
+            result = await docker(*args, timeout=spec.startup_timeout)
+            if result.exit_code:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
+        except BaseException as error:
+            cleanup = await docker("rm", "-f", name, timeout=MACHINE_CLEANUP_TIMEOUT)
+            if cleanup.exit_code:
+                raise RuntimeError(cleanup.stderr.decode(errors="replace")) from error
             raise
-        if result.exit_code:
-            raise RuntimeError(result.stderr.decode(errors="replace"))
-        return DockerMachine(name, spec)
+        machine = DockerMachine(name, spec)
+        machine.control = self.control
+        return machine

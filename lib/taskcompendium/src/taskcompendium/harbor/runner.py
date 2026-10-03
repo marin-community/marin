@@ -12,13 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from tasktrove_verify.spec import PredictedActionSpec
 
 from taskcompendium.grading import resolve_verifier, validate_verifier
-from taskcompendium.harbor.docker import docker_control_plane
 from taskcompendium.lowering import (
-    DOCKER_ENVIRONMENT,
     ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
     HarborEnvironmentConfig,
+    environment_provider,
     read_environment_config,
     read_specification,
     read_submission_convention,
@@ -94,21 +93,14 @@ async def run_trial(
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention differs from task contract: {'; '.join(compatibility.reasons)}")
-    environment_import = (
-        "taskcompendium.harbor.docker:DockerWorkspaceEnvironment"
-        if environment_config.environment == DOCKER_ENVIRONMENT
-        else "taskcompendium.harbor.adapter:NoToolEnvironment"
-    )
-    environment_kwargs = {}
-    if environment_config.environment == DOCKER_ENVIRONMENT:
-        control = await docker_control_plane()
-        environment_kwargs = {"archive_socket": control.socket, "archive_api_version": control.api_version}
+    provider = environment_provider(environment_config)
+    environment_kwargs = await provider.launch_kwargs()
     config = TrialConfig.model_validate(
         {
             "task": {"path": str(task_dir.resolve())},
             "trials_dir": str(trials_dir.resolve()),
             "trial_name": trial_name,
-            "environment": {"import_path": environment_import, "kwargs": environment_kwargs},
+            "environment": {"import_path": provider.harbor_import_path, "kwargs": environment_kwargs},
             "agent": agent.model_dump(),
             **({"trial_attempt_timeout_sec": trial_timeout} if trial_timeout is not None else {}),
             "verifier": {"import_path": "taskcompendium.harbor.adapter:SemanticVerifier"},

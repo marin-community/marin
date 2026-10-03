@@ -10,7 +10,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = ["marin-rigging", "pydantic>=2.0", "tasktrove-verify"]
 
 [project.optional-dependencies]
-harbor = ["harbor", "httpx>=0.27"]
+harbor = ["harbor", "marin-shellbox[harbor]"]
 
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
@@ -21,6 +21,7 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
 marin-rigging = { path = "../rigging", editable = true }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
 tasktrove-verify = { path = "../tasktrove-verify", editable = true }
+marin-shellbox = { path = "../shellbox", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
@@ -48,5 +49,5 @@ known-first-party = ["taskcompendium"]
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
 project-includes = ["src"]
-search-path = ["src", "../tasktrove-verify/src", "../rigging/src"]
+search-path = ["src", "../tasktrove-verify/src", "../rigging/src", "../shellbox/src"]
 python-interpreter = ".venv/bin/python"

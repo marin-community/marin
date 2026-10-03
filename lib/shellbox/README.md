@@ -60,6 +60,7 @@ The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 this value, the factory uses its `create_timeout` setting.
 The pinned Daytona SDK does not upload local `ADD` inputs. Dockerfiles with `ADD`
 require a prebuilt registry image.
+Docker applies `MachineSpec.startup_timeout` to container creation.
 Other factories do not apply `MachineSpec.startup_timeout`. Callers enforce the
 deadline for the complete create operation.
 
@@ -295,3 +296,26 @@ The guest has persistent files for a trial. A minimal bundle uses BusyBox `ash` 
 The QEMU image must contain the task tools and verifier dependencies needed without guest internet. `Bash` runs through a guest PTY on a separate virtio-serial channel. One `Bash` tool returns JSON with `output`, `status`, `exit_code`, and `truncated`. Pass `command` to start a command; omit it to read a running command, pass `input` to send text, or set `signal` to `interrupt` to send Ctrl-C. Use at most one of `command`, `input`, and `signal` per call. `Bash` waits at most 30 seconds per call; a longer command remains active for later reads or interruption. PTY stdout and stderr are combined. A tool result retains at most 128 KiB and marks excess output as truncated; excess output cannot be retrieved later. Agents can redirect large output to a file and inspect a smaller excerpt. `exit` or shell failure resets Bash while files remain. The one-shot serial protocol still buffers setup and verifier output in guest files. The bundle copies a full ext4 disk for each trial; this can be costly for large images. Extended attributes, Linux capabilities, device nodes outside `/dev`, and volume semantics have not been checked against an OCI runtime.
 
 The guest is isolated by QEMU's emulated machine boundary, but this prototype has not been security audited. It is intended for nonhostile agents on an already controlled compute node.
+
+### Harbor Docker adapter and terminal files
+
+`shellbox.backends.docker.environment:DockerEnvironment` adapts a local Docker
+machine to Harbor commands and diagnostic transfer. It accepts a local image
+and explicit workdir, disables internet, and rejects compose and caller host
+mounts. Harbor uses best-effort directory downloads for agent and artifact logs on the
+host; the machine receives no verifier host directory. An explicit `MachineFactory` can supply the machine without Docker control-plane
+inputs; the Docker factory remains the production adapter’s default. Per-command
+users retain Harbor default-user resolution. Public files are owned by the image UID/GID and
+retain their uploaded modes.
+
+Docker command timeout or cancellation stops the machine, preserving its files
+for download until `close` removes it. Further commands and uploads are unavailable.
+A failed stop prevents terminal collection while diagnostic download and explicit
+close remain available. Creation failures remove the container immediately.
+
+`TerminalFileReader` is an optional machine capability. Docker implements it with
+an explicit local Unix-socket Engine endpoint: it pauses a running machine or
+verifies a stopped machine, then reads one bounded regular-file tar without
+extracting it. Candidate shape failures raise `InvalidWorkspaceFile`; transport,
+state, and cleanup failures propagate separately. This does not bound generic
+diagnostic directory transfer or provide a whole-workspace snapshot.
