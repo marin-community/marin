@@ -29,3 +29,10 @@ compiled versus eager execution. Run `model-tp2-dp1-low.yaml` with
 `tb2-ten-old-wins-output8k.yaml` to change only the per-turn output cap from
 16,384 to 8,192. The eager and 8k arms are diagnostic deviations, not release
 settings. Keep their run descriptions explicit and omit a policy version.
+
+The `model-tp2-dp1-high-65k-*` trio isolates the archived single-turn serving
+changes on full HumanEval+ under one current grader. All three hold TP2/DP1,
+high reasoning, compiled execution, and the 65,536-token server window fixed.
+`high-65k-16k` is the no-HF-override control; `high-65k-16k-hf-overrides`
+adds only the archived HF position overrides; `high-65k-8k` instead changes
+only the generation cap. These are unlabeled diagnostics, not policy scores.
