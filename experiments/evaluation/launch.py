@@ -57,7 +57,6 @@ from experiments.evaluation.evals import (
     EVALS,
     EvalchemyDefinition,
     EvaluationDefinition,
-    GraphWalksDefinition,
     HarborDefinition,
     harbor_model_agent_kwargs,
 )
@@ -195,21 +194,6 @@ def _resolve_definitions(
                         executor=EvalchemyExecutor(config),
                         endpoint_route=EndpointRoute.DIRECT,
                         secret_env=dict(secret_env),
-                    ),
-                )
-            )
-            continue
-
-        if isinstance(definition, GraphWalksDefinition):
-            resolved.append(
-                (
-                    name,
-                    _ResolvedDefinition(
-                        record_ref=definition.record_ref_for(),
-                        runtime_descriptor=definition.runtime_descriptor,
-                        executor=definition.executor_for(model, limit),
-                        endpoint_route=EndpointRoute.DIRECT,
-                        secret_env={},
                     ),
                 )
             )

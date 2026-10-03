@@ -269,6 +269,14 @@ def test_extra_gen_kwargs_ride_on_gen_kwargs():
     assert gen_kwargs == "max_gen_toks=2048,skip_special_tokens=false,repetition_penalty=1.1"
 
 
+@pytest.mark.parametrize("prompt_budget_preflight,expected_cap", [(False, 130048), (True, 131072)])
+def test_prompt_preflight_owns_output_budget_selection(prompt_budget_preflight, expected_cap):
+    config = _payload(_config(max_gen_toks=131072, prompt_budget_preflight=prompt_budget_preflight))
+    command = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", 131072)
+
+    assert int(command[command.index("--max_tokens") + 1]) == expected_cap
+
+
 def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
     cmd = build_command(_payload(), _payload()["tasks"][1], "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
@@ -316,8 +324,9 @@ def test_unset_budget_loglikelihood_task_gets_no_gen_kwargs(monkeypatch):
     assert "--max_tokens" not in cmd
 
 
-def test_build_command_chat_route_needs_template_and_generation():
-    config = _payload(_config(apply_chat_template=True))
+@pytest.mark.parametrize("prompt_budget_preflight", [False, True])
+def test_build_command_chat_route_needs_template_and_generation(prompt_budget_preflight):
+    config = _payload(_config(apply_chat_template=True, prompt_budget_preflight=prompt_budget_preflight))
     generative, mcq = config["tasks"][1], config["tasks"][0]
 
     # A generation task of a chat-template model runs through the chat API...
@@ -328,8 +337,13 @@ def test_build_command_chat_route_needs_template_and_generation():
     assert chat_args["base_url"] == "http://10.0.0.1:30000/v1/chat/completions"
     # The endpoint applies the chat template; a client-side tokenizer would reject custom tokenizer
     # code (Kimi-Linear) or metadata the client's Transformers cannot read (Gemma 4).
-    assert chat_args["tokenizer_backend"] == "none"
-    assert "tokenizer" not in chat_args
+    if prompt_budget_preflight:
+        assert chat_args["tokenizer_backend"] == "huggingface"
+        assert chat_args["tokenizer"] == _MODEL.tokenizer
+        assert chat_args["trust_remote_code"] == "True"
+    else:
+        assert chat_args["tokenizer_backend"] == "none"
+        assert "tokenizer" not in chat_args
     completion_args = dict(pair.split("=", 1) for pair in build_model_args(config, False, None).split(","))
     assert completion_args["tokenizer_backend"] == "huggingface"
     assert completion_args["tokenizer"] == _MODEL.tokenizer

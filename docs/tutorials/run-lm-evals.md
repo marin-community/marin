@@ -1,6 +1,6 @@
 # Running Evaluations with Marin
 
-The shared evaluation launcher runs Evalchemy, Harbor, and GraphWalks evaluations against a registered model or a
+The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model or a
 file-backed model configuration. It starts one OpenAI-compatible model server, runs every selected
 evaluation against that endpoint, writes one durable record per evaluation, and tears the server
 down.
@@ -191,7 +191,8 @@ uv run python -m experiments.evaluation.cli launch \
   --evals graphwalks --no-wait
 ```
 
-The `graphwalks` key uses the pinned `openai/graphwalks` dataset and grades the final
+The `graphwalks` key runs the GraphWalks task in Marin's Evalchemy fork. It uses the pinned
+`openai/graphwalks` dataset and grades the final
 `Final Answer: [...]` line with set F1, following the dataset card. Prompts that cannot fit within
 the served model's context and output budget are skipped; the record reports the benchmark size,
 attempted count, and scored coverage. Compare scores together with these counts because the models'

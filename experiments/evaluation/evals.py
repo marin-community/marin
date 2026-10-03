@@ -20,14 +20,12 @@ from marin.evaluation.evalchemy.runner import (
 )
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.graphwalks import GRAPHWALKS_REVISION, GraphWalksExecutor
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
-from marin.evaluation.serving_config import resolved_serve_config
 from marin.external_dependencies import ExternalDependency
 from rigging.secrets import SecretSpec
 
@@ -90,6 +88,7 @@ class EvalchemyDefinition:
             evalchemy=EvalchemyRef(
                 apply_chat_template=config.apply_chat_template,
                 debug=config.debug,
+                prompt_budget_preflight=config.prompt_budget_preflight,
                 max_gen_toks=config.max_gen_toks,
                 max_eval_instances=config.max_eval_instances,
                 num_concurrent=config.num_concurrent,
@@ -139,6 +138,14 @@ class EvalchemyDefinition:
             chat_template_kwargs={
                 **model.generation.chat_template_kwargs,
                 **config.chat_template_kwargs,
+            },
+            extra_model_args={
+                **config.extra_model_args,
+                **(
+                    {"revision": model.effective_tokenizer_revision}
+                    if config.prompt_budget_preflight and model.effective_tokenizer_revision is not None
+                    else {}
+                ),
             },
         )
 
@@ -200,41 +207,6 @@ class HarborDefinition:
         )
 
 
-@dataclass(frozen=True)
-class GraphWalksDefinition:
-    """The pinned GraphWalks dataset and its native set-F1 grader."""
-
-    name: str = "graphwalks"
-    temperature: float = 0
-
-    def record_ref_for(self) -> EvalRef:
-        return EvalRef(
-            name=self.name,
-            mechanism="graphwalks",
-            tasks=(EvalTaskRef(name=self.name, num_fewshot=None),),
-        )
-
-    def executor_for(self, model: ModelConfig, limit: int | None) -> GraphWalksExecutor:
-        max_model_len = resolved_serve_config(model).max_model_len
-        if max_model_len is None:
-            raise ValueError("GraphWalks requires an explicit model serving context length")
-        max_output_tokens = model.generation.max_gen_toks
-        executor = GraphWalksExecutor(
-            max_model_len=max_model_len,
-            temperature=self.temperature,
-            chat_template_kwargs=model.generation.chat_template_kwargs,
-            tokenizer_revision=model.effective_tokenizer_revision,
-            limit=limit,
-        )
-        if max_output_tokens is None:
-            return executor
-        return replace(executor, max_output_tokens=max_output_tokens)
-
-    @property
-    def runtime_descriptor(self) -> str:
-        return f"openai/graphwalks@{GRAPHWALKS_REVISION}"
-
-
 def harbor_model_agent_kwargs(model: ModelConfig) -> dict[str, object]:
     """Omit unset catalog limits so the policy or Harbor defaults can supply them."""
     return {
@@ -294,6 +266,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: Externa
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
         debug=config.debug,
+        prompt_budget_preflight=config.prompt_budget_preflight,
         max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,
@@ -310,7 +283,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: Externa
     )
 
 
-EvaluationDefinition = EvalchemyDefinition | HarborDefinition | GraphWalksDefinition
+EvaluationDefinition = EvalchemyDefinition | HarborDefinition
 
 
 _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
@@ -346,6 +319,7 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "ifeval",
     "ifbench",
     "mrcr",
+    "graphwalks",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {
@@ -358,7 +332,6 @@ EVALS: dict[str, EvaluationDefinition] = {
 }
 EVALS.update(
     {
-        "graphwalks": GraphWalksDefinition(),
         # --- Harbor (agentic registry benchmarks) ---
         # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
         # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
