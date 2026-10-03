@@ -31,6 +31,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    FunctionDefinition,
     Source,
     TaskSpec,
     TextMessage,
@@ -153,6 +154,29 @@ async def test_executable_answer_call_keeps_submission_tool_and_finishes():
         "submit_answer",
         "shell",
     ]
+
+
+async def test_executable_native_action_keeps_final_and_shell_tools():
+    task = arithmetic_task().model_copy(
+        update={
+            "answer_type": AnswerType.NATIVE_ACTION,
+            "final_tools": (FunctionDefinition(name="finish", parameters={"type": "object"}),),
+            "environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
+        }
+    )
+    model = ReplayModel(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "finish", "type": "function", "function": {"name": "finish", "arguments": "{}"}}],
+            }
+        ]
+    )
+
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(task)
+
+    assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["finish", "shell"]
+    assert result.response_token_ids == (20,)
 
 
 async def test_rollout_rejects_legacy_environment_requirements():
