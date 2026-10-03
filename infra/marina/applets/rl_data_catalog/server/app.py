@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .catalog import (
+    HARBOR_ORIGIN,
     SKYRL,
     SKYRL_ORIGIN,
     TASKTROVE,
@@ -24,6 +25,7 @@ from .catalog import (
     Snapshot,
     annotate_source,
     get_json,
+    harbor_snapshot,
     merge_gym_sources,
     skyrl_snapshot,
     tasktrove_snapshot,
@@ -331,7 +333,7 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
     if not lock:
         return {"busy": True, "message": "Another visitor is refreshing the catalog. Your saved data remains available."}
     results = []
-    for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN):
+    for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN, HARBOR_ORIGIN):
         previous = connection.execute(
             text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": origin}
         ).scalar_one_or_none()
@@ -346,7 +348,7 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                     ).scalars()
                 ]
                 snapshot = skyrl_snapshot(client, head, cached_rows, force=force)
-            else:
+            elif origin == TASKTROVE_ORIGIN:
                 info = get_json(client, f"https://huggingface.co/api/datasets/{TASKTROVE}")
                 revision = info["sha"]
                 manifest = (
@@ -355,6 +357,11 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
                     else None
                 )
                 snapshot = tasktrove_snapshot(manifest, info) if manifest is not None else None
+            else:
+                snapshot = harbor_snapshot()
+                revision = snapshot.revision
+                if not force and revision == previous:
+                    snapshot = None
         except (
             httpx.HTTPError,
             HFCredentialError,

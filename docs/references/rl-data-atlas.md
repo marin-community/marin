@@ -1,9 +1,9 @@
 # RL Data Atlas
 
 [Open RL Data Atlas](https://public.applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
-to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
+to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources, pinned Harbor Hub releases, and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
 Task Trove packages converted datasets as tasks for the Harbor execution
-environment. The two catalogs are independent and can share original datasets.
+environment. The catalogs are independent and can share original datasets.
 Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link always opens the current release.
 
 Search and filter the table, including its Environment column, click column
@@ -91,8 +91,8 @@ uv run python -m infra.marina.applets.rl_data_catalog.audit_nemotron \
   --output infra/marina/applets/rl_data_catalog/server/nemotron_counts.py
 ```
 
-The top line shows one data-source count, the filtered task tally, and upstream
-status. The source count counts displayed source/component rows across both
+The top line shows one data-source count, the filtered task tally, and catalog
+status. The source count counts displayed source/component rows across all
 catalogs, excluding deprecated/excluded rows; an expanded parent contributes
 one count for each component and has no separate aggregate entry. It stays global when search
 filters change. Gym aliases such as `gym/aime` remain searchable, and source details
@@ -216,14 +216,15 @@ use the same task sample for three fixed models:
 | Role | Model | Reasoning setting |
 | --- | --- | --- |
 | Small | Qwen/Qwen3-Coder-30B-A3B-Instruct | Non-thinking checkpoint |
-| Large | Qwen/Qwen3.5-122B-A10B | Thinking enabled |
+| Large | Qwen/Qwen3.5-122B-A10B | Thinking disabled |
 | Hosted | zai-org/GLM-5.3 on Together | Low reasoning effort |
 
-The `atlas-difficulty-v2-65k16k` protocol gives each model 65,536 total context
+The `atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking` protocol gives each model 65,536 total context
 tokens, at most 49,152 input tokens, and at most 16,384 output tokens including
-reasoning. All three use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
-repetition penalty 1, and presence and frequency penalties 0. These explicit
-settings prevent checkpoint generation defaults from changing the comparison.
+reasoning. All three use temperature 0.7, top-k 20, min-p 0, repetition penalty 1,
+and frequency penalty 0. Small and Hosted use top-p 0.95 and presence penalty 0;
+Large uses top-p 0.8 and presence penalty 1.5, with `enable_thinking: false`.
+These explicit settings prevent checkpoint generation defaults from changing the comparison.
 Models retain their native reasoning controls; the shared token budget does not
 make those controls equivalent. Nemotron's learned verifiers use Hosted GLM-5.3
 with Low reasoning effort across all three arms. Their native output budgets
@@ -274,8 +275,8 @@ uv run experiments/rl_data_reviews/publish_review.py \
 ```
 
 Set `source.source_id` to the Atlas population named by `--atlas-id` and
-`source.revision` to that dataset's HF commit. `source.tasks_path` points to the
-local inputs. Use `source.format: skyrl_prepared` for Parquet or JSON rows with
+`source.revision` to that dataset's immutable revision (an HF commit or Harbor
+digest). `source.tasks_path` points to the local inputs. Use `source.format: skyrl_prepared` for Parquet or JSON rows with
 MarinSkyRL's `prompt`, `env_class`, and verifier arguments; use `harbor_directory`
 for native Harbor task directories. `task_manifest` accepts JSON or JSONL records
 matching the `Task` dataclass in `make_review.py`, including the source ID and
@@ -287,7 +288,31 @@ and synthesizes the opinions. Each Harbor attempt uses a distinct session name.
 Add `--resume` to the first command to reuse completed task outcomes, judge outputs, and syntheses with matching inputs,
 configuration, and native code. The publisher validates the collection and
 uploads its cited evidence into the applet schema using Marina authentication.
+Judgments need a substantive summary or finding. Placeholder-only responses remain
+incomplete with their raw calls retained; cached reviews and publication receive the
+same content check.
 Imported Task Trove dashboard notes and task audits remain separate historical collections; this publisher creates new collections from actual task attempts.
+
+Harbor reviews use the configured MarinSkyRL checkout for the existing result
+adapter, even when the source has no training registration. Preserve the task's
+resource limits and network restrictions when preparing its runtime.
+
+For Skill2Env, set `runtime.harbor_reward_mode: skill2env_components`. This
+preserves the named native rewards, reports their arithmetic mean, and counts a
+full pass only when every component is one within numerical tolerance.
+The native `tests/test.sh` supplies these scores; `tests/rubric.md` does not
+automatically add an LLM rubric reward.
+
+For Debian-based task images needing offline Terminus-2 tools, set
+`runtime.harbor_agent.name` to `offline_terminus:OfflineTerminus2`. Under
+`runtime.harbor_agent.kwargs`, provide `debian_package_manifest` as an absolute
+path and `debian_package_manifest_sha256` as its hash. The manifest is a JSON
+array of `filename` and `sha256` records; place the referenced `.deb` files
+beside it and include all missing dependencies. Verify package checksums against
+the distribution's package index before execution. Setup installs the checked
+bundle without downloads and records `agent/offline-tooling.json`. Set
+`record_terminal_session: false` when the bundle omits asciinema; conversation
+and trajectory artifacts remain available.
 
 Opening the [authenticated page](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/) checks the MarinSkyRL registry repository and Task Trove release
 repository heads and always refreshes MarinSkyRL upstream dataset metadata, including
@@ -332,3 +357,27 @@ POST to `api/refresh?force=true`. To verify runtime access, send a Marina-authen
 POST to `api/refresh?force=true&hf_auth=runtime` without a caller-supplied HF token;
 the response reports `hf_authentication: runtime_secret`. The token is used only for HF requests and is
 never stored in the applet tables or sent to the frontend. Normal page loads reuse Task Trove snapshots when its release head is unchanged.
+
+## Register a native Harbor release
+
+Add a `HarborSource` entry to
+`infra/marina/applets/rl_data_catalog/server/harbor_sources.py`. Record the
+immutable release digest, complete task count and its evidence, source links,
+license scope, and other metadata defined by the dataclass. Verify the count
+against the full release membership, including API pagination.
+
+Submit registrations and pin updates through a Marin PR. The applet bundles
+these entries under **Harbor Hub** without requiring a training registration.
+After deploying the update, refresh sources to load the bundled pins. Refresh
+does not follow upstream tags or download task archives. Changing a pin
+invalidates the current assessment while retaining earlier review artifacts.
+
+For validation, download selected tasks at their recorded digests and use the
+review workflow above with `source.format: harbor_directory` and
+`source.source_id: Harbor Hub:<org>/<dataset>`. Preserve the release population,
+selection method, and task digests with the evidence: the runner samples only
+the local task directories. Publish evidence after the source entry is deployed;
+registration alone establishes no quality rating or difficulty measurement.
+
+Skill2Env provides an example registration. Its evaluation setup, results, and
+limitations are recorded in [issue #9630](https://github.com/marin-community/marin/issues/9630).

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Execute the same Harbor Trial and result adapter used by MarinSkyRL."""
+"""Execute native Harbor trials and retain their verifier results."""
 
 import argparse
 import asyncio
@@ -12,12 +12,14 @@ from pathlib import Path
 
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
+from harbor_rewards import HarborRewardMode, skill2env_verification
 from review_io import append_event, capture_native_sources, execution_error, native_calls, write_json
 from skyrl_train.trajectory_runners.harbor.contracts import verification_from_harbor_result
 
 
 async def run_task(data: dict, root: Path) -> dict:
     config, model = data["config"], data["model"]
+    reward_mode = HarborRewardMode(config.get("harbor_reward_mode", HarborRewardMode.SCALAR))
     if model.get("api_key_env") is not None:
         os.environ["OPENAI_API_KEY"] = os.environ[model["api_key_env"]]
     task_dir = data["task"]["task_dir"]
@@ -38,8 +40,6 @@ async def run_task(data: dict, root: Path) -> dict:
         "llm_call_kwargs": model["parameters"],
         "max_turns": config["max_turns"],
         "store_all_messages": True,
-        "enable_episode_logging": True,
-        "trajectory_dump_cadence": "per_turn",
     }
     trial_config = TrialConfig.model_validate(
         {
@@ -62,16 +62,20 @@ async def run_task(data: dict, root: Path) -> dict:
     trial = await Trial.create(trial_config)
     result = await trial.run()
     write_json(root / "harbor-result.json", result.model_dump(mode="json"))
+    if reward_mode == HarborRewardMode.SKILL2ENV_COMPONENTS and result.verifier_result is not None:
+        verification = skill2env_verification(result.verifier_result.rewards)
+    else:
+        verification = verification_from_harbor_result(result)
     append_event(
         root / "verifier-trace.jsonl",
         {
             "event": "trial_end",
-            "verification": verification_from_harbor_result(result),
+            "verification": verification,
             "exception": result.exception_info.model_dump(mode="json") if result.exception_info else None,
         },
     )
     return {
-        "verification": verification_from_harbor_result(result),
+        "verification": verification,
         "verifier_executed": any(
             timing is not None and timing.started_at is not None
             for timing in [result.verifier, *(step.verifier for step in result.step_results or [])]

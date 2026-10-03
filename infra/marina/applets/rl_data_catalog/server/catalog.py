@@ -4,7 +4,10 @@
 """Read public source catalogs without executing upstream code or downloading tasks."""
 
 import ast
+import hashlib
+import json
 import re
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -13,6 +16,7 @@ from typing import Any
 import httpx
 
 from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
+from .harbor_sources import HARBOR_SOURCES, HarborSource
 from .source_annotations import (
     BENCHMARK_DATASETS,
     CARD_COUNT_DATASETS,
@@ -24,6 +28,7 @@ SKYRL = "marin-community/MarinSkyRL"
 TASKTROVE = "open-athena/task-trove"
 SKYRL_ORIGIN = "MarinSkyRL"
 TASKTROVE_ORIGIN = "Task Trove"
+HARBOR_ORIGIN = "Harbor Hub"
 SOURCE_PATH = "infra/rl_data/sources.py"
 GYM_PATH = "skyrl-gym/skyrl_gym/envs/__init__.py"
 MULTI_TURN_ENVS = {"gsm8k_multi_turn", "search", "searchcode", "text2sql"}
@@ -40,7 +45,7 @@ TASKTROVE_CLASSIFICATION = {
 class Snapshot:
     origin: str
     revision: str
-    revised_at: str
+    revised_at: str | None
     rows: list[dict[str, Any]]
 
 
@@ -147,6 +152,57 @@ class SourceRow:
 
 def source_row(origin: str, name: str, revision: str, revised_at: str) -> dict[str, Any]:
     return asdict(SourceRow(f"{origin}:{name}", origin, name, name, revision, revised_at))
+
+
+def harbor_snapshot(sources: Sequence[HarborSource] = HARBOR_SOURCES) -> Snapshot:
+    """Read pinned release metadata without fetching task archives or following mutable tags."""
+    content = json.dumps([asdict(source) for source in sources], sort_keys=True).encode()
+    rows = []
+    for source in sources:
+        package, digest = source.package, source.digest
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise ValueError(f"Harbor source {package} must pin a SHA-256 release digest")
+        url = f"https://hub.harborframework.com/datasets/{package}"
+        row = source_row(HARBOR_ORIGIN, package, digest, source.published_at)
+        row.update(
+            url=url,
+            canonical_source=package,
+            canonical_url=url,
+            dataset_id=package,
+            dataset_revision=digest,
+            dataset_revised_at=source.published_at,
+            verifier_revision=digest,
+            verifier_revised_at=source.published_at,
+            revision_basis="Pinned Harbor release, including its native task verifiers",
+            provenance_url=url,
+            upstream_url=source.repository_url,
+            paper_url=source.paper_url,
+            package_ref=f"{package}@{digest}",
+            task_count=source.task_count,
+            count_basis=source.count_basis,
+            count_precision="exact",
+            count_url=url,
+            metadata_checked_at=source.metadata_checked_at,
+            license=source.license,
+            license_url=source.license_url,
+            environment="Harbor",
+            type="Agentic",
+            turns="Multi-turn",
+            family=source.family,
+            classification_basis="Native Harbor terminal tasks in the official release",
+            benchmark_basis=source.benchmark_basis,
+            verification=source.verification,
+            notes=source.notes,
+        )
+        rows.append(row)
+    if len({row["id"] for row in rows}) != len(rows):
+        raise ValueError("Harbor registrations contain duplicate source IDs")
+    return Snapshot(
+        HARBOR_ORIGIN,
+        hashlib.sha256(content).hexdigest(),
+        max((source.metadata_checked_at for source in sources), default=None),
+        rows,
+    )
 
 
 def dataset_metadata(client: httpx.Client, dataset_id: str) -> dict[str, Any]:
@@ -331,6 +387,8 @@ def set_count_metadata(
 
 def annotate_source(row: dict[str, Any]) -> None:
     """Apply audited classifications and canonical names without changing source IDs."""
+    if row["origin"] == HARBOR_ORIGIN:
+        return
     if row["origin"] == TASKTROVE_ORIGIN:
         row["display_name"] = row["name"].replace("__", "/", 1)
         row.update(
