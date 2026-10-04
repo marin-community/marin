@@ -73,6 +73,36 @@ package = false
     assert (venv / "bin" / "python").is_file()
 
 
+@pytest.mark.parametrize("install_status", [0, 17])
+def test_default_setup_native_build_status_ignores_non_maturin_members(tmp_path, install_status):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / "pyproject.toml").write_text(
+        '[project]\nname = "setup-test"\nversion = "0.1.0"\n'
+        '[tool.uv.sources]\nnative = {path = "lib/a-native", editable = true}\n'
+    )
+    for name, backend in [("a-native", "maturin"), ("z-python", "setuptools")]:
+        member = workdir / "lib" / name
+        member.mkdir(parents=True)
+        (member / "pyproject.toml").write_text(f'[build-system]\nbuild-backend = "{backend}"\n')
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        f'#!/bin/sh\nif [ "$1 $2" = "pip install" ]; then\n echo "native install"\n exit {install_status}\nfi\n'
+    )
+    uv.chmod(0o755)
+    completed = subprocess.run(
+        ["bash", "-c", default_setup_script()],
+        env={**os.environ, "IRIS_WORKDIR": str(workdir), "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == install_status
+    assert "native install" in completed.stdout
+
+
 @pytest.mark.parametrize("link_mode", ["copy", "symlink"])
 def test_default_setup_sync_uses_host_link_mode_for_cached_wheel(tmp_path, link_mode):
     workdir = tmp_path / "workdir"

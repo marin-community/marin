@@ -20,13 +20,32 @@ async def check(factory: MachineFactory, spec: MachineSpec) -> None:
         assert first.reason is ExitReason.EXITED and first.exit_code == 0, first
         second = await machine.run(Command(("/bin/sh", "-c", "cat state.txt; printf 'warning' >&2; exit 7")))
         assert second.exit_code == 7 and second.stdout == b"persistent" and second.stderr == b"warning", second
+        stdin = bytes(range(256)) * 49
+        echoed = await machine.run(Command(("/bin/sh", "-c", "cat"), stdin=stdin))
+        assert echoed.exit_code == 0 and echoed.stdout == stdin, echoed
+        empty = await machine.run(Command(("/bin/sh", "-c", "cat")))
+        assert empty.exit_code == 0 and empty.stdout == b"", empty
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.txt"
             target = Path(directory) / "target.txt"
-            source.write_bytes(b"binary\x00content")
+            payload = bytes(range(256)) * 12289
+            source.write_bytes(payload)
             await machine.upload(source, "/tmp/machine-file.txt")
             await machine.download("/tmp/machine-file.txt", target)
-            assert target.read_bytes() == source.read_bytes()
+            assert target.read_bytes() == payload
+            executable = Path(directory) / "executable.sh"
+            executable.write_text("#!/bin/sh\nprintf executable-ok\n")
+            executable.chmod(0o751)
+            await machine.upload(executable, "/tmp/machine-executable.sh")
+            execution = await machine.run(Command(("/tmp/machine-executable.sh",)))
+            assert execution.exit_code == 0 and execution.stdout == b"executable-ok", execution
+            executable.write_text("#!/bin/sh\nprintf replacement-ok\n")
+            executable.chmod(0o640)
+            await machine.upload(executable, "/tmp/machine-executable.sh")
+            await machine.download("/tmp/machine-executable.sh", target)
+            assert target.read_bytes() == executable.read_bytes()
+            mode = await machine.run(Command(("/bin/sh", "-c", "stat -c %a /tmp/machine-executable.sh")))
+            assert mode.exit_code == 0 and mode.stdout == b"640\n", mode
     finally:
         await machine.close()
 

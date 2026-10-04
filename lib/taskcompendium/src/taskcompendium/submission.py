@@ -168,10 +168,15 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
 
 
 def chat_request(specification: TaskSpec, convention: Submission) -> dict[str, Any]:
-    """Prepare the conversation and tools for the selected submission convention."""
+    """Prepare a direct-chat request for the selected submission convention."""
     unsupported = unsupported_direct_chat_features(specification)
     if unsupported:
         raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
+    return submission_request(specification, convention)
+
+
+def submission_request(specification: TaskSpec, convention: Submission) -> dict[str, Any]:
+    """Prepare the model-visible conversation and final submission tools."""
     if not submission_compatible(specification, convention):
         raise ValueError("Submission convention is incompatible with the task")
     messages = conversation_messages(specification.context)

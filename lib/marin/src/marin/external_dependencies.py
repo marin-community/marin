@@ -67,7 +67,7 @@ EVALCHEMY = ExternalDependency(
     distribution="evalchemy",
     repository="https://github.com/marin-community/evalchemy.git",
     version="0.1.0",
-    commit="ae362881cf53f869a6ad52c8a59fa17343c0b5f8",
+    commit="022f3ced2ab888eb017183c44b615d4360b0fe75",
     runtime_requirements=(),
 )
 
@@ -85,7 +85,7 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="f5e4f8108fc723ae903b2190a702c0932a03b025",
+    commit="7bd09cd321fb43933dcb2ce5eaf71e9db0b6c903",
     runtime_requirements=(),
 )
 
