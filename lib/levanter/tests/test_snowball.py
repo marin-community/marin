@@ -419,7 +419,7 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
 
         def run(shape):
             mesh = Mesh(
-                np.asarray(jax.devices()).reshape(shape), axes,
+                np.asarray(jax.devices()[:int(np.prod(shape))]).reshape(shape), axes,
                 axis_types=(AxisType.Explicit,) * len(axes),
             )
             with jax.set_mesh(mesh):
@@ -436,13 +436,13 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
             )
 
         data_axis, reference = run((1, 2, 1, 2, 1))
-        context_axis, sharded = run((1, 1, 2, 2, 1))
+        context_axis, sharded = run((1, 1, 4, 2, 1))
         assert data_axis is None
         assert context_axis == "context"
         for expected, actual in zip(reference, sharded, strict=True):
             np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
         """,
-        device_count=4,
+        device_count=8,
     )
 
 
