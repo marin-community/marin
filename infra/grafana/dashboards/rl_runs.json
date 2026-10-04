@@ -3485,7 +3485,7 @@
       "id": 108,
       "type": "timeseries",
       "title": "GPU utilization on this run's nodes",
-      "description": "Mean GPU busy percentage on the nodes this run occupied.\n\nA long step with low GPU busy is stranded accelerator time. Read it beside the critical-path panel.\n\nThe node agent stamps no run id, so nodes are matched by name. Each node is credited to whichever run reported most from it in that bucket. A node shared by two runs goes entirely to one of them. Data from telemetry_v1.node_agent, joined to node names in telemetry_v1.marinskyrl.\n\nRun-wide: this panel ignores the Job and Execution pickers.",
+      "description": "Mean GPU busy percentage on the nodes this run occupied.\n\nA long step with low GPU busy is stranded accelerator time. Read it beside the critical-path panel.\n\nThe node agent stamps no run id, so nodes are matched by name. Each node is credited to whichever run reported most from it in that bucket. A node shared by two runs goes entirely to one of them. Data from telemetry_v1.node_agent, joined to node names in telemetry_v1.marinskyrl.\n\nRun-wide: this panel ignores the Job and Execution pickers.\n\nGPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3509,7 +3509,7 @@
           "min": 0,
           "unit": "percent",
           "max": 100,
-          "noValue": "No node join. Trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “GPUs idle”.",
+          "noValue": "Zoom to 7h or less for GPU detail.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -3517,9 +3517,11 @@
       "options": {
         "legend": {
           "showLegend": true,
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull"
+          ]
         },
         "tooltip": {
           "mode": "multi",
@@ -3530,7 +3532,7 @@
         {
           "refId": "A",
           "format": "timeseries",
-          "url": "/v1/rl/overview",
+          "url": "/v1/rl/gpu",
           "columns": [
             {
               "selector": "t",
@@ -3558,7 +3560,7 @@
       "id": 122,
       "type": "timeseries",
       "title": "SM and tensor-pipe activity on this run's nodes",
-      "description": "DCGM SM-active and tensor-active on this run's nodes. High SM-active with near-zero tensor-active means kernels run but do little matrix math. Joined by node, so per-rank values are unavailable.\n\nRun-wide: this panel ignores the Job and Execution pickers.",
+      "description": "DCGM SM-active and tensor-active on this run's nodes. High SM-active with near-zero tensor-active means kernels run but do little matrix math. Joined by node, so per-rank values are unavailable.\n\nRun-wide: this panel ignores the Job and Execution pickers.\n\nGPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3582,7 +3584,7 @@
           "unit": "percent",
           "min": 0,
           "max": 100,
-          "noValue": "No node join: trainer rows carry no node_name, or the node agent is not reporting this cluster.",
+          "noValue": "Zoom to 7h or less for GPU detail.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -3590,9 +3592,11 @@
       "options": {
         "legend": {
           "showLegend": true,
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull"
+          ]
         },
         "tooltip": {
           "mode": "multi",
@@ -3603,7 +3607,7 @@
         {
           "refId": "A",
           "targetRef": "rl_run",
-          "url": "/v1/rl/overview",
+          "url": "/v1/rl/gpu",
           "view": "sm_activity",
           "format": "timeseries",
           "columns": [
@@ -3631,7 +3635,7 @@
       "id": 123,
       "type": "timeseries",
       "title": "GPU memory in use on this run's nodes",
-      "description": "DCGM framebuffer bytes, mean and peak across the run's GPUs. Per device, so it counts everything else on the card.\n\nRun-wide: this panel ignores the Job and Execution pickers.",
+      "description": "DCGM framebuffer bytes, mean and peak across the run's GPUs. Per device, so it counts everything else on the card.\n\nRun-wide: this panel ignores the Job and Execution pickers.\n\nGPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3654,16 +3658,18 @@
           },
           "unit": "bytes",
           "min": 0,
-          "noValue": "No node join: trainer rows carry no node_name, or the node agent is not reporting this cluster."
+          "noValue": "Zoom to 7h or less for GPU detail."
         },
         "overrides": []
       },
       "options": {
         "legend": {
           "showLegend": true,
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull"
+          ]
         },
         "tooltip": {
           "mode": "multi",
@@ -3674,7 +3680,7 @@
         {
           "refId": "A",
           "targetRef": "rl_run",
-          "url": "/v1/rl/overview",
+          "url": "/v1/rl/gpu",
           "view": "gpu_memory",
           "format": "timeseries",
           "columns": [
@@ -3702,7 +3708,7 @@
       "id": 124,
       "type": "timeseries",
       "title": "NVLink against PCIe receive traffic",
-      "description": "DCGM NVLink and PCIe receive throughput, summed over the run's GPUs. NVLink traffic stayed within the NVLink domain; PCIe traffic left it. Neither shows the network beyond the host.\n\nRun-wide: this panel ignores the Job and Execution pickers.",
+      "description": "DCGM NVLink and PCIe receive throughput, summed over the run's GPUs. NVLink traffic stayed within the NVLink domain; PCIe traffic left it. Neither shows the network beyond the host.\n\nRun-wide: this panel ignores the Job and Execution pickers.\n\nGPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3725,7 +3731,7 @@
           },
           "unit": "Bps",
           "min": 0,
-          "noValue": "No node join, or no NVLink or PCIe counters from this cluster's node agent.",
+          "noValue": "Zoom to 7h or less for GPU detail.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -3733,9 +3739,11 @@
       "options": {
         "legend": {
           "showLegend": true,
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull"
+          ]
         },
         "tooltip": {
           "mode": "multi",
@@ -3746,7 +3754,7 @@
         {
           "refId": "A",
           "targetRef": "rl_run",
-          "url": "/v1/rl/overview",
+          "url": "/v1/rl/gpu",
           "view": "fabric_receive",
           "format": "timeseries",
           "columns": [
@@ -3774,7 +3782,7 @@
       "id": 125,
       "type": "table",
       "title": "PCIe replay errors and power on this run's GPUs",
-      "description": "GPUs with a positive increase in the PCIe replay counter, with peak board power in the selected window. After a counter reset, its new value counts as the increase.\n\nRun-wide: this panel ignores the Job and Execution pickers.",
+      "description": "GPUs with a positive increase in the PCIe replay counter, with peak board power in the selected window. After a counter reset, its new value counts as the increase.\n\nRun-wide: this panel ignores the Job and Execution pickers.\n\nGPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3796,7 +3804,7 @@
         {
           "refId": "A",
           "targetRef": "rl_run",
-          "url": "/v1/rl/overview",
+          "url": "/v1/rl/gpu",
           "view": "pcie_faults",
           "format": "table",
           "columns": [

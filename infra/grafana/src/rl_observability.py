@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Three bounded sources shared by the RL post-training dashboard."""
+"""Bounded RL run, node-GPU and recent-run datasets."""
 
 from dashboard_dataset import (
     DashboardDataset,
@@ -11,7 +11,7 @@ from dashboard_dataset import (
     validate_value,
     validate_values,
 )
-from vllm_observability import sql_string, sql_values
+from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, sql_string, sql_values
 
 RL_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 RL_MAX_POINTS = 360
@@ -23,6 +23,7 @@ RL_MAX_GPU_ROWS = 50_000
 RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
+RL_GPU_ZOOM_MESSAGE = "Zoom to 7h or less for GPU detail."
 
 _CORE_NAMES = (
     "phase_duration_seconds",
@@ -78,7 +79,7 @@ def _run_nodes_cte(bucket: str, clusters_sql: str, run_sql: str, start_ms: int, 
 def rl_overview_dataset(
     clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
 ) -> DashboardDataset:
-    """Build bounded RL-core, engine, and node-attribution sources."""
+    """Build bounded RL-core and engine sources."""
     validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=128)
     validate_value("run", run, max_length=512)
     bucket_ms = bounded_bucket_ms(
@@ -183,86 +184,7 @@ GROUP BY 1, 2, 3
 ORDER BY t, name, finished_reason
 LIMIT {RL_MAX_ENGINE_ROWS + 1}
 """.strip()
-    dcgm_scope = f"timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"
-    gpu_sql = f"""
-WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_samples AS (
-    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-           {bucket} AS t,
-           node_name AS node,
-           json_get(attributes_json, 'gpu_uuid') AS gpu,
-           name,
-           value,
-           LAG(value) OVER (
-               PARTITION BY cluster, node_name, name, resource_attributes_json, attributes_json
-               ORDER BY timestamp_ms, seq
-           ) AS previous_value
-    FROM selected_nodes
-    JOIN "telemetry_v1.node_agent"
-      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
-     AND node_name = selected_nodes.node
-    WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
-), gpu AS (
-    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-           {bucket} AS t,
-           node_name AS node,
-           json_get(attributes_json, 'gpu_uuid') AS gpu,
-           name,
-           AVG(value) AS mean_value,
-           MAX(value) AS max_value
-    FROM selected_nodes
-    JOIN "telemetry_v1.node_agent"
-      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
-     AND node_name = selected_nodes.node
-    WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
-    GROUP BY 1, 2, 3, 4, 5
-    UNION ALL BY NAME
-    SELECT origin_cluster, t, node, gpu, name,
-           SUM(CASE WHEN value < previous_value THEN value ELSE value - previous_value END) AS increase
-    FROM counter_samples
-    GROUP BY 1, 2, 3, 4, 5
-), attributed AS (
-    SELECT gpu.* FROM run_node JOIN gpu USING (origin_cluster, t, node)
-    WHERE run_node.run = {sql_string(run)}
-)
-SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic,
-       t, name, node, gpu,
-       CASE WHEN GROUPING(node) = 1 THEN AVG(mean_value) END AS mean_value,
-       CASE WHEN GROUPING(node) = 1 THEN SUM(mean_value) END AS total_value,
-       MAX(max_value) AS max_value,
-       CASE WHEN GROUPING(node) = 0 THEN SUM(increase) END AS increase
-FROM attributed
-GROUP BY GROUPING SETS ((t, name), (name, node, gpu))
-HAVING (GROUPING(node) = 1 AND name IN ({sql_values(_DCGM_SERIES)}))
-    OR (GROUPING(node) = 0 AND name IN ({sql_values(_DCGM_DEVICE)}))
-ORDER BY statistic, t, name
-LIMIT {RL_MAX_GPU_ROWS + 1}
-""".strip()
     views = {
-        "sm_activity": (
-            "SELECT t, CASE name WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor pipe active' END AS series, "
-            "mean_value * 100.0 AS value FROM gpu WHERE statistic = 'series' "
-            "AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio') ORDER BY 1"
-        ),
-        "gpu_memory": (
-            "SELECT t, mean_value AS mean_used_bytes, max_value AS peak_used_bytes FROM gpu "
-            "WHERE statistic = 'series' AND name = 'gpu_memory_used_bytes' ORDER BY 1"
-        ),
-        "fabric_receive": (
-            "SELECT t, CASE name WHEN 'gpu_nvlink_receive_bytes_per_second' THEN 'NVLink receive' "
-            "ELSE 'PCIe receive' END AS series, total_value AS value FROM gpu WHERE statistic = 'series' "
-            "AND name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_pcie_receive_bytes_per_second') ORDER BY 1"
-        ),
-        "pcie_faults": (
-            f"""
-SELECT node, gpu,
-       MAX(CASE WHEN name = 'gpu_power_watts' THEN max_value END) AS peak_power_watts,
-       SUM(CASE WHEN name = 'gpu_pcie_replay_errors' THEN increase END) AS pcie_replay_increase
-FROM gpu WHERE statistic = 'device'
-GROUP BY 1, 2
-HAVING SUM(CASE WHEN name IN ({sql_values(_DCGM_COUNTERS)}) THEN increase END) > 0
-ORDER BY 4 DESC, node, gpu
-""".strip()
-        ),
         "critical_path": (
             """
 SELECT t, phase || ' · ' || outcome AS series,
@@ -273,10 +195,6 @@ WHERE statistic = 'aggregate'
   AND phase IN ('rollout_or_inference_wait', 'train_step')
 GROUP BY 1, 2 ORDER BY 1
 """.strip()
-        ),
-        "gpu_utilization": (
-            f"SELECT t, {run_sql} AS series, mean_value AS value FROM gpu "
-            "WHERE statistic = 'series' AND name = 'gpu_utilization_percent' ORDER BY t"
         ),
         "engine_tokens": (
             f"""
@@ -358,8 +276,140 @@ GROUP BY 1, 2 ORDER BY 1
         sources=(
             SourceQuery("core", core_sql, RL_MAX_CORE_ROWS),
             SourceQuery("engine", engine_sql, RL_MAX_ENGINE_ROWS),
-            SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),
         ),
+        setup_sql=(),
+        views=views,
+        max_result_rows=RL_MAX_RESULT_ROWS,
+    )
+
+
+def rl_gpu_dataset(
+    clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
+) -> DashboardDataset:
+    """Build node-GPU detail or a zoom message for ranges longer than seven hours."""
+    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=128)
+    validate_value("run", run, max_length=512)
+    bucket_ms = bounded_bucket_ms(
+        start_ms,
+        end_ms,
+        requested_bucket_ms,
+        max_window_ms=RL_MAX_WINDOW_MS,
+        max_window_error="RL GPU range must not exceed 7 days",
+        min_bucket_ms=RL_MIN_BUCKET_MS,
+        max_points=RL_MAX_POINTS,
+    )
+    bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
+    clusters_sql = sql_values(clusters)
+    run_sql = sql_string(run)
+    dcgm_scope = f"timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"
+    gpu_sql = f"""
+WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_samples AS (
+    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           {bucket} AS t,
+           node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu,
+           name,
+           value,
+           LAG(value) OVER (
+               PARTITION BY cluster, node_name, name, resource_attributes_json, attributes_json
+               ORDER BY timestamp_ms, seq
+           ) AS previous_value
+    FROM selected_nodes
+    JOIN "telemetry_v1.node_agent"
+      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+     AND node_name = selected_nodes.node
+    WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
+), gpu AS (
+    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           {bucket} AS t,
+           node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu,
+           name,
+           AVG(value) AS mean_value,
+           MAX(value) AS max_value
+    FROM selected_nodes
+    JOIN "telemetry_v1.node_agent"
+      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+     AND node_name = selected_nodes.node
+    WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
+    GROUP BY 1, 2, 3, 4, 5
+    UNION ALL BY NAME
+    SELECT origin_cluster, t, node, gpu, name,
+           SUM(CASE WHEN value < previous_value THEN value ELSE value - previous_value END) AS increase
+    FROM counter_samples
+    GROUP BY 1, 2, 3, 4, 5
+), attributed AS (
+    SELECT gpu.* FROM run_node JOIN gpu USING (origin_cluster, t, node)
+    WHERE run_node.run = {sql_string(run)}
+)
+SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic,
+       t, name, node, gpu,
+       CASE WHEN GROUPING(node) = 1 THEN AVG(mean_value) END AS mean_value,
+       CASE WHEN GROUPING(node) = 1 THEN SUM(mean_value) END AS total_value,
+       MAX(max_value) AS max_value,
+       CASE WHEN GROUPING(node) = 0 THEN SUM(increase) END AS increase
+FROM attributed
+GROUP BY GROUPING SETS ((t, name), (name, node, gpu))
+HAVING (GROUPING(node) = 1 AND name IN ({sql_values(_DCGM_SERIES)}))
+    OR (GROUPING(node) = 0 AND name IN ({sql_values(_DCGM_DEVICE)}))
+ORDER BY statistic, t, name
+LIMIT {RL_MAX_GPU_ROWS + 1}
+""".strip()
+    views = {
+        "sm_activity": (
+            "SELECT t, CASE name WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor pipe active' END AS series, "
+            "mean_value * 100.0 AS value FROM gpu WHERE statistic = 'series' "
+            "AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio') ORDER BY 1"
+        ),
+        "gpu_memory": (
+            "SELECT t, mean_value AS mean_used_bytes, max_value AS peak_used_bytes FROM gpu "
+            "WHERE statistic = 'series' AND name = 'gpu_memory_used_bytes' ORDER BY 1"
+        ),
+        "fabric_receive": (
+            "SELECT t, CASE name WHEN 'gpu_nvlink_receive_bytes_per_second' THEN 'NVLink receive' "
+            "ELSE 'PCIe receive' END AS series, total_value AS value FROM gpu WHERE statistic = 'series' "
+            "AND name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_pcie_receive_bytes_per_second') ORDER BY 1"
+        ),
+        "pcie_faults": (
+            f"""
+SELECT node, gpu,
+       MAX(CASE WHEN name = 'gpu_power_watts' THEN max_value END) AS peak_power_watts,
+       SUM(CASE WHEN name = 'gpu_pcie_replay_errors' THEN increase END) AS pcie_replay_increase
+FROM gpu WHERE statistic = 'device'
+GROUP BY 1, 2
+HAVING SUM(CASE WHEN name IN ({sql_values(_DCGM_COUNTERS)}) THEN increase END) > 0
+ORDER BY 4 DESC, node, gpu
+""".strip()
+        ),
+        "gpu_utilization": (
+            f"SELECT t, {run_sql} AS series, mean_value AS value FROM gpu "
+            "WHERE statistic = 'series' AND name = 'gpu_utilization_percent' ORDER BY t"
+        ),
+    }
+    sources = (SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),)
+    if end_ms - start_ms > VLLM_DETAIL_MAX_WINDOW_MS:
+        message = sql_string(RL_GPU_ZOOM_MESSAGE)
+        status = f"'range_limit' AS status, {message} AS message"
+        series = f"SELECT {start_ms} AS t, {message} AS series, CAST(NULL AS DOUBLE) AS value, {status}"
+        views = {
+            "gpu_utilization": series,
+            "sm_activity": series,
+            "gpu_memory": (
+                f"SELECT {start_ms} AS t, CAST(NULL AS DOUBLE) AS mean_used_bytes, "
+                f"CAST(NULL AS DOUBLE) AS peak_used_bytes, {status}"
+            ),
+            "fabric_receive": series,
+            "pcie_faults": (
+                f"SELECT {message} AS node, CAST(NULL AS VARCHAR) AS gpu, "
+                "CAST(NULL AS DOUBLE) AS peak_power_watts, CAST(NULL AS DOUBLE) AS pcie_replay_increase, "
+                f"{status}"
+            ),
+        }
+        sources = ()
+    return DashboardDataset(
+        name="RL GPU",
+        cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
+        sources=sources,
         setup_sql=(),
         views=views,
         max_result_rows=RL_MAX_RESULT_ROWS,

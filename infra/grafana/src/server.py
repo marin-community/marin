@@ -15,7 +15,8 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/v1/node/overview       bounded shared Node Details dataset
     GET /finelog/{cluster}/v1/training/overview   bounded shared Training dataset
     GET /finelog/{cluster}/v1/runs/overview       bounded shared multi-run dataset
-    GET /finelog/{cluster}/v1/rl/overview         bounded shared RL dataset
+    GET /finelog/{cluster}/v1/rl/overview         bounded shared RL core/engine dataset
+    GET /finelog/{cluster}/v1/rl/gpu              node-GPU detail for ranges up to 7h
     GET /finelog/{cluster}/v1/rl/recent           bounded recent RL runs
     GET /finelog/{cluster}/v1/rl/attempt          bounded shared RL attempt dataset
     GET /finelog/{cluster}/v1/accelerator/overview bounded shared accelerator dataset
@@ -156,7 +157,7 @@ from nightly_config import NIGHTLY_LANES
 from node_observability import node_overview_dataset
 from relay_health import relay_alert_rows
 from rl_attempt_observability import rl_attempt_dataset
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import check_window, collect_producers
 from runs_observability import runs_overview_dataset
 from starlette.applications import Starlette
@@ -710,6 +711,19 @@ def create_app(
             request,
             "RL overview",
             lambda params, start_ms, end_ms: rl_overview_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "run"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def rl_gpu(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "RL GPU",
+            lambda params, start_ms, end_ms: rl_gpu_dataset(
                 _csv_values(params, "clusters"),
                 _require(params, "run"),
                 start_ms,
@@ -1371,6 +1385,7 @@ def create_app(
             Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
             Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
             Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
+            Route("/finelog/{cluster}/v1/rl/gpu", rl_gpu),
             Route("/finelog/{cluster}/v1/rl/attempt", rl_attempt),
             Route("/finelog/{cluster}/v1/rl/recent", recent_rl_runs),
             Route("/finelog/{cluster}/v1/runs/overview", runs_overview),

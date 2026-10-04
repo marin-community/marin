@@ -35,6 +35,7 @@ GET /finelog/{cluster}/v1/{node,training,runs,rl,accelerator,jobs}/overview
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
 GET /finelog/{cluster}/v1/rl/attempt             bounded selected-job attempts
+GET /finelog/{cluster}/v1/rl/gpu                 node-GPU detail for ranges up to 7h
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/relay_status                  direct regional relay heartbeats
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
@@ -147,13 +148,14 @@ that extracted `src/`, and pass its parent as `--grafana-dir`. Keep the identity
 window, and request sequence the same, and use a separate output directory.
 These are read-only live queries; repeat only the windows needed for comparison.
 
-The Node Details, Zephyr, Training, Runs, RL (sync and async), Accelerators, Jobs,
+The Node Details, Zephyr, Training, Runs, RL Post-training, Accelerators, Jobs,
 and Home dashboards use the same shared-dataset contract. Each endpoint validates every
 identity and time input, runs a small fixed set of domain queries, and projects all
 panel views locally. Concurrent panel requests coalesce on one logical cache key;
 the `view` parameter only filters the cached result. A cold traversal uses one
-Finelog source for Node and Zephyr, three for Training, two for Runs, three for RL,
-nine for async RL, three for Accelerators, and five for Jobs. Those boundaries are intentional:
+Finelog source for Node and Zephyr, three for Training, two for Runs, two for RL
+overview, one for RL GPU detail, ten for RL attempts, three for Accelerators,
+and five for Jobs. Those boundaries are intentional:
 crossing namespaces or mixing fleet-wide per-device data with compact summaries
 just to reach one RPC would make the query less predictable.
 
@@ -328,6 +330,10 @@ pickers. MarinSkyRL documents telemetry export at `docs/grafana-rl-runs.md`.
 
 Attempt panels require an Iris `job_id`. Runs without one show missing-job errors on the
 attempt panels; the run-wide panels still render.
+
+Node-GPU detail uses `/v1/rl/gpu` for ranges of 7h or less. Longer ranges show
+"Zoom to 7h or less for GPU detail." without querying Finelog. The other run-wide
+panels use `/v1/rl/overview` and keep the selected window, up to seven days.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
