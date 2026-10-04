@@ -87,6 +87,18 @@ def test_coordinator_submits_new_config_and_reuses_identical_config(tmp_path, mo
     assert [json.loads(line) for line in submissions.read_text().splitlines()] == [initial, reviewed]
 
 
+@pytest.mark.parametrize("trailing_slash", ["", "/"])
+def test_training_reads_hf_export_from_the_adopted_s3_root(trailing_slash):
+    prefix = "s3://marin-us-east-02a/marin/tests/russell-rsi"
+    model_uri = "s3://marin-us-east-02a/models/russell-parent"
+    parent = ArtifactStep.adopt("checkpoints/parent", "2026.10.04", model_uri + trailing_slash, kind=LevanterCheckpoint)
+    data = ArtifactStep.adopt("documents/tasks", "2026.10.04", f"{prefix}/tasks")
+    trained = russell_launch.train_step(data, parent, "smoke", "2026.10.04")
+    context = StepContext.for_run(trained.path(prefix), prefix, runtime_args=trained.runtime_args, deps=trained.deps)
+    launch = yaml.safe_load(trained.build_config(context).launch_config_yaml)
+    assert launch["inputs"]["model"]["uri"] == model_uri
+
+
 def test_spike_retains_frozen_development_and_checks_rewards_before_policy_allocation():
     seed = ArtifactStep.adopt("documents/test-russell-seed", "2026.10.04", "/tmp/seed")
     parent = ArtifactStep.adopt("checkpoints/test-russell-parent", "2026.09.21", "/tmp/model", kind=LevanterCheckpoint)

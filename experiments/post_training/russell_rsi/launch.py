@@ -215,13 +215,14 @@ def train_step(
 ) -> ArtifactStep[SkyRLRun]:
     selected = SCALES[scale]
     label = f"{name_component}-{scale}" if name_component else scale
+    # The HF export is at the artifact root. A dot is a literal S3 key component.
     return skyrl_step(
         SkyRLSpec(
             name=f"checkpoints/russell-rsi-{label}",
             version=version,
             config_yaml=recipe(selected, machine_config),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-            model=ArtifactHfModel(model, MODEL, MODEL_REVISION, relative_path="."),
+            model=ArtifactHfModel(model, MODEL, MODEL_REVISION, relative_path=""),
             train_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
             validation_data=(ArtifactDataSource(development or data, relative_path="development.parquet"),),
             topology=SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
