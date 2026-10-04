@@ -109,7 +109,7 @@ from config import (
 )
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from dashboard_dataset import DashboardDataset, project_dataset, validate_table_budget
+from dashboard_dataset import DashboardDataset, SourceQuery, project_dataset, validate_table_budget
 from errors import FinelogUnavailableError, UpstreamError
 from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog_health import FinelogHealth
@@ -215,6 +215,7 @@ _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
 _K8S_ARCH_MISMATCH_CACHE_KEY = "arch_mismatch"
 _K8S_EVENTS_CACHE_KEY = "events"
 _K8S_FINELOG_CACHE_KEY = "finelog"
+_DATASET_SOURCE_CACHE_BYTES = 128 * 1024 * 1024
 _FINELOG_FILTER_TOKEN = "finelog"
 _FINELOG_HUB_CLUSTER = "marin"
 
@@ -561,6 +562,11 @@ def create_app(
 ) -> Starlette:
     """Build the ASGI app serving Grafana's data sources and alert webhooks."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
+    dataset_source_cache: TtlCache[pa.Table] = TtlCache(
+        config.cache_ttl,
+        max_size=_DATASET_SOURCE_CACHE_BYTES,
+        get_size=lambda table: table.nbytes,
+    )
     finelog_health_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
@@ -571,22 +577,40 @@ def create_app(
     dashboard_projection_lock = threading.Lock()
     finelog_queries = _FinelogQueries(config, finelog_sources, finelog_cache)
 
+    def dataset_source(target: ClusterTarget, query: SourceQuery) -> pa.Table:
+        max_rows = min(query.max_rows, config.max_rows)
+
+        def run() -> pa.Table:
+            started = time.monotonic()
+            table = finelog_sources[target.name].query(query.sql, max_rows=max_rows)
+            validate_table_budget(
+                query.name,
+                table,
+                max_rows=query.max_rows,
+                max_samples=query.max_samples,
+            )
+            logger.info(
+                "dashboard source query source=%s cluster=%s rows=%d elapsed_ms=%d",
+                query.name,
+                target.name,
+                table.num_rows,
+                round((time.monotonic() - started) * 1000),
+            )
+            return table
+
+        # A source such as current task state does not depend on panel resolution.
+        # Share its Arrow result across datasets without retaining duplicate copies.
+        return dataset_source_cache.get_or_compute((target.name, query), run)
+
     def dataset_rows(target: ClusterTarget, dataset: DashboardDataset) -> list[dict[str, object]]:
         key = (target.name, dataset.name, *dataset.cache_key)
 
         def run() -> list[dict[str, object]]:
-            source = finelog_sources[target.name]
             source_tables: dict[str, pa.Table] = {}
             started = time.monotonic()
             for source_query in dataset.sources:
                 query_started = time.monotonic()
-                table = source.query(source_query.sql, max_rows=min(source_query.max_rows, config.max_rows))
-                validate_table_budget(
-                    source_query.name,
-                    table,
-                    max_rows=source_query.max_rows,
-                    max_samples=source_query.max_samples,
-                )
+                table = dataset_source(target, source_query)
                 source_tables[source_query.name] = table
                 logger.info(
                     "dashboard dataset source dataset=%s source=%s cluster=%s rows=%d elapsed_ms=%d",
@@ -604,12 +628,13 @@ def create_app(
                 min(dataset.max_result_rows, config.max_rows),
             )
             logger.info(
-                "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d",
+                "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d cache_key=%s",
                 dataset.name,
                 target.name,
                 len(dataset.sources),
                 len(rows),
                 round((time.monotonic() - started) * 1000),
+                dataset.cache_key,
             )
             return rows
 
@@ -666,7 +691,11 @@ def create_app(
             request,
             "Training overview",
             lambda params, start_ms, end_ms: training_overview_dataset(
-                _require(params, "run"), start_ms, end_ms, int(_require(params, "bucket_ms"))
+                _require(params, "run"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 

@@ -2,7 +2,7 @@
 //!
 //! `make_ctx()` builds a `SessionContext` configured to match DuckDB's result
 //! shape (Utf8 strings, DuckDB parsing dialect) with the scalar UDFs registered.
-//! `run_query_over()` registers every live namespace as a `TableProvider`, runs
+//! `run_query_over()` registers the selected namespaces as `TableProvider`s, runs
 //! the user SQL under a SELECT-only gate (see `read_only_sql_options`), collects
 //! the result, and deregisters — the body of the `StatsService::Query` handler.
 //!
@@ -549,6 +549,18 @@ fn read_only_sql_options() -> SQLOptions {
         .with_allow_statements(false)
 }
 
+/// Resolve source namespaces with the same parser and identifier rules as execution.
+/// CTE aliases are excluded; quoted dotted names remain one namespace.
+pub fn query_namespaces(ctx: &SessionContext, sql: &str) -> DFResult<Vec<String>> {
+    let state = ctx.state();
+    let statement = state.sql_to_statement(sql, &state.config_options().sql_parser.dialect)?;
+    Ok(state
+        .resolve_table_references(&statement)?
+        .into_iter()
+        .map(|reference| reference.table().to_owned())
+        .collect())
+}
+
 /// Register every namespace in `providers`, run `sql` (SELECT-only, see
 /// [`read_only_sql_options`]), collect, and deregister. Returns the result
 /// schema + batches.
@@ -725,6 +737,37 @@ mod tests {
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
     use crate::test_support::unique_dir;
     use datafusion::arrow::array::Int64Array;
+
+    #[test]
+    fn query_namespaces_resolves_joins_ctes_and_explain_without_decoys() {
+        let ctx = make_ctx();
+        for (sql, expected) in [
+            ("SELECT 1", vec![]),
+            (
+                r#"SELECT * FROM "levanter.metrics""#,
+                vec!["levanter.metrics"],
+            ),
+            (
+                r#"WITH metrics AS (SELECT * FROM "levanter.metrics")
+                   SELECT * FROM metrics JOIN "iris.task_state" ON true"#,
+                vec!["iris.task_state", "levanter.metrics"],
+            ),
+            (
+                r#"EXPLAIN ANALYZE WITH "iris.task_state" AS (SELECT 1 AS x)
+                   SELECT * FROM "iris.task_state", "levanter.metrics""#,
+                vec!["levanter.metrics"],
+            ),
+            (
+                r#"SELECT * FROM (SELECT * FROM "Mixed.Case") nested
+                   WHERE EXISTS (SELECT 1 FROM "log")"#,
+                vec!["Mixed.Case", "log"],
+            ),
+        ] {
+            let mut names = query_namespaces(&ctx, sql).unwrap();
+            names.sort();
+            assert_eq!(names, expected, "{sql}");
+        }
+    }
 
     #[test]
     fn truncate_sql_caps_on_char_boundary() {

@@ -1001,9 +1001,10 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
 
     dataset = training_overview_dataset("hero-run", fixed_now_ms - 90 * 60_000, fixed_now_ms, 60_000)
     sql_by_ref = {
-        "A": f"WITH training_rows AS ({dataset.sources[0].sql}) {dataset.views['execution_attempt']}",
-        "B": dataset.sources[1].sql,
-        "C": dataset.sources[2].sql,
+        "A": f"WITH attempts AS ({dataset.sources[1].sql.replace('FIRST_VALUE(', 'FIRST(')}) "
+        f"{dataset.views['execution_attempt']}",
+        "B": dataset.sources[2].sql,
+        "C": dataset.sources[3].sql,
     }
     database.execute(
         """
@@ -1161,7 +1162,8 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
         ],
     )
     dataset = training_overview_dataset("hero-run", at - 3 * hour, at, 60_000)
-    sql = f"WITH training_rows AS ({dataset.sources[0].sql}) {dataset.views['attempts']}"
+    sql = f"WITH attempts AS ({dataset.sources[1].sql.replace('FIRST_VALUE(', 'FIRST(')}) "
+    sql += dataset.views["attempts"]
 
     # Newest first, so the top row is the last attempt whether or not it still runs. The
     # Iris dashboard filters backends by peer id and reserves `local` for its own, which

@@ -1693,3 +1693,13 @@ def test_the_producer_census_refuses_a_window_wider_than_it_will_scan():
 
     assert resp.status_code == 400
     assert "maximum" in resp.json()["error"]
+
+
+def test_cache_evicts_oldest_values_to_bound_retained_bytes():
+    cache = TtlCache(60, max_size=5, get_size=len)
+    assert cache.get_or_compute("a", lambda: b"aaa") == b"aaa"
+    assert cache.get_or_compute("b", lambda: b"bbb") == b"bbb"
+    assert cache.get_or_compute("b", lambda: b"wrong") == b"bbb"
+    assert cache.get_or_compute("a", lambda: b"new") == b"new"
+    assert cache.get_or_compute("large", lambda: b"too large") == b"too large"
+    assert cache.get_or_compute("large", lambda: b"fresh") == b"fresh"
