@@ -17,8 +17,9 @@ datakit runs:
    DAG over ``sample_sources(SAMPLE_PREFIX)`` at ``SMOKE_SCALE``; the driver runs it and reads
    the terminal :class:`ClusteredStoreData`.
 2. Train + eval pass -- :func:`store_mixture` turns that store into the Levanter
-   ``LmDataConfig`` (one ``flat_cache=True`` component per bucket with one model
-   sequence), the Grug launch trainer produces an ``ArtifactStep[LevanterCheckpoint]``,
+   ``LmDataConfig`` (one ``flat_cache=True`` component for each bucket with at least
+   ``max_seq_len`` tokens, enough for one model sequence), the Grug launch trainer
+   produces an ``ArtifactStep[LevanterCheckpoint]``,
    and ``eval_steps`` / ``eval_report`` produce the readout.
 
 Both passes resume from their own caches: a training-config edit re-fingerprints only
