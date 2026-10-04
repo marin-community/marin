@@ -37,6 +37,12 @@ DOCKERFILE_HASHES = (
     "b607af0e6fdd7f7519fcdad1b7ee02cf684300f3fd867c2990e7947a1c59067e",
     "f78a98ce9c108903392ad7bb44f5ae2f680bb3b5e187911bddd43d1503c814f5",
 )
+NATIVE_AGENT_PROFILES = (
+    {"name": "opencode", "version": "1.18.2", "collect_rollout_details": True},
+    {"name": "claude-code", "version": "2.1.284", "collect_rollout_details": True},
+    {"name": "codex", "version": "0.118.0", "collect_rollout_details": True},
+    {"name": "mini-swe-agent", "version": "2.1.0", "collect_rollout_details": True},
+)
 
 
 @dataclass(frozen=True)

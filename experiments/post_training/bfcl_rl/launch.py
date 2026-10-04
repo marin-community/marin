@@ -18,6 +18,7 @@ from marin.training.training import LevanterCheckpoint
 from experiments.post_training.bfcl_rl.collect import (
     COLLECTION_EXECUTION,
     MODELS,
+    NATIVE_AGENT_PROFILES,
     collection_recipe,
     collection_spec,
 )
@@ -72,12 +73,7 @@ def rl_recipe(images: tuple[str, str, str], num_train_steps: int, reader_concurr
     harbor = recipe["terminal_bench"]["harbor"]
     harbor.update(name="opencode", version="1.18.2")
     harbor.pop("thinking_format")
-    harbor["agent_profiles"] = [
-        {"name": "opencode", "version": "1.18.2", "collect_rollout_details": True},
-        {"name": "claude-code", "version": "2.1.284", "collect_rollout_details": True},
-        {"name": "codex", "version": "0.118.0", "collect_rollout_details": True},
-        {"name": "mini-swe-agent", "version": "2.1.0", "collect_rollout_details": True},
-    ]
+    harbor["agent_profiles"] = list(NATIVE_AGENT_PROFILES)
 
     trainer = recipe["trainer"]
     old_async = trainer.pop("fully_async")
