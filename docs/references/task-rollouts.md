@@ -22,6 +22,7 @@ public conversation, submission instructions, and tool definitions.
 | `environment.image` | Docker source: `RegistryImage` or `DockerBuild`. |
 | `environment.workdir` | Working directory for commands. The default is `/workspace`. An empty value uses the Docker image's working directory. |
 | `environment.files` | Files that the engine installs before inference. JSON uses base64 content and retains permission bits. |
+| `environment.assets` | Immutable files identified by URI, SHA-256, byte count, target path, and permission bits. The host verifies and installs them before setup. |
 | `environment.env` | Environment variables for task commands. `${VAR}` and `${VAR:-default}` resolve at execution. |
 | `environment.setup` | Commands that prepare a fresh task machine. |
 | `environment.healthcheck` | Readiness command, startup grace period, interval, and retry limit. |
@@ -54,6 +55,14 @@ Each task gets a fresh machine. The engine closes the machine after completion,
 failure, or cancellation.
 The default session exposes `shell(command: string)` for executable environments.
 Files persist between commands. Each command starts a new shell process.
+
+Use assets for shared dependencies such as wheels. Task rows contain their identities,
+not their bytes. The engine reads assets through Rigging, verifies each file, and caches
+it on the host by SHA-256. It verifies cached files again before reuse. A size or hash
+mismatch stops machine setup. Guest network access stays subject to `environment.network`.
+Each asset can contain at most 64 MiB. The shared host cache stops new downloads at 1 GiB.
+Asset URIs are trusted task inputs because the host reads them with its own credentials.
+Private grading files must stay in the verifier specification.
 
 ## Grading
 

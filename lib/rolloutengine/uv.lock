@@ -789,6 +789,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "harbor-config" },
+    { name = "marin-rigging" },
     { name = "marin-shellbox" },
     { name = "taskcompendium" },
 ]
@@ -804,6 +805,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "harbor-config", git = "https://github.com/marin-community/harbor?subdirectory=packages%2Fharbor-config&rev=6b2e76e1dae5c084eed05edefefffcec8c0c1ad9" },
+    { name = "marin-rigging", editable = "../rigging" },
     { name = "marin-shellbox", editable = "../shellbox" },
     { name = "taskcompendium", editable = "../taskcompendium" },
 ]

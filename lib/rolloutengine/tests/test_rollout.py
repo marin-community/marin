@@ -4,6 +4,7 @@
 """Task execution, grading, and exact-token evidence through the public engine."""
 
 import asyncio
+import hashlib
 import json
 import math
 import threading
@@ -14,6 +15,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, ExitReason, MachineSpec, Result, ShellSimBuiltins
 from taskcompendium.environment import (
     ArtifactKind,
+    EnvironmentAsset,
     EnvironmentCommand,
     EnvironmentFile,
     EnvironmentKind,
@@ -41,6 +43,7 @@ from taskcompendium.models import (
 from taskcompendium.parquet import read_tasks, write_tasks
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
+from rolloutengine.assets import cached_asset
 from rolloutengine.contracts import (
     GenerationLimitReached,
     ModelRequest,
@@ -428,6 +431,68 @@ async def test_model_failure_releases_the_shellbox_machine():
     assert isinstance(failure.value.__cause__, ConnectionError)
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(argv=("true",)))
+
+
+async def test_immutable_assets_run_before_setup_and_reject_invalid_identity(tmp_path):
+    payload = f"#!/bin/sh\n# {tmp_path.name}\nprintf 12 > /workspace/answer\n".encode()
+    source = tmp_path / "input.sh"
+    source.write_bytes(payload)
+    asset = EnvironmentAsset(
+        path="/workspace/input.sh",
+        uri=str(source),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        mode=0o755,
+    )
+    task = file_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                assets=(asset,),
+                setup=(EnvironmentCommand(argv=(asset.path,), timeout=5),),
+            )
+        }
+    )
+    parquet = str(tmp_path / "tasks.parquet")
+    write_tasks(parquet, [task])
+    task = next(read_tasks(parquet))
+    for _ in range(2):
+        result = await run_task(
+            engine(
+                ReplayModel([{"role": "assistant", "content": "Completed."}]),
+                {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+            ),
+            task,
+        )
+        assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+        source.unlink(missing_ok=True)
+
+    source.write_bytes(b"different file")
+    wrong_identity = asset.model_copy(update={"sha256": "0" * 64})
+    changed = task.model_copy(update={"environment": task.environment.model_copy(update={"assets": (wrong_identity,)})})
+    with pytest.raises(RolloutInterrupted) as failure:
+        await run_task(engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}), changed)
+    assert failure.value.operation == RolloutOperation.START
+    assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
+    assert isinstance(failure.value.__cause__, ValueError)
+
+
+def test_asset_cache_rejects_corruption_without_replacing_evidence(tmp_path):
+    source = tmp_path / "input"
+    content = b"immutable dependency"
+    source.write_bytes(content)
+    asset = EnvironmentAsset(
+        path="/input", uri=str(source), sha256=hashlib.sha256(content).hexdigest(), size_bytes=len(content)
+    )
+    cache = tmp_path / "cache"
+    stored = cached_asset(asset, cache)
+    source.unlink()
+    assert cached_asset(asset, cache).read_bytes() == content
+    corrupt = b"x" * len(content)
+    stored.write_bytes(corrupt)
+    with pytest.raises(ValueError, match="Cached task asset differs"):
+        cached_asset(asset, cache)
+    assert stored.read_bytes() == corrupt
 
 
 async def test_machine_setup_failure_releases_resources_and_retains_an_empty_record():

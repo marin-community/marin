@@ -22,7 +22,7 @@ from taskcompendium.environment import (
     HealthcheckSpec,
 )
 
-SCHEMA_VERSION = "0.21"
+SCHEMA_VERSION = "0.22"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 FILESYSTEM_CAPABILITY = "filesystem"
 SHELL_CAPABILITY = "shell"

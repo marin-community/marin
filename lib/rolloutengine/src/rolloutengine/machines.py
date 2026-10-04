@@ -4,6 +4,8 @@
 """Machine creation, setup, and cleanup for task execution."""
 
 import asyncio
+import shutil
+import stat
 from collections.abc import Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -22,6 +24,8 @@ from taskcompendium.environment import (
     HealthcheckSpec,
     RegistryImage,
 )
+
+from rolloutengine.assets import cached_asset
 
 
 async def _install_files(machine: Machine, files: tuple[EnvironmentFile, ...]) -> None:
@@ -108,6 +112,15 @@ async def _task_machine(environment: EnvironmentSpec, factories: Mapping[Environ
             )
             resources.push_async_callback(_close_machine, machine)
             await _install_files(machine, environment.files)
+            with TemporaryDirectory(prefix="rollout-assets-") as directory:
+                for index, asset in enumerate(environment.assets):
+                    source = await asyncio.to_thread(cached_asset, asset)
+                    if stat.S_IMODE(source.stat().st_mode) != asset.mode:
+                        staged = Path(directory) / str(index)
+                        shutil.copyfile(source, staged)
+                        staged.chmod(asset.mode)
+                        source = staged
+                    await machine.upload(source, asset.path)
             await _run_setup_commands(machine, environment.setup, "Environment setup command")
             if environment.healthcheck is not None:
                 await _wait_for_healthcheck(machine, environment.healthcheck)

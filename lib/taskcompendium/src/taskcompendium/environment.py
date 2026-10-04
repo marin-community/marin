@@ -9,6 +9,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
+MAX_ASSET_BYTES = 64 * 1024**2
+
 
 class EnvironmentKind(StrEnum):
     NULL = "null"
@@ -44,6 +46,23 @@ class EnvironmentCommand(BaseModel):
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     user: str | None = None
+
+
+class EnvironmentAsset(BaseModel):
+    """An immutable file that the trusted host installs before task setup."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: str
+    uri: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=0, le=MAX_ASSET_BYTES)
+    mode: int = Field(default=0o644, ge=0, le=0o777)
+
+    @field_validator("path")
+    @classmethod
+    def absolute_path(cls, value: str) -> str:
+        return EnvironmentFile.absolute_path(value)
 
 
 class RegistryImage(BaseModel):
@@ -96,6 +115,7 @@ class EnvironmentSpec(BaseModel):
     image: ImageSpec | None = None
     workdir: str = "/workspace"
     files: tuple[EnvironmentFile, ...] = ()
+    assets: tuple[EnvironmentAsset, ...] = ()
     env: dict[str, str] = Field(default_factory=dict)
     setup: tuple[EnvironmentCommand, ...] = ()
     healthcheck: HealthcheckSpec | None = None
@@ -113,6 +133,7 @@ class EnvironmentSpec(BaseModel):
             raise ValueError("Only Docker environments require an image")
         if self.kind == EnvironmentKind.NULL and (
             self.files
+            or self.assets
             or self.env
             or self.setup
             or self.healthcheck is not None
@@ -123,7 +144,7 @@ class EnvironmentSpec(BaseModel):
             or self.gpus
         ):
             raise ValueError("Null environments cannot contain machine resources")
-        if len({file.path for file in self.files}) != len(self.files):
+        if len({file.path for file in (*self.files, *self.assets)}) != len(self.files) + len(self.assets):
             raise ValueError("Environment file paths must be unique")
         return self
 

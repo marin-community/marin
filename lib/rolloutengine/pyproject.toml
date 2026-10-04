@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Task execution and exact-token rollout records"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "marin-rigging",
     "taskcompendium",
     "marin-shellbox",
     "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
@@ -22,6 +23,7 @@ test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[shell
 prerelease = "allow"
 
 [tool.uv.sources]
+marin-rigging = { path = "../rigging", editable = true }
 taskcompendium = { path = "../taskcompendium", editable = true }
 marin-shellbox = { path = "../shellbox", editable = true }
 
