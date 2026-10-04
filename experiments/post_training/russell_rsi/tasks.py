@@ -19,8 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.machines import _install_files, _task_machine
 from shellbox.backends.docker.machine import DockerMachineFactory
-from shellbox.backends.qemu.image import QemuAssets
-from shellbox.backends.qemu.machine import QemuMachineFactory
+from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
 from shellbox.machine import Command, ExitReason, MachineFactory
 from taskcompendium.environment import (
     EnvironmentAsset,
@@ -586,8 +585,12 @@ def generation_request(snapshot: SourceSnapshot, *, failure_summary: str, max_to
         "Do not inspect source text, hashes, Git history, or exact code. Use only stdlib and the supplied source. "
         "Do not include tests, the commit SHA, reference code, or the patch in the problem statement. "
         "The source root is /workspace. Private probes have no source file: do not use __file__ for source paths. "
-        "Add /workspace/backend or /workspace/src to sys.path when the source package requires it. "
+        "Add the actual package root to sys.path: /workspace/backend, /workspace/src, or "
+        "/workspace/lib/<package>/src as shown by the supplied paths. "
         "Import actual repository modules, never synthetic substitutes. "
+        "Only listed source files exist. Do not assume an omitted __init__.py re-exports names: import from the "
+        "specific supplied module. If a module is new and its package is absent in the parent, check the top-level "
+        "package with importlib.util.find_spec before checking a nested module, then return a raw absence value. "
         "All dependencies must be actual installed packages. "
         "For new APIs, call them through the real module and record a named AttributeError if absent. "
         "Do not monkeypatch the scorer or result output. Keep 2 to 4 independent meaningful cases with bounded "
@@ -764,12 +767,7 @@ async def accept_candidates(args: argparse.Namespace) -> None:
     if args.backend == "docker":
         factory = DockerMachineFactory(skopeo=args.skopeo, image_cache=args.image_cache)
     else:
-        values = json.loads(args.qemu_assets.read_text())
-        for key in ("qemu", "kernel", "busybox", "firmware", "libraries", "umoci"):
-            values[key] = Path(values[key])
-        factory = QemuMachineFactory(
-            assets=QemuAssets(**values), bundle_cache=args.bundle_cache, skopeo=args.skopeo, image_cache=args.image_cache
-        )
+        factory = QemuMachineFactory(Acceleration.TCG, prepared_registry_bundles={args.image: args.prepared_bundle})
     candidates = [
         directory
         for directory in sorted(args.candidates.iterdir())
@@ -800,23 +798,23 @@ async def accept_candidates(args: argparse.Namespace) -> None:
             )
             continue
         result = await accept_candidate(task, snapshot, factory=factory)
+        evidence = {
+            "accepted": False,
+            "stage": "behavioral_acceptance",
+            "behavioral_acceptance": result.accepted,
+            "split": split,
+            "family": inventory[snapshot.commit_sha].family,
+            "parent": result.parent.model_dump(mode="json") if result.parent is not None else None,
+            "reference": result.reference.model_dump(mode="json") if result.reference is not None else None,
+            "image": args.image,
+            "patch_controls": {},
+        }
+        acceptance = directory / "acceptance.json"
+        acceptance.write_text(json.dumps(evidence) + "\n")
         controls = await patch_controls(task, snapshot, factory=factory) if result.accepted else {}
         admitted = result.accepted and controls_pass(controls)
-        (directory / "acceptance.json").write_text(
-            json.dumps(
-                {
-                    "accepted": admitted,
-                    "behavioral_acceptance": result.accepted,
-                    "split": split,
-                    "family": inventory[snapshot.commit_sha].family,
-                    "parent": result.parent.model_dump(mode="json") if result.parent is not None else None,
-                    "reference": result.reference.model_dump(mode="json") if result.reference is not None else None,
-                    "image": args.image,
-                    "patch_controls": controls,
-                }
-            )
-            + "\n"
-        )
+        evidence.update(accepted=admitted, stage="completed", patch_controls=controls)
+        acceptance.write_text(json.dumps(evidence) + "\n")
         if admitted:
             accepted.append((snapshot, task))
     write_partitions(args.output, accepted, inventory)
@@ -838,19 +836,21 @@ def main() -> None:
     accept.add_argument("--candidates", type=Path, required=True)
     accept.add_argument("--output", type=Path, required=True)
     accept.add_argument("--dependency-bundles", type=Path, required=True)
-    accept.add_argument("--image", required=True, help="Image with all dependencies installed.")
+    accept.add_argument("--image", required=True, help="Pinned Python task image.")
     accept.add_argument("--backend", choices=("docker", "qemu"), required=True)
-    accept.add_argument("--qemu-assets", type=Path)
-    accept.add_argument("--bundle-cache", type=Path)
-    accept.add_argument("--skopeo", type=Path, required=True)
-    accept.add_argument("--image-cache", type=Path, required=True)
+    accept.add_argument("--prepared-bundle", type=Path, help="Verified QEMU bundle for the pinned task image.")
+    accept.add_argument("--skopeo", type=Path)
+    accept.add_argument("--image-cache", type=Path)
     accept.add_argument("--max-candidates", type=int, required=True)
     accept.add_argument("--timeout", type=float, required=True)
     args = parser.parse_args()
     if args.max_candidates <= 0:
         parser.error("max-candidates must be positive")
-    if args.command == "accept" and args.backend == "qemu" and (args.qemu_assets is None or args.bundle_cache is None):
-        parser.error("qemu requires qemu-assets and bundle-cache")
+    if args.command == "accept":
+        if args.backend == "qemu" and args.prepared_bundle is None:
+            parser.error("qemu requires prepared-bundle")
+        if args.backend == "docker" and (args.skopeo is None or args.image_cache is None):
+            parser.error("docker requires skopeo and image-cache")
     asyncio.run(generate_candidates(args) if args.command == "generate" else accept_candidates(args))
 
 
