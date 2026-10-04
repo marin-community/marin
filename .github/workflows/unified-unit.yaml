@@ -309,6 +309,10 @@ jobs:
       - name: Test TaskCompendium and Harbor adapters
         run: uv run --project lib/taskcompendium --frozen --extra harbor --group test pytest lib/taskcompendium/tests -q
 
+      - name: Type-check TaskCompendium
+        working-directory: lib/taskcompendium
+        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+
   iris_e2e_smoke:
     name: iris-e2e-smoke
     needs: select
