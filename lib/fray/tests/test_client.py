@@ -1,22 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for fray Client protocol, LocalClient, and wait_all."""
+"""Tests for the fray Client protocol and wait_all, run against every backend the client fixture offers."""
 
 import threading
 import time
 
 import pytest
-from fray.client import JobAlreadyExists, JobFailed, wait_all
+from fray.client import Client, JobAlreadyExists, JobFailed, wait_all
 from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest, JobStatus
-
-
-@pytest.fixture
-def client():
-    c = LocalClient(max_threads=4)
-    yield c
-    c.shutdown(wait=True)
 
 
 def _noop():
@@ -35,31 +28,31 @@ def _return_value():
     return 42
 
 
-def test_submit_callable_succeeds(client: LocalClient):
+def test_submit_callable_succeeds(client: Client):
     handle = client.submit(JobRequest(name="ok", entrypoint=Entrypoint.from_callable(_noop)))
     status = handle.wait()
     assert status == JobStatus.SUCCEEDED
 
 
-def test_submit_callable_failure(client: LocalClient):
+def test_submit_callable_failure(client: Client):
     handle = client.submit(JobRequest(name="fail", entrypoint=Entrypoint.from_callable(_fail)))
     status = handle.wait(raise_on_failure=False)
     assert status == JobStatus.FAILED
 
 
-def test_submit_callable_failure_raises(client: LocalClient):
+def test_submit_callable_failure_raises(client: Client):
     handle = client.submit(JobRequest(name="fail", entrypoint=Entrypoint.from_callable(_fail)))
     with pytest.raises(RuntimeError, match="intentional failure"):
         handle.wait(raise_on_failure=True)
 
 
-def test_job_id_contains_name(client: LocalClient):
+def test_job_id_contains_name(client: Client):
     handle = client.submit(JobRequest(name="my-job", entrypoint=Entrypoint.from_callable(_noop)))
     assert "my-job" in handle.job_id
     handle.wait()
 
 
-def test_status_transitions(client: LocalClient):
+def test_status_transitions(client: Client):
     handle = client.submit(JobRequest(name="slow", entrypoint=Entrypoint.from_callable(_sleep_then_succeed)))
     # Should be running or pending initially
     initial = handle.status()
@@ -84,20 +77,20 @@ def test_terminate():
     c.shutdown(wait=True)
 
 
-def test_wait_all_all_succeed(client: LocalClient):
+def test_wait_all_all_succeed(client: Client):
     handles = [client.submit(JobRequest(name=f"ok-{i}", entrypoint=Entrypoint.from_callable(_noop))) for i in range(3)]
     statuses = wait_all(handles)
     assert all(s == JobStatus.SUCCEEDED for s in statuses)
 
 
-def test_wait_all_mixed_failure(client: LocalClient):
+def test_wait_all_mixed_failure(client: Client):
     h_ok = client.submit(JobRequest(name="ok", entrypoint=Entrypoint.from_callable(_noop)))
     h_fail = client.submit(JobRequest(name="fail", entrypoint=Entrypoint.from_callable(_fail)))
     with pytest.raises(JobFailed):
         wait_all([h_ok, h_fail], raise_on_failure=True)
 
 
-def test_wait_all_no_raise(client: LocalClient):
+def test_wait_all_no_raise(client: Client):
     h_ok = client.submit(JobRequest(name="ok", entrypoint=Entrypoint.from_callable(_noop)))
     h_fail = client.submit(JobRequest(name="fail", entrypoint=Entrypoint.from_callable(_fail)))
     statuses = wait_all([h_ok, h_fail], raise_on_failure=False)
@@ -155,10 +148,10 @@ def test_job_already_exists_without_handle():
     assert exc.job_name == "orphan-job"
 
 
-def test_submit_with_adopt_existing_false_default(client: LocalClient):
-    """By default, adopt_existing=True and LocalClient doesn't enforce uniqueness."""
-    # LocalClient doesn't track job names, so calling submit twice with the same name
-    # creates two separate jobs (no exception)
+def test_submit_with_adopt_existing_false_default(client: Client):
+    """By default, adopt_existing=True and neither backend enforces name uniqueness."""
+    # Neither LocalClient nor RayClient tracks job names, so submitting the same name
+    # twice creates two separate jobs (no exception)
     h1 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)))
     h2 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)))
     # Both jobs should succeed independently
@@ -167,9 +160,9 @@ def test_submit_with_adopt_existing_false_default(client: LocalClient):
     assert h1.job_id != h2.job_id  # Different job IDs
 
 
-def test_submit_with_adopt_existing_true(client: LocalClient):
-    """When adopt_existing=True, LocalClient still doesn't enforce uniqueness."""
-    # LocalClient doesn't track job names, so adopt_existing has no effect
+def test_submit_with_adopt_existing_true(client: Client):
+    """With adopt_existing=True the backends under test still do not enforce uniqueness."""
+    # Job names are not tracked by either backend, so adopt_existing has no effect
     h1 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)), adopt_existing=True)
     h2 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)), adopt_existing=True)
     # Both jobs should succeed independently

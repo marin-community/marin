@@ -14,6 +14,12 @@ from fray.local_backend import LocalClient
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 
 
+@pytest.fixture(autouse=True)
+def _without_ray_backend(monkeypatch):
+    """A session-wide RayClient fixture leaves FRAY_BACKEND set; these tests cover the other branches."""
+    monkeypatch.delenv("FRAY_BACKEND", raising=False)
+
+
 def test_default_returns_local_client():
     client = current_client()
     assert isinstance(client, LocalClient)
