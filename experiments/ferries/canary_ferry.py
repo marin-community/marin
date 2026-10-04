@@ -41,7 +41,8 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
-from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
+from marin.training.levanter import resolve_checkpointer_output_path
+from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
 
 from experiments.datasets.prebuilt_caches import fineweb_edu_10M_dataset

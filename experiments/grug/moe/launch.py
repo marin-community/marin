@@ -35,7 +35,8 @@ from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
+from marin.training.levanter import resolve_checkpointer_output_path
+from marin.training.training import LevanterCheckpoint
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets

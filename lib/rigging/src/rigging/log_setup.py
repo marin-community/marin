@@ -264,3 +264,10 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
     return _global_buffer
+
+
+def configure_logging_if_unset(level: int = logging.INFO) -> None:
+    # Make step progress visible by default. Idempotent and non-clobbering:
+    # skipped when the driver (or a wrapping app) already installed handlers.
+    if not logging.getLogger().handlers:
+        configure_logging(level=level)
