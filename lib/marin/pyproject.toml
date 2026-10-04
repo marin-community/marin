@@ -61,6 +61,10 @@ marin-serve = "marin.inference.serve_cli:main"
 
 [dependency-groups]
 test = [
+    # The Marin test lane also runs the root experiment tests.
+    "marin-rolloutengine",
+    "marin-shellbox",
+    "taskcompendium",
     "cloud-sql-python-connector[pg8000]>=1.9",
     "pytest>=8.3.2",
     "pytest-asyncio",

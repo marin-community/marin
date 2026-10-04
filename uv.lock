@@ -6108,6 +6108,8 @@ dev = [
     { name = "black" },
     { name = "click" },
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "marin-rolloutengine" },
+    { name = "marin-shellbox" },
     { name = "mkdocs" },
     { name = "mkdocs-git-authors-plugin" },
     { name = "mkdocs-git-revision-date-localized-plugin" },
@@ -6126,6 +6128,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "taskcompendium" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
@@ -6152,12 +6155,15 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "marin-rolloutengine" },
+    { name = "marin-shellbox" },
     { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "taskcompendium" },
     { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
 ]
 
@@ -6243,6 +6249,8 @@ dev = [
     { name = "black", specifier = ">=26.3.1" },
     { name = "click", specifier = ">=8.0" },
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-git-authors-plugin", specifier = ">=0.9.0" },
     { name = "mkdocs-git-revision-date-localized-plugin", specifier = ">=1.2.0" },
@@ -6261,6 +6269,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
+    { name = "taskcompendium", editable = "lib/taskcompendium" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
@@ -6287,12 +6296,15 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "taskcompendium", editable = "lib/taskcompendium" },
     { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
 ]
 
