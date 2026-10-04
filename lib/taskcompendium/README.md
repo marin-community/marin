@@ -143,10 +143,10 @@ lower_to_harbor(spec, chosen.convention, chosen.environment_config, Path("/tmp/a
 
 ## Dataset conversion
 
-TaskSpec defines the serialized task contract. `taskcompendium.parquet` reads
-and writes bounded batches with one serialized task per row. Dataset conversion
-pipelines own higher-level storage layout and streaming. JSON decoding preserves
-valid unsupported requirements; export and launch validate runtime support separately.
+`TaskSpec.model_dump_json()` defines the serialized task contract.
+`TaskSpec.model_validate_json()` reads that contract. Applications own dataset
+conversion, file formats, and storage. JSON decoding preserves valid unsupported
+requirements; export and launch validate runtime support separately.
 
 ## How does Harbor run it?
 

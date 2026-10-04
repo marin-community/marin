@@ -14,8 +14,7 @@ from shellbox.machine import ExitReason, Result
 from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, RegistryImage
 from taskcompendium.grading import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
-from taskcompendium.models import Source
-from taskcompendium.parquet import read_tasks, write_tasks
+from taskcompendium.models import Source, TaskSpec
 
 from .test_rollout import ReplayModel, engine, run_task
 
@@ -76,7 +75,7 @@ def git_image(tmp_path):
 
 
 @pytest.mark.parametrize("answer,reward", [("fixed", 1.0), ("wrong", 0.0)])
-async def test_swe_parquet_task_applies_and_grades_the_patch_in_a_fresh_repository(tmp_path, git_image, answer, reward):
+async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(tmp_path, git_image, answer, reward):
     task = swe_task(
         SWEInstance(
             instance_id="fixture-1",
@@ -89,8 +88,7 @@ async def test_swe_parquet_task_applies_and_grades_the_patch_in_a_fresh_reposito
         ),
         verifier_timeout=5,
     )
-    path = str(tmp_path / "tasks.parquet")
-    write_tasks(path, iter([task]))
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     machines = []
 
     class Factory:
@@ -119,7 +117,7 @@ async def test_swe_parquet_task_applies_and_grades_the_patch_in_a_fresh_reposito
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await run_task(engine(model, {EnvironmentKind.DOCKER: Factory()}), next(read_tasks(path)))
+    result = await run_task(engine(model, {EnvironmentKind.DOCKER: Factory()}), task)
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert (git_image / "value.txt").read_text() == "broken\n"
     assert len(machines) == 2

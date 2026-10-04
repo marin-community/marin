@@ -39,7 +39,6 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
-from taskcompendium.parquet import read_tasks, write_tasks
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from rolloutengine.contracts import (
@@ -102,11 +101,10 @@ def engine(model, factories) -> ShellboxRolloutEngine:
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
-async def test_parquet_task_produces_private_grade_and_training_tokens(tmp_path, answer, reward):
-    path = str(tmp_path / "tasks.parquet")
-    write_tasks(path, [arithmetic_task()])
+async def test_serialized_task_produces_private_grade_and_training_tokens(answer, reward):
+    task = TaskSpec.model_validate_json(arithmetic_task().model_dump_json())
     model = ReplayModel([{"role": "assistant", "content": answer}])
-    result = await engine(model, {}).run(next(read_tasks(path)))
+    result = await engine(model, {}).run(task)
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert result.prompt_token_ids == (10, 11)
     assert result.response_token_ids == (20,)
@@ -464,7 +462,7 @@ async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine(
         ("echo broken > /logs/verifier/reward.json; echo 1 > /logs/verifier/reward.txt", Outcome.INFRA_ERROR, None),
     ],
 )
-async def test_file_grader_preserves_priority_and_rejects_agent_scores(tmp_path, script, status, reward):
+async def test_file_grader_preserves_priority_and_rejects_agent_scores(script, status, reward):
     verifier = ShellVerifierSpec(
         argv=("sh", "/tests/test.sh"),
         files=(EnvironmentFile(path="/tests/test.sh", content=script.encode()),),
@@ -485,14 +483,12 @@ async def test_file_grader_preserves_priority_and_rejects_agent_scores(tmp_path,
             "verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
         }
     )
-    path = str(tmp_path / "tasks.parquet")
-    write_tasks(path, iter([task]))
     result = await run_task(
         engine(
             ReplayModel([{"role": "assistant", "content": "Completed."}]),
             {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
         ),
-        next(read_tasks(path)),
+        task,
     )
     assert (result.grade.status, result.grade.reward) == (status, reward)
 
@@ -700,7 +696,7 @@ async def test_attempt_deadline_and_cancellation_wait_for_machine_cleanup():
 
 
 @pytest.mark.parametrize("answer,expected_reward", [(b"\x00\xff\r\n", 1.0), (b"incorrect", 0.0)])
-async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(tmp_path, answer, expected_reward):
+async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(answer, expected_reward):
     verifier = ShellVerifierSpec(
         argv=("/private/grade.sh",),
         timeout=5,
@@ -734,8 +730,7 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(tmp_
             "verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
         }
     )
-    path = str(tmp_path / "tasks.parquet")
-    write_tasks(path, iter([task]))
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     model = ReplayModel(
         [
             {
@@ -759,7 +754,7 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(tmp_
     factory = RecordingShellSimFactory()
     machines = factory.machines
 
-    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: factory}), next(read_tasks(path)))
+    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: factory}), task)
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected_reward)
     assert len(machines) == 2
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
