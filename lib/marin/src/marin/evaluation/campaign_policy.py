@@ -18,6 +18,7 @@ from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalchemyRef, EvalRef, ModelRef
 
 SEPTEMBER_29_VERSION = "eval-policy-2026-09-29-verified"
+SEPTEMBER_29_R2_VERSION = "eval-policy-2026-09-29-r2-verified"
 MAX_SERVED_CONTEXT = 73728
 
 
@@ -42,9 +43,15 @@ class CampaignProfile(BaseModel):
 CAMPAIGN = CampaignProfile.model_validate_json(
     Path(__file__).with_name("policies").joinpath("september_29.json").read_text()
 )
+CAMPAIGNS = {
+    SEPTEMBER_29_VERSION: CAMPAIGN,
+    SEPTEMBER_29_R2_VERSION: CampaignProfile.model_validate_json(
+        Path(__file__).with_name("policies").joinpath("september_29_r2.json").read_text()
+    ),
+}
 
 
-def campaign_policy_violations(model: ModelRef, evaluation: EvalRef) -> tuple[str, ...]:
+def campaign_policy_violations(model: ModelRef, evaluation: EvalRef, profile: CampaignProfile) -> tuple[str, ...]:
     """Check a selected benchmark against the frozen campaign, including model overrides."""
     source = model.source_config or model.config
     if source is None or model.config is None:
@@ -71,8 +78,8 @@ def campaign_policy_violations(model: ModelRef, evaluation: EvalRef) -> tuple[st
         problems.append("model configuration digest does not match the saved configuration")
     if not re.fullmatch(r"[0-9a-f]{40}", source.revision or ""):
         problems.append("campaign requires an immutable model revision")
-    if evaluation.name in CAMPAIGN.evalchemy:
-        approved = CAMPAIGN.evalchemy[evaluation.name]
+    if evaluation.name in profile.evalchemy:
+        approved = profile.evalchemy[evaluation.name]
         if evaluation.mechanism != "evalchemy" or evaluation.evalchemy is None:
             return (*problems, "campaign requires Evalchemy for this benchmark")
         if evaluation.source_digest != approved.source_digest:
@@ -105,11 +112,11 @@ def campaign_policy_violations(model: ModelRef, evaluation: EvalRef) -> tuple[st
             if getattr(evaluation.evalchemy, key) != getattr(expected_config, key)
         )
         return tuple(problems)
-    if evaluation.name in CAMPAIGN.harbor:
-        approved_harbor = CAMPAIGN.harbor[evaluation.name]
+    if evaluation.name in profile.harbor:
+        approved_harbor = profile.harbor[evaluation.name]
         if evaluation.mechanism != "harbor" or evaluation.harbor is None:
             return (*problems, "campaign requires Harbor for this benchmark")
-        variant = "native32k" if source.location in CAMPAIGN.native32k_locations else "standard"
+        variant = "native32k" if source.location in profile.native32k_locations else "standard"
         if evaluation.source_digest != approved_harbor.sources[variant]:
             problems.append("source config differs from the approved model-specific Harbor policy")
         if evaluation.harbor.task_limit is not None:
@@ -137,4 +144,4 @@ def campaign_policy_violations(model: ModelRef, evaluation: EvalRef) -> tuple[st
         if evaluation.harbor.max_output_tokens != expected_info["max_output_tokens"]:
             problems.append("Harbor output limit differs from the approved effective settings")
         return tuple(problems)
-    return (*problems, f"{evaluation.name}: not in {SEPTEMBER_29_VERSION}")
+    return (*problems, f"{evaluation.name}: not in the selected campaign profile")
