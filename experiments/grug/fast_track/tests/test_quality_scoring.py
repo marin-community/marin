@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import json
+from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
@@ -9,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from levanter.store.cache import CacheMetadata, TreeCache
 from zephyr.context import ZephyrContext
 from zephyr.stage_io import ZephyrWorkerError
 
@@ -18,6 +21,7 @@ from experiments.grug.fast_track.quality_features import QualityFeatureSource, p
 from experiments.grug.fast_track.quality_pipeline import (
     SelectedQualityPool,
     SelectionMethod,
+    _write_quality_token_cache,
     materialize_selected_pool,
     score_raw_pool,
     select_scored_pool,
@@ -34,6 +38,54 @@ class _TextScorer:
 
     def __call__(self):
         return _TextScorer(self.direction)
+
+
+def _variable_token_pool(raw_pool, tmp_path, name):
+    rows = []
+    for index in range(12):
+        token_count = 2 + index % 4
+        rows.append(
+            {
+                "source": "source",
+                "id": str(index),
+                "sample_rank": f"{index:064x}",
+                "duplicate_group": hashlib.sha256(f"text-{index}".encode()).hexdigest(),
+                "text": f"text-{index}",
+                "normalized_shard": str(tmp_path / "normalized.parquet"),
+                "normalized_row": index,
+                "input_ids": [index + 1] * token_count,
+                "token_count": token_count,
+            }
+        )
+    paths = (tmp_path / f"{name}-a.parquet", tmp_path / f"{name}-b.parquet")
+    pq.write_table(pa.Table.from_pylist(rows[:6]), paths[0])
+    pq.write_table(pa.Table.from_pylist(rows[6:]), paths[1])
+    range_totals = tuple(
+        RangeTokenTotal(
+            range_key,
+            str(path),
+            len(range_rows),
+            sum(row["token_count"] for row in range_rows),
+        )
+        for range_key, path, range_rows in (
+            (0, paths[0], rows[:6]),
+            (1, paths[1], rows[6:]),
+        )
+    )
+    total_tokens = sum(item.tokens for item in range_totals)
+    return RawCorpusPool(
+        tokenizer=raw_pool.tokenizer,
+        tokenizer_hash=raw_pool.tokenizer_hash,
+        sources=raw_pool.sources,
+        seed=raw_pool.seed,
+        requested_tokens=total_tokens,
+        actual_tokens=total_tokens,
+        documents=len(rows),
+        shards=tuple(str(path) for path in paths),
+        range_totals=range_totals,
+        source_tokens={"source": total_tokens},
+        manifest_path=str(tmp_path / f"{name}-manifest.json"),
+    )
 
 
 @pytest.fixture
@@ -168,6 +220,9 @@ def test_text_scorer_selects_only_after_the_deterministic_raw_prefix(raw_pool, z
     assert positive.classifier_identity["revision"] == "positive-v1"
     assert "text" not in pq.read_table(positive.shards[0]).column_names
     assert "input_ids" not in pq.read_table(positive.shards[0]).column_names
+    report = json.loads(Path(selected_positive.report_path).read_text())
+    assert report["rung_prefix_shards"] == list(selected_positive.raw_prefix_shards)
+    assert "scored_pool_shards" not in report
 
 
 def test_embedding_scorer_receives_id_aligned_cached_features(raw_pool, zephyr_context, tmp_path, monkeypatch):
@@ -208,6 +263,74 @@ def test_embedding_scorer_receives_id_aligned_cached_features(raw_pool, zephyr_c
     rows = [row for path in scored.shards for row in pq.read_table(path).to_pylist()]
     assert len(rows) == feature_pool.documents
     assert all("embedding" not in row for row in rows)
+
+
+def test_scoring_accepts_explicit_feature_output_pin_and_rejects_mismatches(
+    raw_pool, zephyr_context, tmp_path, monkeypatch
+):
+    default_harrier_path = str(tmp_path / "harrier")
+    monkeypatch.setattr(
+        "experiments.grug.fast_track.quality_features.hero_data.harrier", lambda _source: default_harrier_path
+    )
+    custom_harrier_path = tmp_path / "fresh-harrier"
+    custom_harrier_path.mkdir()
+    pq.write_table(
+        pq.read_table(tmp_path / "harrier" / "normalized.parquet"),
+        custom_harrier_path / "normalized.parquet",
+    )
+    custom_source = QualityFeatureSource("source", raw_pool.sources[0].normalized_path, str(custom_harrier_path))
+    prepared = prepare_quality_features(
+        raw_pool,
+        ctx=zephyr_context,
+        output_path=str(tmp_path / "explicit-feature-pins"),
+        token_budget=40,
+        sources=(custom_source,),
+    )
+
+    class EmbeddingScorer:
+        def scores(self, batch):
+            return batch.embeddings[:, 0]
+
+        def __call__(self):
+            return self
+
+    score_args = {
+        "ctx": zephyr_context,
+        "scorer_factory": EmbeddingScorer(),
+        "classifier_identity": {"implementation": "embedding-test", "revision": "fresh-v1"},
+        "label_exclusion": LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
+        "token_budget": 40,
+        "prepared_features": prepared,
+    }
+    scored = score_raw_pool(
+        raw_pool,
+        output_path=str(tmp_path / "explicit-feature-pin-score"),
+        expected_feature_sources=(custom_source,),
+        **score_args,
+    )
+    assert scored.feature_identity == prepared.feature_identity
+    with pytest.raises(ValueError, match="prepared feature pool"):
+        score_raw_pool(raw_pool, output_path=str(tmp_path / "implicit-feature-pin-score"), **score_args)
+    with pytest.raises(ValueError, match="expected feature normalized paths"):
+        score_raw_pool(
+            raw_pool,
+            output_path=str(tmp_path / "wrong-feature-pin-score"),
+            expected_feature_sources=(
+                QualityFeatureSource("source", "wrong-normalized-path", str(custom_harrier_path)),
+            ),
+            **score_args,
+        )
+    with pytest.raises(ValueError, match="require a prepared feature pool"):
+        score_raw_pool(
+            raw_pool,
+            ctx=zephyr_context,
+            output_path=str(tmp_path / "pins-without-features"),
+            scorer_factory=EmbeddingScorer(),
+            classifier_identity={"implementation": "embedding-test", "revision": "raw-only"},
+            label_exclusion=LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
+            token_budget=40,
+            expected_feature_sources=(custom_source,),
+        )
 
 
 def test_random_selection_reuses_the_same_raw_prefix_across_scores(raw_pool, zephyr_context, tmp_path):
@@ -339,6 +462,152 @@ def test_larger_training_budget_expands_the_raw_candidate_prefix(raw_pool, zephy
     assert len(small_candidates) == 8
     assert len(large_candidates) == 12
     assert small_candidates < large_candidates
+
+
+def test_max_scored_pool_matches_exact_rung_pools_through_raw_cache(raw_pool, zephyr_context, tmp_path):
+    pool = _variable_token_pool(raw_pool, tmp_path, "variable")
+    total_tokens = pool.actual_tokens
+    exclusion = LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset())
+    classifier = {"implementation": "text-test", "revision": "variable-v1"}
+    max_scored = score_raw_pool(
+        pool,
+        ctx=zephyr_context,
+        output_path=str(tmp_path / "max-scored"),
+        scorer_factory=_TextScorer(1),
+        classifier_identity=classifier,
+        label_exclusion=exclusion,
+        token_budget=total_tokens,
+    )
+    exact_small = score_raw_pool(
+        pool,
+        ctx=zephyr_context,
+        output_path=str(tmp_path / "exact-small"),
+        scorer_factory=_TextScorer(1),
+        classifier_identity=classifier,
+        label_exclusion=exclusion,
+        token_budget=10,
+    )
+    exact_large = score_raw_pool(
+        pool,
+        ctx=zephyr_context,
+        output_path=str(tmp_path / "exact-large"),
+        scorer_factory=_TextScorer(1),
+        classifier_identity=classifier,
+        label_exclusion=exclusion,
+        token_budget=20,
+    )
+    with pytest.raises(ValueError, match="scored raw prefix budget 10 is below the 20 token rung prefix"):
+        select_scored_pool(
+            exact_small,
+            ctx=zephyr_context,
+            output_path=str(tmp_path / "undersized-scored-pool"),
+            training_tokens=2,
+            selection_method=SelectionMethod.CANDIDATE,
+            tie_seed=5,
+            num_ranges=32,
+        )
+
+    selections = []
+    for label, scored, training_tokens in (
+        ("max-small", max_scored, 1),
+        ("exact-small", exact_small, 1),
+        ("max-large", max_scored, 2),
+        ("exact-large", exact_large, 2),
+    ):
+        selected = select_scored_pool(
+            scored,
+            ctx=zephyr_context,
+            output_path=str(tmp_path / f"{label}-selection"),
+            training_tokens=training_tokens,
+            selection_method=SelectionMethod.CANDIDATE,
+            tie_seed=5,
+            num_ranges=32,
+        )
+        assert selected.raw_source_shards == scored.raw_prefix_shards
+        assert all(
+            "input_ids" in pq.read_schema(path).names for path in selected.raw_source_shards
+        ), selected.raw_source_shards
+        materialized = materialize_selected_pool(
+            selected,
+            ctx=zephyr_context,
+            output_path=str(tmp_path / f"{label}-materialized"),
+        )
+        cache_dir = str(tmp_path / f"{label}-cache")
+        _write_quality_token_cache(
+            materialized,
+            cache_dir,
+            metadata=CacheMetadata({"preprocessor": "max-pool-rung-test"}),
+        )
+        cache = TreeCache.load(
+            cache_dir,
+            {"input_ids": np.zeros(0, dtype=np.int32)},
+            CacheMetadata({"preprocessor": "max-pool-rung-test"}),
+        )
+        cache_rows = cache.get_batch_sync(list(range(len(cache))))
+        selected_rows = [row for path in materialized for row in pq.read_table(path).to_pylist()]
+        selections.append(
+            (
+                selected,
+                [(row["id"], row["input_ids"]) for row in selected_rows],
+                [row["input_ids"].tolist() for row in cache_rows],
+            )
+        )
+
+    for max_index, exact_index, expected_tokens in ((0, 1, 10), (2, 3, 20)):
+        max_selected, max_rows, max_cache = selections[max_index]
+        exact_selected, exact_rows, exact_cache = selections[exact_index]
+        assert max_rows == exact_rows
+        assert max_cache == exact_cache
+        assert max_selected.raw_prefix_documents == exact_selected.raw_prefix_documents
+        assert max_selected.raw_prefix_tokens > expected_tokens
+        assert max_selected.raw_prefix_tokens == exact_selected.raw_prefix_tokens
+        assert max_selected.raw_source_shards == max_scored.raw_prefix_shards
+        assert len(max_selected.shards) < 32
+
+
+def test_max_scored_pool_checks_constant_scores_on_each_rung_prefix(raw_pool, zephyr_context, tmp_path):
+    class PrefixConstantScorer:
+        def scores(self, batch):
+            return np.asarray(
+                [0.0 if int(document_id) < 4 else float(document_id) for document_id in batch.document_ids]
+            )
+
+        def __call__(self):
+            return self
+
+    pool = _variable_token_pool(raw_pool, tmp_path, "constant-prefix")
+    total_tokens = pool.actual_tokens
+    scored = score_raw_pool(
+        pool,
+        ctx=zephyr_context,
+        output_path=str(tmp_path / "constant-prefix-scored"),
+        scorer_factory=PrefixConstantScorer(),
+        classifier_identity={"implementation": "text-test", "revision": "prefix-constant-v1"},
+        label_exclusion=LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
+        token_budget=total_tokens,
+    )
+
+    with pytest.raises(ValueError, match="candidate scores are constant on the rung raw prefix"):
+        select_scored_pool(
+            scored,
+            ctx=zephyr_context,
+            output_path=str(tmp_path / "constant-prefix-small"),
+            training_tokens=1,
+            selection_method=SelectionMethod.CANDIDATE,
+            tie_seed=5,
+            num_ranges=8,
+        )
+    selected = select_scored_pool(
+        scored,
+        ctx=zephyr_context,
+        output_path=str(tmp_path / "constant-prefix-large"),
+        training_tokens=2,
+        selection_method=SelectionMethod.CANDIDATE,
+        tie_seed=5,
+        num_ranges=8,
+    )
+
+    assert selected.raw_prefix_tokens > 20
 
 
 def test_training_order_does_not_follow_score_rank(raw_pool, zephyr_context, tmp_path):

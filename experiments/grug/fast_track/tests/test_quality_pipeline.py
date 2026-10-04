@@ -3,9 +3,11 @@
 
 import asyncio
 import hashlib
+import json
 from dataclasses import replace
 from typing import cast
 
+import click
 import jax
 import numpy as np
 import pyarrow as pa
@@ -19,6 +21,7 @@ from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheLedger, CacheMetadata, SerialCacheWriter, TreeCache
 from marin.execution.lazy import ArtifactStep
+from marin.execution.step_spec import StepSpec
 from zephyr.context import ZephyrContext
 
 from experiments.grug.fast_track import quality_pipeline
@@ -295,6 +298,7 @@ def test_training_loader_reads_only_complete_mixture_blocks(tmp_path, monkeypatc
     ("stage", "terminal_artifact"),
     [
         ("features", "fast-track/quality-features"),
+        ("score", "fast-track/scored-pool/"),
         ("select", "fast-track/quality/"),
         ("train", "grug/quality-cli-plan"),
     ],
@@ -328,3 +332,69 @@ def test_quality_cli_prints_selected_stage_graph(tmp_path, stage, terminal_artif
     assert "fast-track/raw-pool" in result.output
     assert "s3://marin-test/raw-pool" in result.output
     assert terminal_artifact in result.output
+
+
+def test_quality_cli_reuses_scored_pool_for_moe_rung(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(click, "echo", emitted.append)
+    result = CliRunner().invoke(
+        quality_main,
+        [
+            "--scored-pool",
+            "s3://marin-test/scored-pool",
+            "--stage",
+            "train",
+            "--run-id",
+            "quality-cli-moe-plan",
+            "--size",
+            "d1280",
+            "--moe",
+            "--version",
+            "2026.10.04",
+        ],
+    )
+
+    assert result.exit_code == 0, result.exception
+    training = next(item for item in emitted if isinstance(item, StepSpec))
+    selection = next(dep for dep in training.deps if dep.name.startswith("fast-track/quality/"))
+    adopted_pool = selection.deps[0]
+    training_config = json.loads(training.fingerprint_payload)
+    selection_config = json.loads(selection.fingerprint_payload)
+    assert json.loads(adopted_pool.fingerprint_payload)["adopt_source"] == "s3://marin-test/scored-pool"
+    assert training_config["model"]["dense_mlp"] is False
+    assert training_config["trainer"]["trainer"]["num_train_steps"] == 16669
+    assert selection_config["training_tokens"] == 17478713344
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--raw-pool", "s3://marin-test/raw", "--stage", stage, "--run-id", "ignored"]
+        for stage in ("features", "score", "select")
+    ]
+    + [
+        [
+            "--scored-pool",
+            "s3://marin-test/scored",
+            "--stage",
+            "train",
+            "--run-id",
+            "quality-cli-plan",
+            "--training-tokens",
+            "1000",
+        ],
+        [
+            "--scored-pool",
+            "s3://marin-test/scored",
+            "--stage",
+            "select",
+            "--scorer-factory",
+            f"{__name__}:_Scorer",
+        ],
+    ],
+)
+def test_quality_cli_rejects_options_that_would_be_ignored(args):
+    # A discarded run ID, token budget, or scorer can misidentify an experiment.
+    result = CliRunner().invoke(quality_main, [*args, "--version", "2026.10.04"])
+
+    assert result.exit_code == 2

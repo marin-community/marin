@@ -158,7 +158,7 @@ def fit_quality_head(
     training, development = split_labelled_embeddings(rows, split_seed=split_seed)
     scorer = head.fit(training)
     metrics = development_metrics(scorer, development)
-    return FittedQualityHead(scorer, quality_head_identity(head), len(training), metrics)
+    return FittedQualityHead(scorer, quality_classifier_identity(head.identity), len(training), metrics)
 
 
 def frozen_label_duplicate_groups(rows: Sequence[LabelledEmbedding]) -> frozenset[str]:
@@ -215,15 +215,17 @@ def development_metrics(scorer: QualityScorer, rows: Sequence[LabelledEmbedding]
     )
 
 
-def quality_head_identity(head: QualityHeadConfig) -> dict[str, str | int | float | bool]:
-    """Return the JSON-safe identity that selects a quality-head implementation and config."""
-    identity = dict(head.identity)
+def quality_classifier_identity(
+    values: Mapping[str, str | int | float | bool],
+) -> dict[str, str | int | float | bool]:
+    """Validate and copy the JSON-safe classifier implementation, revision, and parameters."""
+    identity = dict(values)
     if not isinstance(identity.get("implementation"), str) or not isinstance(identity.get("revision"), str):
-        raise ValueError("quality head identity requires implementation and revision strings")
+        raise ValueError("classifier identity requires implementation and revision strings")
     try:
         json.dumps(identity, sort_keys=True, allow_nan=False)
     except (TypeError, ValueError) as exc:
-        raise ValueError("quality head identity must contain finite JSON values") from exc
+        raise ValueError("classifier identity must contain finite JSON values") from exc
     return identity
 
 
