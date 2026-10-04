@@ -773,7 +773,9 @@ def _launch_config_yaml(
             "launcher_commit": spec.runtime.commit,
             "profile": spec.runtime.profile.value,
             "entrypoint": "",
-            "experiments_dir": "/app/experiments",
+            "experiments_dir": (
+                prefix_join(output.attempts_root, "literal_capture") if controller_ingress else "/app/experiments"
+            ),
             "task_env": task_env,
         },
         "iris": {
