@@ -64,6 +64,23 @@ Each asset can contain at most 64 MiB. The shared host cache stops new downloads
 Asset URIs are trusted task inputs because the host reads them with its own credentials.
 Private grading files must stay in the verifier specification.
 
+For a task that requires a full Linux environment, callers can map the `docker`
+environment kind to `QemuMachineFactory`. A prepared guest bundle contains the
+kernel, QEMU executable, libraries, and guest disk. Install the bundle with
+`rigging.runtime_bundle.install_runtime_bundle` to verify its archive and file
+hashes. Prepared runtimes cannot require host package installation.
+
+Pass `prepared_registry_bundles={pinned_image: verified_bundle_path}` to the
+QEMU factory. The factory requires an exact match between the image reference
+and the bundle metadata, including the guest code version. Rebuild the bundle
+after a guest code change. The reference must identify the Linux amd64 manifest.
+Each machine uses a private writable overlay on the shared guest disk.
+
+A prepared disk can contain shared dependency files. QEMU omits a file upload
+only when the existing guest file has the same SHA-256 and permission bits.
+Keep these files in `environment.assets` so the task retains their identities.
+Task source and private grading files must not enter a shared prepared disk.
+
 ## Grading
 
 Text, numeric, multiple-choice, and final-action tasks use the shared verifier registry.

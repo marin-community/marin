@@ -5,19 +5,20 @@
 
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import os
 import re
 import shlex
-import shutil
 import tarfile
 import tempfile
+from collections.abc import Mapping
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 
-from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
+from shellbox.backends.qemu.image import QemuAssets, guest_code_id, stage_qemu_image
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
@@ -33,8 +34,23 @@ from shellbox.machine import (
 )
 
 REQUEST_CHUNK_BYTES = 2048
+UPLOAD_CHUNK_BYTES = 48 * 1024
 TRANSFER_LIMIT_BYTES = 128 * 1024 * 1024
+BOOT_DIAGNOSTIC_BYTES = 8192
+PROCESS_STOP_TIMEOUT = 5
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+async def _stopped_process_output(process: asyncio.subprocess.Process) -> tuple[bytes, bytes]:
+    if process.returncode is None:
+        process.terminate()
+    output = asyncio.create_task(process.communicate())
+    try:
+        return await asyncio.wait_for(asyncio.shield(output), timeout=PROCESS_STOP_TIMEOUT)
+    except TimeoutError:
+        if process.returncode is None:
+            process.kill()
+        return await output
 
 
 class Acceleration(StrEnum):
@@ -175,6 +191,8 @@ class QemuMachine:
         assert self._runtime_dir is not None
         runtime_path = Path(self._runtime_dir.name)
         runtime_env = os.environ.copy()
+        # QEMU stores its temporary disk overlay inside this machine's private directory.
+        runtime_env["TMPDIR"] = str(runtime_path)
         lib = self.bundle / "lib"
         if lib.is_dir():
             runtime_env["LD_LIBRARY_PATH"] = str(lib)
@@ -182,12 +200,11 @@ class QemuMachine:
             if modules.is_dir():
                 runtime_env["QEMU_MODULE_DIR"] = str(modules)
         disk_args: list[str] = []
-        if (self.bundle / "rootfs.ext4").is_file():
-            trial_disk = runtime_path / "rootfs.ext4"
-            await asyncio.to_thread(shutil.copyfile, self.bundle / "rootfs.ext4", trial_disk)
+        base_disk = self.bundle / "rootfs.ext4"
+        if base_disk.is_file():
             disk_args = [
                 "-drive",
-                f"file={trial_disk},if=none,format=raw,id=rootdisk",
+                f"file={base_disk},if=none,format=raw,id=rootdisk,snapshot=on",
                 "-device",
                 "virtio-blk-device,drive=rootdisk",
             ]
@@ -204,7 +221,8 @@ class QemuMachine:
             "-L",
             str(self.bundle / "firmware"),
             "-machine",
-            "microvm",
+            # Keep the PIT; Firecracker 5.10 and 6.1 kernels panic before IRQ setup with the legacy PIC.
+            "microvm,pic=off",
             *accelerator_args,
             "-m",
             f"{self.spec.memory_mb or 512}M",
@@ -241,13 +259,28 @@ class QemuMachine:
             env=runtime_env,
         )
         assert self.process.stdout is not None
+        boot_output = bytearray()
         while True:
-            line = await asyncio.wait_for(self.process.stdout.readline(), timeout=60)
+            try:
+                line = await asyncio.wait_for(self.process.stdout.readline(), timeout=60)
+            except TimeoutError as error:
+                stdout, stderr = await _stopped_process_output(self.process)
+                raise RuntimeError(
+                    f"QEMU guest startup timed out: "
+                    f"stdout={(bytes(boot_output) + stdout)[-BOOT_DIAGNOSTIC_BYTES:]!r}; "
+                    f"stderr={stderr[-BOOT_DIAGNOSTIC_BYTES:]!r}"
+                ) from error
+            boot_output.extend(line)
+            del boot_output[:-BOOT_DIAGNOSTIC_BYTES]
             if b"READY" in line:
                 break
             if not line:
-                assert self.process.stderr is not None
-                raise RuntimeError(f"QEMU exited before guest startup: {await self.process.stderr.read()!r}")
+                stdout, stderr = await _stopped_process_output(self.process)
+                raise RuntimeError(
+                    f"QEMU exited before guest startup: "
+                    f"stdout={(bytes(boot_output) + stdout)[-BOOT_DIAGNOSTIC_BYTES:]!r}; "
+                    f"stderr={stderr[-BOOT_DIAGNOSTIC_BYTES:]!r}"
+                )
         self.active_acceleration = await query_acceleration(qmp_socket)
 
     async def open_shell(self) -> QemuShellSession:
@@ -285,8 +318,8 @@ class QemuMachine:
             raise ValueError("Command argv is empty")
         if command.user not in (None, "0", "root"):
             raise UnsupportedMachineSpec("QEMU does not provide separate execution users")
-        if command.stdin:
-            raise ValueError("QEMU serial protocol does not support command stdin")
+        if command.stdin is not None and len(command.stdin) > TRANSFER_LIMIT_BYTES:
+            raise ValueError("QEMU command stdin exceeds the transfer limit")
         process = self.process
         if process is None or process.stdin is None or process.stdout is None or process.returncode is not None:
             raise RuntimeError("QEMU machine is not running")
@@ -304,6 +337,9 @@ class QemuMachine:
             process.stdin.write(b"BEGIN\n")
             for offset in range(0, len(encoded), REQUEST_CHUNK_BYTES):
                 process.stdin.write(b"DATA|" + encoded[offset : offset + REQUEST_CHUNK_BYTES] + b"\n")
+            encoded_stdin = base64.b64encode(command.stdin or b"")
+            for offset in range(0, len(encoded_stdin), REQUEST_CHUNK_BYTES):
+                process.stdin.write(b"INPUT|" + encoded_stdin[offset : offset + REQUEST_CHUNK_BYTES] + b"\n")
             process.stdin.write(b"END\n")
             await process.stdin.drain()
             try:
@@ -347,25 +383,79 @@ class QemuMachine:
                 await self.close()
                 raise
 
+    async def _upload_bytes(self, payload: bytes, target: str) -> None:
+        if len(payload) > TRANSFER_LIMIT_BYTES:
+            raise ValueError("QEMU upload exceeds the transfer limit")
+        temporary = f"{target}.harbor-upload-{os.urandom(16).hex()}"
+        quoted = shlex.quote(temporary)
+        parent = shlex.quote(str(Path(target).parent))
+        try:
+            result = await self.run(Command(("/bin/sh", "-c", f"/harbor/busybox mkdir -p {parent} && : > {quoted}")))
+            if result.exit_code != 0:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
+            # Bound the script argument below Linux MAX_ARG_STRLEN after base64 expansion.
+            for offset in range(0, len(payload), UPLOAD_CHUNK_BYTES):
+                encoded = base64.b64encode(payload[offset : offset + UPLOAD_CHUNK_BYTES]).decode()
+                script = f"printf '%s' '{encoded}' | /harbor/busybox base64 -d >> {quoted}"
+                result = await self.run(Command(("/bin/sh", "-c", script)))
+                if result.exit_code != 0:
+                    raise RuntimeError(result.stderr.decode(errors="replace"))
+            result = await self.run(Command(("/harbor/busybox", "mv", "-f", temporary, target)))
+            if result.exit_code != 0:
+                raise RuntimeError(result.stderr.decode(errors="replace"))
+        finally:
+            await self._remove_upload_temporary(temporary)
+
+    async def _remove_upload_temporary(self, path: str) -> None:
+        if self.process is None:
+            return
+        result = await self.run(Command(("/harbor/busybox", "rm", "-f", path)))
+        if result.exit_code != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
+
     async def upload(self, source: Path, target: str) -> None:
         if source.is_dir():
             stream = io.BytesIO()
             with tarfile.open(fileobj=stream, mode="w:gz") as archive:
                 archive.add(source, arcname=".")
-            encoded = base64.b64encode(stream.getvalue()).decode()
-            script = (
-                f"/harbor/busybox mkdir -p {shlex.quote(target)} && printf '%s' '{encoded}' | "
-                "/harbor/busybox base64 -d | /harbor/busybox gzip -d | "
-                f"/harbor/busybox tar xf - -C {shlex.quote(target)}"
+            temporary = f"/tmp/harbor-upload-{os.urandom(16).hex()}.tar.gz"
+            try:
+                await self._upload_bytes(stream.getvalue(), temporary)
+                script = (
+                    f"/harbor/busybox mkdir -p {shlex.quote(target)} && "
+                    f"/harbor/busybox gzip -dc {temporary} | "
+                    f"/harbor/busybox tar xf - -C {shlex.quote(target)}"
+                )
+                result = await self.run(Command(("/bin/sh", "-c", script)))
+                if result.exit_code != 0:
+                    raise RuntimeError(result.stderr.decode(errors="replace"))
+            finally:
+                await self._remove_upload_temporary(temporary)
+            return
+        payload = source.read_bytes()
+        if len(payload) > TRANSFER_LIMIT_BYTES:
+            raise ValueError("QEMU upload exceeds the transfer limit")
+        mode = source.stat().st_mode & 0o7777
+        quoted = shlex.quote(target)
+        check = await self.run(
+            Command(
+                (
+                    "/bin/sh",
+                    "-c",
+                    f"test -f {quoted} && test ! -L {quoted} && /harbor/busybox stat -c %a {quoted} && "
+                    f"/harbor/busybox sha256sum {quoted}",
+                )
             )
-        else:
-            encoded = base64.b64encode(source.read_bytes()).decode()
-            script = (
-                f"/harbor/busybox mkdir -p {shlex.quote(str(Path(target).parent))} && "
-                f"printf '%s' '{encoded}' | /harbor/busybox base64 -d > {shlex.quote(target)}"
-            )
-        result = await self.run(Command(("/bin/sh", "-c", script), output_limit_bytes=TRANSFER_LIMIT_BYTES))
-        if result.exit_code:
+        )
+        lines = check.stdout.splitlines()
+        if check.exit_code == 0 and len(lines) == 2:
+            digest = hashlib.sha256(payload).hexdigest().encode()
+            if lines[0] == f"{mode:o}".encode() and lines[1].split(maxsplit=1)[0] == digest:
+                return
+        await self._upload_bytes(payload, target)
+        script = f"/harbor/busybox chmod {mode:o} {shlex.quote(target)}"
+        result = await self.run(Command(("/bin/sh", "-c", script)))
+        if result.exit_code != 0:
             raise RuntimeError(result.stderr.decode(errors="replace"))
 
     async def download(self, source: str, target: Path) -> None:
@@ -421,6 +511,7 @@ class QemuMachineFactory:
         skopeo: Path | None = None,
         authfile: Path | None = None,
         policy: Path | None = None,
+        prepared_registry_bundles: Mapping[str, Path] | None = None,
     ):
         self.acceleration = Acceleration(acceleration)
         self.assets = assets
@@ -429,6 +520,16 @@ class QemuMachineFactory:
         self.skopeo = skopeo
         self.authfile = authfile
         self.policy = policy
+        self.prepared_registry_bundles = dict(prepared_registry_bundles or {})
+
+        for reference, bundle in self.prepared_registry_bundles.items():
+            metadata = json.loads((bundle / "image.json").read_text())
+            if "@sha256:" not in reference or metadata.get("image_reference") != reference:
+                raise ValueError(f"Prepared registry bundle {bundle} must match pinned source {reference}")
+            if metadata.get("manifest_digest") != reference.rsplit("@", 1)[1]:
+                raise ValueError(f"Prepared registry bundle {bundle} image digest differs from source {reference}")
+            if metadata.get("guest_code_id") != guest_code_id():
+                raise ValueError(f"Prepared registry bundle {bundle} guest protocol differs from current guest code")
 
     async def create(self, spec: MachineSpec) -> QemuMachine:
         if spec.storage_mb is not None or spec.gpus:
@@ -437,6 +538,10 @@ class QemuMachineFactory:
             raise UnsupportedMachineSpec("QEMU guest networking is unsupported")
         if spec.memory_mb is not None and spec.memory_mb <= 0:
             raise ValueError("memory_mb must be positive")
+        if isinstance(spec.source, RegistryImage) and spec.source.reference in self.prepared_registry_bundles:
+            reference = spec.source.reference
+            bundle = self.prepared_registry_bundles[reference]
+            spec = replace(spec, source=QemuBundle(bundle))
         if isinstance(spec.source, (RegistryImage, DockerfileSource)):
             if self.image_cache is None or self.skopeo is None:
                 raise UnsupportedMachineSpec("Registry images and Dockerfiles require an image cache and Skopeo")

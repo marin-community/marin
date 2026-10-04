@@ -2,7 +2,7 @@
 
 These scripts exercise installed runtime assets that the test suite cannot bundle. They use assertions and exit nonzero on failure.
 
-- `check_machine.py` compares command results and file transfer in a local Docker image and a prepared QEMU bundle.
+- `check_machine.py` compares command results, binary stdin, empty-input reset, 3 MB file transfer, executable mode, and file replacement in a local Docker image and a prepared QEMU bundle.
 - `check_shell.py` checks persistent Bash state, stdin, interruption, jobs, output limits, and reset in a PTY-enabled QEMU bundle.
 - `check_prepared_image.py` prepares one registry image and compares its command output in Docker and QEMU. It needs Docker, Skopeo, `umoci`, guest assets, and registry access.
 

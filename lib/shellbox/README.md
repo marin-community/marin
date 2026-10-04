@@ -18,11 +18,15 @@ uv pip install 'marin-shellbox[gvisor]'
 
 The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [Marin Harbor fork](../../config/external/harbor/pyproject.toml), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.20 or newer within the 0.1 series. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
 
+For a kernel with PVH boot, include `pvh.bin` from the matching QEMU release in the firmware directory. A host QEMU data directory can hide a missing bundle file; check the bundle on a host without QEMU installed.
+
 ## Machine API
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris}`. QEMU and ShellSim have Harbor environment adapters. The three new backends expose the machine contract; a Harbor environment adapter and persistent Bash support remain separate work.
+
+Pass `prepared_registry_bundles={pinned_image_reference: bundle_path}` to `QemuMachineFactory` to use a verified OCI bundle without registry access or image staging tools. The bundle's `image.json` must record the exact Linux amd64 `manifest_digest`, `image_reference`, and current `guest_code_id`. Each machine uses a private disk snapshot. QEMU commands accept binary stdin and return EOF for an empty input. Large inputs need a timeout that permits their serial transfer.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
