@@ -1,0 +1,60 @@
+# Diagnostic subset: ten tasks K2 solved in the 2026-09-24 Terminal-Bench run.
+# The same task names occur in terminal-bench/terminal-bench-2-1 ref 6.
+# One trial per task screens serving behavior; this is not a policy score.
+n_concurrent_trials: 10
+n_attempts: 1
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  - TmuxBatchProtocolError
+  - TmuxSessionEndedError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+- name: terminus-2
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    model_info:
+      max_input_tokens: 65536
+      max_output_tokens: 16384
+datasets:
+- name: terminal-bench/terminal-bench-2-1
+  ref: '6'
+  task_names:
+  - terminal-bench/build-pov-ray
+  - terminal-bench/cobol-modernization
+  - terminal-bench/constraints-scheduling
+  - terminal-bench/custom-memory-heap-crash
+  - terminal-bench/distribution-search
+  - terminal-bench/financial-document-processor
+  - terminal-bench/fix-code-vulnerability
+  - terminal-bench/git-leak-recovery
+  - terminal-bench/git-multibranch
+  - terminal-bench/headless-terminal
+verifier:
+  override_timeout_sec: 300

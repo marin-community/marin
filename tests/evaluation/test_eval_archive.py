@@ -504,6 +504,22 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     assert ReadView(str(results)).scan("samples").num_rows == 2
 
 
+def test_rebuild_preserves_repeated_sample_trial_ids(tmp_path):
+    results = tmp_path / "run" / "results"
+    first = _lm_eval_row(0, "none", 0.0, "first") | {"sample_repeat": 0}
+    second = _lm_eval_row(0, "none", 1.0, "second") | {"sample_repeat": 1}
+    source = _write_jsonl(results, [first, second])
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    source.unlink()
+    assert rebuild_lm_eval_samples(str(results)) == 2
+    rows = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {(row["trial_id"], sample_from_archive_row(row).output) for row in rows} == {
+        ("0", "first"),
+        ("1", "second"),
+    }
+
+
 def test_export_preserves_every_artifact_the_harness_left(tmp_path):
     # evalchemy's resume state lives under a dot-directory, which the earlier `**/*` globs never
     # matched, so it was the one thing a rebuilt archive could not account for.

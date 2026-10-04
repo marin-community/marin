@@ -1,0 +1,36 @@
+# Diagnostic only: deliberately too small for the first SOTOPIA prompt.
+# Paired with the canonical config at --limit 1 to test boundary enforcement.
+n_concurrent_trials: 1
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 0
+  exclude_exceptions: []
+  include_exceptions:
+  - ContextManagementInfrastructureError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+- name: sotopia
+  import_path: harbor.agents.installed.sotopia:SotopiaAgent
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    model_info:
+      max_input_tokens: 64
+    partner_model: openai/openai/gpt-oss-120b
+    partner_api_base: https://api.together.xyz/v1
+    evaluator_model: openai/openai/gpt-oss-120b
+    evaluator_api_base: https://api.together.xyz/v1
+  env:
+    CUSTOM_API_KEY: ${TOGETHER_API_KEY}
+    OPENAI_API_KEY: ${TOGETHER_API_KEY}
+datasets:
+- name: hf://open-athena/sotopia-hard-harbor
+  ref: 65be6de928ab289e43a2730182b5b75cf2f75d41
+verifier:
+  override_timeout_sec: 300
+  env:
+    TOGETHER_API_KEY: ${TOGETHER_API_KEY}

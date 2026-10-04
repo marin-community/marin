@@ -637,6 +637,25 @@ def test_inference_proxy_routes_models_readiness_to_running_model(mock_cluster: 
     assert mock_cluster.broker.size() == 0
 
 
+def test_inference_proxy_forwards_server_root_tokenize_route(mock_cluster: MockInferenceCluster) -> None:
+    server_root = mock_cluster.proxy.endpoint.base_url.removesuffix("/v1")
+    response = httpx.post(
+        f"{server_root}/tokenize",
+        json={
+            "model": mock_cluster.model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "add_generation_prompt": True,
+        },
+        timeout=5,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 3, "max_model_len": 32768, "tokens": [1, 2, 3]}
+    assert len(mock_cluster.upstream.requests_for("/tokenize")) == 1
+    assert mock_cluster.broker.pending() == []
+    assert mock_cluster.broker.size() == 0
+
+
 def test_inference_proxy_rejects_streaming_before_submitting_to_broker(
     mock_cluster: MockInferenceCluster,
 ) -> None:

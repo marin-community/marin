@@ -132,6 +132,31 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
     return LockedGitSource(repository=repository, commit=commit)
 
 
+def project_git_distributions(project: ExternalProject) -> tuple[str, ...]:
+    """Return every locked distribution sourced from the project's repository."""
+    lock_path = project.directory / "uv.lock"
+    repository = locked_git_source(lock_path, project.distribution).repository
+    lock = tomllib.loads(lock_path.read_text())
+    distributions = []
+    for package in lock["package"]:
+        git_source = package.get("source", {}).get("git")
+        if git_source is None:
+            continue
+        parsed = urlsplit(git_source)
+        package_repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+        if package_repository == repository:
+            distributions.append(package["name"])
+    return tuple(distributions)
+
+
+def upgrade_project_lock(project: ExternalProject) -> None:
+    """Advance all distributions that share an external project's Git repository."""
+    command = ["uv", "lock", "--project", str(project.directory)]
+    for distribution in project_git_distributions(project):
+        command.extend(("--upgrade-package", distribution))
+    subprocess.run(command, check=True)
+
+
 def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
     """Read one forked TPU vLLM pin (repository + commit) from the fork descriptor.
 
@@ -627,17 +652,7 @@ def main() -> None:
     previous_dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     if not args.check:
         for project in selected:
-            subprocess.run(
-                [
-                    "uv",
-                    "lock",
-                    "--project",
-                    str(project.directory),
-                    "--upgrade-package",
-                    project.distribution,
-                ],
-                check=True,
-            )
+            upgrade_project_lock(project)
 
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)

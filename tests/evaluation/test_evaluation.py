@@ -53,7 +53,6 @@ from marin.evaluation.records import (
     read_record,
 )
 from marin.evaluation.runner import (
-    EndpointRoute,
     Evaluation,
     EvaluationBatch,
     EvaluationError,
@@ -244,7 +243,7 @@ def _failed_evaluation(
     )
 
 
-def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute = EndpointRoute.CAPABILITY) -> Evaluation:
+def _evaluation(root: Path, name: str, executor) -> Evaluation:
     return Evaluation(
         identity=EvaluationIdentity(
             run_id=f"run-{name}",
@@ -254,7 +253,6 @@ def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute =
             eval_runtime="test-runtime",
         ),
         executor=executor,
-        endpoint_route=endpoint_route,
     )
 
 
@@ -366,9 +364,8 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     assert record.judge.hardware.accelerator == "H100x1"
 
 
-def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_path, monkeypatch):
+def test_run_evaluation_batch_does_not_bind_execution_to_direct_endpoint(tmp_path, monkeypatch):
     observed_urls: list[str] = []
-    addresses = iter(("http://10.0.0.1:8000", "http://10.0.0.2:8000"))
 
     def executor(
         session: RemoteInferenceSession,
@@ -380,20 +377,23 @@ def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_
         observed_urls.append(session.model.endpoint.base_url)
         return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
 
-    _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
+    _patch_inference_runtime(
+        monkeypatch,
+        lambda _config: nullcontext(_remote_session("https://iris.example/proxy/t/token/serve.inference/v1")),
+    )
     monkeypatch.setattr(
         "marin.evaluation.runner.iris_ctx",
         lambda: SimpleNamespace(
             job_id="/orchestrator",
-            client=SimpleNamespace(resolve_endpoint=lambda _name: next(addresses)),
+            client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000"),
         ),
     )
     batch = replace(
         _hosted_judge_batch(
             tmp_path,
             (
-                _evaluation(tmp_path, "one", executor, EndpointRoute.DIRECT),
-                _evaluation(tmp_path, "two", executor, EndpointRoute.DIRECT),
+                _evaluation(tmp_path, "one", executor),
+                _evaluation(tmp_path, "two", executor),
             ),
         ),
         judge=None,
@@ -401,15 +401,21 @@ def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_
 
     run_evaluation_batch(batch)
 
-    assert observed_urls == ["http://10.0.0.1:8000/v1", "http://10.0.0.2:8000/v1"]
+    assert observed_urls == [
+        "https://iris.example/proxy/t/token/serve.inference/v1",
+        "https://iris.example/proxy/t/token/serve.inference/v1",
+    ]
 
 
 def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_start(tmp_path, monkeypatch):
+    opened_models: list[str] = []
+
     class InferenceContext:
         def __init__(self, model_name: str):
             self.model_name = model_name
 
         def __enter__(self) -> RemoteInferenceSession:
+            opened_models.append(self.model_name)
             if self.model_name == "judge":
                 raise RemoteInferenceStartupError("judge did not become ready", jobs=())
             return _remote_session("https://candidate.example/v1")
@@ -427,11 +433,62 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
     with pytest.raises(RuntimeError, match="judge inference failed"):
         run_evaluation_batch(batch)
 
+    assert opened_models == ["candidate", "judge"]
     for evaluation in evaluations:
         record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
         assert record.status is RunStatus.INFRA_FAILED
         assert record.jobs == {"orchestrator": "/orchestrator"}
         assert "judge did not become ready" in (record.error or "")
+
+
+def test_run_evaluation_batch_retries_hosted_judge_startup_failure(tmp_path, monkeypatch):
+    opened_models: list[str] = []
+    judge_attempts = 0
+
+    class InferenceContext:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+
+        def __enter__(self) -> RemoteInferenceSession:
+            nonlocal judge_attempts
+            opened_models.append(self.model_name)
+            if self.model_name == "judge":
+                judge_attempts += 1
+                if judge_attempts < 3:
+                    failed_job = SimpleNamespace(
+                        job_id=f"/judge/failed-{judge_attempts}",
+                        logs=lambda **_kwargs: ("endpoint startup failed",),
+                    )
+                    raise RemoteInferenceStartupError("judge did not become ready", jobs=(failed_job,))
+            return _remote_session(f"https://{self.model_name}.example/v1")
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    observed_judges: list[RemoteInferenceSession | None] = []
+
+    def executor(
+        _session: RemoteInferenceSession,
+        _output_dir: str,
+        _env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
+    ) -> EvaluationOutcome:
+        observed_judges.append(judge)
+        return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
+
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _seconds: None)
+    _patch_inference_runtime(monkeypatch, lambda config: InferenceContext(config.model.model_id))
+    evaluation = _evaluation(tmp_path, "one", executor)
+
+    run_evaluation_batch(_hosted_judge_batch(tmp_path, (evaluation,)))
+
+    assert opened_models == ["candidate", "judge", "judge", "judge"]
+    assert len(observed_judges) == 1
+    assert observed_judges[0] is not None
+    assert observed_judges[0].model.endpoint.base_url == "https://judge.example/v1"
+    record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
+    assert record.status is RunStatus.SUCCEEDED
 
 
 def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -> dict:
@@ -760,12 +817,13 @@ def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypa
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
 
 
-def test_aggregate_coverage_keeps_the_full_benchmark_extent():
+@pytest.mark.parametrize("count_metric", ["total_examples", "scored_count"])
+def test_aggregate_coverage_keeps_the_full_benchmark_extent(count_metric: str):
     coverage = {
         "custom": TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=0, errors={"ungraded": 10}),
     }
 
-    reconciled = _coverage_with_aggregate_counts(coverage, {"custom": {"total_examples": 10.0}})
+    reconciled = _coverage_with_aggregate_counts(coverage, {"custom": {count_metric: 10.0}})
 
     assert reconciled["custom"] == TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=10)
 
@@ -1093,7 +1151,6 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
             eval_runtime="test-runtime",
         ),
         executor=_successful_evaluation,
-        endpoint_route=EndpointRoute.CAPABILITY,
     )
     batch = EvaluationBatch(
         group_id="group",
@@ -1247,7 +1304,7 @@ def test_build_evaluation_batch_rejects_hosted_judge_for_evalchemy_evaluations(m
         build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
 
-def test_build_evaluation_batch_uses_submission_cluster_for_direct_endpoint(monkeypatch):
+def test_build_evaluation_batch_uses_submission_cluster_for_capability_origin(monkeypatch):
     monkeypatch.setattr(
         "experiments.evaluation.launch._capability_origin",
         lambda cluster: f"https://{cluster}.example",
@@ -1269,7 +1326,6 @@ def test_build_evaluation_batch_uses_submission_cluster_for_direct_endpoint(monk
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
     assert batch.capability_origin == "https://custom-controller.example"
-    assert all(evaluation.endpoint_route is EndpointRoute.DIRECT for evaluation in batch.evaluations)
 
 
 def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
@@ -1302,7 +1358,6 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
         )
     }
     assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
-    assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
 
@@ -1437,6 +1492,97 @@ def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
     evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
     assert evalchemy is not None
     assert evalchemy.apply_chat_template is True
+
+
+@pytest.mark.parametrize(
+    ("generation", "expected"),
+    (
+        (
+            GenerationConfig(chat_template_kwargs={"enable_thinking": True, "strict_format": False}),
+            {"enable_thinking": False, "strict_format": False},
+        ),
+        (
+            GenerationConfig(
+                chat_template_kwargs={"reasoning_effort": "high"},
+                thinking_off_template_kwargs={"reasoning_effort": "low"},
+            ),
+            {"reasoning_effort": "low"},
+        ),
+    ),
+)
+def test_file_evalchemy_chat_template_kwargs_override_model_per_key(tmp_path, monkeypatch, generation, expected):
+    config_path = tmp_path / "thinking.yaml"
+    config_path.write_text("tasks: [triviaqa]\nchat_template_kwargs:\n  enable_thinking: false\n")
+    model = replace(
+        models()["qwen3-8b"],
+        generation=generation,
+    )
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model=model,
+        evals=(),
+        evalchemy_definitions=(EvalchemyDefinition(name="thinking", config_path=config_path),),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.chat_template_kwargs == expected
+
+
+@pytest.mark.parametrize(
+    ("config_name", "enable_thinking"),
+    (
+        ("aime24", True),
+        ("math500", True),
+        ("olympiadbench", True),
+        ("mmlu-pro", True),
+        ("gpqa-diamond", True),
+        ("humanevalplus", False),
+        ("mbppplus", False),
+        ("gsm8k-0shot", False),
+        ("triviaqa", False),
+        ("cruxeval", False),
+        ("financebench", False),
+        ("ifbench", False),
+        ("mrcr", False),
+    ),
+)
+def test_policy_evalchemy_configs_override_model_thinking_mode(config_name, enable_thinking, monkeypatch):
+    config_path = Path("experiments/evaluation/configs/evalchemy") / f"{config_name}.yaml"
+    model = replace(
+        models()["qwen3-8b"],
+        generation=GenerationConfig(chat_template_kwargs={"enable_thinking": not enable_thinking}),
+    )
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model=model,
+        evals=(),
+        evalchemy_definitions=(EvalchemyDefinition(name=config_name, config_path=config_path),),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.chat_template_kwargs["enable_thinking"] is enable_thinking
 
 
 def test_seed_override_replaces_the_evalchemy_config_seed_in_records(monkeypatch):
@@ -1631,6 +1777,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         ],
         "evalchemy": {
             "apply_chat_template": True,
+            "chat_tokenizer_backend": "none",
             "debug": False,
             "max_eval_instances": 2,
             "num_concurrent": 16,
@@ -1638,6 +1785,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "seed": 1234,
             "extra_gen_kwargs": {},
             "extra_model_args": {},
+            "chat_template_kwargs": {},
         },
     }
 
@@ -2021,6 +2169,85 @@ def test_launch_accepts_registry_ifeval_and_repeated_harbor_configs(tmp_path, mo
     assert "eval=ifeval" in result.output
     assert "eval=first-policy" in result.output
     assert "eval=second-policy" in result.output
+
+
+def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    policy = _write_harbor_config(tmp_path / "aime-policy.yaml")
+    output_dir = f"memory://{tmp_path.name}/existing-harbor-results"
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(HarborDefinition(name="aime-policy", config_path=policy),),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=None,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "tester")
+    (StoragePath(output_dir) / "harbor_resume_identity.json").write_text(
+        batch.evaluations[0].executor.resume_identity.model_dump_json()
+    )
+    existing_trial = StoragePath(output_dir) / "scored-trial.json"
+    existing_trial.write_text('{"reward": 0.0}')
+    submitted = []
+
+    def launch(batch, _client):
+        evaluation = replace(batch.evaluations[0], executor=_successful_evaluation)
+        execution = replace(batch, records_prefix=str(tmp_path / "records"), evaluations=(evaluation,))
+        evaluate_batch(execution, _remote_session(), orchestrator_job_id="/test", env_vars={})
+        submitted.append(evaluation.identity)
+        return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
+
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(object()))
+    monkeypatch.setattr("experiments.evaluation.cli.launch_group", launch)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--harbor-config",
+            str(policy),
+            "--resume-results-path",
+            output_dir,
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (StoragePath(output_dir) / "endpoint.txt").read_text() == _remote_session().model.endpoint.base_url
+    assert json.loads(existing_trial.read_text()) == {"reward": 0.0}
+    record = read_record(str(tmp_path / "records" / submitted[0].run_id / "record.json"))
+    assert record.results_path == output_dir
+
+
+def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evals",
+            "aime-harbor,tb2",
+            "--resume-results-path",
+            "memory://existing-harbor-results",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "requires exactly one Harbor evaluation" in result.output
 
 
 def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):

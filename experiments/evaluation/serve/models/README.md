@@ -48,6 +48,9 @@ serve:                          # ServeConfig -> model-server behavior
   reasoning_parser: qwen3
   vllm_batch_invariant: null    # VLLM_BATCH_INVARIANT; true/false is preserved
   vllm_use_flashinfer_sampler: null # VLLM_USE_FLASHINFER_SAMPLER; false uses the built-in sampler
+  vllm_source: null             # GPU default is marin_fork; upstream requires vllm_version
+  vllm_version: null            # exact upstream PyPI version, e.g. "0.29.0"
+  vllm_plugin_requirements: []  # pinned packages installed with GPU vLLM in its isolated environment
   vllm_extra_args: ["--enable-prefix-caching"]   # escape hatch for flags without a typed field
   chat_template: null           # jinja served in place of the tokenizer's own
   auto_overrides: true          # derive remaining flags + clamp max_model_len from config.json
@@ -56,6 +59,8 @@ generation:                     # per-model generation behavior
   max_gen_toks: null            # Evalchemy generation limit and Harbor agent output budget
   extra_gen_kwargs:             # forwarded to Evalchemy, e.g. for a thinking model
     skip_special_tokens: "false"
+  chat_template_kwargs:         # boolean or string template arguments on Evalchemy chat requests
+    enable_thinking: false
 
 agent:                          # AgentConfig -> the Harbor/agentic agent
   agent_kwargs:                 # forwarded to the agent's request against the served endpoint
@@ -65,6 +70,11 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
 `auto_serve_overrides` fills unset serve fields from the model's `config.json` and may clamp
 `max_model_len` to the model's native limit. `resource_hint.hbm_gb` is portable across TPU and GPU;
 `resource_hint.gpu` declares that the model requires one of the listed exact GPU shapes.
+
+For a GPU model whose architecture is supplied by a vLLM plugin, set `vllm_source: upstream`,
+an exact `vllm_version`, and a plugin requirement pinned to a release or commit. These fields are
+part of the model catalog and the recorded effective serving configuration. The plugin is installed
+in the same isolated environment as vLLM; TPU serving does not accept these GPU-specific settings.
 
 ## vLLM eager execution
 

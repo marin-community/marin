@@ -1,0 +1,33 @@
+# open-athena Snowball 67B-A2B 10T Mixed RLVR Sync Step92: GrugMoE 256-expert MoE, ~134 GB bf16,
+# same lineage as the Datakit SFT export (June recipe, disable_pko/disable_long_rope explicit in
+# config.json). Trained at max_seq_len 262,144 (config.json max_position_embeddings); served at
+# the suite cap 73,728 per the canonical full-context protocol from marin#7505. Serve follows the
+# grug-agentic-s3-step1903 catalog recipe: TP1 + DP8 + expert parallel on one 8xH100 node (the
+# per-head TP heuristic cannot infer this shape, hence auto_overrides: false), shards streamed
+# distributed across ranks (~134 GB through host buffers, hence memory 512g).
+name: open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92
+location: open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92
+revision: fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+
+# The in-repo template maps enable_thinking to its /think soft-switch. Benchmark configs select the
+# policy mode explicitly; model-default benchmarks leave the switch to the model.
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

@@ -154,6 +154,12 @@ class ModelServeConfig(BaseModel):
     reasoning_parser: str | None
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
+    runai_streamer_concurrency: int | None = None
+    runai_streamer_s3_request_timeout_ms: int | None = None
+    vllm_source: str | None = None
+    vllm_version: str | None = None
+    vllm_plugin_requirements: tuple[str, ...] = ()
+    object_store_load_mode: str = "stream"
     vllm_extra_args: tuple[str, ...]
     speculative: SpeculativeServingRef | None = None
     chat_template: str | None
@@ -167,7 +173,8 @@ class ModelGenerationConfig(BaseModel):
 
     max_gen_toks: int | None
     extra_gen_kwargs: dict[str, str]
-    chat_template_kwargs: dict[str, bool | None] = Field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
+    thinking_off_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
 
 
 class ModelAgentConfig(BaseModel):
@@ -251,6 +258,7 @@ class EvalchemyRef(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apply_chat_template: bool
+    chat_tokenizer_backend: str = "none"
     debug: bool = False
     max_gen_toks: int | None
     max_eval_instances: int | None
@@ -258,8 +266,8 @@ class EvalchemyRef(BaseModel):
     batch_size: str | None
     seed: int | None
     extra_gen_kwargs: dict[str, str] = Field(default_factory=dict)
-    chat_template_kwargs: dict[str, bool | None] = Field(default_factory=dict, exclude_if=lambda value: not value)
     extra_model_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeRef | None = Field(default=None, exclude_if=lambda value: value is None)
 
@@ -471,10 +479,12 @@ class EvalRunRecord(BaseModel):
     created_at: str
     user: str
     version: str | None = None
-    """A human version label for the launch (``--version``), e.g. ``2026.07.20`` or ``rl-fix-sweep``.
-    Every record in a group shares it. The dashboard groups a model's runs by version so the headline
-    matrix shows the latest labelled cohort rather than mixing evals across model states; ``None`` for
-    an unlabelled launch."""
+    """A submitter-controlled cohort label for the launch (``--version``).
+
+    Every record in a group shares it. The dashboard may use the label to group runs, but it is
+    provenance metadata rather than evidence of evaluation-policy conformance. A trusted verifier
+    must assign conformance independently. ``None`` denotes an unlabelled launch.
+    """
     description: str | None = None
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""

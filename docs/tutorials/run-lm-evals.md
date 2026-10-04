@@ -31,7 +31,7 @@ uv run python -m experiments.evaluation.cli launch \
 
 Run the resolved plan before submitting an unfamiliar model or suite. `--dry-run` prints the model
 location, serving backend, accelerator, target cluster or region, priority band, task names, and
-records prefix:
+records and results paths:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
@@ -169,6 +169,20 @@ uv run python -m experiments.evaluation.cli launch \
 
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
 capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
+
+Resume an interrupted Harbor evaluation from its existing results tree:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-32b \
+  --evals tb2 \
+  --resume-results-path s3://marin-us-east-02a/marin/evals/<run-id>/results \
+  --no-wait
+```
+
+The resume option accepts exactly one Harbor evaluation. The launcher and worker check the
+model, hosted judge, dataset, policy, runtime, and task limit against the saved results before
+reuse. Incompatible results are rejected before submission. Compatible completed trials are reused.
 
 Run one OT-TBLite trial with the registered Grug model and OpenCode agent policy:
 
@@ -455,6 +469,42 @@ print(report_artifact.averages)      # suite-level rollups
 
 Each individual result is a `FineStoreEvalchemyResult`; `task_metrics()` reads the per-task scores
 from Evalchemy's aggregate source artifacts in FineStore.
+
+### Audit an Evalchemy run before its record appears
+
+The evaluator writes its native result and sample artifacts to FineStore before the parent writes
+`record.json`. A missing record therefore does not prove that evaluation is still incomplete. Read
+the exact run's `results` archive with `fsutil` and inspect the native task outcome without printing
+the full Evalchemy configuration: its model arguments can contain a signed endpoint URL.
+
+```bash
+uv run fsutil ls -l s3://<bucket>/<records-prefix>/<run-id>/results
+```
+
+```python
+import json
+
+from finestore.reader import ReadView
+from marin.evaluation.lm_eval_samples import read_native_evalchemy_artifacts
+
+archive = "s3://<bucket>/<records-prefix>/<run-id>/results"
+reader = ReadView(archive)
+print("archive sealed:", reader.is_sealed())
+for name, payload in read_native_evalchemy_artifacts(archive).result_payloads.items():
+    result = json.loads(payload)
+    for task, outcome in result.get("task_outcomes", {}).items():
+        print(name, task, outcome["status"], outcome["generated_count"], outcome["scored_count"],
+              outcome.get("failure_counts"))
+```
+
+Check the declared benchmark count, unique sample identities, scoreable outcomes, and the run's
+immutable configuration before accepting a recovered result. A sample row count alone can overcount
+trials when an evaluator writes multiple extraction filters or repeats. If FineStore is sealed and the
+evaluator outcome is complete but Iris is retrying, compare `iris task describe` and `iris task events`
+for the evaluator child. A `Completed` container event followed by `PodDeleted` can make Iris retry a
+finished evaluator; see [Iris task operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#task-operations). Do not mark a
+running child complete merely because some samples exist. Confirm that the exact archive contains
+the full, valid result and that the parent can consume it before recovering the canonical record.
 
 ### Run the repository example scripts
 
