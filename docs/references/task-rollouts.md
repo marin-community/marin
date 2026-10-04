@@ -76,6 +76,11 @@ and the bundle metadata, including the guest code version. Rebuild the bundle
 after a guest code change. The reference must identify the Linux amd64 manifest.
 Each machine uses a private writable overlay on the shared guest disk.
 
+QEMU raises `shellbox.machine.MachineStartupError` if the guest times out or exits
+before its command service is ready. The exception includes bounded boot output.
+Callers can use this exception type for a finite startup retry policy. Other
+machine and setup errors retain their original exception types.
+
 A prepared disk can contain shared dependency files. QEMU omits a file upload
 only when the existing guest file has the same SHA-256 and permission bits.
 Keep these files in `environment.assets` so the task retains their identities.
