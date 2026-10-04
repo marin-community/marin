@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read the frozen coding development panel without exposing benchmark answers."""
+"""Use development candidates and archived tests to select skills. Keep the final panel separate."""
 
 import asyncio
 import hashlib
@@ -22,7 +22,8 @@ from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 CODING_SUITES = ("humanevalplus", "mbppplus")
-CODING_ANALYSIS_CONTEXT_PROTOCOL = "grading-context-v2"
+CODING_ANALYSIS_CONTEXT_PROTOCOL = "archived-test-static-v1"
+CODING_ANALYSIS_MAXIMUM_EVIDENCE_BYTES = 524288
 
 
 def protocol_digest(record: dict) -> str:
@@ -83,7 +84,7 @@ class CodingAnalysisConfig:
     relay_job: str
     output_path: str
     maximum_failed_rows: int = 64
-    maximum_evidence_bytes: int = 262144
+    maximum_evidence_bytes: int = CODING_ANALYSIS_MAXIMUM_EVIDENCE_BYTES
 
 
 def coding_evidence_rows(
@@ -166,16 +167,89 @@ def collect_coding_eval_evidence(config: CodingEvidenceConfig) -> None:
     records, archives = load_coding_archives(config)
     rows = coding_evidence_rows(records, archives, config.model_identity, config.panel)
     evaluation_context = coding_evaluation_context(records, rows)
+    static_test_evidence = coding_static_test_evidence(archives, rows)
     payload = {
         "model_identity": config.model_identity,
         "panel_sha256": compact_json_sha256(asdict(config.panel)),
         "records_sha256": [compact_json_sha256(record) for record in records],
         "context_protocol": CODING_ANALYSIS_CONTEXT_PROTOCOL,
         "evaluation_context": evaluation_context,
+        "static_test_evidence": static_test_evidence,
         "rows": [asdict(row) for row in rows],
         "scores": {suite: evaluation_context["suites"][suite]["row_score"] for suite in CODING_SUITES},
     }
     StoragePath(prefix_join(config.output_path, "coding-evidence.json")).write_text(json.dumps(payload) + "\n")
+
+
+def coding_static_test_evidence(archives: tuple[list[dict], ...], rows: tuple[CodingEvidenceRow, ...]) -> dict:
+    """Bind failed rows to only the test fields stored in the original development archives."""
+    archived: dict[tuple[str, str], dict] = {}
+    for archive in archives:
+        for row in archive:
+            sample = sample_from_archive_row(row)
+            doc = json.loads(sample.doc)
+            key = (sample.task, str(doc["task_id"]))
+            if key in archived:
+                raise ValueError("Duplicate archived coding identity while building static test evidence")
+            test_source = doc.get("test")
+            if test_source is not None and not isinstance(test_source, str):
+                raise ValueError("Archived coding test fields must be strings or null")
+            harness_metadata = {"availability": {"entry_point": "unavailable", "test_imports": "unavailable"}}
+            for field in ("entry_point", "test_imports"):
+                value = doc.get(field)
+                if value is not None:
+                    harness_metadata["availability"][field] = "available"
+                    harness_metadata[field] = value
+            archived[key] = {
+                "source_sha256": compact_json_sha256(row),
+                "test_source": test_source,
+                "harness_metadata": harness_metadata,
+            }
+
+    items = []
+    for evidence_row in rows:
+        if evidence_row.pass_rate != 0.0:
+            continue
+        key = (evidence_row.suite, evidence_row.benchmark_id)
+        archived_item = archived.get(key)
+        if archived_item is None:
+            raise ValueError("A validated coding failure is missing from its original archive")
+        if archived_item["source_sha256"] != evidence_row.source_sha256:
+            raise ValueError("Coding failure source hash differs from its original archive row")
+        test_source = archived_item["test_source"]
+        harness_metadata = archived_item["harness_metadata"]
+        if test_source is None:
+            items.append(
+                {
+                    "suite": evidence_row.suite,
+                    "benchmark_id": evidence_row.benchmark_id,
+                    "source_sha256": evidence_row.source_sha256,
+                    "status": "unavailable",
+                    "reason": "not_in_original_archive",
+                    "harness_metadata": harness_metadata,
+                }
+            )
+            continue
+        test_bytes = test_source.encode("utf-8")
+        items.append(
+            {
+                "suite": evidence_row.suite,
+                "benchmark_id": evidence_row.benchmark_id,
+                "source_sha256": evidence_row.source_sha256,
+                "status": "available",
+                "test_source": test_source,
+                "test_source_sha256": hashlib.sha256(test_bytes).hexdigest(),
+                "harness_metadata": harness_metadata,
+            }
+        )
+    return {
+        "comparison": "static_candidate_against_archived_test",
+        "replay_performed": False,
+        "runtime_digest": "unresolved",
+        "original_scores_unchanged": True,
+        "availability_source": "original_development_archives_only",
+        "items": items,
+    }
 
 
 def coding_evaluation_context(records: tuple[dict, ...], rows: tuple[CodingEvidenceRow, ...]) -> dict:
@@ -225,16 +299,32 @@ def coding_evaluation_context(records: tuple[dict, ...], rows: tuple[CodingEvide
     }
 
 
-def coding_analysis_request(evidence: dict, maximum_failed_rows: int = 64, maximum_evidence_bytes: int = 262144) -> dict:
+def coding_analysis_request(
+    evidence: dict,
+    maximum_failed_rows: int = 64,
+    maximum_evidence_bytes: int = CODING_ANALYSIS_MAXIMUM_EVIDENCE_BYTES,
+) -> dict:
     """Keep a balanced bounded set of failures private to the capability analyst."""
     failed = []
     for suite in CODING_SUITES:
         rows = [row for row in evidence["rows"] if row["suite"] == suite and row["pass_rate"] == 0]
         failed.extend(rows)
-    if len(failed) > maximum_failed_rows or len(json.dumps(failed).encode()) > maximum_evidence_bytes:
-        raise ValueError("Coding failure evidence exceeds the explicit analyst budget. Do not truncate it")
     if evidence["context_protocol"] != CODING_ANALYSIS_CONTEXT_PROTOCOL:
         raise ValueError("Coding evaluation context protocol is missing or unsupported")
+    static_test_evidence = evidence["static_test_evidence"]
+    if [(item["suite"], item["benchmark_id"], item["source_sha256"]) for item in static_test_evidence["items"]] != [
+        (row["suite"], row["benchmark_id"], row["source_sha256"]) for row in failed
+    ]:
+        raise ValueError("Static test evidence does not match every measured failure row")
+    private_evidence = {
+        "taxonomy": SKILL_DESCRIPTIONS,
+        "context_protocol": evidence["context_protocol"],
+        "evaluation_context": evidence["evaluation_context"],
+        "failures": failed,
+        "static_test_evidence": static_test_evidence,
+    }
+    if len(failed) > maximum_failed_rows or len(json.dumps(private_evidence).encode()) > maximum_evidence_bytes:
+        raise ValueError("Complete coding evidence exceeds the explicit analyst budget. Do not truncate it")
     return {
         "model": GLM_MODEL,
         "messages": [
@@ -247,20 +337,24 @@ def coding_analysis_request(evidence: dict, maximum_failed_rows: int = 64, maxim
                     "Only rows with measured pass_rate 0 in failures are selected for analysis. "
                     "Missing grader detail alone proves neither grading failure nor correctness. "
                     "Completed aggregate coverage does not prove that every individual grade is correct. "
+                    "Use only supplied static_test_evidence from original development archives. "
+                    "This static assessment performs no test execution or external lookup. "
+                    "If entry_point is unavailable, abstain on claims that need a verified "
+                    "harness-to-candidate connection. "
+                    "If test_imports is unavailable, abstain on claims that depend on imports. "
+                    "Classify a skill only when the candidate response has a concrete contradiction "
+                    "with an available archived test. "
+                    "Cite the suite, benchmark_id, and test_source_sha256 in the private evidence string. "
+                    "Abstain when a test is unavailable or ambiguous, or conflicts with the prompt, "
+                    "or requires execution to attribute the result. "
+                    "Do not claim that a runtime failure was reproduced. "
                     "Return an empty skills list when evidence is insufficient. "
                     "Return JSON matching this schema: " + json.dumps(FeedbackAnalysis.model_json_schema())
                 ),
             },
             {
                 "role": "user",
-                "content": json.dumps(
-                    {
-                        "taxonomy": SKILL_DESCRIPTIONS,
-                        "context_protocol": evidence["context_protocol"],
-                        "evaluation_context": evidence["evaluation_context"],
-                        "failures": failed,
-                    }
-                ),
+                "content": json.dumps(private_evidence),
             },
         ],
         "max_tokens": 2048,
