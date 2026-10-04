@@ -15,8 +15,8 @@ from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
-from experiments.post_training.russell_rsi.rollout_eval import completion_message
-from experiments.post_training.russell_rsi.token_preflight import run_token_preflight
+from experiments.post_training.russell_rsi.rollout_eval import completion_message, rollout_evidence
+from experiments.post_training.russell_rsi.token_preflight import preflight_task, run_token_preflight
 
 
 @pytest.mark.parametrize(
@@ -136,3 +136,54 @@ def test_completion_message_supports_two_shell_calls_before_grading():
     observations = [message for message in rollout.messages if message["role"] == "tool"]
     assert len(observations) == 2
     assert all(json.loads(message["content"])["stdout"] == "89\n" for message in observations)
+
+
+@pytest.mark.parametrize("stage", ["start", "grade", "success"])
+def test_rollout_evidence_preserves_execution_failure_and_partial_tokens(stage):
+    class UnavailableMachineFactory:
+        async def create(self, spec):
+            raise OSError("Guest transport is unavailable")
+
+    async def turn(request):
+        message = {"role": "assistant", "content": "89"}
+        if stage == "grade":
+            message = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "bad-wire",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": {"command": "true"}},
+                    }
+                ],
+            }
+        return ModelTurn(
+            message=message, prompt_token_ids=(1,), response_token_ids=(2,), logprobs=None, stop_reason="stop"
+        )
+
+    task = preflight_task(1, "Return the file value.", 89)
+    engine = ShellboxRolloutEngine(
+        turn,
+        {EnvironmentKind.SHELLSIM: UnavailableMachineFactory() if stage == "start" else ShellSimMachineFactory()},
+        max_turns=4,
+        command_timeout=10,
+        convention=SubmissionConvention(id="unit", answer_format=AnswerFormat.PLAIN),
+    )
+    rollout, evidence = asyncio.run(rollout_evidence(engine, task))
+    record = json.loads(json.dumps(evidence))
+    assert record["task_id"] == task.id
+    assert record["response_token_ids"] == ([] if stage == "start" else [2])
+    if stage == "success":
+        assert record["grade"]["reward"] == 1.0
+        assert record["interrupted_operation"] is None
+        assert record["execution_error"] is None
+        return
+    assert record["grade"]["reward"] is None
+    assert rollout.grade.reward is None
+    assert record["interrupted_operation"] == stage
+    cause = record["execution_error"]
+    assert cause["type"] == ("OSError" if stage == "start" else "ValidationError")
+    assert cause["message"] in record["execution_error"]["traceback"]
+    if stage == "start":
+        assert cause["message"] == "Guest transport is unavailable"

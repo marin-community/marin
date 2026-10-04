@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import traceback
 from collections import Counter
 from dataclasses import asdict, dataclass
 from itertools import islice
@@ -67,6 +68,26 @@ def qemu_factory(manifest: dict, runtime_bundle: RuntimeBundle):
     )
 
 
+async def rollout_evidence(engine, task):
+    """Return the rollout and a record with execution failure details."""
+    from rolloutengine.contracts import RolloutInterrupted  # noqa: PLC0415
+
+    operation = None
+    execution_error: dict | None = None
+    try:
+        rollout = await engine.run(task)
+    except RolloutInterrupted as error:
+        rollout = error.rollout
+        operation = error.operation.value
+        cause = error.__cause__ or error
+        execution_error = {
+            "type": type(cause).__name__,
+            "message": str(cause),
+            "traceback": "".join(traceback.format_exception(error)),
+        }
+    return rollout, {**asdict(rollout), "interrupted_operation": operation, "execution_error": execution_error}
+
+
 async def evaluate_development(
     config: DevelopmentEvaluationConfig, base_url: str, model: str, runtime_manifest: dict
 ) -> None:
@@ -75,7 +96,6 @@ async def evaluate_development(
         ModelRequest,
         ModelTurn,
         RolloutContractError,
-        RolloutInterrupted,
     )
     from rolloutengine.engine import ShellboxRolloutEngine  # noqa: PLC0415
     from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
@@ -169,15 +189,9 @@ async def evaluate_development(
 
             async def run_task(task) -> None:
                 async with semaphore:
-                    operation = None
-                    try:
-                        rollout = await engine.run(task)
-                    except RolloutInterrupted as error:
-                        rollout = error.rollout
-                        operation = error.operation.value
-                    record = asdict(rollout)
-                    record["interrupted_operation"] = operation
+                    rollout, record = await rollout_evidence(engine, task)
                     traces.write(json.dumps(record) + "\n")
+                    operation = record["interrupted_operation"]
                     if rollout.grade.status != Outcome.GRADED:
                         category = f"execution_{operation or 'ungraded'}"
                     elif rollout.grade.reward is not None and rollout.grade.reward > 0:
