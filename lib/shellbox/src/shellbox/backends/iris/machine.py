@@ -178,7 +178,7 @@ class IrisMachine:
             return
         self._closed = True
         try:
-            await asyncio.to_thread(self.job.terminate)
+            await asyncio.to_thread(self.job.cancel)
         finally:
             try:
                 await asyncio.to_thread(self.client.shutdown)
@@ -267,7 +267,7 @@ class IrisMachineFactory:
         except BaseException:
             try:
                 if job is not None:
-                    job.terminate()
+                    job.cancel()
             finally:
                 try:
                     if client is not None:
