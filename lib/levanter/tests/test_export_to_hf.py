@@ -12,7 +12,9 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from transformers import AutoModelForCausalLM
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerFast
 from transformers import GPT2Config as HfGpt2Config
 
 import haliax
@@ -166,3 +168,38 @@ def test_export_dpo_policy_subtree_to_bfloat16(tmp_path):
     for name, value in exported.items():
         assert value.dtype == jnp.bfloat16
         np.testing.assert_array_equal(value, expected[name].astype(jnp.bfloat16))
+
+
+def test_export_pinned_tokenizer_revision(tmp_path, monkeypatch):
+    old_tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "old": 1})))
+    pinned_tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "old": 1, "pinned": 2}))
+    )
+    snapshots = {("test/tokenizer", None): old_tokenizer, ("test/tokenizer", "snapshot"): pinned_tokenizer}
+
+    def from_pretrained(model_name_or_path, *, revision=None, **kwargs):
+        return snapshots[model_name_or_path, revision]
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", from_pretrained)
+    model_config = TokenizerlessGpt2Config(
+        num_layers=1, num_heads=2, max_seq_len=16, use_flash_attention=False, hidden_dim=16
+    )
+    model = Gpt2LMHeadModel.init(haliax.Axis("vocab", len(pinned_tokenizer)), model_config, key=jax.random.PRNGKey(0))
+    params, _ = eqx.partition(model, is_inexact_arrayish)
+    checkpoint_path = str(tmp_path / "checkpoint")
+    save_checkpoint({"model": params}, 0, checkpoint_path)
+    output_dir = str(tmp_path / "output")
+    export_lm_to_hf.main(
+        export_lm_to_hf.ConvertLmConfig(
+            trainer=SimpleNamespace(device_mesh=contextlib.nullcontext(), parameter_axis_mapping={}),
+            checkpoint_path=checkpoint_path,
+            output_dir=output_dir,
+            model=model_config,
+            tokenizer="test/tokenizer@snapshot",
+            use_cpu=True,
+        )
+    )
+    restored_tokenizer = PreTrainedTokenizerFast.from_pretrained(output_dir)
+    assert restored_tokenizer.get_vocab() == pinned_tokenizer.get_vocab()
+    with open(os.path.join(output_dir, "config.json")) as f:
+        assert json.load(f)["vocab_size"] == len(pinned_tokenizer)

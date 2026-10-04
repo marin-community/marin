@@ -67,7 +67,8 @@ def main(config: ConvertLmConfig):
     if tokenizer_spec is None:
         tokenizer = converter.tokenizer
     else:
-        tokenizer = load_tokenizer(tokenizer_spec)
+        tokenizer_ref = RepoRef.from_string(tokenizer_spec)
+        tokenizer = load_tokenizer(tokenizer_ref.model_name_or_path, revision=tokenizer_ref.revision)
 
     if tokenizer is None:
         vocab_size = config.override_vocab_size or getattr(config.model, "vocab_size", None)

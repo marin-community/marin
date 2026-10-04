@@ -459,3 +459,4 @@ Set `export_dtype: bfloat16` to cast floating-point weights for export; omitting
 checkpoint dtype. Use `checkpoint_subpath: model/policy` to export the policy from a DPO checkpoint.
 With `use_cpu: true`, the exporter restores the selected subtree on CPU. Host memory must hold the
 restored weights as well as the export buffers.
+Pin an explicit tokenizer with `tokenizer: model_name_or_path@revision`.
