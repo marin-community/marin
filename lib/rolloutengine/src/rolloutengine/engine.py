@@ -147,6 +147,7 @@ class ShellboxRolloutEngine:
                 )
                 break
             last_graded_step = len(record.steps) - 1
+            assert grade.reward is not None
             rewards = grade.rewards or {"reward": grade.reward}
             if any(rewards.get(key, -math.inf) < minimum for key, minimum in stage.minimum_rewards.items()):
                 break
