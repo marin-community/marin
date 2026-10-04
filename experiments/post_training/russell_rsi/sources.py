@@ -16,7 +16,7 @@ MAX_SNAPSHOT_FILES = 100
 
 
 def compact_json_sha256(value: dict) -> str:
-    """Hash sorted JSON with compact separators for loop and coding evidence identities."""
+    """Hash sorted JSON with compact separators."""
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
