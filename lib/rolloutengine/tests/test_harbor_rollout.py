@@ -322,7 +322,7 @@ async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
     if status == Outcome.GRADED:
         assert sum(step.transition.reward for step in result.steps) == reward
         if strategy == "mean":
-            assert result.grade.diagnostics["rewards"] == {
+            assert result.grade.rewards == {
                 "reward": reward,
                 "safety": 0.0 if first_answer == "wrong" else 0.5 if last_grader == "valid" else 1.0,
             }
