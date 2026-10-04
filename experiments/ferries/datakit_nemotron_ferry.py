@@ -10,6 +10,7 @@ see :mod:`experiments.ferries.datakit_reference_ferry`.
 """
 
 import logging
+import os
 
 from fray.types import ResourceConfig
 from marin.datakit.normalize import normalize_step
@@ -116,12 +117,13 @@ def main() -> None:
     if region:
         check_path_in_region("nemotron_raw", NEMOTRON_RAW_PATH, region)
 
-    output_prefix = ferry_output_prefix(FERRY_NAME)
+    output_prefix = ferry_output_prefix(FERRY_NAME, os.environ["SMOKE_RUN_ID"])
     run_reference_ferry(
         ferry_name=FERRY_NAME,
         sources=build_sources(output_prefix),
         scale=TIER3_SCALE,
         output_prefix=output_prefix,
+        status_path=os.environ.get("FERRY_STATUS_PATH"),
     )
 
 

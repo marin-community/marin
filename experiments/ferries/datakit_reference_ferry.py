@@ -11,7 +11,6 @@ resolve against ``MARIN_PREFIX``, so they must be staged in the ferry's region.
 """
 
 import logging
-import os
 
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -33,9 +32,9 @@ FERRY_OUTPUT_TTL_DAYS = 1
 FERRY_MAX_CONCURRENT_STEPS = 8
 
 
-def ferry_output_prefix(ferry_name: str) -> str:
-    """Return the temporary output root for this run of ``ferry_name``."""
-    return marin_temp_bucket(ttl_days=FERRY_OUTPUT_TTL_DAYS, prefix=f"{ferry_name}/{os.environ['SMOKE_RUN_ID']}")
+def ferry_output_prefix(ferry_name: str, run_id: str) -> str:
+    """Return the temporary output root for run ``run_id`` of ``ferry_name``."""
+    return marin_temp_bucket(ttl_days=FERRY_OUTPUT_TTL_DAYS, prefix=f"{ferry_name}/{run_id}")
 
 
 def run_reference_ferry(
@@ -44,8 +43,12 @@ def run_reference_ferry(
     sources: dict[str, StepSpec],
     scale: PipelineScale,
     output_prefix: str,
+    status_path: str | None,
 ) -> None:
-    """Run the reference DAG over ``sources`` with every output under ``output_prefix``."""
+    """Run the reference DAG over ``sources`` with every output under ``output_prefix``.
+
+    ``status_path`` is where the CI workflow reads the run state and output prefix.
+    """
     logger.info("Output prefix: %s", output_prefix)
     zephyr_context = shared_zephyr_context(scale, name=ferry_name)
     steps = reference_datakit_steps(
@@ -56,6 +59,6 @@ def run_reference_ferry(
         zephyr_context=zephyr_context,
         output_prefix=output_prefix,
     )
-    with run_status(os.environ.get("FERRY_STATUS_PATH"), marin_prefix=output_prefix):
+    with run_status(status_path, marin_prefix=output_prefix):
         with log_time(f"{ferry_name} total wall time"), zephyr_context:
             StepRunner().run(steps.all_steps, max_concurrent=FERRY_MAX_CONCURRENT_STEPS)

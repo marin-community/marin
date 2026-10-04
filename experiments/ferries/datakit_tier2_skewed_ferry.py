@@ -16,6 +16,8 @@ fresh HuggingFace download otherwise. Every later stage is the reference Datakit
 DAG with one-day TTL outputs; see :mod:`experiments.ferries.datakit_reference_ferry`.
 """
 
+import os
+
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -85,12 +87,13 @@ def build_sources(output_prefix: str) -> dict[str, StepSpec]:
 
 def main() -> None:
     configure_logging()
-    output_prefix = ferry_output_prefix(FERRY_NAME)
+    output_prefix = ferry_output_prefix(FERRY_NAME, os.environ["SMOKE_RUN_ID"])
     run_reference_ferry(
         ferry_name=FERRY_NAME,
         sources=build_sources(output_prefix),
         scale=TIER2_SCALE,
         output_prefix=output_prefix,
+        status_path=os.environ.get("FERRY_STATUS_PATH"),
     )
 
 

@@ -312,10 +312,10 @@ def _seconds(elapsed: str) -> float:
 
 
 def compute_stage_wall_seconds(step_lines: list[str]) -> tuple[dict[str, float], list[str]]:
-    """Sum StepRunner wall times per stage.
+    """Return each stage's StepRunner wall time.
 
-    A stage with several steps (one per source, or several reports) sums them, so
-    the value is busy time, not the stage's critical path. Returns
+    A stage with several steps (one per source, or several reports) adds their
+    times together; a single-source ferry has one step per stage. Returns
     ``(stage_wall_seconds, cached_steps)``. A stage whose steps the runner only
     skipped as already succeeded is reported with ``0.0`` in ``cached_steps``.
     A stage with no line at all is left out.

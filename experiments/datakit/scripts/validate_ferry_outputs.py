@@ -137,7 +137,7 @@ def _bucket_records(bucket_path: str) -> int:
 
 
 def _validate_store(base: str, normalize_rows: int) -> int:
-    store_dirs = [str(m) for m in StoragePath(f"{base}/datakit/store_*").glob()]
+    store_dirs = [str(m) for m in StoragePath(prefix_join(base, "datakit/store_*")).glob()]
     if len(store_dirs) != 1:
         raise SystemExit(f"Store: expected one store under {base}/datakit, got {store_dirs}")
     store = read_artifact(store_dirs[0], ClusteredStoreData)
