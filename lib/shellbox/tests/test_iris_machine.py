@@ -23,10 +23,10 @@ class LocalRpc:
 
 class LocalJob:
     def __init__(self):
-        self.terminated = False
+        self.cancelled = False
 
-    def terminate(self):
-        self.terminated = True
+    def cancel(self):
+        self.cancelled = True
 
 
 class LocalClient:
@@ -73,6 +73,6 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
             assert target.read_bytes() == source.read_bytes()
         finally:
             await machine.close()
-        assert job.terminated
+        assert job.cancelled
 
     asyncio.run(scenario())
