@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 import traceback
 from collections.abc import Awaitable, Callable
@@ -28,6 +27,7 @@ from experiments.post_training.glm import GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import SourceSnapshot
+from experiments.post_training.russell_rsi.task_worker import run_task_worker
 
 MAX_STATEMENT_BYTES = 8192
 MAX_REQUIREMENTS_BYTES = 8192
@@ -319,8 +319,6 @@ async def contract_attempt(
                     await save_admission_record(final, result, persist)
                     return result
                 expected = reports["capture-reference-1"]["observations"]
-                if expected_path.exists() and json.loads(expected_path.read_text())["observations"] != expected:
-                    raise ValueError("Reference observations differ from the frozen expectations")
                 await save_admission_record(expected_path, {"observations": expected}, persist)
             if not statement_path.exists():
                 statement = await saved_statement(
@@ -444,33 +442,7 @@ class ContractTasksConfig:
 
 def run_contract_tasks_in_project(config: ContractTasksConfig) -> None:
     """Run the fixed-contract worker with its isolated rollout dependencies."""
-    from rigging.config_discovery import find_project_root  # noqa: PLC0415
-
-    workspace = find_project_root()
-    if workspace is None:
-        raise RuntimeError("Fixed contract construction requires a bundled workspace")
-    with tempfile.TemporaryDirectory(prefix="russell-contract-config-") as temporary:
-        path = Path(temporary) / "config.json"
-        path.write_text(json.dumps(asdict(config)))
-        subprocess.run(
-            [
-                "uv",
-                "run",
-                "--project",
-                str(workspace / "lib/rolloutengine"),
-                "--with",
-                "openai==2.24.0",
-                "--with-editable",
-                str(workspace / "lib/iris"),
-                "python",
-                "-m",
-                __name__,
-                "--config",
-                str(path),
-            ],
-            cwd=workspace,
-            check=True,
-        )
+    run_task_worker(__name__, asdict(config))
 
 
 def prepare_contract_tasks(config: ContractTasksConfig) -> None:

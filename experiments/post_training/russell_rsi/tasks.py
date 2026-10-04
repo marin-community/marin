@@ -849,6 +849,7 @@ def admission_code_sha256() -> str:
     code_files = {
         Path(__file__),
         Path(__file__).with_name("adaptive_tasks.py"),
+        Path(__file__).with_name("task_worker.py"),
         Path(inspect.getfile(_grade_rollout)),
         Path(inspect.getfile(inspect.unwrap(_task_machine))),
         Path(inspect.getfile(QemuMachineFactory)),

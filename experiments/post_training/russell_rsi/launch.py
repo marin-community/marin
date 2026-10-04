@@ -52,8 +52,6 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     advance,
     freeze_round_dataset,
     load_round,
-    manifest_digest,
-    pinned_file,
     qualified_bank,
     round_inputs,
     round_plan,
@@ -85,6 +83,7 @@ from experiments.post_training.russell_rsi.settings import (
     ROLLOUT_CONCURRENCY,
     STOP_TOKEN_IDS,
 )
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
 MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -781,6 +780,28 @@ def main(
     )
 
 
+def final_coding_evaluation(
+    checkpoint: ArtifactStep[LevanterCheckpoint],
+    label: str,
+    version: str,
+) -> ArtifactStep[EvaluationResult]:
+    """Build final-only evaluation of the working and held-out coding panels."""
+    model = evaluation_model(f"russell-rsi-final-{label}", MODEL, None)
+    return eval_step(
+        model,
+        "humanevalplus,mbppplus",
+        version=version,
+        deps=(checkpoint,),
+        resolve_model=lambda ctx: replace(
+            model, location=ctx.artifact_path(checkpoint), identity=artifact_identity(checkpoint)
+        ),
+        limit=64,
+        accelerator="H100x8",
+        submission_cluster=CLUSTER,
+        federated_cluster=CLUSTER,
+    )
+
+
 def run_bootstrap_loop(
     seed_bank: ArtifactStep[Artifact],
     parent: ArtifactStep[LevanterCheckpoint],
@@ -800,16 +821,16 @@ def run_bootstrap_loop(
     build_next_bank: Callable[[ArtifactStep[Artifact], LoopState, int], ArtifactStep[Artifact] | None],
 ) -> LoopState:
     """Execute bounded artifact rounds with an explicit independent source builder."""
-    heldout_manifest = json.loads(pinned_file(heldout_manifest_uri, heldout_manifest_sha256))
+    heldout_manifest = json.loads(pinned_bytes(heldout_manifest_uri, heldout_manifest_sha256))
     heldout_panel_ids(panel, heldout_manifest)
     heldout = {"manifest_sha256": heldout_manifest_sha256, "development": asdict(panel)}
     write_once(manifest_directory / "panels.json", heldout)
-    panel_identity = manifest_digest(asdict(panel))
-    runtime_identity = manifest_digest(
+    panel_identity = compact_json_sha256(asdict(panel))
+    runtime_identity = compact_json_sha256(
         {"qemu": runtime_bundle.archive_sha256, "skyrl": MARIN_SKYRL.commit, "machine": machine_config}
     )
-    parent_coding = json.loads(pinned_file(parent_coding_evidence_uri, parent_coding_evidence_sha256))
-    parent_retention = json.loads(pinned_file(parent_retention_evidence_uri, parent_retention_evidence_sha256))
+    parent_coding = json.loads(pinned_bytes(parent_coding_evidence_uri, parent_coding_evidence_sha256))
+    parent_retention = json.loads(pinned_bytes(parent_retention_evidence_uri, parent_retention_evidence_sha256))
     if (
         parent_coding["model_identity"] != artifact_identity(parent)
         or parent_coding["panel_sha256"] != panel_identity
@@ -836,7 +857,7 @@ def run_bootstrap_loop(
     checkpoint_handles = {artifact_identity(parent): parent}
     bank_handle = seed_bank
     feedback_identity = bank_record["feedback_identity"]
-    previous_sha256 = manifest_digest(
+    previous_sha256 = compact_json_sha256(
         {
             **heldout,
             "source_bank": artifact_identity(seed_bank),
@@ -1047,7 +1068,7 @@ def run_bootstrap_loop(
                     {
                         "state": asdict(state),
                         "last_round_sha256": previous_sha256,
-                        "prior_bank_sha256": manifest_digest({"tasks": [asdict(task) for task in state.bank]}),
+                        "prior_bank_sha256": compact_json_sha256({"tasks": [asdict(task) for task in state.bank]}),
                         "feedback_identity": artifact_identity(capabilities),
                         "capabilities_uri": prefix_join(capability_artifact.path, "capabilities.json"),
                         "capabilities_sha256": (
@@ -1068,37 +1089,12 @@ def run_bootstrap_loop(
     }
     write_once(manifest_directory / "terminal-state.json", terminal)
     champion = checkpoint_handles[state.champion.checkpoint_identity]
-    parent_model = evaluation_model("russell-rsi-final-parent", MODEL, None)
-    parent_final = eval_step(
-        parent_model,
-        "humanevalplus,mbppplus",
-        version=version,
-        deps=(parent,),
-        resolve_model=lambda ctx: replace(
-            parent_model, location=ctx.artifact_path(parent), identity=artifact_identity(parent)
-        ),
-        limit=64,
-        accelerator="H100x8",
-        submission_cluster=CLUSTER,
-        federated_cluster=CLUSTER,
+    parent_final = final_coding_evaluation(parent, "parent", version)
+    champion_final = (
+        parent_final
+        if artifact_identity(champion) == artifact_identity(parent)
+        else final_coding_evaluation(champion, "champion", version)
     )
-    if artifact_identity(champion) == artifact_identity(parent):
-        champion_final = parent_final
-    else:
-        champion_model = evaluation_model("russell-rsi-final-champion", MODEL, None)
-        champion_final = eval_step(
-            champion_model,
-            "humanevalplus,mbppplus",
-            version=version,
-            deps=(champion,),
-            resolve_model=lambda ctx: replace(
-                champion_model, location=ctx.artifact_path(champion), identity=artifact_identity(champion)
-            ),
-            limit=64,
-            accelerator="H100x8",
-            submission_cluster=CLUSTER,
-            federated_cluster=CLUSTER,
-        )
     comparison = heldout_comparison_step(
         parent_final,
         champion_final,

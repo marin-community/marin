@@ -15,6 +15,11 @@ MAX_SNAPSHOT_BYTES = 2_000_000
 MAX_SNAPSHOT_FILES = 100
 
 
+def compact_json_sha256(value: dict) -> str:
+    """Hash sorted JSON with compact separators for loop and coding evidence identities."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def source_path(value: str) -> str:
     path = PurePosixPath(value)
     if not value or path.is_absolute() or ".." in path.parts or ".git" in path.parts or str(path) != value:

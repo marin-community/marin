@@ -20,10 +20,12 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 
-from experiments.post_training.russell_rsi.bootstrap_loop import LoopState, manifest_digest, pinned_file
+from experiments.post_training.russell_rsi.bootstrap_loop import LoopState
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
 from experiments.post_training.russell_rsi.launch import run_bootstrap_loop
+from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 
 def execute_loop(config: dict) -> None:
@@ -37,7 +39,7 @@ def execute_loop(config: dict) -> None:
     seed = adopted(config["seed_bank"])
     parent = adopted(config["parent"], LevanterCheckpoint)
     retention = adopted(config["retention"])
-    panel_value = json.loads(pinned_file(config["panel_uri"], config["panel_sha256"]))
+    panel_value = json.loads(pinned_bytes(config["panel_uri"], config["panel_sha256"]))
     panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
 
     def next_bank(
@@ -46,7 +48,7 @@ def execute_loop(config: dict) -> None:
         supplied = config["reviewed_banks"].get(str(state.completed_pilots))
         if supplied is None:
             return None
-        prior = manifest_digest({"tasks": [asdict(task) for task in state.bank]})
+        prior = compact_json_sha256({"tasks": [asdict(task) for task in state.bank]})
         if supplied["prior_bank_sha256"] != prior or supplied["feedback_identity"] != artifact_identity(feedback):
             raise ValueError("Reviewed construction does not identify this prior bank and coding feedback")
         feedback_result = resolve(feedback)
@@ -55,7 +57,7 @@ def execute_loop(config: dict) -> None:
         ).hexdigest()
         if supplied["capabilities_sha256"] != actual_feedback_sha256:
             raise ValueError("Reviewed construction changed its canonical feedback bytes")
-        record = json.loads(pinned_file(prefix_join(supplied["uri"], "bank.json"), supplied["bank_sha256"]))
+        record = json.loads(pinned_bytes(prefix_join(supplied["uri"], "bank.json"), supplied["bank_sha256"]))
         if record["feedback_identity"] != supplied["capabilities_sha256"] or supplied["response_cap"] != response_cap:
             raise ValueError("Reviewed construction changed its canonical feedback or response budget")
         return ArtifactStep.adopt(
@@ -104,7 +106,7 @@ def run_loop(config: dict) -> None:
 @click.option("--config-sha256", required=True)
 @build_options
 def main(config_uri: str, config_sha256: str) -> ArtifactStep[Artifact]:
-    config = json.loads(pinned_file(config_uri, config_sha256))
+    config = json.loads(pinned_bytes(config_uri, config_sha256))
     if click.get_current_context().params.get("do_run") and not (
         has_current_context() or os.environ.get("IRIS_TASK_ID")
     ):

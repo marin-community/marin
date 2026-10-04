@@ -15,7 +15,6 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.mismatch_probe.metrics import prompt_cluster_bootstrap
-from experiments.post_training.russell_rsi.bootstrap_loop import pinned_file
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CODING_SUITES,
     CodingEvidenceConfig,
@@ -23,10 +22,11 @@ from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingPanel,
     PanelItem,
     coding_evidence_rows,
-    digest,
     load_coding_archives,
     protocol_digest,
 )
+from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 BOOTSTRAP_SEED = 9528
 BOOTSTRAP_DRAWS = 10_000
@@ -156,7 +156,7 @@ def paired_scores(parent: tuple[CodingEvidenceRow, ...], champion: tuple[CodingE
 
 def compare_heldout_evaluations(config: HeldoutComparisonConfig) -> None:
     """Write the final comparison after the controller freezes its champion."""
-    manifest = json.loads(pinned_file(config.manifest_uri, config.manifest_sha256))
+    manifest = json.loads(pinned_bytes(config.manifest_uri, config.manifest_sha256))
     parent_records, parent_archives = load_coding_archives(config.parent)
     parent_selected, panel = heldout_rows(parent_records, parent_archives, config.parent.panel, manifest)
     parent = coding_evidence_rows(parent_records, parent_selected, config.parent.model_identity, panel)
@@ -176,13 +176,13 @@ def compare_heldout_evaluations(config: HeldoutComparisonConfig) -> None:
         "manifest": manifest,
         "manifest_sha256": config.manifest_sha256,
         "terminal_state": config.terminal_state,
-        "terminal_state_sha256": digest(config.terminal_state),
+        "terminal_state_sha256": compact_json_sha256(config.terminal_state),
         "parent_identity": config.parent.model_identity,
         "champion_identity": config.champion.model_identity,
         "inputs": {"parent": asdict(config.parent), "champion": asdict(config.champion)},
         "records_sha256": {
-            "parent": [digest(record) for record in parent_records],
-            "champion": [digest(record) for record in champion_records],
+            "parent": [compact_json_sha256(record) for record in parent_records],
+            "champion": [compact_json_sha256(record) for record in champion_records],
         },
         "measured_rows_sha256": {
             "parent": [row.source_sha256 for row in parent],

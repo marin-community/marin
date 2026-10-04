@@ -26,7 +26,6 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     RoundResult,
     StopReason,
     advance,
-    manifest_digest,
     round_plan,
     seal_round,
 )
@@ -40,6 +39,7 @@ from experiments.post_training.russell_rsi.launch import (
     repair_spike_workflow,
     spike_workflow,
 )
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 
 def test_spike_retains_frozen_development_and_checks_rewards_before_policy_allocation():
@@ -417,7 +417,7 @@ def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_c
         json.dumps(
             {
                 "model_identity": artifact_identity(parent),
-                "panel_sha256": russell_launch.manifest_digest(asdict(panel)),
+                "panel_sha256": compact_json_sha256(asdict(panel)),
                 "scores": {"humanevalplus": 25 / 32, "mbppplus": 25 / 32},
             }
         )
@@ -489,7 +489,7 @@ def test_driver_restores_sealed_round_before_any_calibration(tmp_path, monkeypat
         json.dumps(
             {
                 "model_identity": artifact_identity(parent),
-                "panel_sha256": manifest_digest(asdict(panel)),
+                "panel_sha256": compact_json_sha256(asdict(panel)),
                 "scores": {suite: 25 / 32 for suite in panel.protocols},
             }
         )
@@ -539,10 +539,10 @@ def test_driver_restores_sealed_round_before_any_calibration(tmp_path, monkeypat
         bank_identity=artifact_identity(seed),
         calibration_identity=artifact_identity(difficulty),
         feedback_labels=(),
-        development_identity=manifest_digest(asdict(panel)),
+        development_identity=compact_json_sha256(asdict(panel)),
         retention_identity=artifact_identity(retention),
         feedback_identity="seed-feedback",
-        runtime_identity=manifest_digest(
+        runtime_identity=compact_json_sha256(
             {"qemu": runtime.archive_sha256, "skyrl": MARIN_SKYRL.commit, "machine": {"backend": "qemu"}}
         ),
         seed=9528,
@@ -563,7 +563,7 @@ def test_driver_restores_sealed_round_before_any_calibration(tmp_path, monkeypat
     )
     state = advance(initial, plan, result)
     directory = StoragePath(str(tmp_path / "manifests"))
-    previous = manifest_digest(
+    previous = compact_json_sha256(
         {
             "manifest_sha256": hashes[0],
             "development": asdict(panel),

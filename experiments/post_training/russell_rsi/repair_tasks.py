@@ -8,7 +8,6 @@ import asyncio
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import traceback
@@ -17,7 +16,6 @@ from pathlib import Path
 
 from openai import APIError, AsyncOpenAI
 from pydantic import ValidationError
-from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle
 
@@ -26,6 +24,7 @@ from experiments.post_training.russell_rsi.corpus import CommitRecord
 from experiments.post_training.russell_rsi.feedback import FeedbackAnalysis, generation_feedback
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import SourceSnapshot, source_group_id
+from experiments.post_training.russell_rsi.task_worker import run_task_worker
 
 MAX_PROPOSAL_BYTES = 64_000
 MAX_QC_BYTES = 16_384
@@ -54,42 +53,12 @@ class QualifiedUnionConfig:
     parent_development_identity: str
 
 
-def run_in_project(stage: str, values: dict) -> None:
-    workspace = find_project_root()
-    if workspace is None:
-        raise RuntimeError("Task repair requires the bundled Marin workspace")
-    with tempfile.TemporaryDirectory(prefix="russell-repair-config-") as directory:
-        config = Path(directory) / "config.json"
-        config.write_text(json.dumps(values))
-        subprocess.run(
-            [
-                "uv",
-                "run",
-                "--project",
-                str(workspace / "lib/rolloutengine"),
-                "--with",
-                "openai==2.24.0",
-                "--with-editable",
-                str(workspace / "lib/iris"),
-                "python",
-                "-m",
-                "experiments.post_training.russell_rsi.repair_tasks",
-                "--stage",
-                stage,
-                "--config",
-                str(config),
-            ],
-            cwd=workspace,
-            check=True,
-        )
-
-
 def run_repair_tasks_in_project(config: RepairTasksConfig) -> None:
-    run_in_project("repair", asdict(config))
+    run_task_worker(__name__, asdict(config), arguments=("--stage", "repair"))
 
 
 def run_qualified_union_in_project(config: QualifiedUnionConfig) -> None:
-    run_in_project("union", asdict(config))
+    run_task_worker(__name__, asdict(config), arguments=("--stage", "union"))
 
 
 def sha256(data: bytes) -> str:
@@ -451,7 +420,7 @@ def prepare_repair_tasks(config: RepairTasksConfig) -> None:
                 )
                 + "\n"
             )
-            repair_rows = []
+            repair_rows: list[dict] = []
             for identifier in sorted(manifest["repair_source_groups"]):
                 target = candidates / identifier
                 acceptance = target / "acceptance.json"

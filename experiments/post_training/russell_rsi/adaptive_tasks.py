@@ -7,17 +7,16 @@ import argparse
 import asyncio
 import hashlib
 import json
-import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle
 
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import SourceSnapshot, source_group_id
+from experiments.post_training.russell_rsi.task_worker import run_task_worker
 
 GENERATION_MAX_TOKENS = 16384
 
@@ -183,31 +182,7 @@ def prepare_adaptive_tasks(config: AdaptiveTasksConfig) -> None:
 
 def run_adaptive_tasks_in_project(config: AdaptiveTasksConfig) -> None:
     """Execute task admission with the bundled rollout package dependencies."""
-    workspace = find_project_root()
-    if workspace is None:
-        raise RuntimeError("Task admission requires the bundled Marin workspace")
-    with tempfile.TemporaryDirectory(prefix="russell-task-config-") as directory:
-        config_path = Path(directory) / "config.json"
-        config_path.write_text(json.dumps(asdict(config)))
-        subprocess.run(
-            [
-                "uv",
-                "run",
-                "--project",
-                str(workspace / "lib/rolloutengine"),
-                "--with",
-                "openai==2.24.0",
-                "--with-editable",
-                str(workspace / "lib/iris"),
-                "python",
-                "-m",
-                "experiments.post_training.russell_rsi.adaptive_tasks",
-                "--config",
-                str(config_path),
-            ],
-            cwd=workspace,
-            check=True,
-        )
+    run_task_worker(__name__, asdict(config))
 
 
 if __name__ == "__main__":

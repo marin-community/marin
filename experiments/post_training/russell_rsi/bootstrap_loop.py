@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded bootstrap-and-replay policy, separate from the failed fresh-task gate."""
+"""Select qualified task rounds, track checkpoint progress, and seal resumable evidence."""
 
 import hashlib
 import json
@@ -9,6 +9,9 @@ from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+
+from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 ATTEMPTS_PER_TASK = 8
 MINIMUM_TASKS = 16
@@ -279,10 +282,6 @@ def advance(state: LoopState, plan: RoundPlan, result: RoundResult) -> LoopState
     )
 
 
-def manifest_digest(value: dict) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
 def write_once(path: StoragePath, value: dict) -> None:
     content = json.dumps(value, sort_keys=True, indent=2) + "\n"
     if path.exists():
@@ -304,7 +303,7 @@ def seal_round(
         "result": asdict(result),
         "state": asdict(state),
     }
-    digest = manifest_digest(payload)
+    digest = compact_json_sha256(payload)
     write_once(directory / f"{plan.name}.json", {"sha256": digest, "payload": payload})
     return digest
 
@@ -325,7 +324,7 @@ def load_round(path: StoragePath, expected_inputs: dict, previous_sha256: str) -
     """Verify known inputs before calibration and restore the sealed selected dataset."""
     record = json.loads(path.read_text())
     payload = record["payload"]
-    if record["sha256"] != manifest_digest(payload):
+    if record["sha256"] != compact_json_sha256(payload):
         raise ValueError("Round manifest digest mismatch")
     expected = json.loads(json.dumps(expected_inputs))
     plan_value = payload["plan"]
@@ -405,22 +404,15 @@ class BankExportConfig:
     contract_registry_sha256: str
 
 
-def pinned_file(path: str, expected_sha256: str) -> bytes:
-    content = StoragePath(path).read_bytes()
-    if hashlib.sha256(content).hexdigest() != expected_sha256:
-        raise ValueError(f"Pinned evidence changed: {path}")
-    return content
-
-
 def export_qualified_bank(config: BankExportConfig) -> None:
     """Export a separate semantic selection with actual original admission evidence."""
     from taskcompendium.parquet import read_tasks, write_tasks  # noqa: PLC0415
 
-    audit_bytes = pinned_file(config.audit_path, config.audit_sha256)
-    selection_bytes = pinned_file(config.selection_path, config.selection_sha256)
+    audit_bytes = pinned_bytes(config.audit_path, config.audit_sha256)
+    selection_bytes = pinned_bytes(config.selection_path, config.selection_sha256)
     audit = json.loads(audit_bytes)
     selection = json.loads(selection_bytes)
-    registry_bytes = pinned_file(config.contract_registry_path, config.contract_registry_sha256)
+    registry_bytes = pinned_bytes(config.contract_registry_path, config.contract_registry_sha256)
     registry = json.loads(registry_bytes)
     if registry["selection_sha256"] != config.selection_sha256:
         raise ValueError("Contract registry refers to a different semantic selection")
@@ -438,7 +430,7 @@ def export_qualified_bank(config: BankExportConfig) -> None:
     bank, tasks = [], []
     for key in sorted(keys):
         proposal = proposals[key]
-        parquet_bytes = pinned_file(proposal["parquet_path"], proposal["parquet_sha256"])
+        parquet_bytes = pinned_bytes(proposal["parquet_path"], proposal["parquet_sha256"])
         if not parquet_bytes:
             raise ValueError("Qualified source parquet is empty")
         task = next(task for task in read_tasks(proposal["parquet_path"]) if task.id == proposal["task_id"])
@@ -456,11 +448,11 @@ def export_qualified_bank(config: BankExportConfig) -> None:
             ("repair.json", "repair_sha256"),
             ("acceptance.json", "acceptance_sha256"),
         ):
-            originals[filename] = pinned_file(prefix_join(root, filename), proposal[field])
+            originals[filename] = pinned_bytes(prefix_join(root, filename), proposal[field])
         for filename, expected_hash in proposal.get("evidence_file_hashes", {}).items():
-            originals[filename] = pinned_file(prefix_join(root, filename), expected_hash)
+            originals[filename] = pinned_bytes(prefix_join(root, filename), expected_hash)
         for filename, expected_hash in proposal.get("attempt_file_hashes", {}).items():
-            originals[filename] = pinned_file(prefix_join(root, filename), expected_hash)
+            originals[filename] = pinned_bytes(prefix_join(root, filename), expected_hash)
         if "recorded_admission_identity" in proposal:
             identity = proposal["recorded_admission_identity"]
             originals["admission-identity.json"] = StoragePath(prefix_join(root, "admission-identity.json")).read_bytes()

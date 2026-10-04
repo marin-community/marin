@@ -18,18 +18,15 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.post_training.glm import GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, FeedbackAnalysis, generation_feedback
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 CODING_SUITES = ("humanevalplus", "mbppplus")
-
-
-def digest(value: dict) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def protocol_digest(record: dict) -> str:
     """Include evaluator, dataset, serving, tokenizer, and generation protocol pins."""
     config = record["model"]["config"]
-    return digest(
+    return compact_json_sha256(
         {
             "evaluation": record["eval"],
             "eval_runtime": record["provenance"]["eval_runtime"],
@@ -142,7 +139,7 @@ def coding_evidence_rows(
                     pass_rate=score,
                     grader_detail=sample.grading.detail if sample.grading is not None else None,
                     prompt_sha256=prompt_hash,
-                    source_sha256=digest(row),
+                    source_sha256=compact_json_sha256(row),
                 )
             )
     if seen != set(expected):
@@ -168,8 +165,8 @@ def collect_coding_eval_evidence(config: CodingEvidenceConfig) -> None:
     rows = coding_evidence_rows(records, archives, config.model_identity, config.panel)
     payload = {
         "model_identity": config.model_identity,
-        "panel_sha256": digest(asdict(config.panel)),
-        "records_sha256": [digest(record) for record in records],
+        "panel_sha256": compact_json_sha256(asdict(config.panel)),
+        "records_sha256": [compact_json_sha256(record) for record in records],
         "rows": [asdict(row) for row in rows],
         "scores": {suite: sum(row.pass_rate for row in rows if row.suite == suite) / 32 for suite in CODING_SUITES},
     }
@@ -209,7 +206,7 @@ async def analyze_coding_failures(config: CodingAnalysisConfig) -> None:
     evidence = json.loads(StoragePath(prefix_join(config.evidence_path, "coding-evidence.json")).read_text())
     request = coding_analysis_request(evidence, config.maximum_failed_rows, config.maximum_evidence_bytes)
     directory = StoragePath(config.output_path)
-    request_hash = digest(request)
+    request_hash = compact_json_sha256(request)
     response_path = directory / "private-analysis.json"
     if response_path.exists():
         saved = json.loads(response_path.read_text())
