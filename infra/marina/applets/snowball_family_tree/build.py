@@ -10,7 +10,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
 
-DIST.mkdir(exist_ok=True)
+if DIST.exists():
+    shutil.rmtree(DIST)
+DIST.mkdir()
 data = json.loads((ROOT / "graph-data.json").read_text())
 serialized = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
 html = (ROOT / "index.html").read_text().replace("__DATA__", serialized)
