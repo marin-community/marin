@@ -24,7 +24,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import LoopState
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
 from experiments.post_training.russell_rsi.launch import run_bootstrap_loop
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
-from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
+from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV, IRIS_TASK_ID_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 
@@ -108,7 +108,7 @@ def run_loop(config: dict) -> None:
 def main(config_uri: str, config_sha256: str) -> ArtifactStep[Artifact]:
     config = json.loads(pinned_bytes(config_uri, config_sha256))
     if click.get_current_context().params.get("do_run") and not (
-        has_current_context() or os.environ.get("IRIS_TASK_ID")
+        has_current_context() or os.environ.get(IRIS_TASK_ID_ENV)
     ):
         raise click.UsageError("Run this CPU coordinator inside the CW02 Iris context")
     version = resolve_version("russell-rsi-bootstrap-loop", None)

@@ -10,7 +10,7 @@ from enum import StrEnum
 
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
+from experiments.post_training.russell_rsi.repair_tasks import canonical_sha256, pinned_bytes
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 ATTEMPTS_PER_TASK = 8
@@ -374,10 +374,7 @@ def freeze_round_dataset(config: FrozenRoundConfig) -> None:
     tasks = []
     for identifier, record in sorted(selected.items()):
         task = by_id[identifier]
-        if (
-            hashlib.sha256(json.dumps(task.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
-            != record.task_sha256
-        ):
+        if canonical_sha256(task.model_dump(mode="json")) != record.task_sha256:
             raise ValueError("Selected TaskSpec content differs from its sealed bank")
         admission = StoragePath(
             prefix_join(config.bank_path, f"evidence/{record.admission_sha256}/proposal.json")
@@ -434,10 +431,7 @@ def export_qualified_bank(config: BankExportConfig) -> None:
         if not parquet_bytes:
             raise ValueError("Qualified source parquet is empty")
         task = next(task for task in read_tasks(proposal["parquet_path"]) if task.id == proposal["task_id"])
-        if (
-            hashlib.sha256(json.dumps(task.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
-            != proposal["task_sha256"]
-        ):
+        if canonical_sha256(task.model_dump(mode="json")) != proposal["task_sha256"]:
             raise ValueError("Qualified TaskSpec changed after the semantic audit")
         if task.metadata["split"] != "train":
             raise ValueError("Evaluation tasks cannot enter the qualified bank")

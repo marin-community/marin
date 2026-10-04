@@ -23,7 +23,7 @@ from experiments.post_training.russell_rsi.contract_tasks import (
     run_contract_tasks_in_project,
 )
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
-from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
+from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV, IRIS_TASK_ID_ENV
 
 
 def run_contract_tasks(config: ContractTasksConfig) -> None:
@@ -40,7 +40,7 @@ def run_contract_tasks(config: ContractTasksConfig) -> None:
 @build_options
 def main(config_uri: str, config_sha256: str) -> ArtifactStep[Artifact]:
     if click.get_current_context().params.get("do_run") and not (
-        has_current_context() or os.environ.get("IRIS_TASK_ID")
+        has_current_context() or os.environ.get(IRIS_TASK_ID_ENV)
     ):
         raise click.UsageError("Run this CPU coordinator inside the CW02 Iris context")
     version = resolve_version("russell-rsi-contracts", None)
