@@ -220,12 +220,40 @@ def test_training_loader_reads_only_complete_mixture_blocks(tmp_path, monkeypatc
     assert sorted(token_values) == [31, 32, 33]
 
 
-def test_quality_cli_adopts_raw_pool_with_valid_graph_version():
+@pytest.mark.parametrize(
+    ("stage", "terminal_artifact"),
+    [
+        ("features", "fast-track/quality-features"),
+        ("select", "fast-track/quality/"),
+        ("train", "grug/quality-cli-plan"),
+    ],
+)
+def test_quality_cli_prints_selected_stage_graph(tmp_path, stage, terminal_artifact):
+    args = ["--raw-pool", "s3://marin-test/raw-pool", "--stage", stage, "--version", "2026.10.04"]
+    if stage != "features":
+        exclusion_path = tmp_path / "labels.json"
+        exclusion_path.write_text(
+            LabelExclusion(label_revision="quality-cli-test-v1", duplicate_groups=frozenset()).model_dump_json()
+        )
+        args.extend(
+            [
+                "--scorer-factory",
+                f"{__name__}:_Scorer",
+                "--classifier-identity",
+                '{"implementation":"test","revision":"v1"}',
+                "--label-exclusion-manifest",
+                str(exclusion_path),
+            ]
+        )
+    if stage == "train":
+        args.extend(["--run-id", "quality-cli-plan", "--size", "d512"])
+
     result = CliRunner().invoke(
         quality_main,
-        ["--raw-pool", "s3://marin-test/raw-pool", "--features-only", "--version", "2026.10.04"],
+        args,
     )
 
     assert result.exit_code == 0, result.output
     assert "fast-track/raw-pool" in result.output
     assert "s3://marin-test/raw-pool" in result.output
+    assert terminal_artifact in result.output
