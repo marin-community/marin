@@ -75,10 +75,10 @@ class LocalTask:
 
 class LocalJob:
     def __init__(self):
-        self.terminated = False
+        self.cancelled = False
 
     def cancel(self):
-        self.terminated = True
+        self.cancelled = True
 
 
 class LocalClient:
@@ -147,7 +147,7 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
             assert target.read_bytes() == source.read_bytes()
         finally:
             await machine.close()
-        assert job.terminated
+        assert job.cancelled
 
     asyncio.run(scenario())
 
@@ -190,7 +190,7 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
             await machine.close()
 
     asyncio.run(scenario())
-    assert job.terminated
+    assert job.cancelled
     assert submitted_environments == [{"JUDGE_KEY": secret} if private_credentials else {}]
     assert secret not in json.dumps(asdict(spec), default=str)
     assert secret not in caplog.text
