@@ -16,7 +16,7 @@ from taskcompendium.grading import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import Source, TaskSpec
 
-from .test_rollout import ReplayModel, engine, run_task
+from .test_rollout import ReplayModel, engine
 
 
 class LocalGitMachine:
@@ -117,7 +117,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(tmp_p
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await run_task(engine(model, {EnvironmentKind.DOCKER: Factory()}), task)
+    result = await engine(model, {EnvironmentKind.DOCKER: Factory()}).run(task)
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert (git_image / "value.txt").read_text() == "broken\n"
     assert len(machines) == 2
