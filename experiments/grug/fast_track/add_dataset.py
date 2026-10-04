@@ -29,6 +29,7 @@ from rigging.filesystem.storage_path import prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from experiments.grug.fast_track.batching import bounded_batches
 from experiments.grug.fast_track.contracts import (
     TOKENIZATION_CHUNK_CHARS,
     TOKENIZATION_MAX_DOCUMENT_BYTES,
@@ -68,23 +69,14 @@ class _PrefixText:
 
 
 def _prefix_text_batches(rows: Iterable[Mapping[str, Any]], *, text_field: str) -> Iterator[list[_PrefixText]]:
-    pending = []
-    pending_bytes = 0
-    for row in rows:
-        text = row.get(text_field)
-        text_bytes = len(text.encode("utf-8")) if isinstance(text, str) else 0
-        if pending and pending_bytes + text_bytes > PREFIX_TOKENIZE_BLOCK_BYTES:
-            yield pending
-            pending = []
-            pending_bytes = 0
-        pending.append(_PrefixText(text, text_bytes))
-        pending_bytes += text_bytes
-        if len(pending) >= PREFIX_TOKENIZE_BLOCK_ROWS or pending_bytes >= PREFIX_TOKENIZE_BLOCK_BYTES:
-            yield pending
-            pending = []
-            pending_bytes = 0
-    if pending:
-        yield pending
+    texts = (row.get(text_field) for row in rows)
+    prefix_texts = (_PrefixText(text, len(text.encode("utf-8")) if isinstance(text, str) else 0) for text in texts)
+    yield from bounded_batches(
+        prefix_texts,
+        max_rows=PREFIX_TOKENIZE_BLOCK_ROWS,
+        max_bytes=PREFIX_TOKENIZE_BLOCK_BYTES,
+        byte_size=lambda row: row.num_bytes,
+    )
 
 
 def _tokenized_prefix(
