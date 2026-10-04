@@ -7,7 +7,7 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Semantic answer tasks and Harbor direct-chat lowerings"
 requires-python = ">=3.12,<3.14"
-dependencies = ["marin-rigging>=0.2.135.dev36906221286", "pyarrow>=17", "pydantic>=2.0", "verifyit"]
+dependencies = ["marin-rigging>=0.2.139.dev37117265303", "pyarrow>=17", "pydantic>=2.0", "verifyit"]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
