@@ -803,7 +803,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?rev=a2adfd7e60c41be528c93f3c4672f8e2a9a0e770#a2adfd7e60c41be528c93f3c4672f8e2a9a0e770" }
+source = { git = "https://github.com/marin-community/harbor.git?rev=41c25c5b7a388b073b1938d4f8e2874d9085e069#41c25c5b7a388b073b1938d4f8e2874d9085e069" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -838,7 +838,7 @@ tau3 = [
 [[package]]
 name = "harbor-tau3-bench-adapter"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/harbor.git?subdirectory=adapters%2Ftau3-bench&rev=a2adfd7e60c41be528c93f3c4672f8e2a9a0e770#a2adfd7e60c41be528c93f3c4672f8e2a9a0e770" }
+source = { git = "https://github.com/marin-community/harbor.git?subdirectory=adapters%2Ftau3-bench&rev=41c25c5b7a388b073b1938d4f8e2874d9085e069#41c25c5b7a388b073b1938d4f8e2874d9085e069" }
 dependencies = [
     { name = "harbor" },
 ]
@@ -1082,7 +1082,7 @@ dependencies = [
 requires-dist = [
     { name = "daytona", specifier = "==0.200.2" },
     { name = "gcsfs" },
-    { name = "harbor", extras = ["archive", "tau3"], git = "https://github.com/marin-community/harbor.git?rev=a2adfd7e60c41be528c93f3c4672f8e2a9a0e770" },
+    { name = "harbor", extras = ["archive", "tau3"], git = "https://github.com/marin-community/harbor.git?rev=41c25c5b7a388b073b1938d4f8e2874d9085e069" },
     { name = "marin-rigging", specifier = ">=0.2.0" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
