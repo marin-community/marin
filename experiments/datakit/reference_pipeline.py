@@ -534,7 +534,9 @@ def build_per_source_embed_steps(
     the domain training subgraph (via :func:`build_train_centroids_step`) can
     share the same embeds across both wirings.
     """
-    return {name: _build_embed_step(name, step, scale, output_prefix, driver_placement) for name, step in sources.items()}
+    return {
+        name: _build_embed_step(name, step, scale, output_prefix, driver_placement) for name, step in sources.items()
+    }
 
 
 def build_train_centroids_step(
