@@ -356,6 +356,7 @@ def test_add_dataset_cli_accepts_prepared_artifacts_without_hugging_face_options
             prefix=preparation.prefix,
             actual_num_rows=3,
             actual_num_tokens=16_384,
+            tokenization_policy="fast-track-long-string-v1",
         ),
         prepared_path,
     )
@@ -475,6 +476,33 @@ def test_prepare_add_dataset_cache_stops_when_the_bounded_prefix_runs_out(tmp_pa
             _config(tmp_path, token_cap=5, max_rows=1),
             rows=[{"body": "one"}, {"body": "unread"}],
             tokenizer=_SmallTokenizer.name_or_path,
+        )
+
+
+def test_long_document_prefix_preserves_tokens_and_defers_oversized_lookahead(tmp_path, monkeypatch):
+    tokenizer = _SmallTokenizer()
+    monkeypatch.setattr("experiments.grug.fast_track.add_dataset.load_tokenizer", lambda _name: tokenizer)
+    monkeypatch.setattr(
+        "experiments.grug.fast_track.add_dataset.tokenizer_content_hash", lambda _name: "sha256:test-tokenizer"
+    )
+    monkeypatch.setattr("experiments.grug.fast_track.add_dataset.TOKENIZATION_MAX_DOCUMENT_BYTES", 200_000)
+    texts = ["first", "hello 世界\n" * 10_000, "last"]
+    expected = [[1, *tokenizer.encode(text + " EOS")] for text in texts]
+    token_cap = sum(map(len, expected))
+    config = _config(tmp_path, token_cap=token_cap)
+    oversized = {"body": "x" * 200_001}
+    prepared = prepare_add_dataset_cache(
+        config,
+        rows=[*({"body": text} for text in texts), oversized],
+        tokenizer=tokenizer.name_or_path,
+    )
+    cache = TreeCache.load(prepared.cache_dir + "/train", {"input_ids": np.zeros((0,), dtype=np.int32)})
+    assert [row["input_ids"].tolist() for row in cache] == expected
+    with pytest.raises(ValueError, match="org/dataset row 3 has 200,001 UTF-8 bytes"):
+        prepare_add_dataset_cache(
+            replace(config, output_path=str(tmp_path / "too-long"), prefix=_prefix(token_cap=token_cap + 1)),
+            rows=[*({"body": text} for text in texts), oversized],
+            tokenizer=tokenizer.name_or_path,
         )
 
 

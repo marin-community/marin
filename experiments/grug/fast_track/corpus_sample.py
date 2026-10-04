@@ -15,7 +15,7 @@ from functools import partial
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.tokenizers import MarinTokenizer, load_tokenizer, tokenizer_content_hash
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
@@ -30,12 +30,18 @@ from zephyr.dataset import Dataset
 
 from experiments.datakit import hero_data
 from experiments.datakit.reference_pipeline import TokenizerSpec
+from experiments.grug.fast_track.contracts import (
+    TOKENIZATION_CHUNK_CHARS,
+    TOKENIZATION_MAX_DOCUMENT_BYTES,
+    TOKENIZATION_POLICY,
+)
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
 from experiments.grug.fast_track.ranked_pool import RangeTokenTotal, ranked_pool, take_token_prefix
 
 QUALITY_FRACTION = 0.1
 TOKENIZE_BATCH_ROWS = 128
-PARQUET_BATCH_ROWS = 1024
+TOKENIZE_BATCH_MAX_BYTES = 256 * 1024
+PARQUET_BATCH_ROWS = 32
 SAMPLE_HEADROOM = 1.25
 SAMPLE_RANGES = 64
 logger = logging.getLogger(__name__)
@@ -131,15 +137,24 @@ def _sample_records(
     excluded_document_ids: frozenset[str],
 ) -> Iterator[dict]:
     threshold = min(1 << 256, math.ceil(probability * (1 << 256)))
-    preprocessor = TextLmDatasetFormat().build_preprocessor(tokenizer)
-    pending = []
+    preprocessor = BatchTokenizer(
+        tokenizer,
+        enforce_bos=True,
+        enforce_eos=True,
+        text_field="text",
+        _workaround_len=TOKENIZATION_CHUNK_CHARS,
+        long_string_workaround=True,
+    )
+    pending: list[dict] = []
+    pending_bytes = 0
     normalized_row = 0
     with StoragePath(shard.path).open("rb") as stream:
         for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=["id", "text"]):
-            for row in batch.to_pylist():
+            ids, texts = batch.column("id"), batch.column("text")
+            for index in range(batch.num_rows):
                 row_offset = normalized_row
                 normalized_row += 1
-                document_id, text = row["id"], row["text"]
+                document_id, text = ids[index].as_py(), texts[index].as_py()
                 if not isinstance(document_id, str) or not isinstance(text, str):
                     raise ValueError(f"{shard.path}: normalized id and text must be strings")
                 rank = sample_rank(shard.source, document_id, seed)
@@ -147,9 +162,21 @@ def _sample_records(
                     continue
                 if document_id in excluded_document_ids:
                     continue
-                duplicate_group = hashlib.sha256(text.encode()).hexdigest()
+                text_bytes_data = text.encode("utf-8")
+                text_bytes = len(text_bytes_data)
+                duplicate_group = hashlib.sha256(text_bytes_data).hexdigest()
                 if duplicate_group in excluded_groups:
                     continue
+                if text_bytes > TOKENIZATION_MAX_DOCUMENT_BYTES:
+                    raise ValueError(
+                        f"document exceeds tokenization size limit: source={shard.source!r}, "
+                        f"id={document_id!r}, bytes={text_bytes}, "
+                        f"limit={TOKENIZATION_MAX_DOCUMENT_BYTES}"
+                    )
+                if pending and pending_bytes + text_bytes > TOKENIZE_BATCH_MAX_BYTES:
+                    yield from _encode_records(pending, preprocessor)
+                    pending.clear()
+                    pending_bytes = 0
                 pending.append(
                     {
                         "source": shard.source,
@@ -161,9 +188,11 @@ def _sample_records(
                         "text": text,
                     }
                 )
-                if len(pending) == TOKENIZE_BATCH_ROWS:
+                pending_bytes += text_bytes
+                if len(pending) >= TOKENIZE_BATCH_ROWS or pending_bytes >= TOKENIZE_BATCH_MAX_BYTES:
                     yield from _encode_records(pending, preprocessor)
                     pending.clear()
+                    pending_bytes = 0
         if pending:
             yield from _encode_records(pending, preprocessor)
 
@@ -308,4 +337,10 @@ def build_corpus_pool(spec: CorpusSampleSpec, *, version: str | None = None) -> 
 
 
 def _spec_identity(spec: CorpusSampleSpec) -> dict:
-    return {**asdict(spec), "label_exclusion": spec.label_exclusion.identity() if spec.label_exclusion else None}
+    return {
+        **asdict(spec),
+        "label_exclusion": spec.label_exclusion.identity() if spec.label_exclusion else None,
+        "tokenization_policy": TOKENIZATION_POLICY,
+        "tokenization_chunk_chars": TOKENIZATION_CHUNK_CHARS,
+        "tokenization_max_document_bytes": TOKENIZATION_MAX_DOCUMENT_BYTES,
+    }

@@ -372,6 +372,16 @@ Run the preparation in the source region. Full-scale memory use and runtime requ
 Tokenizer content hashes are part of the artifact identity, so plan construction needs tokenizer access.
 Add `--run` in an Iris CPU coordinator to execute either preparation command.
 
+Corpus sampling and new-dataset preparation use the fixed `fast-track-long-string-v1` encoding policy.
+It uses the production `BatchTokenizer` mechanism and adds a 32 MiB limit on each document's UTF-8 text.
+Long strings split at the first whitespace at or after 10,000 characters. Each next piece keeps that whitespace.
+Separate pieces can produce different token IDs at a split. Raw text, document IDs, and one output per document stay intact.
+The policy and its limits determine new artifact names. The corpus manifest records them in `corpus.json` under `spec`.
+The prepared HF artifact records `tokenization_policy`.
+An oversized sampled document stops preparation. The error identifies the corpus source and document ID, or the HF repository and row number.
+Preparation does not drop or truncate the document. Text batches target 256 KiB, but one permitted document can exceed that target.
+These limits reduce memory use but do not guarantee a fixed worker-memory bound for every tokenizer and input.
+
 ## Add a dataset
 
 The add-dataset track tokenizes a Hugging Face prefix, limited by the calculated token cap and `--max-rows`.

@@ -5,7 +5,7 @@
 
 import dataclasses
 import hashlib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from itertools import islice
 from typing import Any
@@ -14,6 +14,7 @@ import numpy as np
 from datasets import load_dataset
 from fray.types import ResourceConfig
 from levanter.data._preprocessor import BatchProcessor
+from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.datasets import DatasetComponent, DatasetComponentBase, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, write_levanter_cache
@@ -29,6 +30,9 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from experiments.grug.fast_track.contracts import (
+    TOKENIZATION_CHUNK_CHARS,
+    TOKENIZATION_MAX_DOCUMENT_BYTES,
+    TOKENIZATION_POLICY,
     TRAIN_SPLIT,
     AddDatasetConfig,
     DatasetPrefix,
@@ -40,6 +44,7 @@ from experiments.grug.fast_track.contracts import (
 from experiments.grug.fast_track.launch import TrainingSource
 
 PREFIX_TOKENIZE_BLOCK_ROWS = 2048
+PREFIX_TOKENIZE_BLOCK_BYTES = 256 * 1024
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,6 +61,32 @@ class _PrefixCounts:
     total_tokens: int = 0
 
 
+@dataclasses.dataclass(frozen=True)
+class _PrefixText:
+    value: Any
+    num_bytes: int
+
+
+def _prefix_text_batches(rows: Iterable[Mapping[str, Any]], *, text_field: str) -> Iterator[list[_PrefixText]]:
+    pending = []
+    pending_bytes = 0
+    for row in rows:
+        text = row.get(text_field)
+        text_bytes = len(text.encode("utf-8")) if isinstance(text, str) else 0
+        if pending and pending_bytes + text_bytes > PREFIX_TOKENIZE_BLOCK_BYTES:
+            yield pending
+            pending = []
+            pending_bytes = 0
+        pending.append(_PrefixText(text, text_bytes))
+        pending_bytes += text_bytes
+        if len(pending) >= PREFIX_TOKENIZE_BLOCK_ROWS or pending_bytes >= PREFIX_TOKENIZE_BLOCK_BYTES:
+            yield pending
+            pending = []
+            pending_bytes = 0
+    if pending:
+        yield pending
+
+
 def _tokenized_prefix(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -64,14 +95,15 @@ def _tokenized_prefix(
     counts: _PrefixCounts,
 ) -> Iterable[dict[str, np.ndarray]]:
     """Read and tokenize bounded blocks in source order within one Zephyr task."""
-    row_iter = iter(rows)
-    while counts.scanned_rows < config.prefix.max_rows and counts.total_tokens < config.prefix.requested_token_cap:
-        remaining_rows = config.prefix.max_rows - counts.scanned_rows
-        block = list(islice(row_iter, min(PREFIX_TOKENIZE_BLOCK_ROWS, remaining_rows)))
-        if not block:
-            break
-
-        texts = [row.get(config.prefix.text_field) for row in block]
+    blocks = _prefix_text_batches(islice(rows, config.prefix.max_rows), text_field=config.prefix.text_field)
+    for block in blocks:
+        texts = [row.value for row in block]
+        for offset, row in enumerate(block):
+            if row.num_bytes > TOKENIZATION_MAX_DOCUMENT_BYTES:
+                raise ValueError(
+                    f"{config.prefix.repo} row {counts.scanned_rows + offset} has {row.num_bytes:,} UTF-8 bytes; "
+                    f"{TOKENIZATION_POLICY} permits at most {TOKENIZATION_MAX_DOCUMENT_BYTES:,} bytes per document"
+                )
         valid_rows = [{config.prefix.text_field: text} for text in texts if isinstance(text, str)]
         encoded = preprocessor(valid_rows) if valid_rows else []
         if not isinstance(encoded, list) or len(encoded) != len(valid_rows):
@@ -95,6 +127,8 @@ def _tokenized_prefix(
             yield {"input_ids": input_ids}
             if counts.total_tokens >= config.prefix.requested_token_cap:
                 break
+        if counts.total_tokens >= config.prefix.requested_token_cap:
+            break
 
     if counts.total_tokens < config.prefix.requested_token_cap:
         raise ValueError(
@@ -118,7 +152,12 @@ def prepare_add_dataset_cache(
         )
     counts = _PrefixCounts()
     train_path = prefix_join(config.output_path, TRAIN_SPLIT)
-    preprocessor = TextLmDatasetFormat(text_key=config.prefix.text_field).build_preprocessor(load_tokenizer(tokenizer))
+    preprocessor = BatchTokenizer(
+        load_tokenizer(tokenizer),
+        text_field=config.prefix.text_field,
+        long_string_workaround=True,
+        _workaround_len=TOKENIZATION_CHUNK_CHARS,
+    )
     write_levanter_cache(
         _tokenized_prefix(rows, preprocessor=preprocessor, config=config, counts=counts),
         train_path,
@@ -133,6 +172,7 @@ def prepare_add_dataset_cache(
         prefix=config.prefix,
         actual_num_rows=ledger.total_num_rows,
         actual_num_tokens=ledger.field_counts["input_ids"],
+        tokenization_policy=TOKENIZATION_POLICY,
     )
 
 
@@ -163,7 +203,11 @@ def add_dataset_cache_step(
     version: str | None = None,
 ) -> ArtifactStep[PreparedAddDatasetCache]:
     """Build a cache handle whose name includes every preparation identity field."""
-    identity = config.prefix.model_dump()
+    identity = config.prefix.model_dump() | {
+        "tokenization_policy": TOKENIZATION_POLICY,
+        "tokenization_chunk_chars": TOKENIZATION_CHUNK_CHARS,
+        "tokenization_max_document_bytes": TOKENIZATION_MAX_DOCUMENT_BYTES,
+    }
     identity_hash = hashlib.sha256(canonical_json(identity).encode()).hexdigest()
     name = f"fast-track/add-dataset/{identity_hash}"
     resolved_version = resolve_version(name, version)
@@ -252,6 +296,10 @@ class AddDatasetTrainingSource:
             cache_dir = ctx.artifact_path(self.config.token_cache)
         else:
             token_cache = ctx.resolved(self.config.token_cache)
+            if token_cache.tokenization_policy != TOKENIZATION_POLICY:
+                raise ValueError(
+                    f"prepared cache uses {token_cache.tokenization_policy!r}; expected {TOKENIZATION_POLICY!r}"
+                )
             actual_tokenizer_hash = tokenizer_content_hash(tokenizer)
             if actual_tokenizer_hash != self.config.prefix.tokenizer_hash:
                 raise ValueError(
