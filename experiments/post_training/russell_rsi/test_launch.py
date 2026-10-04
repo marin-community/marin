@@ -32,7 +32,11 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     round_plan,
     seal_round,
 )
-from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
+from experiments.post_training.russell_rsi.coding_eval_feedback import (
+    CODING_ANALYSIS_CONTEXT_PROTOCOL,
+    CodingPanel,
+    PanelItem,
+)
 from experiments.post_training.russell_rsi.launch import (
     MODEL,
     MODEL_REVISION,
@@ -419,6 +423,8 @@ def test_bootstrap_round_uses_coding_eval_feedback_after_reload_without_parent_r
     assert terminals["reload"] in terminals["coding-development"].deps
     assert terminals["coding-development"] in terminals["coding-evidence"].deps
     assert terminals["capabilities"].deps == (terminals["coding-evidence"],)
+    assert terminals["coding-evidence"].name.endswith(f"-coding-evidence-{CODING_ANALYSIS_CONTEXT_PROTOCOL}")
+    assert terminals["capabilities"].name.endswith(f"-capabilities-{CODING_ANALYSIS_CONTEXT_PROTOCOL}")
 
 
 def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_contracts(tmp_path, monkeypatch):
@@ -514,17 +520,18 @@ def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_c
 
 
 @pytest.mark.parametrize(
-    "next_bank_supplied,calibration_source",
+    "next_bank_supplied,calibration_source,empty_feedback",
     [
-        (True, "normal"),
-        (False, "normal"),
-        (False, "changed_recovery"),
-        (False, "fresh_recovery"),
-        (False, "incomplete_recovery"),
+        (True, "normal", False),
+        (False, "normal", False),
+        (False, "normal", True),
+        (False, "changed_recovery", False),
+        (False, "fresh_recovery", False),
+        (False, "incomplete_recovery", False),
     ],
 )
-def test_driver_validates_calibration_before_training_or_resume(
-    tmp_path, monkeypatch, next_bank_supplied, calibration_source
+def test_driver_validates_calibration_and_feedback_before_training_or_resume(
+    tmp_path, monkeypatch, next_bank_supplied, calibration_source, empty_feedback
 ):
     bank_path = tmp_path / "bank"
     bank_path.mkdir()
@@ -579,11 +586,24 @@ def test_driver_validates_calibration_before_training_or_resume(
     reload = ArtifactStep.adopt("evals/reload", "2026.10.04", "/tmp/reload")
     capabilities_path = tmp_path / "capabilities"
     capabilities_path.mkdir()
-    (capabilities_path / "capabilities.json").write_text(json.dumps({"skills": [{"label": "types"}]}))
+    (capabilities_path / "capabilities.json").write_text(
+        json.dumps({"skills": [] if empty_feedback else [{"label": "types"}]})
+    )
     capabilities = ArtifactStep.adopt("documents/capabilities", "2026.10.04", str(capabilities_path))
     trained = ArtifactStep.adopt("checkpoints/trained", "2026.10.04", "/tmp/trained")
     outputs = {"rl": trained, "reload": reload, "capabilities": capabilities}
     monkeypatch.setattr(russell_launch, "development_step", lambda *args, **kwargs: difficulty)
+    if empty_feedback:
+        monkeypatch.setattr(
+            russell_launch,
+            "final_coding_evaluation",
+            lambda *args, **kwargs: pytest.fail("Final coding evaluation started without capability feedback"),
+        )
+        monkeypatch.setattr(
+            russell_launch,
+            "heldout_comparison_step",
+            lambda *args, **kwargs: pytest.fail("Held-out evaluation started without capability feedback"),
+        )
     if calibration_source not in ("fresh_recovery", "incomplete_recovery"):
         monkeypatch.setattr(russell_launch, "bootstrap_round_workflow", lambda *args, **kwargs: outputs)
     monkeypatch.setattr(russell_launch, "run", lambda *args: pytest.fail("Resume started GPU work"))
@@ -671,7 +691,7 @@ def test_driver_validates_calibration_before_training_or_resume(
 
         monkeypatch.setattr(russell_launch, "run", allocation_boundary)
     else:
-        seal_round(directory, state, plan, result, previous)
+        sealed_hash = seal_round(directory, state, plan, result, previous)
         russell_launch.write_once(
             directory / "smoke.json",
             {
@@ -695,8 +715,14 @@ def test_driver_validates_calibration_before_training_or_resume(
         expected = pytest.raises(RuntimeError, match="Training allocation intercepted")
     elif calibration_source == "incomplete_recovery":
         expected = pytest.raises(ValueError, match="eight finite grades")
-    with expected:
-        restored = russell_launch.run_bootstrap_loop(
+
+    def build_next_bank(*args):
+        if empty_feedback:
+            pytest.fail("Source construction started without capability feedback")
+        return seed if next_bank_supplied else None
+
+    def resume():
+        return russell_launch.run_bootstrap_loop(
             seed,
             parent,
             retention,
@@ -712,9 +738,12 @@ def test_driver_validates_calibration_before_training_or_resume(
             {"backend": "qemu"},
             "relay",
             directory,
-            lambda *args: seed if next_bank_supplied else None,
+            build_next_bank,
             initial_calibration=initial_calibration,
         )
+
+    with expected:
+        restored = resume()
     if calibration_source == "changed_recovery":
         assert not (directory / "terminal-state.json").exists()
         return
@@ -726,6 +755,28 @@ def test_driver_validates_calibration_before_training_or_resume(
             assert len(allocation_plans[0].selected_tasks) == 16
         else:
             assert allocation_plans == []
+        return
+    if empty_feedback:
+        boundary_path = directory / "feedback-insufficient-after-1.json"
+        boundary_bytes = boundary_path.read_bytes()
+        boundary = json.loads(boundary_bytes)
+        capabilities_bytes = (capabilities_path / "capabilities.json").read_bytes()
+        assert boundary["state"] == json.loads(json.dumps(asdict(restored)))
+        assert boundary["last_round_sha256"] == sealed_hash
+        assert boundary["feedback_identity"] == artifact_identity(capabilities)
+        assert boundary["capabilities_sha256"] == hashlib.sha256(capabilities_bytes).hexdigest()
+        assert boundary["reason"] == "empty_capability_feedback"
+        assert restored.completed_pilots == 1
+        assert restored.stop_reason is None
+        assert restored.working == restored.champion == score
+        assert not (directory / "terminal-state.json").exists()
+        assert not (directory / "construction-required-after-1.json").exists()
+        sealed_path = directory / f"{plan.name}.json"
+        sealed_bytes = sealed_path.read_bytes()
+        repeated = resume()
+        assert repeated == restored
+        assert boundary_path.read_bytes() == boundary_bytes
+        assert sealed_path.read_bytes() == sealed_bytes
         return
     assert restored.completed_pilots == 1
     assert restored.stop_reason == (StopReason.TASK_SUPPLY if next_bank_supplied else None)

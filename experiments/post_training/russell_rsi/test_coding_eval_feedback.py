@@ -8,10 +8,12 @@ from dataclasses import asdict
 import pytest
 
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
+    CODING_ANALYSIS_CONTEXT_PROTOCOL,
     CODING_SUITES,
     CodingPanel,
     PanelItem,
     coding_analysis_request,
+    coding_evaluation_context,
     coding_evidence_rows,
     protocol_digest,
 )
@@ -23,6 +25,16 @@ def panel_fixture():
         record = {
             "eval": {"name": suite, "source_digest": "dataset-pin", "tasks": [], "evalchemy": {"shots": 3}},
             "provenance": {"eval_runtime": "evaluator-pin"},
+            "coverage": {
+                suite: {
+                    "n_benchmark": 32,
+                    "n_attempted": 32,
+                    "n_scored": 32,
+                    "n_unanswered": 0,
+                    "errors": {},
+                }
+            },
+            "metrics": {suite: {"pass@1": 25 / 32, "scored_count": 32.0}},
             "model": {
                 "config": {
                     "identity": "parent",
@@ -69,13 +81,51 @@ def test_real_sample_shape_keeps_null_grading_and_excludes_gold_from_feedback():
         "humanevalplus": 25,
         "mbppplus": 25,
     }
-    request = coding_analysis_request({"rows": [asdict(row) for row in rows]})
-    failed = json.loads(request["messages"][1]["content"])["failures"]
-    assert len(failed) == 14
+    context = coding_evaluation_context(records, rows)
+    evidence = {
+        "context_protocol": CODING_ANALYSIS_CONTEXT_PROTOCOL,
+        "evaluation_context": context,
+        "rows": [asdict(row) for row in rows],
+    }
+    request = coding_analysis_request(evidence)
+    content = json.loads(request["messages"][1]["content"])
+    failed = content["failures"]
     assert {row["suite"] for row in failed} == set(CODING_SUITES)
     serialized = json.dumps(request)
     assert "secret-gold" not in serialized and "secret-test" not in serialized
-    assert all(row["pass_rate"] == 0 for row in failed)
+    assert content["context_protocol"] == CODING_ANALYSIS_CONTEXT_PROTOCOL
+    assert content["failures"] == [asdict(row) for row in rows if row.pass_rate == 0]
+    for suite in CODING_SUITES:
+        suite_context = content["evaluation_context"]["suites"][suite]
+        assert suite_context["run_status"] == "succeeded"
+        assert suite_context["run_error"] is None
+        assert suite_context["coverage_errors"] == {}
+        assert suite_context["coverage"] == {
+            "n_benchmark": 32,
+            "n_attempted": 32,
+            "n_scored": 32,
+            "n_unanswered": 0,
+        }
+        assert suite_context["row_outcomes"] == {
+            "passed": 25,
+            "failed": 7,
+            "null_grader_detail": {"passed": 25, "failed": 7},
+        }
+
+
+@pytest.mark.parametrize(
+    ("record_field", "value_field", "value", "error"),
+    [
+        ("coverage", "n_scored", 31, "coverage differs"),
+        ("metrics", "pass@1", 0.5, "score differs"),
+    ],
+)
+def test_record_mismatch_cannot_become_evaluation_context(record_field, value_field, value, error):
+    records, archives, panel = panel_fixture()
+    rows = coding_evidence_rows(records, archives, "parent", panel)
+    records[0][record_field]["humanevalplus"][value_field] = value
+    with pytest.raises(ValueError, match=error):
+        coding_evaluation_context(records, rows)
 
 
 @pytest.mark.parametrize("change", ["prompt", "task", "missing", "duplicate", "model", "protocol", "metric"])

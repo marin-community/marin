@@ -60,6 +60,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     write_once,
 )
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
+    CODING_ANALYSIS_CONTEXT_PROTOCOL,
     CodingAnalysisConfig,
     CodingEvidenceConfig,
     CodingPanel,
@@ -492,7 +493,7 @@ def coding_feedback_steps(
         )
 
     evidence = ArtifactStep(
-        name=f"documents/russell-rsi-{label}-coding-evidence",
+        name=f"documents/russell-rsi-{label}-coding-evidence-{CODING_ANALYSIS_CONTEXT_PROTOCOL}",
         version=version,
         artifact_type=Artifact,
         deps=(coding_eval, model),
@@ -500,7 +501,7 @@ def coding_feedback_steps(
         run=collect_coding_eval_evidence,
     )
     analysis = ArtifactStep(
-        name=f"documents/russell-rsi-{label}-capabilities",
+        name=f"documents/russell-rsi-{label}-capabilities-{CODING_ANALYSIS_CONTEXT_PROTOCOL}",
         version=version,
         artifact_type=Artifact,
         deps=(evidence,),
@@ -1069,10 +1070,21 @@ def run_bootstrap_loop(
             capabilities = outputs["capabilities"]
         if state.stop_reason is None:
             capability_artifact = resolve(capabilities)
-            capability_record = json.loads(
-                StoragePath(prefix_join(capability_artifact.path, "capabilities.json")).read_text()
-            )
+            capabilities_bytes = StoragePath(prefix_join(capability_artifact.path, "capabilities.json")).read_bytes()
+            capability_record = json.loads(capabilities_bytes)
             feedback_labels = {skill["label"] for skill in capability_record["skills"]}
+            if not feedback_labels:
+                write_once(
+                    manifest_directory / f"feedback-insufficient-after-{state.completed_pilots}.json",
+                    {
+                        "state": asdict(state),
+                        "last_round_sha256": previous_sha256,
+                        "feedback_identity": artifact_identity(capabilities),
+                        "capabilities_sha256": hashlib.sha256(capabilities_bytes).hexdigest(),
+                        "reason": "empty_capability_feedback",
+                    },
+                )
+                return state
             next_bank = build_next_bank(capabilities, state, 24)
             if next_bank is None:
                 write_once(
@@ -1083,11 +1095,7 @@ def run_bootstrap_loop(
                         "prior_bank_sha256": compact_json_sha256({"tasks": [asdict(task) for task in state.bank]}),
                         "feedback_identity": artifact_identity(capabilities),
                         "capabilities_uri": prefix_join(capability_artifact.path, "capabilities.json"),
-                        "capabilities_sha256": (
-                            hashlib.sha256(
-                                StoragePath(prefix_join(capability_artifact.path, "capabilities.json")).read_bytes()
-                            ).hexdigest()
-                        ),
+                        "capabilities_sha256": hashlib.sha256(capabilities_bytes).hexdigest(),
                         "response_cap": 24,
                     },
                 )
