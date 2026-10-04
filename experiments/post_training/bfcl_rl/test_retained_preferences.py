@@ -515,6 +515,9 @@ def _native_pair_collection(
                 "config": {"agent": {"name": profile["name"], "version": profile["version"]}},
                 "agent_result": {"metadata": {"rollout_correlation_id": trial_id}},
             }
+            if model == "student" and index == 0 and fault == "agent_error":
+                trial["exception_info"] = {"exception_type": "AgentTimeoutError"}
+                record["disposition"]["exception_type"] = "AgentTimeoutError"
             if score is None:
                 record["verification_result"] = {"status": "unavailable", "reason": "setup_failed"}
                 record["prompt"]["token_ids"] = []
@@ -596,7 +599,7 @@ def _native_pair_collection(
     return NativeCollectionInput(str(root / "terminal.json"), locator, 7)
 
 
-@pytest.mark.parametrize("fault", ["none", "context", "negative_tokens"])
+@pytest.mark.parametrize("fault", ["none", "context", "negative_tokens", "agent_error"])
 def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_semantics(tmp_path: Path, fault: str):
     tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
     partition = replace(PARTITION, complement=tasks)
@@ -623,11 +626,18 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         return
     with set_current_client(LocalClient()):
         value = build_native_preference_cache(config, partition)
-    assert value.num_preferences == (1 if fault == "context" else 2)
+    assert value.num_preferences == (1 if fault in ("context", "agent_error") else 2)
     report = json.loads((tmp_path / "cache/selection.json").read_text())
-    assert report["dispositions"] == {"preference": 2, "both_incorrect": 1, "both_correct": 1, "unscored": 1}
+    assert report["dispositions"] == {
+        "preference": 1 if fault == "agent_error" else 2,
+        "both_incorrect": 1,
+        "both_correct": 1,
+        "unscored": 2 if fault == "agent_error" else 1,
+    }
     assert [pair["chosen"]["model_revision"] for pair in report["preferences"]] == (
-        [MODELS["student"].revision] if fault == "context" else [TEACHER_REVISION, MODELS["student"].revision]
+        [MODELS["student"].revision]
+        if fault in ("context", "agent_error")
+        else [TEACHER_REVISION, MODELS["student"].revision]
     )
     assert [item["reason"] for item in report["excluded_preferences"]] == (
         ["initial_context_mismatch"] if fault == "context" else []
@@ -635,14 +645,17 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
     adaptations = report["model_identity_adaptations"]
     teacher_initial = next(item for item in adaptations if item["source_id"].endswith(tasks[0].name))
     assert teacher_initial["original_initial_prompt_sha256"] != teacher_initial["student_initial_prompt_sha256"]
-    student_initial = next(
-        item
-        for item in adaptations
-        if item["source_alias"] == "student-alias" and item["source_id"].endswith(tasks[0].name)
-    )
-    assert (teacher_initial["student_initial_prompt_sha256"] == student_initial["student_initial_prompt_sha256"]) == (
-        fault != "context"
-    )
+    if fault != "agent_error":
+        student_initial = next(
+            item
+            for item in adaptations
+            if item["source_alias"] == "student-alias" and item["source_id"].endswith(tasks[0].name)
+        )
+        assert (
+            teacher_initial["student_initial_prompt_sha256"] == student_initial["student_initial_prompt_sha256"]
+        ) == (fault != "context")
+    else:
+        assert report["collections"][1]["dispositions"]["opencode@1.18.2/unscored"] == 2
     cache = TreeCache.load(
         str(tmp_path / "cache/train"),
         {
@@ -663,7 +676,7 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         targets = np.roll(np.asarray(branch.tokens.array), -1)[np.asarray(branch.loss_weight.array) > 0]
         np.testing.assert_array_equal(targets, ids[masks])
         assert "TOOL_OBSERVATION" in tok.decode(ids.tolist())
-        if fault != "context":
+        if fault not in ("context", "agent_error"):
             text = tok.decode(ids.tolist())
             assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named student-alias." in text
             assert "The exact model ID is hosted_vllm/teacher-alias" in text

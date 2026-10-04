@@ -151,6 +151,8 @@ def collection_native_evidence(
             profile = NATIVE_AGENT_PROFILES[task_indices[task] % len(NATIVE_AGENT_PROFILES)]
             identity = replace(receipt.identity, harness=f"{profile['name']}@{profile['version']}")
             retained = retained_rollout(record, identity=identity, partition=partition, trajectory_uri=uri)
+            if trial["exception_info"] is not None:
+                retained = replace(retained, rollout=replace(retained.rollout, outcome=RolloutOutcome.UNSCORED))
             dispositions[f"{identity.harness}/{retained.rollout.outcome.value}"] += 1
             entries = []
             if retained.rollout.outcome is not RolloutOutcome.UNSCORED:
