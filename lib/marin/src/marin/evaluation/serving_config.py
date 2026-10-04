@@ -32,7 +32,8 @@ from marin.inference.config import (
 
 logger = logging.getLogger(__name__)
 
-ENDPOINT_READY_TIMEOUT_SECONDS = 2400
+ENDPOINT_READY_TIMEOUT_SECONDS = 8 * 60 * 60
+_VLLM_ENGINE_STARTUP_TIMEOUT_SECONDS = 2400
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
@@ -208,7 +209,7 @@ def _vllm_engine_config(
         source=source,
         version=serve.vllm_version,
         extra_requirements=serve.vllm_plugin_requirements,
-        startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
+        startup_timeout_seconds=_VLLM_ENGINE_STARTUP_TIMEOUT_SECONDS,
         max_num_batched_tokens=(
             serve.max_num_batched_tokens
             if serve.max_num_batched_tokens is not None
@@ -330,6 +331,7 @@ def inference_config_for_model(
             serving_geometry=geometry,
             worker_resources=resources,
             worker_environment=environment,
+            endpoint_placement_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
             endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
             priority=priority,
         ),

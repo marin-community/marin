@@ -198,6 +198,10 @@ The `qwen3-32b` / `tb2-lite` path follows the H100x2 acceptance run recorded in
 persistence use the selected GCS or S3 records store after
 [PR #7625](https://github.com/marin-community/marin/pull/7625).
 
+Evaluation launches allow eight hours for worker placement and a separate eight hours for endpoint
+registration. Preemption requeues reset the registration clock. These limits do not change vLLM's
+40-minute engine-startup budget, generation deadlines, or scoring.
+
 ### Object-store model loading
 
 CUDA vLLM serves `s3://` checkpoints with RunAI model streamer 0.16.1. The launcher gives the

@@ -340,6 +340,24 @@ def test_explicit_memory_hint_wins_without_measuring_the_checkpoint():
     assert lowered.iris.worker_resources.ram == "512g"
 
 
+def test_endpoint_queue_wait_does_not_extend_engine_startup():
+    # Queued H100 evals exhausted endpoint readiness before allocation. Only
+    # that scheduling-inclusive wait should grow, not the engine startup budget.
+    model = ModelConfig(
+        name="queued-model",
+        location="s3://models/queued-model",
+        resource_hint=ResourceHint(memory="32g"),
+        serve=ServeConfig(auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+
+    assert lowered.iris.endpoint_ready_timeout_seconds == 8 * 60 * 60
+    assert lowered.iris.endpoint_placement_timeout_seconds == 8 * 60 * 60
+    assert lowered.engine.startup_timeout_seconds == 2400
+
+
 def test_scan_model_configs_keys_by_name_and_skips_underscored(tmp_path):
     _write(tmp_path, "Qwen/Qwen3-8B.yaml", "name: qwen3-8b\nlocation: Qwen/Qwen3-8B\n")
     _write(tmp_path, "org/other.yaml", "name: other\nlocation: org/other\n")
