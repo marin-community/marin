@@ -56,11 +56,8 @@ revision.
   exact `main-next` to `main` admin promotion still required, request the
   descriptor's `blocker_assignee` as reviewer, and monitor the PR per
   `.agents/skills/commit/SKILL.md`.
-- For `vllm-gpu`, source approval and publication precede the Marin e2e.
-  Prepare a source-review handoff with the `main-next` compare link, old and new
-  source SHAs, replay audit, and rollback and date tags. Wait for the admin to
-  approve and promote that source before building. Resume with the main build,
-  then open one draft Marin PR with published wheel pins after its e2e passes.
+- For `vllm-gpu`, use `docs/vllm.md` for the source-review handoff and the
+  later Marin adoption PR.
 - On an unresolved blocker, do not open a PR. Create or update one
   `marin-community/marin` issue assigned to `blocker_assignee`, titled
   `Fork refresh blocked: <fork> — <short reason>`, with current pins, the selected
@@ -190,10 +187,8 @@ need the follow-up described below.
   record the exact existing main-line source and its upstream base without
   creating or promoting another branch. The section-by-section mechanics are
   in `docs/vllm.md`.
-- `pin = release:<path>` (`vllm-gpu`): approve the source on `main` before
-  building. The fork workflow qualifies both wheels and publishes once. Import
-  the published manifest in Marin and run its e2e before merging the pin PR.
-  Commands and the CUDA/torch ABI caveat are in `docs/vllm.md`.
+- `pin = release:<path>` (`vllm-gpu`): follow `docs/vllm.md` for publication,
+  manifest import, the Marin e2e, and the CUDA/torch ABI caveat.
 - `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
@@ -283,8 +278,7 @@ Push and verify those tags, then leave protected `main` unchanged. The
 draft Marin PR must identify each `main-next` to `main` hard swap that an admin
 must complete before merge.
 
-Skip this step for `vllm-gpu`: its source approval happened before the build.
-Its Marin PR approves adoption of an already published wheel release.
+For `vllm-gpu`, use the source-approval step in `docs/vllm.md`.
 
 A `fork_main` selector has no protected-branch promotion. Record the immutable
 source tag or ancestry proof in the PR instead.
@@ -303,12 +297,8 @@ refresh, and no text overclaims validation evidence.
 
 Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
 request the descriptor's `blocker_assignee` as reviewer, and follow the commit
-skill's monitoring loop to an exit condition. PR body: above the fold, the fork,
-selected base, the staged tip SHA, its rollback and date tags, the pending admin
-promotion, e2e outcome, and unresolved
-risks; in `<details>`, the base-selection evidence and the carry/drop/fix table with
+skill's monitoring loop to an exit condition. The GPU guide names the adoption
+PR evidence. For the other forks, include the selected base, staged tip SHA,
+rollback and date tags, pending admin promotion, e2e outcome, and unresolved
+risks; in `<details>`, include the base-selection evidence and carry/drop/fix table with
 dropped-patch reasons.
-
-For `vllm-gpu`, name the published release tag, source SHA, both wheel hashes,
-source approval, and the fork qualification and Marin e2e results. No vLLM
-source promotion remains pending when this adoption PR opens.

@@ -64,10 +64,8 @@ tip. An admin checks those refs and performs the leased hard swap shown above
 before building wheels. For an ordinary fork patch, merge its reviewed PR to
 `main`.
 
-The GPU workflow then builds and qualifies both wheels from that main commit
-and publishes one release. An agent imports the published wheels in a Marin
-worktree, runs Snowball, and opens the adoption PR. Marin keeps its previous
-wheel until that PR merges. A source swap alone does not change the consumer pin.
+After source approval, follow `vllm.md` for the wheel build and Marin adoption.
+A source swap alone does not change Marin's wheel pin.
 
 The TPU group selects an exact commit already on the shared lineage and never
 creates or promotes `tpu` or `tpu-next`. Only its tpu-inference rebase needs the

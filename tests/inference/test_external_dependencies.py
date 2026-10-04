@@ -147,7 +147,7 @@ def gpu_pin_workspace(tmp_path, monkeypatch):
     return update_external, pin, generated
 
 
-def test_promote_gpu_release_advances_an_ordinary_final_pin(tmp_path, gpu_pin_workspace):
+def test_promote_gpu_release_updates_pin_and_generated_dependencies(tmp_path, gpu_pin_workspace):
     update_external, pin, generated = gpu_pin_workspace
     previous = _promoted_manifest()
     previous["source"]["fork_commit"] = "e" * 40
@@ -158,10 +158,10 @@ def test_promote_gpu_release_advances_an_ordinary_final_pin(tmp_path, gpu_pin_wo
 
     update_external.promote_gpu_release(manifest_path)
 
-    final = update_external.load_vllm_gpu_release(pin)
+    release = update_external.load_vllm_gpu_release(pin)
     packaged = runpy.run_path(str(generated))["VLLM_GPU_RELEASE"]
-    assert final.release_tag == packaged.release_tag == _promoted_manifest()["release"]["tag"]
-    assert final.source_commit == packaged.source_commit == "a" * 40
+    assert release.release_tag == packaged.release_tag == _promoted_manifest()["release"]["tag"]
+    assert release.source_commit == packaged.source_commit == "a" * 40
 
 
 def test_gpu_manifest_generation_failure_preserves_the_existing_pin(tmp_path, monkeypatch, gpu_pin_workspace):

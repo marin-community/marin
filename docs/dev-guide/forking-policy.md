@@ -102,10 +102,8 @@ and each architecture's URL and SHA-256) and regenerates the packaged pins. Open
 a Marin PR with those pins and the qualification and parity results. Review and
 merge that PR to adopt the wheels. Marin keeps its previous wheel until then.
 
-Source approval precedes wheel qualification and Marin validation. A failed
-qualification publishes no release; a failed Marin e2e prevents adoption.
-There is no temporary GPU candidate pin or second publication step. The
-refresh-fork vLLM guide contains the exact dispatch commands.
+The refresh-fork vLLM guide contains the exact dispatch commands and the
+source-review handoff for unattended rebases.
 
 ## Promotion
 

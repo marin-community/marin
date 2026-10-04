@@ -110,6 +110,11 @@ refresh or a patch authored in the fork.
    `main` described in `promotion-protocol.md` before wheel builds. For an
    ordinary patch, merge its reviewed vLLM PR to `main`. Keep the build and
    release automation in the selected source.
+
+For an unattended rebase, prepare a source-review handoff with the `main-next`
+compare link, old and new source SHAs, replay audit, and rollback and date tags.
+Wait for an admin to review and promote the source, then resume at the build.
+
 2. The build workflow builds both wheels, runs the existing H100 and GB200
    qualification, and publishes one release after both jobs pass. Source
    changes on `main` trigger it automatically. To start it manually:
