@@ -96,11 +96,12 @@ def prepare_adaptive_tasks(config: AdaptiveTasksConfig) -> None:
         candidates = root / "candidates"
         output = root / "accepted"
         generation_uri = prefix_join(config.output_path, "generation")
+        generation_path = StoragePath(generation_uri)
         candidates.mkdir()
-        for source in StoragePath(generation_uri + "/**/*").glob():
+        for source in (generation_path / "**/*").glob():
             if source.isdir():
                 continue
-            relative = str(source).removeprefix(generation_uri + "/")
+            relative = source.relative_to(generation_path)
             target = candidates / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             source.download_to(str(target))
