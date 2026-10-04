@@ -63,7 +63,7 @@ class _PrefixCounts:
 
 @dataclasses.dataclass(frozen=True)
 class _PrefixText:
-    value: Any
+    value: object
     num_bytes: int
 
 

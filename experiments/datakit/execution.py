@@ -5,7 +5,6 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Any
 
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner
@@ -17,8 +16,8 @@ def run_steps_in_pool(steps: Sequence[StepSpec], *, pool: ZephyrContext, max_con
     """Run all dependencies with the same pool, including remote step drivers."""
     bound: dict[int, StepSpec] = {}
 
-    def bind_callable(fn: Callable[[str], Any]) -> Callable[[str], Any]:
-        def run(output_path: str) -> Any:
+    def bind_callable(fn: Callable[[str], object]) -> Callable[[str], object]:
+        def run(output_path: str) -> object:
             with pool.execution_scope():
                 return fn(output_path)
 
