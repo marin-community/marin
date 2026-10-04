@@ -3,6 +3,8 @@
 
 """Canonical bounded source snapshots for corpus and task preparation."""
 
+import hashlib
+import json
 import re
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -54,3 +56,10 @@ class SourceSnapshot(BaseModel):
             if not self.license_paths or not all(path in files for path in self.license_paths):
                 raise ValueError("Snapshots require license files")
         return self
+
+
+def source_group_id(snapshot: SourceSnapshot) -> str:
+    """Identify one source scope at a commit independently of its data split."""
+    payload = snapshot.model_dump(mode="json", exclude={"split"})
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return f"{snapshot.commit_sha}-{digest[:16]}"
