@@ -43,13 +43,15 @@ class DevelopmentEvaluationConfig:
     require_reward_variation: bool = False
 
 
-def completion_message(text: str, tools: list[dict]) -> dict:
-    """Serialize parsed call arguments as JSON strings for the engine's chat wire format."""
+def completion_message(text: str, tools: list[dict], message_index: int) -> dict:
+    """Serialize call arguments as JSON and assign IDs from the assistant message position."""
     parsed = opencode_protocol_messages([{"role": "assistant", "content": text}], tools)
     if parsed is None:
         raise ValueError("The model emitted invalid Hermes tool syntax")
     message = parsed[0][0]
-    for call in message.get("tool_calls", []):
+    # The parser starts message numbering at zero for each completion.
+    for call_index, call in enumerate(message.get("tool_calls", [])):
+        call["id"] = f"call_{call['function']['name']}_{message_index}_{call_index}"
         call["function"]["arguments"] = json.dumps(call["function"]["arguments"])
     return message
 
@@ -143,7 +145,7 @@ async def evaluate_development(
             if not isinstance(response_ids, list) or not all(type(token) is int for token in response_ids):
                 raise RolloutContractError("The server did not return exact response tokens")
             return ModelTurn(
-                message=completion_message(choice["text"], request.options.get("tools", [])),
+                message=completion_message(choice["text"], request.options.get("tools", []), len(request.messages)),
                 prompt_token_ids=tuple(prompt_ids),
                 response_token_ids=tuple(response_ids),
                 logprobs=None,
