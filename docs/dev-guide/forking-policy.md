@@ -8,10 +8,11 @@ how Marin pins a fork and how the refresh runs.
 
 ## How Marin pins a fork
 
-Every fork is pinned under `config/external/`. The pins feed
+Forks except XLA are pinned under `config/external/`. Those pins feed
 `config/update-external.py`, which regenerates
 `lib/marin/src/marin/external_dependencies.py`; nothing else imports a fork
-revision directly. There are three pin kinds:
+revision directly. XLA uses the workspace wheel pin described below. There
+are four pin kinds:
 
 - Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
   dependency in `config/external/<fork>/uv.lock`. `uv run
@@ -53,7 +54,8 @@ select a new upstream base or existing main-line source, replay Marin's overlays
 for overlay forks, stage rebases on `main-next`, re-pin Marin, run the fork's declared
 end-to-end test, and on green open one draft Marin PR requesting the descriptor's
 reviewer. On an unresolved external blocker it files a "can't migrate" issue
-instead of a PR.
+instead of a PR. The GPU wheel refresh approves its source on `main` before
+building; its later Marin PR approves wheel adoption, as described below.
 
 `config/external/migration.toml` is the per-fork descriptor. It records the
 upstream repository, the pin kind, the fork branch the pin tracks, how to select a
@@ -80,44 +82,44 @@ recorded as a baseline failure and left for its own fix.
 
 ## The vLLM GPU release pipeline
 
-The stable GPU pin resolves to a prebuilt wheel. For a refresh, the candidate
-workflow builds immutable x86_64 and aarch64 wheels from the exact `main-next`
-tip. The release workflow runs from trusted `main` as the qualification harness
-and validates those staged wheels on H100 and GB200. Running the harness from
-`main` does not change the `main-next` code inside the wheels.
+Review and land source changes on the vLLM fork's `main`. This applies to an
+upstream refresh and to a patch authored in the fork. The build workflow
+(`marin-gpu-candidate.yaml`) builds x86_64 and aarch64 wheels from that commit,
+runs the existing H100 and GB200 qualification, and publishes one release after
+both jobs pass. A manual GPU build must also run from `main`.
 
-Before source promotion, download the staged candidate manifest, temporarily
-pin its x86_64 wheel in Marin, and run the declared Snowball parity end-to-end:
+In an isolated Marin worktree, download the published manifest, import the
+exact wheels, and run the declared Snowball parity end-to-end:
 
 ```sh
-uv run config/update-external.py --stage-gpu-candidate marin-vllm-gpu-manifest.json
+uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
 uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
   -m cluster -o addopts= --import-mode=importlib -vv -s
 ```
 
-The fork qualification and Marin end-to-end must both pass. After an admin
-promotes that exact `main-next` source to `main`, publish the final release from
-the same wheel bytes, download its manifest, and replace the temporary pin with:
+The updater writes `gpu.toml` (release tag, source SHA, version, Torch backend,
+and each architecture's URL and SHA-256) and regenerates the packaged pins. Open
+a Marin PR with those pins and the qualification and parity results. Review and
+merge that PR to adopt the wheels. Marin keeps its previous wheel until then.
 
-```sh
-uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
-```
-
-Both manifest commands write `gpu.toml` (tag, source commit, version, Torch
-backend, and each architecture's wheel URL and SHA-256) and regenerate the
-pins. Do not hand-edit `gpu.toml`; the helper encodes the wheel URLs as the pin
-loader expects. The refresh-fork vLLM guide contains the exact workflow
-dispatch commands.
+Source approval precedes wheel qualification and Marin validation. A failed
+qualification publishes no release; a failed Marin e2e prevents adoption.
+There is no temporary GPU candidate pin or second publication step. The
+refresh-fork vLLM guide contains the exact dispatch commands.
 
 ## Promotion
 
-The refresh never force-moves a fork's stable branch. A rebase stages on `main-next`
-and leaves the protected stable branch at the old tip; the draft Marin PR names
-the `main-next` to `main` hard swap an admin performs after review. Because
-the staged tip and the eventual stable tip are the same commit, source and commit
-pins need no change after promotion. The vLLM GPU wheel is different: replace its
-temporary staged candidate pin with the final release manifest after promotion,
-as described above.
+The refresh agent never force-moves a protected stable branch. For descriptor
+and isolated-project rebases, `main-next` stays separate until the e2e passes
+and an admin reviews the draft Marin PR. That admin performs the backed-up
+hard swap to `main` before the PR merges. Descriptor pins already name the exact
+validated SHA; isolated projects restore their uv source to `main` and relock
+at that same SHA.
+
+For a vLLM GPU rebase, the admin reviews and promotes `main-next` before wheel
+builds. The later Marin PR adopts the published release. See
+`.agents/skills/refresh-fork/docs/promotion-protocol.md` for rollback tags and
+the leased source swap.
 
 The vLLM TPU selector is the exception: it reuses an exact commit already on
 the fork's `main` lineage, so it has no vLLM staging branch or protected-branch

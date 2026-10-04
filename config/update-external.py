@@ -9,7 +9,6 @@
 """Advance external projects and package their immutable runtime inputs."""
 
 import argparse
-import hashlib
 import json
 import re
 import subprocess
@@ -32,7 +31,6 @@ VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
-GPU_STAGED_CANDIDATE_TAG_PREFIX = "marin-vllm-gpu-staged-candidate-"
 CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
     {
         "cu130": "13.0.88",
@@ -226,31 +224,18 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
     return release
 
 
-def render_gpu_release_toml(manifest: dict, *, staged_candidate: bool = False) -> str:
-    """Return gpu.toml text for a promoted release or explicit staged candidate.
+def render_gpu_release_toml(manifest: dict) -> str:
+    """Return gpu.toml text for a promoted release with a registered CUDA backend.
 
     ``manifest`` is a parsed ``marin-vllm-gpu-manifest.json``. Each wheel URL is rebuilt from
     its filename with ``+`` percent-encoded because the manifest stores the raw ``+`` filename
     while ``load_vllm_gpu_release`` accepts only the ``%2B`` form.
     """
     release = manifest["release"]
-    status = release.get("status")
-    if staged_candidate:
-        if status != "candidate":
-            raise ValueError(f"expected a staged 'candidate' manifest, found status {status!r}")
-        tag = release.get("tag", "")
-        source_commit = manifest.get("source", {}).get("fork_commit", "")
-        if tag != f"{GPU_STAGED_CANDIDATE_TAG_PREFIX}{source_commit[:12]}":
-            raise ValueError(f"expected a staged GPU candidate tag, found {tag!r}")
-        if manifest.get("validation") != {"status": "pending", "targets": []}:
-            raise ValueError("staged candidate has an unexpected validation state")
-        if {platform["architecture"] for platform in manifest["platforms"]} != {"x86_64", "aarch64"}:
-            raise ValueError("staged candidate must contain both GPU wheel architectures")
-    else:
-        if status != "released":
-            raise ValueError(f"expected a promoted 'released' manifest, found status {status!r}")
-        if manifest.get("validation", {}).get("status") != "passed":
-            raise ValueError("manifest validation did not pass; refusing to pin an unvalidated release")
+    if release.get("status") != "released":
+        raise ValueError(f"expected a promoted 'released' manifest, found status {release.get('status')!r}")
+    if manifest.get("validation", {}).get("status") != "passed":
+        raise ValueError("manifest validation did not pass; refusing to pin an unvalidated release")
     repository = release["repository"]
     if repository != GPU_RELEASE_REPOSITORY:
         raise ValueError(f"expected a {GPU_RELEASE_REPOSITORY} release, found {repository!r}")
@@ -576,107 +561,29 @@ def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_r
     )
 
 
-def _gpu_artifact_identity(release: VllmGpuRelease) -> dict[str, object]:
-    """Identify the source and wheel bytes that crossed the GPU gates."""
-    return {
-        "source_commit": release.source_commit,
-        "version": release.version,
-        "torch_backend": release.torch_backend,
-        "torch_version": release.torch_version,
-        "wheels": {wheel.architecture: (wheel.sm_targets, wheel.sha256) for wheel in release.wheels},
-    }
-
-
-def _install_gpu_manifest(
-    manifest_path: Path,
-    manifest: dict,
-    rendered: str,
-    *,
-    kind: str,
-    expected_release: VllmGpuRelease | None = None,
-) -> None:
-    """Validate and install rendered gpu.toml, then regenerate external_dependencies.py.
+def promote_gpu_release(manifest_path: Path) -> None:
+    """Re-pin gpu.toml from a promoted manifest and regenerate external_dependencies.py.
 
     ``manifest_path`` is a ``marin-vllm-gpu-manifest.json`` downloaded from the fork release;
     the fork's release pipeline is the only writer of that artifact. The rendered pin is
     validated on a staging file before it atomically replaces the canonical one, so a manifest
     that renders but violates a loader invariant leaves the existing pin in place.
     """
+    manifest = json.loads(manifest_path.read_text())
+    rendered = render_gpu_release_toml(manifest)
     directory = VLLM_GPU_RELEASE_CONFIG.parent
     with tempfile.NamedTemporaryFile("w", dir=directory, prefix="gpu.", suffix=".toml.tmp", delete=False) as handle:
         handle.write(rendered)
         staging = Path(handle.name)
     try:
         release = load_vllm_gpu_release(staging)
-        if expected_release is not None and _gpu_artifact_identity(release) != _gpu_artifact_identity(expected_release):
-            raise ValueError("promoted release does not match the staged candidate source, ABI and wheel bytes")
         dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
         generated = render_generated_pins(dependencies, release)
-        with tempfile.NamedTemporaryFile("w", dir=GENERATED_PINS.parent, delete=False) as handle:
-            handle.write(generated)
-            generated_staging = Path(handle.name)
-        original_pin = VLLM_GPU_RELEASE_CONFIG.read_text()
-        try:
-            staging.replace(VLLM_GPU_RELEASE_CONFIG)
-            try:
-                generated_staging.replace(GENERATED_PINS)
-            except OSError:
-                VLLM_GPU_RELEASE_CONFIG.write_text(original_pin)
-                raise
-        finally:
-            generated_staging.unlink(missing_ok=True)
+        staging.replace(VLLM_GPU_RELEASE_CONFIG)
+        synchronize_file(GENERATED_PINS, generated, check=False)
     finally:
         staging.unlink(missing_ok=True)
-    print(f"re-pinned vllm GPU {kind} {manifest['release']['tag']} from {manifest_path}")
-
-
-def promote_gpu_release(manifest_path: Path) -> None:
-    current = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
-    candidate = current if current.release_tag.startswith(GPU_STAGED_CANDIDATE_TAG_PREFIX) else None
-    manifest = json.loads(manifest_path.read_text())
-    rendered = render_gpu_release_toml(manifest)
-    if candidate is not None and manifest["release"].get("candidate_tag") != candidate.release_tag:
-        raise ValueError("promoted release names a different staged candidate")
-    _install_gpu_manifest(manifest_path, manifest, rendered, kind="release", expected_release=candidate)
-
-
-def stage_gpu_candidate(manifest_path: Path) -> None:
-    manifest = json.loads(manifest_path.read_text())
-    rendered = render_gpu_release_toml(manifest, staged_candidate=True)
-    source_commit = manifest["source"]["fork_commit"]
-    staging_tip = subprocess.run(
-        ["gh", "api", f"repos/{GPU_RELEASE_REPOSITORY}/git/ref/heads/main-next", "--jq", ".object.sha"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if source_commit != staging_tip:
-        raise ValueError(f"staged candidate source {source_commit} is not the current main-next tip {staging_tip}")
-    published = json.loads(
-        subprocess.run(
-            ["gh", "api", f"repos/{GPU_RELEASE_REPOSITORY}/releases/tags/{manifest['release']['tag']}"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-    )
-    wheels = {
-        platform["wheel"]["filename"]: f"sha256:{platform['wheel']['sha256']}" for platform in manifest["platforms"]
-    }
-    assets = {asset["name"]: asset for asset in published["assets"]}
-    if (
-        published["tag_name"] != manifest["release"]["tag"]
-        or published["target_commitish"] != source_commit
-        or published["draft"]
-        or not published["prerelease"]
-        or set(assets) != {GPU_RELEASE_MANIFEST_NAME, *wheels}
-        or assets[GPU_RELEASE_MANIFEST_NAME].get("digest")
-        != f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
-        or any(asset["state"] != "uploaded" for asset in assets.values())
-        or any(assets[name].get("digest") != digest for name, digest in wheels.items())
-    ):
-        raise ValueError("staged candidate metadata no longer matches its published source and wheel digests")
-    _install_gpu_manifest(manifest_path, manifest, rendered, kind="staged candidate")
+    print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -708,21 +615,9 @@ def parse_args() -> argparse.Namespace:
             f"re-pin config/external/vllm/gpu.toml from a promoted {GPU_RELEASE_MANIFEST_NAME}, then regenerate the pins"
         ),
     )
-    parser.add_argument(
-        "--stage-gpu-candidate",
-        type=Path,
-        metavar="MANIFEST",
-        help=(
-            f"temporarily re-pin config/external/vllm/gpu.toml from an exact staged "
-            f"{GPU_RELEASE_MANIFEST_NAME}, then regenerate the pins"
-        ),
-    )
     args = parser.parse_args()
-    manifest_modes = tuple(path for path in (args.promote_gpu_release, args.stage_gpu_candidate) if path is not None)
-    if len(manifest_modes) > 1:
-        parser.error("choose only one GPU manifest pin mode")
-    if manifest_modes and (args.check or args.projects or args.summary_file):
-        parser.error("GPU manifest pin modes run alone; drop --check, PROJECT, and --summary-file")
+    if args.promote_gpu_release is not None and (args.check or args.projects or args.summary_file):
+        parser.error("--promote-gpu-release runs on its own; drop --check, PROJECT, and --summary-file")
     return args
 
 
@@ -730,9 +625,6 @@ def main() -> None:
     args = parse_args()
     if args.promote_gpu_release is not None:
         promote_gpu_release(args.promote_gpu_release)
-        return
-    if args.stage_gpu_candidate is not None:
-        stage_gpu_candidate(args.stage_gpu_candidate)
         return
     selected = tuple(project_by_name(name) for name in args.projects if name != VLLM_CONFIG_NAME)
     if not args.projects:

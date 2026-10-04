@@ -15,15 +15,11 @@ snapshots retain their full dependency locks. Preflight and workers run the
 selected lock with `uv run --frozen`; the external dependency updater advances
 only the top-level projects.
 
-`vllm/gpu.toml` normally records the promoted CUDA release, Torch backend, and
-architecture-specific wheel URLs and SHA-256 digests. The final release pin is
-updated only after the H100 and GB200 publication gates pass. It is not a uv
-project and the nightly update does not advance it.
-
-During a source refresh, a draft Marin PR may temporarily point `gpu.toml` at
-an immutable staged candidate. This lets Snowball parity test the exact
-`main-next` wheel before source promotion. The final release manifest replaces
-that temporary pin after promotion.
+`vllm/gpu.toml` records the published CUDA release, Torch backend, and exact
+wheel URL and SHA-256 for each architecture. The fork builds only from `main`,
+runs its existing GPU qualification, and publishes once. A Marin adoption PR
+updates the descriptor and runs Snowball parity before those pins reach Marin's
+`main`.
 
 `vllm/tpu.toml` records an exact vLLM source from the fork's maintained `main`
 lineage and the matching `tpu-inference` SHA. The TPU stack runs from an
@@ -43,31 +39,21 @@ uv run config/update-external.py evalchemy
 ```
 
 Omit the project name to advance all three Git projects. The command updates
-the selected lockfiles and regenerates the packaged requirements. Import the
-exact staged vLLM candidate for pre-promotion parity with:
+the selected lockfiles and regenerates the packaged requirements.
 
-```bash
-uv run config/update-external.py --stage-gpu-candidate marin-vllm-gpu-manifest.json
-```
+Update a GPU release from its published manifest with:
 
-Replace it with the final promoted release using:
-
-```bash
+```sh
 uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
 ```
 
-Both commands update `vllm/gpu.toml` from a verified manifest and regenerate
-the packaged pins. Do not edit the wheel fields by hand.
+The command updates `vllm/gpu.toml` and regenerates the packaged pins. It can
+advance from any published GPU release to a newer one. It validates and renders
+both outputs before replacing the existing descriptor. Run the Marin end-to-end
+in the proposed pin PR; merge that PR to adopt the release.
 
-Staging checks the current `main-next` tip and published candidate source and
-wheel digests. Promoting a staged pin requires the final manifest to name that
-candidate and preserve its full source SHA and both wheel digests. Rejected
-manifests leave the descriptor and generated pins unchanged. The same promotion
-command also supports an ordinary final-to-final upgrade; that path accepts
-the newer qualified release's source and wheels.
-
-The generated module also carries the isolated TPU-vLLM requirements from
-`vllm/tpu.toml`; those forks are not part of the nightly upgrade set.
+Update TPU source pins in `vllm/tpu.toml`; those forks are not part of the
+nightly upgrade set.
 Verify that all generated state is current without contacting the repositories:
 
 ```bash

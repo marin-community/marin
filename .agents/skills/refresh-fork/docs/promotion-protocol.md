@@ -1,7 +1,8 @@
 # Prepare and promote `main-next`
 
-An unattended refresh prepares promotion after the fork's e2e passes against
-`main-next`, then opens the draft Marin PR. It creates immutable refs for the old
+For descriptor and isolated-project pins, an unattended refresh prepares
+promotion after the fork's e2e passes against `main-next`, then opens the draft
+Marin PR. It creates immutable refs for the old
 and new tips and leaves the protected stable branch unchanged. An admin hard-swaps
 the stable branch after reviewing the draft PR and before that PR merges.
 
@@ -14,12 +15,14 @@ history the fork depends on.
 Marin pins exact SHAs and wheels, never a bare branch name, so the branch pointer can
 move without changing what Marin resolves. That is what makes the swap safe.
 
+GPU source approval happens before wheel builds and Marin tests. See
+[the shared vLLM source branch](#the-shared-vllm-source-branch) for that order.
+
 ## Prepare the refs
 
 For each pin in the refresh after its e2e passes:
 
-- Confirm `main-next` is exactly the tip the e2e ran against. For a `release:` pin
-  also confirm it is the `source_commit` the candidate wheel was built from.
+- Confirm `main-next` is exactly the tip the e2e ran against.
 - Record the current remote `main` SHA. Tag it as
   `main-backup/YYYYMMDD/pre-<old-shortsha>` and tag the validated staged tip as
   `main-YYYYMMDD`. Reuse a tag that already points at the expected SHA; stop and
@@ -27,7 +30,7 @@ For each pin in the refresh after its e2e passes:
 - Push both tags and verify the remote tags resolve to the recorded SHAs.
 - Leave `main` unchanged and keep `main-next` available for admin review.
 
-Pin Marin at the exact staged SHA or candidate wheel and regenerate
+Pin Marin at the exact staged SHA and regenerate
 `external_dependencies.py`. The draft PR must list the staged and stable SHAs, both
 tags, and the pending admin hard swap. For an `isolated_project`, keep its uv source
 on `main-next` in this draft so regenerating the lock cannot move it back to the old
@@ -46,26 +49,30 @@ promotes each pin:
 - Verify remote `main` resolves to the validated tip. Delete `main-next` or
   leave it for the next cycle; the next refresh force-updates it.
 
-Descriptor and final release pins need no edit after this swap because they already
-record the exact validated SHA or wheel. A `vllm-gpu` draft is the exception: after
-the swap, publish the final release from the staged wheel bytes and run
-`config/update-external.py --promote-gpu-release <manifest>` to replace the temporary
-candidate pin. For an `isolated_project`, restore the uv source from `main-next` to
-`main`, rerun `uv run config/update-external.py <fork>`, and verify the lock still
-records the validated SHA. Commit and push either follow-up to the draft Marin PR
-before marking it ready or merging it.
+Descriptor pins need no edit after this swap because they already record the
+exact validated SHA. For an `isolated_project`, restore the uv source from
+`main-next` to `main`, rerun `uv run config/update-external.py <fork>`, and verify
+the lock still records the validated SHA. Commit and push the follow-up to the
+draft Marin PR before marking it ready or merging it.
 
 ## The shared vLLM source branch
 
-The vLLM fork has one maintained source branch, `main`. A `vllm-gpu` source
-refresh stages on `main-next` and promotes it to `main` after GPU qualification.
-The TPU group selects an exact commit already on that lineage and never creates
-or promotes `tpu` or `tpu-next`. Only its tpu-inference rebase needs the usual
-`main-next` to `main` hard swap.
+The vLLM fork has one maintained source branch, `main`. For an upstream GPU
+refresh, prepare `main-next` and review the source overlay. Record and push the
+rollback tag for the old `main` and the date tag for the reviewed `main-next`
+tip. An admin checks those refs and performs the leased hard swap shown above
+before building wheels. For an ordinary fork patch, merge its reviewed PR to
+`main`.
 
-GPU and TPU artifacts still promote independently because Marin resolves an
-exact GPU wheel release and an exact TPU source pair. A successful source
-promotion does not move either consumer pin by itself.
+The GPU workflow then builds and qualifies both wheels from that main commit
+and publishes one release. An agent imports the published wheels in a Marin
+worktree, runs Snowball, and opens the adoption PR. Marin keeps its previous
+wheel until that PR merges. A source swap alone does not change the consumer pin.
+
+The TPU group selects an exact commit already on the shared lineage and never
+creates or promotes `tpu` or `tpu-next`. Only its tpu-inference rebase needs the
+usual post-e2e `main-next` to `main` hard swap. GPU and TPU artifacts retain
+independent qualification and adoption.
 
 ## Partial failure
 
