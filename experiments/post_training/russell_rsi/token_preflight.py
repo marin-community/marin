@@ -11,7 +11,7 @@ from itertools import pairwise
 
 import httpx
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutContractError
+from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutContractError, RolloutInterrupted
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec
@@ -113,6 +113,11 @@ async def run_preflight_probe(
     except Exception as error:
         recorded_error = error
         evidence["error"] = f"{type(error).__name__}: {error}"
+        if isinstance(error, RolloutInterrupted):
+            evidence["rollout"] = asdict(error.rollout)
+            evidence["interrupted_operation"] = error.operation.value
+        if error.__cause__ is not None:
+            evidence["cause"] = {"type": type(error.__cause__).__name__, "message": str(error.__cause__)}
         if isinstance(error, RolloutContractError):
             evidence["contract_failure"] = True
     finally:

@@ -43,6 +43,17 @@ class DevelopmentEvaluationConfig:
     require_reward_variation: bool = False
 
 
+def completion_message(text: str, tools: list[dict]) -> dict:
+    """Serialize parsed call arguments as JSON strings for the engine's chat wire format."""
+    parsed = opencode_protocol_messages([{"role": "assistant", "content": text}], tools)
+    if parsed is None:
+        raise ValueError("The model emitted invalid Hermes tool syntax")
+    message = parsed[0][0]
+    for call in message.get("tool_calls", []):
+        call["function"]["arguments"] = json.dumps(call["function"]["arguments"])
+    return message
+
+
 def qemu_factory(manifest: dict, runtime_bundle: RuntimeBundle):
     from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory  # noqa: PLC0415
 
@@ -131,13 +142,8 @@ async def evaluate_development(
             response_ids = choice.get("token_ids")
             if not isinstance(response_ids, list) or not all(type(token) is int for token in response_ids):
                 raise RolloutContractError("The server did not return exact response tokens")
-            parsed = opencode_protocol_messages(
-                [{"role": "assistant", "content": choice["text"]}], request.options.get("tools", [])
-            )
-            if parsed is None:
-                raise ValueError("The model emitted invalid Hermes tool syntax")
             return ModelTurn(
-                message=parsed[0][0],
+                message=completion_message(choice["text"], request.options.get("tools", [])),
                 prompt_token_ids=tuple(prompt_ids),
                 response_token_ids=tuple(response_ids),
                 logprobs=None,
