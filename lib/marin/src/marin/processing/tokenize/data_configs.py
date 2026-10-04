@@ -56,7 +56,7 @@ def lm_mixture_data_config(
     *,
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation: bool = True,
-    max_train_batches: dict[str, int] | None = None,
+    max_train_sequences: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
     shuffle_before_trainval_split: bool = True,
     mixture_block_size: int | None = None,
@@ -71,7 +71,7 @@ def lm_mixture_data_config(
         shuffle: shuffling policy. Defaults to hierarchical block shuffle.
             `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
-        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        max_train_sequences: Maximum number of sequences to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
         shuffle_before_trainval_split: Whether to shuffle before splitting into train/val. Defaults to True.
         block_cross_document_attention: Whether to mask attention across document boundaries.
@@ -95,7 +95,7 @@ def lm_mixture_data_config(
         cache_dir=None,
         shuffle=shuffle,
         permutation_type="feistel",
-        max_train_batches=max_train_batches,
+        max_train_sequences=max_train_sequences,
         num_validation_sequences=num_validation_sequences,
         shuffle_before_trainval_split=shuffle_before_trainval_split,
         block_cross_document_attention=block_cross_document_attention,

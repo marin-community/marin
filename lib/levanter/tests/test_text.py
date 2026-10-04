@@ -466,13 +466,47 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     )
 
     Pos = hax.Axis("position", 4)
-    train_sets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))
+    train_sets = config.train_sets(Pos, key=jax.random.PRNGKey(0))
     grug_example = train_sets["prebuilt"].as_sync_dataset()[0]
     assert isinstance(grug_example, GrugLmExample)
 
     named_train_set = config.train_set(Pos, BatchSchedule(1), key=jax.random.PRNGKey(0)).as_sync_dataset()
     named_example = named_train_set[0]
     assert isinstance(named_example, LmExample)
+
+
+def test_train_set_repeats_three_sequences_inside_larger_batch(tmp_path):
+    data_path = tmp_path / "small_train.jsonl"
+    with data_path.open("w") as stream:
+        for token in (1, 2, 3, 4):
+            stream.write(json.dumps({"input_ids": [token] * 4}) + "\n")
+
+    config = LmDataConfig(
+        components={
+            "small": DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+                format=PrebuiltLmDatasetFormat(),
+                cache_dir=str(tmp_path),
+            )
+        },
+        tokenizer="passthrough",
+        vocab_size=16,
+        train_weights={"small": 1.0},
+        shuffle=False,
+        mixture_block_size=3,
+        max_train_sequences={"small": 3},
+    )
+    position = hax.Axis("position", 4)
+    key = jax.random.PRNGKey(0)
+
+    source_sequences = config.train_sets(position, key=key)["small"].as_sync_dataset()
+    training = config.train_set(position, BatchSchedule(8), key=key).as_sync_dataset()
+    values = [int(training[index].tokens.array[0]) for index in range(8)]
+
+    assert len(source_sequences) == 3
+    assert set(values[:3]) == {1, 2, 3}
+    assert set(values[3:6]) == {1, 2, 3}
+    assert len(values) == 8
 
 
 def test_dataset_for_component_rejects_preference_format():
