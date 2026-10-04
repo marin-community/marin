@@ -351,9 +351,13 @@ describes a weighted sample from the same store and a shared text corpus for fou
 The earlier sample and document-cap scripts are not in this checkout.
 Use the checked-in hero sampler for a reproducible new reference.
 
-The quality sampler reads the pinned normalized corpus paths in `hero_data_paths.json`.
-It applies one document-hash inclusion probability across sources. Expected token shares therefore follow available corpus token mass.
-Source estimates set the initial sample size; measured token counts determine whether another pass is necessary.
+The quality sampler includes all registered DataKit sources, currently 292.
+It reads their pinned normalized corpus paths in `hero_data_paths.json` and rejects missing source pins.
+The `corpus-id-interval-v1` policy selects a seeded cyclic interval in the normalized 128-bit document ID space.
+Each source has its own fixed offset and the same interval width.
+Expected token shares follow available corpus token mass because normalized IDs are uniform content hashes.
+This is a hash-interval sample. Documents do not have independent Bernoulli draws.
+Source estimates set the initial interval width. Measured token counts determine whether the interval must increase.
 The output has a stable random order that does not depend on input partitions or worker order.
 There are no topic quotas or quality-score filters in this stage.
 
@@ -367,7 +371,8 @@ The quality sampler requests ten times that budget: 174,787,133,440 raw candidat
 Use `--max-training-tokens` to set a different maximum for the quality sampler.
 Whole-document boundaries can add a small token excess.
 Use repeatable `--source <registry-name>` options for a bounded pipeline experiment; omit them for all pinned sources.
-The current implementation reads all input shards on each pass and tokenizes only selected documents.
+Each pass examines all input shard footers. It omits a row group only when valid ID statistics prove that the interval cannot intersect.
+Missing or invalid statistics cause a row-group read. The sampler tokenizes only selected documents.
 Run the preparation in the source region. Full-scale memory use and runtime require measurement.
 Tokenizer content hashes are part of the artifact identity, so plan construction needs tokenizer access.
 Add `--run` in an Iris CPU coordinator to execute either preparation command.
@@ -397,9 +402,13 @@ Training requires `--baseline-artifact <PreparedHeroSample-path>` from the check
 The control and treatment must use the same reference artifact.
 
 The source requires an immutable Hugging Face revision, split, and text field.
+Private or gated repositories also require account access and an `HF_TOKEN` in the Iris preparation job.
+See [installation](../../../docs/tutorials/installation.md) and [Iris environment forwarding](../../../lib/iris/OPS.md#job-run-gotchas).
 Add `--subset <name>` when the repository has a named dataset configuration. Without this flag, the loader uses the repository default.
 The CLI uses `hero-bpe-v16384` for preparation and training. It has no tokenizer override.
 State the desired token fraction `p` and the available unique dataset tokens `N`.
+Here `N` counts token occurrences in one pass through the supplied dataset, before simulated epoching. It does not count distinct vocabulary IDs.
+This track does not deduplicate the supplied dataset.
 The production budget `T` defaults to the hero recipe's 18.75T tokens.
 Count `N` and `T` with the same production tokenizer. The default recipe uses `marin-community/marin-tokenizer`.
 The smaller experiment counts its budget and prepared sample with `hero-bpe-v16384`.
@@ -421,6 +430,7 @@ The loader applies the cap once and disables its global budget scaling so that i
 The count `N` must come from a measured count or an explicitly recorded estimate.
 A first-row prefix supports a result about that prefix. Sorted data can make the prefix unrepresentative of the full dataset.
 The baseline keeps its existing exposure policy. This track simulates production exposure only for the new dataset.
+The following examples use an illustrative `N` of 100 billion tokens. Replace it with the count or recorded estimate for the supplied dataset.
 
 ```bash
 uv run python -m experiments.grug.fast_track.add_dataset_cli \
@@ -480,7 +490,8 @@ For a training budget `B`, this track takes the first `10*B` tokens of the fixed
 It scores that raw prefix, orders documents from highest to lowest score, and includes documents until their total reaches `B` tokens.
 The final whole document can exceed the target; the training loader consumes only its exact budget.
 Each rung gets its own selection. A smaller rung does not use a prefix of a larger rung's selected cache.
-The default model is dense d512; `--size` selects another ladder rung and its data-match token budget.
+The default model is dense d512. Use `--moe` for MoE models and `--size` for the width.
+Each choice uses its own data-match token budget.
 
 A scorer factory returns a `DocumentQualityScorer` with `scores(batch)`.
 The `QualityScoringBatch` contains document text, document IDs, and optional cached embeddings.
@@ -488,8 +499,10 @@ The result contains one finite scalar per input document.
 Higher scores must mean higher quality.
 The factory loads the model once per Zephyr shard.
 Classifier identity must include `implementation`, `revision`, and every input that can change scores, including model and embedding revisions.
-Scored artifacts include the raw-pool identity and the rung's candidate token budget.
-Candidate, incumbent, and random-selection comparisons can reuse those scores.
+Scored artifacts include the raw-pool identity and the scored token budget.
+Candidate, incumbent, and random-selection comparisons can reuse those scores across smaller rungs.
+Each selection uses only its own `10*B` raw prefix and preserves the original document locators.
+The constant-score check also uses this prefix.
 
 For embedding-head experiments, `fit_quality_head` in `quality.py` accepts frozen `LabelledEmbedding` rows and a `QualityHeadConfig`.
 The built-in `RidgeHeadConfig` fits a regularized linear head.
@@ -570,9 +583,34 @@ Without `--run`, the commands print their artifact plans.
 The quality command defaults to `--stage train`.
 Use `--stage select --run` to score and prepare the selected cache without model training.
 In this mode, `--training-tokens` can set a small experiment budget.
+The training stage rejects this override and uses the selected rung's budget.
 For a training run, add `--run` inside an Iris CPU coordinator.
 
 The default scoring workers use CPUs. Use the Python builder's `worker_resources` for a scorer that requires GPUs.
+
+For a four-scale MoE comparison, prepare and score the maximum raw pool once:
+
+```bash
+uv run python -m experiments.grug.fast_track.quality_cli \
+  --raw-pool <raw-corpus-artifact> --ridge-head-artifact <fitted-head-artifact> \
+  --stage score --moe --size d1280 --version 2026.10.04
+```
+
+Run the command with `--run` in an Iris CPU coordinator.
+Pass its completed `ScoredPool` artifact to each training command:
+
+```bash
+uv run python -m experiments.grug.fast_track.quality_cli \
+  --scored-pool <scored-pool-artifact> --moe --size d512 \
+  --run-id quality-candidate-d512 --selection-method candidate \
+  --seed 0 --data-seed 0 --version 2026.10.04 --run
+```
+
+Use `--selection-method random` with a separate run ID for the matched control.
+Do the same for d768, d1024, and d1280.
+These runs reuse tokenization, embeddings, and classifier scores. Each rung builds its own selected token cache.
+The scored pool must supply at least ten times the requested training tokens.
+Do not combine `--scored-pool` with `--raw-pool`, scorer, head, feature, or label-exclusion options.
 
 For a custom head that reads cached Harrier vectors, inspect the feature plan:
 
@@ -584,6 +622,22 @@ uv run python -m experiments.grug.fast_track.quality_cli \
 Run this command with `--run` inside an Iris CPU coordinator to build the feature artifact.
 Pass that completed artifact as `--prepared-features` with the generic scorer options.
 The feature budget must match the scorer's raw-prefix budget. The ridge-head command prepares and reuses these features automatically.
+
+The earlier generic scorer example requires a text-only factory. An embedding scorer also requires the prepared feature artifact:
+
+```bash
+uv run python -m experiments.grug.fast_track.quality_cli \
+  --raw-pool <raw-corpus-artifact> --prepared-features <feature-artifact> \
+  --scorer-factory <module>:<embedding-scorer-factory> \
+  --classifier-identity '{"implementation":"embedding-head","revision":"<frozen-model-identity>"}' \
+  --label-exclusion-manifest <labels-excluded.json> \
+  --stage select --size d512 --version 2026.10.04
+```
+
+The Python builder `build_scored_pool` can use a different prepared feature artifact with `expected_feature_sources`.
+Supply independently pinned normalized and Harrier paths for every raw source.
+The builder requires the same source names and normalized paths as the raw pool and exact agreement with the prepared artifact.
+Without this argument, it uses the checked-in Harrier pins.
 
 Use `--incumbent-scorer-factory` and `--incumbent-identity` to score the same raw prefix with a fixed incumbent.
 Then use `--selection-method incumbent` for its training selection.
@@ -601,7 +655,9 @@ Compare downstream evaluation results and inspect score and source distributions
 
 ## Compare data-track runs
 
-Each data-track CLI runs one rung at a time. Select the next rung only after the matched comparison passes its declared gate.
+Each data-track CLI runs one rung at a time.
+For candidate promotion, select the next rung only after the matched comparison passes its declared gate.
+Code-validation experiments can exercise all rungs without a promotion claim.
 For comparisons, use final Paloma macro BPB as the primary metric and Uncheatable macro BPB plus domain results as guardrails.
 BPB means bits per byte: the model's prediction loss divided by the evaluated text's byte count.
 Each macro metric averages the dataset scores in its evaluation suite. Lower values are better.
@@ -610,7 +666,7 @@ Record that margin in BPB, domain-regression limits, and the confidence-interval
 Use at least three matched model/data seeds to calculate candidate-minus-control differences.
 A rung passes when the upper one-sided 95% confidence bound is below the declared margin and all declared guardrails pass.
 Use a zero margin when the gate requires an improvement.
-After a pass, keep the same declared gate for d768 and then d1024.
+After a pass, keep the same declared gate for d768, d1024, and d1280.
 Record unresolved results as inconclusive. A nonsignificant regression does not prove non-inferiority.
 For quality-head comparisons, use a second, independently sampled pool for final confirmation.
 On that pool, build new candidate and control selections, then run matched training seeds and apply the same declared gate.
