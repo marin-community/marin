@@ -7,7 +7,7 @@ import json
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from contextlib import ExitStack
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import click
@@ -25,13 +25,18 @@ from experiments.post_training.bfcl_rl.collect import MODELS, NATIVE_AGENT_PROFI
 from experiments.post_training.bfcl_rl.data import BFCLPartition
 from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
 from experiments.post_training.bfcl_rl.offline_data import (
-    NativeTeacherTrace,
+    NativeModelTrace,
     build_verified_sft_store,
-    native_teacher_trace,
+    native_model_trace,
 )
 from experiments.post_training.bfcl_rl.preferences import RolloutOutcome
 from experiments.post_training.bfcl_rl.recovery_data import generation_collection_receipt, load_audited_partition
-from experiments.post_training.bfcl_rl.retained_preferences import retained_archive_records, retained_rollout
+from experiments.post_training.bfcl_rl.retained_preferences import (
+    CollectionIdentity,
+    RetainedRollout,
+    retained_archive_records,
+    retained_rollout,
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,25 @@ class OfflineCollectionInput:
     terminal_uri: str
     teacher_source: str
     seed: int
+
+
+@dataclass(frozen=True)
+class NativeCollectionInput:
+    terminal_uri: str
+    model: ModelSource
+    seed: int
+
+
+@dataclass(frozen=True)
+class NativeCollectionEvidence:
+    identity: CollectionIdentity
+    retained: RetainedRollout
+    record: dict
+    retained_uri: str
+    trial: dict
+    native_uri: str
+    literal_entries: list[dict]
+    served_model_alias: str
 
 
 @dataclass(frozen=True)
@@ -60,25 +84,26 @@ class LiteralSpan:
     length: int
 
 
-def collection_teacher_traces(
-    source: OfflineCollectionInput, partition: BFCLPartition, audit_path: str
-) -> Iterator[NativeTeacherTrace]:
-    """Join complete collection evidence with bounded memory and exact token prefixes."""
+def collection_native_evidence(
+    source: NativeCollectionInput, partition: BFCLPartition, audit_path: str
+) -> Iterator[NativeCollectionEvidence]:
+    """Stream complete native collection evidence for either model and every verifier outcome."""
     terminal = json.loads(StoragePath(source.terminal_uri).read_text())
     resolved = json.loads(StoragePath(terminal["config"]["artifacts"]["resolved_config_uri"]).read_text())
     receipt = generation_collection_receipt(
         terminal,
         resolved,
-        model=ModelSource(TEACHER_MODEL, TEACHER_REVISION, source.teacher_source, "pinned"),
+        model=source.model,
         harness="native",
         partition=partition,
     )
     skyrl = resolved["config"]["skyrl"]
+    served_model_alias = Path(terminal["config"]["inputs"]["model"]["local_path"]).name
     if skyrl["trainer"]["seed"] != source.seed:
-        raise ValueError("Teacher seed differs from the declared collection")
+        raise ValueError("Model seed differs from the declared collection")
     harbor = skyrl["terminal_bench_config"]["harbor"]
     if harbor["agent_profiles"] != list(NATIVE_AGENT_PROFILES):
-        raise ValueError("Teacher collection differs from the fixed native harness panel")
+        raise ValueError("Model collection differs from the fixed native harness panel")
     if receipt.task_names != frozenset(task.name for task in partition.complement):
         raise ValueError("Offline corpus requires a full complement collection")
     trials = {}
@@ -91,10 +116,10 @@ def collection_teacher_traces(
         trials[task] = (str(path), trial)
     if set(trials) != receipt.task_names:
         raise ValueError("Canonical native results do not cover the complement")
-    correct_ids = {
+    scored_ids = {
         trial["agent_result"]["metadata"]["rollout_correlation_id"]
         for _, trial in trials.values()
-        if trial["exception_info"] is None and trial["verifier_result"]["rewards"] == {"reward": 1.0}
+        if trial["exception_info"] is None and trial["verifier_result"]["rewards"] in ({"reward": 1.0}, {"reward": 0.0})
     }
     literal_root = StoragePath(terminal["config"]["runtime"]["experiments_dir"]) / "logs"
     spans: dict[str, list[LiteralSpan]] = defaultdict(list)
@@ -107,7 +132,7 @@ def collection_teacher_traces(
                 if not line:
                     break
                 entry = json.loads(line)
-                if entry["trial_id"] in correct_ids and entry["literal"] is not None:
+                if entry["trial_id"] in scored_ids and entry["literal"] is not None:
                     spans[entry["trial_id"]].append(LiteralSpan(str(path), offset, len(line)))
     archives = sorted(
         str(path) for path in (StoragePath(receipt.trajectory_root) / "schema_v6" / "archives" / "**" / "*.zip").glob()
@@ -127,36 +152,27 @@ def collection_teacher_traces(
             identity = replace(receipt.identity, harness=f"{profile['name']}@{profile['version']}")
             retained = retained_rollout(record, identity=identity, partition=partition, trajectory_uri=uri)
             dispositions[f"{identity.harness}/{retained.rollout.outcome.value}"] += 1
-            if retained.rollout.outcome is not RolloutOutcome.CORRECT:
-                continue
-            correlation_id = trial["agent_result"]["metadata"]["rollout_correlation_id"]
             entries = []
-            for span in spans[correlation_id]:
-                stream = literal_files[span.path]
-                stream.seek(span.offset)
-                entries.append(json.loads(stream.read(span.length)))
-            trace = native_teacher_trace(
-                identity=identity,
-                seed=source.seed,
-                retained_record=record,
-                retained_uri=uri,
-                native_trace_uri=native_uri,
-                trial_result=trial,
-                literal_entries=entries,
-                partition=partition,
-                assistant_prefill="<think>\n",
+            if retained.rollout.outcome is not RolloutOutcome.UNSCORED:
+                correlation_id = trial["agent_result"]["metadata"]["rollout_correlation_id"]
+                for span in spans[correlation_id]:
+                    stream = literal_files[span.path]
+                    stream.seek(span.offset)
+                    entries.append(json.loads(stream.read(span.length)))
+            yield NativeCollectionEvidence(
+                identity, retained, record, uri, trial, native_uri, entries, served_model_alias
             )
-            if trace is None:
-                raise ValueError("Correct retained trace was excluded by native evidence")
-            yield trace
     if seen != receipt.task_names:
         raise ValueError("Retained native evidence does not cover the complement")
     StoragePath(audit_path).write_text(
         json.dumps(
             {
                 "terminal_uri": source.terminal_uri,
-                "teacher_revision": TEACHER_REVISION,
-                "teacher_source": source.teacher_source,
+                "model_revision": source.model.revision,
+                "model_source": source.model.uri,
+                "served_model_alias": served_model_alias,
+                "identity": asdict(receipt.identity),
+                "conditions_digest": receipt.conditions_digest,
                 "runtime_commit": terminal["config"]["runtime"]["launcher_commit"],
                 "seed": source.seed,
                 "canonical_trials": len(trials),
@@ -170,6 +186,29 @@ def collection_teacher_traces(
         )
         + "\n"
     )
+
+
+def collection_teacher_traces(
+    source: OfflineCollectionInput, partition: BFCLPartition, audit_path: str
+) -> Iterator[NativeModelTrace]:
+    """Select correct teacher branches from the shared native evidence stream."""
+    collection = NativeCollectionInput(
+        source.terminal_uri, ModelSource(TEACHER_MODEL, TEACHER_REVISION, source.teacher_source, "pinned"), source.seed
+    )
+    for evidence in collection_native_evidence(collection, partition, audit_path):
+        if evidence.retained.rollout.outcome is not RolloutOutcome.CORRECT:
+            continue
+        yield native_model_trace(
+            identity=evidence.identity,
+            seed=source.seed,
+            retained_record=evidence.record,
+            retained_uri=evidence.retained_uri,
+            native_trace_uri=evidence.native_uri,
+            trial_result=evidence.trial,
+            literal_entries=evidence.literal_entries,
+            partition=partition,
+            assistant_prefill="<think>\n",
+        )
 
 
 def build_offline_corpus(config: OfflineCorpusConfig) -> SftTokenStore:

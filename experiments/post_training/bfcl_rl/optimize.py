@@ -21,7 +21,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
-from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.training.training import (
     LevanterCheckpoint,
     TrainDpoOnPodConfig,
@@ -54,14 +54,7 @@ def dispatch_recovery_training(config: TrainDpoOnPodConfig) -> None:
     remote(run_levanter_train_dpo, resources=config.resources, env_vars=env)(config)
 
 
-def recovery_optimizer_step(
-    cache: ArtifactStep[RecoveryPreferenceCache],
-    *,
-    selection_name: str,
-    optimization: RecoveryOptimization,
-    resume_checkpoint: ArtifactStep[LevanterCheckpoint] | None = None,
-) -> ArtifactStep[LevanterCheckpoint]:
-    """Bind the exact-token cache and initial student to the existing DPO trainer."""
+def initial_student_model() -> ArtifactHfModel:
     source = MODELS["student"]
     initial_student = ArtifactStep.adopt(
         user_owned_name("models/bfcl-rl-student"),
@@ -70,6 +63,21 @@ def recovery_optimizer_step(
         kind=LevanterCheckpoint,
         config={"model": source.model, "revision": source.revision},
     )
+    return ArtifactHfModel(initial_student, source.model, source.revision, relative_path="")
+
+
+def recovery_optimizer_step(
+    cache: ArtifactStep[RecoveryPreferenceCache],
+    *,
+    initial_policy: ArtifactHfModel,
+    selection_name: str,
+    optimization: RecoveryOptimization,
+    resume_checkpoint: ArtifactStep[LevanterCheckpoint] | None = None,
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Bind preference tokens and an explicit round-start policy to the existing DPO trainer."""
+    source = MODELS["student"]
+    if (initial_policy.tokenizer_uri, initial_policy.tokenizer_revision) != (source.model, source.revision):
+        raise ValueError("DPO initialization must retain the mandated Snowball tokenizer")
     resources = ResourceConfig.with_gpu(
         "H100",
         count=8,
@@ -105,7 +113,6 @@ def recovery_optimizer_step(
     def build_config(ctx: StepContext) -> TrainDpoOnPodConfig:
         if ctx.is_fingerprint:
             cache_path = ctx.artifact_path(cache)
-            model_path = ctx.artifact_path(initial_student)
         else:
             preferences = ctx.resolved(cache)
             if preferences.num_preferences == 0:
@@ -115,7 +122,7 @@ def recovery_optimizer_step(
             if (preferences.tokenizer_uri, preferences.tokenizer_revision) != (source.model, source.revision):
                 raise ValueError("Preference cache tokenizer differs from the initial student")
             cache_path = preferences.path
-            model_path = ctx.resolved(initial_student).path
+        model_path = initial_policy.resolve(ctx).uri
         data = PreferenceLmDataConfig(
             tokenizer=f"{source.model}@{source.revision}",
             auto_build_caches=False,
@@ -185,7 +192,7 @@ def recovery_optimizer_step(
         artifact_type=LevanterCheckpoint,
         run=dispatch_recovery_training,
         build_config=build_config,
-        deps=(cache, initial_student) + ((resume_checkpoint,) if resume_checkpoint is not None else ()),
+        deps=(cache, initial_policy.step) + ((resume_checkpoint,) if resume_checkpoint is not None else ()),
     )
 
 
@@ -265,7 +272,11 @@ def main(
         num_train_steps, batch_size, beta, num_nodes, expert_axis, context_axis, jax_memory_fraction
     )
     optimizer = recovery_optimizer_step(
-        cache, selection_name=selection, optimization=optimization, resume_checkpoint=resume_checkpoint
+        cache,
+        initial_policy=initial_student_model(),
+        selection_name=selection,
+        optimization=optimization,
+        resume_checkpoint=resume_checkpoint,
     )
     return replace(optimizer, runtime_args={"execution": COLLECTION_EXECUTION})
 

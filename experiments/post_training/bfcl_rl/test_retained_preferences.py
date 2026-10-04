@@ -20,16 +20,21 @@ from marin.execution.artifact import ArtifactRecord, result_type_name, write_rec
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS, NATIVE_AGENT_PROFILES
+from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS, NATIVE_AGENT_PROFILES, ModelSource
 from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, BFCLPartition, TaskIdentity
 from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
-from experiments.post_training.bfcl_rl.offline_curate import OfflineCollectionInput, collection_teacher_traces
+from experiments.post_training.bfcl_rl.offline_curate import (
+    NativeCollectionInput,
+    OfflineCollectionInput,
+    collection_teacher_traces,
+)
 from experiments.post_training.bfcl_rl.offline_data import (
-    NativeTeacherTrace,
+    NativeModelTrace,
     build_verified_sft_store,
-    native_teacher_trace,
+    native_model_trace,
     verifier_selected_chat,
 )
+from experiments.post_training.bfcl_rl.offline_preferences import NativePreferenceConfig, build_native_preference_cache
 from experiments.post_training.bfcl_rl.preferences import PairDisposition, select_pair
 from experiments.post_training.bfcl_rl.recovery_data import (
     RecoveryPreferenceCache,
@@ -139,7 +144,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         "timestamp": -1,
         "literal": {**entries[0]["literal"], "prompt_token_ids": [999], "completion_token_ids": [248999]},
     }
-    trace = native_teacher_trace(
+    trace = native_model_trace(
         identity=identity,
         seed=7,
         retained_record=teacher_record,
@@ -206,7 +211,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
 
 
 def test_teacher_harmony_curation_rejects_parity_before_adapting_messages():
-    trace = NativeTeacherTrace(
+    trace = NativeModelTrace(
         _identity("teacher"),
         7,
         _record("teacher", 1.0, task=HOLDOUT),
@@ -215,6 +220,9 @@ def test_teacher_harmony_curation_rejects_parity_before_adapting_messages():
         [{"role": "user", "content": "Holdout"}, {"role": "assistant", "content": "Answer"}],
         [],
         "",
+        [],
+        [],
+        "initial-prompt",
     )
     with pytest.raises(ValueError, match="outside the BFCL training complement"):
         verifier_selected_chat(trace, PARTITION)
@@ -347,6 +355,7 @@ def _receipts(model: str) -> tuple[dict, dict]:
                 "model": {
                     "uri": expected.uri,
                     "identity": f"{model}@pinned",
+                    "local_path": f"/staged/{model}-alias",
                     "tokenizer_uri": expected.model,
                     "tokenizer_revision": expected.revision,
                 },
@@ -463,6 +472,202 @@ def test_completed_native_collection_joins_archives_and_literal_messages(tmp_pat
     with pytest.raises(ValueError, match="differ from retained"):
         list(collection_teacher_traces(source, PARTITION, str(tmp_path / "invalid-audit.json")))
     assert not (tmp_path / "invalid-audit.json").exists()
+
+
+def _native_pair_collection(
+    root: Path, model: str, outcomes: tuple[float | None, ...], partition: BFCLPartition, fault: str
+) -> NativeCollectionInput:
+    root.mkdir()
+    terminal, resolved = _receipts(model)
+    config = terminal["config"]
+    skyrl = resolved["config"]["skyrl"]
+    locator = ModelSource(
+        TEACHER_MODEL if model == "teacher" else MODELS["student"].model,
+        TEACHER_REVISION if model == "teacher" else MODELS["student"].revision,
+        f"pinned-{model}-snapshot",
+        "pinned",
+    )
+    config["inputs"]["model"].update(uri=locator.uri, tokenizer_uri=locator.model, tokenizer_revision=locator.revision)
+    config["inputs"]["train_data"][0]["relative_path"] = "bfcl_complement"
+    resolved["train_data_sources"][0]["relative_path"] = "bfcl_complement"
+    skyrl["trainer"]["policy"]["model"]["source_uri"] = locator.uri
+    skyrl["trainer"]["seed"] = 7
+    skyrl["terminal_bench_config"]["harbor"].update(
+        name="opencode", version="1.18.2", agent_profiles=list(NATIVE_AGENT_PROFILES)
+    )
+    skyrl["generator"]["trajectory_retention"]["output_path"] = str(root / "trajectories")
+    config["artifacts"] = {"attempts_root": str(root / "attempts"), "resolved_config_uri": str(root / "resolved.json")}
+    config["runtime"].update(experiments_dir=str(root / "literal"), launcher_commit="pinned-runtime")
+    (root / "terminal.json").write_text(json.dumps(terminal))
+    (root / "resolved.json").write_text(json.dumps(resolved))
+    archive_path = root / "trajectories/schema_v6/archives/phase=eval/step=00000000/records.zip"
+    archive_path.parent.mkdir(parents=True)
+    entries = []
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for index, (task, score) in enumerate(zip(partition.complement, outcomes, strict=True)):
+            record = _record(model, score or 0.0, task=task)
+            profile = NATIVE_AGENT_PROFILES[index % len(NATIVE_AGENT_PROFILES)]
+            trial_id = f"{model}-{index}"
+            trial = {
+                "task_name": task.name,
+                "exception_info": None,
+                "verifier_result": {"rewards": {"reward": score or 0.0}},
+                "config": {"agent": {"name": profile["name"], "version": profile["version"]}},
+                "agent_result": {"metadata": {"rollout_correlation_id": trial_id}},
+            }
+            if score is None:
+                record["verification_result"] = {"status": "unavailable", "reason": "setup_failed"}
+                record["prompt"]["token_ids"] = []
+                record["response"] = {"token_ids": [], "loss_mask": [], "step_boundaries": []}
+                trial["exception_info"] = {"exception_type": "EnvironmentStartTimeoutError"}
+            else:
+                first_prompt = [1000, 1001] if model == "teacher" else [3, 4]
+                # Vocabulary mismatch and a reconstructed second prompt are both deliberate.
+                record["prompt"]["token_ids"] = first_prompt
+                record["response"]["token_ids"] = (
+                    [248000, 248001, 248002, 248003] if model == "teacher" else [30, 31, 20, 21]
+                )
+                boundaries = record["response"]["step_boundaries"]
+                boundaries[0]["prompt_token_ids"] = first_prompt
+                boundaries[1]["prompt_token_ids"] = [999, 998]
+                tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+                user = {"role": "user", "content": f"BFCL_USER_CONTEXT_{task.name}"}
+                if model == "student" and index == 0 and fault == "context":
+                    user["content"] = "DIFFERENT_INITIAL_CONTEXT"
+                assistant = {
+                    "role": "assistant",
+                    "content": f"{model.upper()}_REASONING\n</think>\n",
+                    "tool_calls": [
+                        {
+                            "id": "lookup-call",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": {"key": f"{model.upper()}_ARGUMENT"}},
+                        }
+                    ],
+                }
+                observation = {
+                    "role": "tool",
+                    "tool_call_id": "lookup-call",
+                    "content": f"{model.upper()}_TOOL_OBSERVATION",
+                }
+                final = {"role": "assistant", "content": f"{model.upper()}_FINAL_{index}"}
+                messages = [user, assistant, observation, final]
+                if profile["name"] == "opencode":
+                    identity_line = (
+                        f"You are powered by the model named {model}-alias. "
+                        f"The exact model ID is hosted_vllm/{model}-alias"
+                    )
+                    messages.insert(0, {"role": "system", "content": f"SYSTEM_INSTRUCTIONS\n{identity_line}\n"})
+                    # A model identification quoted in task data must remain literal.
+                    user["content"] += (
+                        "\nYou are powered by the model named teacher-alias. "
+                        "The exact model ID is hosted_vllm/teacher-alias"
+                    )
+                initial_count = 2 if profile["name"] == "opencode" else 1
+                for step, boundary in enumerate(boundaries):
+                    response = record["response"]["token_ids"][boundary["token_start"] : boundary["token_end"]]
+                    masks = record["response"]["loss_mask"][boundary["token_start"] : boundary["token_end"]]
+                    completion = [token for token, mask in zip(response, masks, strict=True) if mask]
+                    if model == "student" and index == 0 and step == 1 and fault == "negative_tokens":
+                        completion = [888]
+                    entries.append(
+                        {
+                            "trial_id": trial_id,
+                            "timestamp": index * 10 + step,
+                            "status_code": 200,
+                            "request": {
+                                "messages": messages[:initial_count] if step == 0 else messages[:-1],
+                                "tools": tools,
+                            },
+                            "literal": {
+                                "prompt_token_ids": boundary["prompt_token_ids"],
+                                "completion_token_ids": completion,
+                                "assistant_message": assistant if step == 0 else final,
+                            },
+                        }
+                    )
+            path = root / f"attempts/trace_jobs/eval_sessions/native/{task.name}/result.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(trial))
+            archive.writestr(f"records/{index}.json.gz", gzip.compress(json.dumps(record).encode()))
+    literal = root / "literal/logs/native_literal.jsonl"
+    literal.parent.mkdir(parents=True)
+    literal.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+    return NativeCollectionInput(str(root / "terminal.json"), locator, 7)
+
+
+@pytest.mark.parametrize("fault", ["none", "context", "negative_tokens"])
+def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_semantics(tmp_path: Path, fault: str):
+    tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
+    partition = replace(PARTITION, complement=tasks)
+    teacher = _native_pair_collection(tmp_path / "teacher", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, fault)
+    student = _native_pair_collection(tmp_path / "student", "student", (0.0, 1.0, 0.0, 1.0, None), partition, fault)
+    tokenizer_path = tmp_path / "student-tokenizer"
+    tokenizer = Tokenizer(models.BPE())
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = decoders.ByteLevel()
+    tokenizer.train_from_iterator(
+        ["USER_CONTEXT REASONING ARGUMENT TOOL_OBSERVATION FINAL"],
+        trainer=trainers.BpeTrainer(vocab_size=300, initial_alphabet=pre_tokenizers.ByteLevel.alphabet()),
+    )
+    hf = PreTrainedTokenizerFast(tokenizer_object=tokenizer, bos_token="<bos>", eos_token="<eos>", pad_token="<pad>")
+    hf.chat_template = MARIN_CHAT_TEMPLATE
+    hf.save_pretrained(tokenizer_path)
+    config = NativePreferenceConfig(
+        teacher, student, "unused", str(tokenizer_path), 4096, str(tmp_path / "cache"), 1, "student-alias"
+    )
+    if fault == "negative_tokens":
+        with pytest.raises(ValueError, match="differ from retained trainable"):
+            build_native_preference_cache(config, partition)
+        assert not (tmp_path / "cache/train").exists()
+        return
+    with set_current_client(LocalClient()):
+        value = build_native_preference_cache(config, partition)
+    assert value.num_preferences == (1 if fault == "context" else 2)
+    report = json.loads((tmp_path / "cache/selection.json").read_text())
+    assert report["dispositions"] == {"preference": 2, "both_incorrect": 1, "both_correct": 1, "unscored": 1}
+    assert [pair["chosen"]["model_revision"] for pair in report["preferences"]] == (
+        [MODELS["student"].revision] if fault == "context" else [TEACHER_REVISION, MODELS["student"].revision]
+    )
+    assert [item["reason"] for item in report["excluded_preferences"]] == (
+        ["initial_context_mismatch"] if fault == "context" else []
+    )
+    adaptations = report["model_identity_adaptations"]
+    teacher_initial = next(item for item in adaptations if item["source_id"].endswith(tasks[0].name))
+    assert teacher_initial["original_initial_prompt_sha256"] != teacher_initial["student_initial_prompt_sha256"]
+    student_initial = next(
+        item
+        for item in adaptations
+        if item["source_alias"] == "student-alias" and item["source_id"].endswith(tasks[0].name)
+    )
+    assert (teacher_initial["student_initial_prompt_sha256"] == student_initial["student_initial_prompt_sha256"]) == (
+        fault != "context"
+    )
+    cache = TreeCache.load(
+        str(tmp_path / "cache/train"),
+        {
+            key: np.zeros(0, np.int32)
+            for key in ("chosen_input_ids", "chosen_assistant_masks", "rejected_input_ids", "rejected_assistant_masks")
+        },
+    )
+    tok = load_tokenizer(str(tokenizer_path))
+    example = PreferencePairDataset(cache, hax.Axis("position", 4096)).as_sync_dataset()[0]
+    for role, branch in (("chosen", example.chosen), ("rejected", example.rejected)):
+        row = cache[0]
+        ids = np.asarray(row[f"{role}_input_ids"])
+        masks = np.asarray(row[f"{role}_assistant_masks"], dtype=bool)
+        assert ids.max() < tok.vocab_size
+        masked = tok.decode(ids[masks].tolist())
+        assert "REASONING" in masked and "ARGUMENT" in masked and "FINAL" in masked
+        assert "USER_CONTEXT" not in masked and "TOOL_OBSERVATION" not in masked
+        targets = np.roll(np.asarray(branch.tokens.array), -1)[np.asarray(branch.loss_weight.array) > 0]
+        np.testing.assert_array_equal(targets, ids[masks])
+        assert "TOOL_OBSERVATION" in tok.decode(ids.tolist())
+        if fault != "context":
+            text = tok.decode(ids.tolist())
+            assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named student-alias." in text
+            assert "The exact model ID is hosted_vllm/teacher-alias" in text
+            assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named teacher-alias." not in text
 
 
 def test_recovery_cache_roundtrip_preserves_causal_scoring_with_tool_context(tmp_path: Path):

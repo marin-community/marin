@@ -11,6 +11,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.chat_normalize import (
     ChatChannel,
+    RepeatedToolCallPolicy,
     _normalize_chat_record,
     normalize_chat_to_parquet,
     validate_chat_messages,
@@ -144,7 +145,8 @@ def test_harmony_tool_handoff_requires_matching_observations_before_continuation
         validate_chat_messages([user, call, wrong_observation, final])
 
 
-def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_path: Path):
+@pytest.mark.parametrize("policy", [RepeatedToolCallPolicy.FILTER, RepeatedToolCallPolicy.RETAIN])
+def test_normalization_applies_stalled_tool_policy_without_changing_observations(tmp_path: Path, policy):
     def call(arguments: str) -> Message:
         return (
             Message.from_role_and_content(Role.ASSISTANT, arguments)
@@ -182,16 +184,24 @@ def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_pa
     input_dir.mkdir()
     (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
 
-    result = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(tmp_path / "normalized"))
+    result = normalize_chat_to_parquet(
+        input_path=str(input_dir), output_path=str(tmp_path / "normalized"), repeated_tool_call_policy=policy
+    )
 
     normalized = [
         row
         for path in (tmp_path / "normalized" / "outputs" / "main").glob("*.parquet")
         for row in pq.read_table(path).to_pylist()
     ]
-    assert len(normalized) == 1
-    assert normalized[0]["messages"][0]["content"][0]["text"] == "Hello."
-    assert result.counters["normalize_chat/repeated_tool_calls_filtered"] == 1
+    if policy == RepeatedToolCallPolicy.FILTER:
+        assert len(normalized) == 1
+        assert normalized[0]["messages"][0]["content"][0]["text"] == "Hello."
+        assert result.counters["normalize_chat/repeated_tool_calls_filtered"] == 1
+    else:
+        assert len(normalized) == 2
+        loop = next(row for row in normalized if row["messages"][0]["content"][0]["text"] == "Search again.")
+        assert [Message.from_dict(message).to_dict() for message in loop["messages"]] == records[1]["messages"]
+        assert result.counters.get("normalize_chat/repeated_tool_calls_filtered", 0) == 0
     assert result.counters.get("normalize_chat/records_quarantined", 0) == 0
 
 

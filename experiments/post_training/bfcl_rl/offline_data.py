@@ -3,6 +3,7 @@
 
 """Curate verifier-correct BFCL traces through Datakit's Harmony SFT pipeline."""
 
+import hashlib
 import json
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -11,7 +12,8 @@ from itertools import pairwise
 from typing import Any
 
 from marin.datakit.chat_normalize import normalize_chat_to_parquet
-from marin.datakit.download.rollout_transforms import openai_chat_document
+from marin.datakit.chat_render import render_marin_chat
+from marin.datakit.download.rollout_transforms import openai_chat_document, openai_chat_messages
 from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -23,7 +25,7 @@ STUDENT_REASONING_MODE = "/think"
 
 
 @dataclass(frozen=True)
-class NativeTeacherTrace:
+class NativeModelTrace:
     """Native message evidence joined to an audited generation-only retained record."""
 
     identity: CollectionIdentity
@@ -34,9 +36,22 @@ class NativeTeacherTrace:
     messages: list[dict]
     tools: list[dict]
     assistant_prefill: str
+    initial_messages: list[dict]
+    initial_tools: list[dict]
+    initial_prompt_sha256: str
 
 
-def native_teacher_trace(
+def native_prompt_sha256(messages: list[dict], tools: list[dict], assistant_prefill: str) -> str:
+    prompt = render_marin_chat(
+        openai_chat_messages(messages, assistant_prefill=assistant_prefill),
+        tools=tools,
+        enable_thinking=STUDENT_REASONING_MODE,
+        add_generation_prompt=True,
+    )
+    return hashlib.sha256(prompt.encode()).hexdigest()
+
+
+def native_model_trace(
     *,
     identity: CollectionIdentity,
     seed: int,
@@ -47,15 +62,16 @@ def native_teacher_trace(
     literal_entries: Iterable[Mapping[str, Any]],
     partition: BFCLPartition,
     assistant_prefill: str,
-) -> NativeTeacherTrace | None:
-    """Join canonical native outcomes and parsed literal messages to exact teacher-token evidence."""
+) -> NativeModelTrace:
+    """Join a scored native branch's parsed messages to its exact model-token evidence."""
     retained = retained_rollout(retained_record, identity=identity, partition=partition, trajectory_uri=retained_uri)
-    if retained.rollout.outcome is not RolloutOutcome.CORRECT:
-        return None
+    if retained.rollout.outcome is RolloutOutcome.UNSCORED:
+        raise ValueError("Unscored native traces cannot supply preference text")
     if trial_result["task_name"] != retained_record["trajectory"]["instance_id"]:
         raise ValueError("Native trial and retained task differ")
-    if trial_result["exception_info"] is not None or trial_result["verifier_result"]["rewards"] != {"reward": 1.0}:
-        raise ValueError("Native trial does not confirm the retained correct outcome")
+    score = 1.0 if retained.rollout.outcome is RolloutOutcome.CORRECT else 0.0
+    if trial_result["exception_info"] is not None or trial_result["verifier_result"]["rewards"] != {"reward": score}:
+        raise ValueError("Native trial does not confirm the retained verifier outcome")
     agent = trial_result["config"]["agent"]
     if identity.harness != f"{agent['name']}@{agent['version']}":
         raise ValueError("Native trial and collection harness differ")
@@ -92,7 +108,8 @@ def native_teacher_trace(
     assistant = final["literal"]["assistant_message"]
     if assistant is None or assistant["role"] != "assistant":
         raise ValueError("Native capture lacks the parsed final assistant message")
-    return NativeTeacherTrace(
+    initial = selected[0]["request"]
+    return NativeModelTrace(
         identity,
         seed,
         retained_record,
@@ -101,10 +118,24 @@ def native_teacher_trace(
         [*request["messages"], assistant],
         request.get("tools") or [],
         assistant_prefill,
+        initial["messages"],
+        initial.get("tools") or [],
+        native_prompt_sha256(initial["messages"], initial.get("tools") or [], assistant_prefill),
     )
 
 
-def verifier_selected_chat(trace: NativeTeacherTrace, partition: BFCLPartition) -> dict | None:
+def native_chat_document(trace: NativeModelTrace) -> dict:
+    """Adapt a native model branch using the shared OpenAI-to-Harmony conversion."""
+    return openai_chat_document(
+        trace.messages,
+        f"bfcl-complement/{trace.identity.harness}",
+        source_id=f"{trace.identity.run_id}/{trace.retained_record['record_id']}",
+        assistant_prefill=trace.assistant_prefill,
+        chat_template_kwargs={"tools": trace.tools, "enable_thinking": STUDENT_REASONING_MODE},
+    )
+
+
+def verifier_selected_chat(trace: NativeModelTrace, partition: BFCLPartition) -> dict | None:
     """Validate complement provenance and hand correct native messages to the shared adapter.
 
     The collection reader joins messages and tool definitions from the native
@@ -119,17 +150,11 @@ def verifier_selected_chat(trace: NativeTeacherTrace, partition: BFCLPartition) 
     )
     if retained.rollout.outcome is not RolloutOutcome.CORRECT:
         return None
-    return openai_chat_document(
-        trace.messages,
-        f"bfcl-complement/{trace.identity.harness}",
-        source_id=f"{trace.identity.run_id}/{retained.record_id}",
-        assistant_prefill=trace.assistant_prefill,
-        chat_template_kwargs={"tools": trace.tools, "enable_thinking": STUDENT_REASONING_MODE},
-    )
+    return native_chat_document(trace)
 
 
 def build_verified_sft_store(
-    traces: Iterable[NativeTeacherTrace],
+    traces: Iterable[NativeModelTrace],
     *,
     partition: BFCLPartition,
     output_path: str,

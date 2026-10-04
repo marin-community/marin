@@ -151,6 +151,12 @@ do not trigger this filter. The count is `normalize_chat/repeated_tool_calls_fil
 These filtered records are separate from malformed-record quarantines and the
 5% quarantine health limit.
 
+For preference data that needs repeated tool-call loops as rejected responses, pass
+`repeated_tool_call_policy=RepeatedToolCallPolicy.RETAIN` (import the enum from
+`marin.datakit.chat_normalize`) to
+`normalize_chat_to_parquet` or `normalize_chat_step`. This preserves the calls
+and observations while applying the structural validation used by the default policy.
+
 ## 5. Register and verify the source
 
 Add the chat step factory to `all_sft_sources()` in `sft_sources.py`. Its

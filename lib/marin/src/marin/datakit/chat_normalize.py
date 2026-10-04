@@ -82,6 +82,11 @@ class RepeatedToolCallError(ValueError):
     """A conversation repeats one tool call after two identical replies."""
 
 
+class RepeatedToolCallPolicy(StrEnum):
+    FILTER = "filter"
+    RETAIN = "retain"
+
+
 class _ToolCall(NamedTuple):
     position: int
     recipient: str
@@ -245,7 +250,12 @@ def validate_tool_definitions(tools: list[dict], messages: list[Message]) -> Non
                 raise ValueError(f"Tool call {name!r} has no explicit definition")
 
 
-def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field: str) -> dict[str, Any]:
+def _normalize_chat_record(
+    record: dict[str, Any],
+    messages_field: str,
+    id_field: str,
+    repeated_tool_call_policy: RepeatedToolCallPolicy = RepeatedToolCallPolicy.FILTER,
+) -> dict[str, Any]:
     messages_value = record[messages_field]
     if not isinstance(messages_value, list):
         raise ValueError(f"{messages_field!r} must be a list")
@@ -282,7 +292,7 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")
     validate_tool_definitions(tools, messages)
-    if has_stalled_tool_call(messages):
+    if repeated_tool_call_policy == RepeatedToolCallPolicy.FILTER and has_stalled_tool_call(messages):
         raise RepeatedToolCallError("A tool call repeated after two identical tool replies")
     serialized_messages = [message.to_dict() for message in messages]
 
@@ -313,10 +323,11 @@ def _build_chat_pipeline(
     id_field: str,
     dedup_mode: DedupMode,
     output_schema: pa.Schema,
+    repeated_tool_call_policy: RepeatedToolCallPolicy,
 ) -> Dataset:
     def normalize_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         try:
-            normalized = _normalize_chat_record(record, messages_field, id_field)
+            normalized = _normalize_chat_record(record, messages_field, id_field, repeated_tool_call_policy)
         except RepeatedToolCallError:
             counters.pipeline.update_counter("normalize_chat/repeated_tool_calls_filtered", 1)
             return []
@@ -378,6 +389,7 @@ def normalize_chat_to_parquet(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     output_schema: pa.Schema = CHAT_SCHEMA,
+    repeated_tool_call_policy: RepeatedToolCallPolicy = RepeatedToolCallPolicy.FILTER,
 ) -> NormalizedData:
     """Normalize source conversations into deduplicated Harmony-message Parquet."""
     resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
@@ -386,7 +398,14 @@ def normalize_chat_to_parquet(
         raise FileNotFoundError(f"No data files found under {input_path}")
     num_shards = max(1, sum(file_sizes.values()) // target_partition_bytes)
     pipeline = _build_chat_pipeline(
-        list(file_sizes), output_path, num_shards, messages_field, id_field, dedup_mode, output_schema
+        list(file_sizes),
+        output_path,
+        num_shards,
+        messages_field,
+        id_field,
+        dedup_mode,
+        output_schema,
+        repeated_tool_call_policy,
     )
     outcome = ZephyrContext(name="normalize-chat", resources=resources, max_workers=max_workers).execute(pipeline)
     counters_dict = dict(outcome.counters)
@@ -422,6 +441,7 @@ def normalize_chat_step(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     output_schema: pa.Schema = CHAT_SCHEMA,
+    repeated_tool_call_policy: RepeatedToolCallPolicy = RepeatedToolCallPolicy.FILTER,
 ) -> StepSpec:
     """Create a versioned Harmony-message normalization step."""
     hash_attrs = {
@@ -432,6 +452,7 @@ def normalize_chat_step(
         "file_extensions": file_extensions,
         "dedup_mode": dedup_mode,
         "output_schema": str(output_schema),
+        "repeated_tool_call_policy": repeated_tool_call_policy,
     }
     return StepSpec(
         name=name,
@@ -446,6 +467,7 @@ def normalize_chat_step(
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
             output_schema=output_schema,
+            repeated_tool_call_policy=repeated_tool_call_policy,
         ),
         deps=[download],
         hash_attrs=hash_attrs,
