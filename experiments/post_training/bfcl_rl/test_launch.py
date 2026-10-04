@@ -37,7 +37,7 @@ def test_recovery_handoff_requires_export_and_resolves_saved_policy(tmp_path, po
 def test_rl_recipe_survives_coordinator_workspace_relocation(tmp_path, monkeypatch):
     languages = ("python", "java", "javascript")
     images = tuple(f"registry/{language}@sha256:{index:064x}" for index, language in enumerate(languages))
-    expected = yaml.safe_load(launch.rl_recipe(images, 2, 8))
+    expected = yaml.safe_load(launch.rl_recipe(images, 2, 8, "stream"))
     source = Path(launch.__file__)
     copied = tmp_path / "launch.py"
     shutil.copyfile(source, copied)
@@ -57,4 +57,4 @@ def test_rl_recipe_survives_coordinator_workspace_relocation(tmp_path, monkeypat
 
     # The coordinator cannot access the submitting machine's configuration files.
     monkeypatch.setattr(Path, "read_text", workspace_read)
-    assert yaml.safe_load(relocated.rl_recipe(images, 2, 8)) == expected
+    assert yaml.safe_load(relocated.rl_recipe(images, 2, 8, "stream")) == expected
