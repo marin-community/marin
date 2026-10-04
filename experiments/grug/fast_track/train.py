@@ -1389,7 +1389,7 @@ def _weight_diagnostics_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[...,
             return
         with set_mesh(mesh), _pgle_disabled():
             stats = compute(*collect(info.model))
-        host = jax.tree.map(np.asarray, multihost_utils.process_allgather(stats))
+        host = jax.tree.map(np.asarray, multihost_utils.process_allgather(stats, tiled=True))
         if jax.process_index() == 0:
             levanter.tracker.log({k: float(v) for k, v in host.items()}, step=info.step)
 
