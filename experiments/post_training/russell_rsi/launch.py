@@ -120,6 +120,12 @@ def recipe(scale: Scale, machine_config: dict | None = None) -> str:
     return yaml.safe_dump(
         {
             "entrypoint": "taskcompendium",
+            "context_budget": {
+                "request_window_tokens": CONTEXT_TOKENS,
+                "max_new_tokens_per_turn": RESPONSE_TOKENS,
+                "max_turns": 16,
+                "max_prompt_tokens": PROMPT_TOKENS,
+            },
             "data": {"kind": "tasks", "train_data": [], "val_data": []},
             "trainer": {
                 "strategy": "megatron",
@@ -132,7 +138,6 @@ def recipe(scale: Scale, machine_config: dict | None = None) -> str:
                 "epochs": scale.updates,
                 "max_steps": scale.updates,
                 "update_epochs_per_batch": 1,
-                "max_prompt_length": PROMPT_TOKENS,
                 "eval_batch_size": 64,
                 "micro_forward_batch_size_per_gpu": 1,
                 "eval_before_train": False,
@@ -167,18 +172,15 @@ def recipe(scale: Scale, machine_config: dict | None = None) -> str:
                 "max_num_batched_tokens": PROMPT_TOKENS,
                 "run_engines_locally": True,
                 "weight_sync_backend": "nccl",
-                "max_turns": 16,
                 "chat_template_kwargs": CHAT_TEMPLATE_KWARGS,
                 "engine_init_kwargs": {
                     "moe_backend": "triton",
                     "enable_auto_tool_choice": True,
                     "tool_call_parser": "hermes",
-                    "max_model_len": CONTEXT_TOKENS,
                 },
                 "sampling_params": {
                     "temperature": 1.0,
                     "top_p": 1.0,
-                    "max_generate_length": RESPONSE_TOKENS,
                     "stop_token_ids": list(STOP_TOKEN_IDS),
                 },
                 "error_handling": {"default_error_treatment": "mask", "preserve_logprobs_on_timeout": True},
