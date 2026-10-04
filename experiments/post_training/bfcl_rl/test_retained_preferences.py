@@ -10,12 +10,23 @@ from pathlib import Path
 import haliax as hax
 import numpy as np
 import pytest
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 from levanter.data.text.preference import PreferencePairDataset
 from levanter.store.cache import TreeCache
+from levanter.tokenizers import load_tokenizer
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS
 from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, BFCLPartition, TaskIdentity
+from experiments.post_training.bfcl_rl.offline_data import (
+    NativeTeacherTrace,
+    build_verified_sft_store,
+    verifier_selected_chat,
+)
 from experiments.post_training.bfcl_rl.preferences import PairDisposition, select_pair
 from experiments.post_training.bfcl_rl.recovery_data import (
     RecoveryPreferenceCache,
@@ -76,6 +87,92 @@ def _identity(model: str) -> CollectionIdentity:
         DATASET_COMMIT,
         "/staged/bfcl_complement",
     )
+
+
+def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path: Path):
+    messages = [
+        {"role": "user", "content": "USER_CONTEXT"},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "ASSISTANT_REASONING",
+            "tool_calls": [
+                {"id": "a", "type": "function", "function": {"name": "lookup", "arguments": {"key": "TOOL_ARGUMENT"}}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "a", "content": "TOOL_OBSERVATION"},
+        {"role": "assistant", "content": "VERIFIER_CORRECT"},
+    ]
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+    # The teacher's IDs intentionally lie outside this student's small vocabulary.
+    teacher_record = _record("teacher", 1.0)
+    teacher_record["response"]["token_ids"] = [248000, 248001, 248002, 248003]
+    teacher_record["response"]["step_boundaries"][1]["prompt_token_ids"] = [1, 2, 248000, 248001, 99]
+    trace = NativeTeacherTrace(_identity("teacher"), 7, teacher_record, "retained", "native", messages, tools)
+    duplicate = replace(
+        trace,
+        seed=8,
+        identity=replace(trace.identity, run_id="teacher-collection-seed8"),
+        retained_record={**teacher_record, "run_id": "teacher-collection-seed8"},
+    )
+    incorrect_record = _record("teacher", 0.0)
+    incorrect_record["record_id"] = "incorrect-teacher"
+    incorrect = replace(trace, retained_record=incorrect_record)
+    tokenizer_path = tmp_path / "student-tokenizer"
+    tokenizer = Tokenizer(models.BPE())
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = decoders.ByteLevel()
+    tokenizer.train_from_iterator(
+        [json.dumps(messages), json.dumps(tools)],
+        trainer=trainers.BpeTrainer(vocab_size=300, initial_alphabet=pre_tokenizers.ByteLevel.alphabet()),
+    )
+    hf_tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=tokenizer, bos_token="<bos>", eos_token="<eos>", pad_token="<pad>"
+    )
+    hf_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
+    hf_tokenizer.save_pretrained(tokenizer_path)
+    with set_current_client(LocalClient()):
+        store = build_verified_sft_store(
+            [trace, duplicate, incorrect],
+            partition=PARTITION,
+            output_path=str(tmp_path / "curation"),
+            student_tokenizer=str(tokenizer_path),
+            max_length=4096,
+            seed=42,
+            num_shards=1,
+            max_workers=1,
+        )
+    cache = TreeCache.load(
+        store.cache_path, {"input_ids": np.zeros(0, np.int32), "assistant_masks": np.zeros(0, np.int32)}
+    )
+    assert len(cache) == 1
+    row = cache[0]
+    student = load_tokenizer(str(tokenizer_path))
+    masked = student.decode(np.asarray(row["input_ids"])[np.asarray(row["assistant_masks"], dtype=bool)].tolist())
+    assert "ASSISTANT_REASONING" in masked
+    assert "TOOL_ARGUMENT" in masked
+    assert "VERIFIER_CORRECT" in masked
+    assert "USER_CONTEXT" not in masked
+    assert "TOOL_OBSERVATION" not in masked
+    selection = json.loads((tmp_path / "curation/selection.json").read_text())
+    assert {item["seed"] for item in selection["selected"]} == {7, 8}
+    assert selection["dispositions"] == {"verifier_correct": 2, "incorrect_or_unscored": 1}
+    assert all(item["task"]["digest"] == TASK.digest for item in selection["selected"])
+    assert store.sources["bfcl-complement"].conversations == 1
+
+
+def test_teacher_harmony_curation_rejects_parity_before_adapting_messages():
+    trace = NativeTeacherTrace(
+        _identity("teacher"),
+        7,
+        _record("teacher", 1.0, task=HOLDOUT),
+        "retained",
+        "native",
+        [{"role": "user", "content": "Holdout"}, {"role": "assistant", "content": "Answer"}],
+        [],
+    )
+    with pytest.raises(ValueError, match="outside the BFCL training complement"):
+        verifier_selected_chat(trace, PARTITION)
 
 
 def test_retained_archives_produce_exact_preferences_with_tool_context_masked(tmp_path: Path):
