@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Admission rules for the two published Marin evaluation cohorts."""
+"""Admission rules for versioned Marin evaluation cohorts."""
 
 import hashlib
 import json
