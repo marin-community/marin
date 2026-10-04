@@ -30,11 +30,9 @@ _REPORT_URL = (
 )
 _TOTAL_TOKENS_KEY = "throughput/total_tokens"
 _SAMPLES = 800
-EVAL_LOSS_METRIC = "eval_dropless/paloma/macro_loss"
-
 WANDB_CHARTS = {
     "train-loss": ("Train cross-entropy loss", "train/cross_entropy_loss"),
-    "paloma-macro-loss": ("Paloma macro loss (dropless)", EVAL_LOSS_METRIC),
+    "paloma-macro-loss": ("Paloma macro loss (dropless)", "eval_dropless/paloma/macro_loss"),
     "mfu": ("MFU (%)", "throughput/mfu"),
 }
 

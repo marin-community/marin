@@ -52,6 +52,7 @@ ROUTER_BIAS_MAX = 400.0
 TOKENS_PER_SECOND_MIN = 2.0e6
 MFU_MIN = 15.0
 EVAL_LOSS_RELATIVE_INCREASE = 0.02
+EVAL_LOSS_METRIC = "eval_dropless/uncheatable_eval/macro_loss"
 # The newest evaluation and the two before it.
 EVAL_HISTORY_LENGTH = 3
 
