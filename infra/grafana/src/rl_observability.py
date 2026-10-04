@@ -17,6 +17,8 @@ RL_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 RL_MAX_POINTS = 360
 RL_MIN_BUCKET_MS = 30_000
 RL_MAX_CLUSTERS = 16
+RL_MAX_CLUSTER_LENGTH = 128
+RL_MAX_RUN_LENGTH = 512
 RL_MAX_CORE_ROWS = 100_000
 RL_MAX_ENGINE_ROWS = 100_000
 RL_MAX_GPU_ROWS = 50_000
@@ -80,8 +82,8 @@ def rl_overview_dataset(
     clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
 ) -> DashboardDataset:
     """Build bounded RL-core and engine sources."""
-    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=128)
-    validate_value("run", run, max_length=512)
+    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=RL_MAX_CLUSTER_LENGTH)
+    validate_value("run", run, max_length=RL_MAX_RUN_LENGTH)
     bucket_ms = bounded_bucket_ms(
         start_ms,
         end_ms,
@@ -287,8 +289,8 @@ def rl_gpu_dataset(
     clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
 ) -> DashboardDataset:
     """Build node-GPU detail or a zoom message for ranges longer than seven hours."""
-    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=128)
-    validate_value("run", run, max_length=512)
+    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=RL_MAX_CLUSTER_LENGTH)
+    validate_value("run", run, max_length=RL_MAX_RUN_LENGTH)
     bucket_ms = bounded_bucket_ms(
         start_ms,
         end_ms,
