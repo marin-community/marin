@@ -518,6 +518,21 @@ def attacked_source(content: str, attack: str) -> str:
     return "".join(lines)
 
 
+def control_files(snapshot: SourceSnapshot, control: str) -> dict[str, str]:
+    if control == "unittest_monkeypatch":
+        # New modules need an importable attack without the reference implementation.
+        files = snapshot.parent_files | dict.fromkeys(snapshot.reference_files.keys() - snapshot.parent_files.keys(), "")
+    elif control == "noop":
+        files = dict(snapshot.parent_files)
+    else:
+        files = dict(snapshot.reference_files)
+    if control in CONTROL_SOURCE:
+        for path, content in files.items():
+            if snapshot.parent_files.get(path) != snapshot.reference_files.get(path):
+                files[path] = attacked_source(content, CONTROL_SOURCE[control])
+    return files
+
+
 async def patch_controls(task: TaskSpec, snapshot: SourceSnapshot, *, factory: MachineFactory) -> dict[str, dict]:
     """Replay repair and attack controls through patch collection and the fresh grader."""
     factories = {EnvironmentKind.DOCKER: factory}
@@ -525,14 +540,10 @@ async def patch_controls(task: TaskSpec, snapshot: SourceSnapshot, *, factory: M
     for control in CONTROL_REWARDS:
         async with _task_machine(task.environment, factories) as machine:
             assert machine is not None
-            files = snapshot.parent_files if control in ("noop", "unittest_monkeypatch") else snapshot.reference_files
+            files = control_files(snapshot, control)
             if control != "noop":
                 with tempfile.TemporaryDirectory() as directory:
                     for index, (path, content) in enumerate(files.items()):
-                        if control in CONTROL_SOURCE and snapshot.parent_files.get(path) != snapshot.reference_files.get(
-                            path
-                        ):
-                            content = attacked_source(content, CONTROL_SOURCE[control])
                         local = Path(directory) / str(index)
                         local.write_text(content)
                         await machine.upload(local, f"{WORKSPACE}/{path}")

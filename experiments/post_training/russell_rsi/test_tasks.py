@@ -28,6 +28,7 @@ from experiments.post_training.russell_rsi.tasks import (
     accept_candidate,
     accept_candidates,
     build_task,
+    control_files,
     generate_candidates,
     generation_request,
     source_partition,
@@ -377,6 +378,27 @@ def test_probe_child_runs_real_source_without_expected_values_or_unittest_scorin
         check=True,
     )
     assert json.loads(result.stdout) == case.expected_json
+
+
+def test_monkeypatch_control_attacks_new_modules(tmp_path):
+    snapshot = seed().model_copy(update={"parent_files": {"LICENSE": "MIT license"}})
+    files = control_files(snapshot, "unittest_monkeypatch")
+    (tmp_path / "maths.py").write_text(files["maths.py"])
+    probe = (
+        "import maths, unittest\n"
+        "result = unittest.TestResult()\n"
+        "result.failures.append(('broken', 'failure'))\n"
+        "observation = {'has_add': hasattr(maths, 'add'), 'forged_success': result.wasSuccessful()}\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", PROBE_RUNNER],
+        input=probe,
+        text=True,
+        capture_output=True,
+        cwd=tmp_path,
+        check=True,
+    )
+    assert json.loads(result.stdout) == {"has_add": False, "forged_success": True}
 
 
 def test_forged_metrics_are_an_observation_not_a_success_report(tmp_path):
