@@ -1046,8 +1046,8 @@ wheels = [
 
 [[package]]
 name = "marin-rigging"
-version = "0.2.0"
-source = { editable = "../rigging" }
+version = "0.2.139.dev37117265303"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiobotocore" },
     { name = "aiohttp" },
@@ -1067,48 +1067,9 @@ dependencies = [
     { name = "starlette" },
     { name = "zstandard" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiobotocore", specifier = ">=2.12.2" },
-    { name = "aiohttp", specifier = ">=3.9" },
-    { name = "braceexpand", specifier = ">=0.1.7" },
-    { name = "click", specifier = ">=8.3.1" },
-    { name = "connect-python", specifier = ">=0.9.0" },
-    { name = "fsspec", specifier = ">=2024.0.0" },
-    { name = "gcsfs", specifier = ">=2024.0.0" },
-    { name = "google-auth", specifier = ">=2.0.0" },
-    { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
-    { name = "google-cloud-secret-manager", marker = "extra == 'secrets'", specifier = ">=2.16.0" },
-    { name = "msgspec", specifier = ">=0.20.0" },
-    { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = ">=0.24" },
-    { name = "psutil", specifier = ">=7.2.2" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "requests", specifier = ">=2.0.0" },
-    { name = "s3fs", specifier = ">=2024.0.0" },
-    { name = "starlette", specifier = ">=0.40" },
-    { name = "zstandard", specifier = ">=0.22" },
-]
-provides-extras = ["iap", "prometheus", "secrets"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "prometheus-client", specifier = ">=0.24" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-timeout" },
-    { name = "pytest-xdist" },
-]
-test = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "prometheus-client", specifier = ">=0.24" },
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-timeout" },
-    { name = "pytest-xdist" },
+sdist = { url = "https://files.pythonhosted.org/packages/dc/df/df5f1f367049aef1fb07207ee1a060fd04c8e6f81c8b7158a0a40f6343b3/marin_rigging-0.2.139.dev37117265303.tar.gz", hash = "sha256:429ccf7eec8837e14241fc8922034e8c8646138287fdac06f386703c3ad3aa76", size = 224377, upload-time = "2026-10-03T10:44:04.299Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/5c/043a28bc55a885ec3ad78c0e64edd4ff8118aee8926ee96632418257c10c/marin_rigging-0.2.139.dev37117265303-py3-none-any.whl", hash = "sha256:2ce899d34fa102982e7005d78b4bdc36d4faeabf54d176675b8671c11d6017c6", size = 526306, upload-time = "2026-10-03T10:43:52.754Z" },
 ]
 
 [[package]]
@@ -2038,7 +1999,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
-    { name = "marin-rigging", editable = "../rigging" },
+    { name = "marin-rigging", specifier = ">=0.2.135.dev36906221286" },
     { name = "pyarrow", specifier = ">=17" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "verifyit", editable = "../verifyit" },
