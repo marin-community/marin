@@ -373,7 +373,7 @@ Tokenizer content hashes are part of the artifact identity, so plan construction
 Add `--run` in an Iris CPU coordinator to execute either preparation command.
 
 Corpus sampling and new-dataset preparation use the fixed `fast-track-long-string-v1` encoding policy.
-It uses the production `BatchTokenizer` mechanism and adds a 32 MiB limit on each document's UTF-8 text.
+It uses the production `BatchTokenizer` mechanism and adds a 64 MiB limit on each document's UTF-8 text.
 Long strings split at the first whitespace at or after 10,000 characters. Each next piece keeps that whitespace.
 Separate pieces can produce different token IDs at a split. Raw text, document IDs, and one output per document stay intact.
 
