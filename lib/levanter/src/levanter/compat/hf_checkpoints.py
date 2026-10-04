@@ -14,8 +14,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
-from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
@@ -28,9 +27,7 @@ import humanfriendly
 import jax
 import jax.numpy as jnp
 import mergedeep
-import numpy as np
 import requests
-import safetensors.numpy
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
 from fsspec.asyn import get_loop
@@ -46,8 +43,6 @@ from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
-from jax._src.partition_spec import PartitionSpec
-from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from rigging.filesystem.atomic import fetch_file_atomic
@@ -57,6 +52,7 @@ from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
+from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -520,23 +516,7 @@ def _to_state_dict_with_dtype(
             else:
                 logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
 
-    # This is the shared Levanter HF export path, not a GrugMoE-specific hook.
-    # Deshard before writing; reshard handles explicit meshes moving partitioned arrays to replicated leaves.
-    state_dict = jax.tree.map(lambda value: jax.sharding.reshard(value, PartitionSpec()), state_dict)
-
     return state_dict
-
-
-def _gather_to_host_numpy(array) -> np.ndarray:
-    """Gather a (possibly globally-sharded) array to a full, host-local numpy array.
-
-    On a multi-host run a parameter's shards live on devices that are not all local to
-    this process, so ``np.asarray`` raises ``RuntimeError: Fetching value for jax.Array
-    that spans non-addressable ... devices``. ``process_allgather`` is a collective — every
-    process must call it in lockstep — that returns the complete array as a host-local
-    numpy array on every process, which the safetensors writer requires.
-    """
-    return np.asarray(multihost_utils.process_allgather(array, tiled=True))
 
 
 @dataclass_with_default_init(frozen=True)
@@ -1136,6 +1116,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
+        All initialized JAX processes must call this with the same model and options.
+        Shard and metadata writer failures propagate to every process through matched collectives.
         """
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
@@ -1164,22 +1146,14 @@ class HFCheckpointConverter(Generic[LevConfig]):
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
         state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None)
-        model_size = sum(v.size * v.dtype.itemsize for v in state_dict_shape.values())
-        pbar = tqdm(
-            total=model_size,
-            unit="B",
-            unit_scale=True,
-            desc="Checkpoint size",
-        )
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
-        shard_specs = [(shard_name, tuple(weight_map.keys())) for shard_name, weight_map in shards.items()]
         this_max_shard_size = max(
             sum(v.size * v.dtype.itemsize for v in shards[shard_name].values()) for shard_name in shards.keys()
         )
         logger.info(
-            "Will save %d shards with max size %s", len(shard_specs), humanfriendly.format_size(this_max_shard_size)
+            "Will save %d shards with max size %s", len(shards), humanfriendly.format_size(this_max_shard_size)
         )
 
         def _maybe_upload(
@@ -1232,116 +1206,74 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     rel_files.add(os.path.relpath(full_path, directory))
             return rel_files
 
-        def _write_shard(shard_name: str, shard_numpy: dict[str, np.ndarray], reserved_bytes: int) -> None:
-            try:
-                with temp_dir_before_upload(path, process_should_upload=True, sync_on_exit=False) as local_path:
-                    os.makedirs(local_path, exist_ok=True)
-                    # Writer threads run only on process 0, so they must not enter a multi-host collective.
-                    safetensors.numpy.save_file(
-                        shard_numpy, os.path.join(local_path, shard_name), metadata={"format": "pt"}
-                    )
-                    _maybe_upload(
-                        local_path,
-                        files=[shard_name],
-                        commit_message=f"Upload shard {shard_name} from Levanter",
-                        source_is_temp=path != local_path,
-                    )
-            finally:
-                budget.release(reserved_bytes)
+        def upload_shard(local_path: str, shard_name: str) -> None:
+            _maybe_upload(
+                local_path,
+                files=[shard_name],
+                commit_message=f"Upload shard {shard_name} from Levanter",
+                source_is_temp=True,
+            )
 
-        budget = HostByteBudget(export_host_budget_bytes)
-        is_writer = jax.process_index() == 0
-        pending: deque[tuple[Future[None], int]] = deque()
-
-        with ThreadPoolExecutor(max_workers=max_concurrent_shards, thread_name_prefix="hf_export") as pool:
-            for shard_name, subset_keys in shard_specs:
-                if is_writer:
-                    while len(pending) >= max_concurrent_shards:
-                        future, completed_bytes = pending.popleft()
-                        future.result()
-                        pbar.update(completed_bytes)
-
-                bytes_this_time = sum(v.size * v.dtype.itemsize for v in shards[shard_name].values())
-                reserved_bytes = 2 * bytes_this_time
-                if is_writer:
-                    fsspec_sync(get_loop(), budget.acquire, reserved_bytes)
-
-                try:
-                    subset_arg = subset_keys if subset_keys else None
-                    shard_weights = _to_state_dict_with_dtype(model, dtype, subset_arg)
-                    # All processes gather parameters in the same order; only process 0 writes.
-                    shard_numpy = {k: _gather_to_host_numpy(v) for k, v in shard_weights.items()}
-                    if is_writer:
-                        logger.info(
-                            "Saving shard %s (%s, %.2f%% of model)",
-                            shard_name,
-                            humanfriendly.format_size(bytes_this_time),
-                            100 * bytes_this_time / model_size,
-                        )
-                        pending.append(
-                            (pool.submit(_write_shard, shard_name, shard_numpy, reserved_bytes), bytes_this_time)
-                        )
-                        del shard_numpy
-                    else:
-                        del shard_numpy
-                        pbar.update(bytes_this_time)
-                except BaseException:
-                    if is_writer:
-                        budget.release(reserved_bytes)
-                    raise
-
-            for future, completed_bytes in pending:
-                future.result()
-                pbar.update(completed_bytes)
+        save_hf_shards(
+            shards,
+            lambda keys: _to_state_dict_with_dtype(model, dtype, keys),
+            path,
+            export_host_budget_bytes=export_host_budget_bytes,
+            max_concurrent_shards=max_concurrent_shards,
+            upload_to_hf=upload_shard,
+        )
 
         if index is not None:
             logger.info(
-                f"Saved a sharded checkpoint with {len(shard_specs)} shards, max size {humanfriendly.format_size(this_max_shard_size)}"
+                f"Saved a sharded checkpoint with {len(shards)} shards, max size {humanfriendly.format_size(this_max_shard_size)}"
             )
 
-        with temp_dir_before_upload(path) as local_path:
-            if path != local_path:
-                logger.info(f"Saving metadata to {path} via temp path {local_path}")
+        def save_metadata() -> None:
+            with temp_dir_before_upload(path, process_should_upload=True, sync_on_exit=False) as local_path:
+                if path != local_path:
+                    logger.info(f"Saving metadata to {path} via temp path {local_path}")
 
-            os.makedirs(local_path, exist_ok=True)
+                os.makedirs(local_path, exist_ok=True)
 
-            files_before = _list_relative_files(local_path)
+                files_before = _list_relative_files(local_path)
 
-            if save_reference_code_flag:
-                logger.info(f"Copying reference code from {self.reference_checkpoint}")
-                self._save_code_local(local_path)
+                if save_reference_code_flag:
+                    logger.info(f"Copying reference code from {self.reference_checkpoint}")
+                    self._save_code_local(local_path)
 
-            if save_tokenizer:
-                logger.info("Saving tokenizer")
-                _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
+                if save_tokenizer:
+                    logger.info("Saving tokenizer")
+                    _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
 
-            if save_feature_extractor and self.feature_extractor is not None:
-                logger.info("Saving feature extractor")
-                self.feature_extractor.save_pretrained(local_path)
+                if save_feature_extractor and self.feature_extractor is not None:
+                    logger.info("Saving feature extractor")
+                    self.feature_extractor.save_pretrained(local_path)
 
-            with open(os.path.join(local_path, "config.json"), "w") as f:
-                json.dump(dict_config, f)
+                with open(os.path.join(local_path, "config.json"), "w") as f:
+                    json.dump(dict_config, f)
 
-            if generation_config is not None:
-                logger.info(
-                    "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
+                if generation_config is not None:
+                    logger.info(
+                        "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
+                    )
+                    with open(os.path.join(local_path, "generation_config.json"), "w") as f:
+                        json.dump(generation_config, f)
+
+                if index is not None:
+                    with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
+                        json.dump(index, f)
+
+                files_after = _list_relative_files(local_path)
+                new_files = sorted(files_after - files_before)
+
+                _maybe_upload(
+                    local_path,
+                    files=new_files,
+                    commit_message="Upload config and metadata from Levanter",
+                    source_is_temp=path != local_path,
                 )
-                with open(os.path.join(local_path, "generation_config.json"), "w") as f:
-                    json.dump(generation_config, f)
 
-            if index is not None:
-                with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
-                    json.dump(index, f)
-
-            files_after = _list_relative_files(local_path)
-            new_files = sorted(files_after - files_before)
-
-            _maybe_upload(
-                local_path,
-                files=new_files,
-                commit_message="Upload config and metadata from Levanter",
-                source_is_temp=path != local_path,
-            )
+        run_on_export_writer(save_metadata)
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
