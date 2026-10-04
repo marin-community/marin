@@ -9,6 +9,11 @@ harbor_model_info:
 # Reusable harness behavior. Benchmarks select a profile below; model-specific
 # adjustments remain properties of the model within that harness.
 harbor_harness_profiles:
+  mini-swe-k2-tool-history:
+    agent: mini-swe-agent
+    model_kwargs:
+      IFM-K2-Horizon-MoVA-36B-A4B:
+        model_format: k2_horizon
   pi-65k-16k:
     agent: pi
     kwargs:
@@ -21,6 +26,7 @@ harbor_harness_profiles:
 
 harbor_eval_harness_profiles:
   bixbench-pi: pi-65k-16k
+  swebench-verified: mini-swe-k2-tool-history
 
 # This model's Terminal-Bench serving arm was validated at the exact agent
 # context/output limits. Selection is benchmark-specific; neither launcher nor
