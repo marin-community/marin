@@ -107,6 +107,9 @@ class ZephyrWorker:
         self._actor_ctx = current_actor()
         self._host_shutdown_event = self._actor_ctx.shutdown_event
         self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
+        # Iris can run a new attempt of this task beside a lost one; the coordinator
+        # tells the two apart by this token.
+        self._incarnation = uuid.uuid4().hex
         self._actor_handle = self._actor_ctx.handle
         self._stats_writer = StatsWriter.connect(stats_config)
         job_info = get_job_info()
@@ -157,7 +160,9 @@ class ZephyrWorker:
         while not self._stopping():
             try:
                 if future is None:
-                    future = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle, self._task_id)
+                    future = self._coordinator.register_worker.remote(
+                        self._worker_id, self._actor_handle, self._task_id, incarnation=self._incarnation
+                    )
                     request_start = time.monotonic()
                     warned = False
                 future.result(timeout=RPC_POLL_INTERVAL)
@@ -214,7 +219,7 @@ class ZephyrWorker:
             # killing it on slow coordinator deserialization.
             try:
                 if future is None:
-                    future = self._coordinator.pull_task.remote(self._worker_id, avail)
+                    future = self._coordinator.pull_task.remote(self._worker_id, avail, incarnation=self._incarnation)
                     future_start = time.monotonic()
                     warned = False
                 response = future.result(timeout=RPC_POLL_INTERVAL)
@@ -444,7 +449,7 @@ class ZephyrWorker:
         while not self._shutdown_event.is_set():
             try:
                 snapshots = self._heartbeat_counter_snapshots()
-                coordinator.heartbeat.remote(self._worker_id, snapshots).result()
+                coordinator.heartbeat.remote(self._worker_id, snapshots, incarnation=self._incarnation).result()
                 heartbeat_count += 1
                 consecutive_failures = 0
                 if heartbeat_count % 10 == 1:
