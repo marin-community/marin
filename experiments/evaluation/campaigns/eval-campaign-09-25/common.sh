@@ -266,7 +266,7 @@ from experiments.evaluation.evals import EvalchemyDefinition
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.external_dependencies import EVALCHEMY
 from marin.evaluation.model_config import load_model_config
-REGISTRY_COMMIT = "2666d6526477ae3e46030a8dc4f3f2c68fd7a84f"
+REGISTRY_COMMIT = os.environ["CAMPAIGN_SHA_HARBOR"]
 
 models = Path(os.environ["MODEL_CONFIG_DIR"])
 chat_templates = Path(os.environ["CHAT_TEMPLATE_DIR"])

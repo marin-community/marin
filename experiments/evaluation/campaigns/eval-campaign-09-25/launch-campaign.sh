@@ -77,13 +77,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ "$version" = eval-policy-2026-09-29-verified ]; then
+if [[ "$version" = eval-policy-2026-09-29-verified || "$version" = eval-policy-2026-09-29-r2-verified ]]; then
   read -r CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY HARBOR_RUNTIME_PROJECT < <(
     uv run --project "$MARIN_DIR" python -c '
-from marin.evaluation.campaign_policy import CAMPAIGN
+import sys
+from marin.evaluation.campaign_policy import CAMPAIGNS
 from marin.evaluation.harbor.driver_config import harbor_runtime_project
+CAMPAIGN = CAMPAIGNS[sys.argv[1]]
 print(CAMPAIGN.runtimes["harbor"], CAMPAIGN.runtimes["evalchemy"], harbor_runtime_project(CAMPAIGN.runtimes["harbor"]))
-'
+' "$version"
   )
   export CAMPAIGN_SHA_HARBOR CAMPAIGN_SHA_EVALCHEMY HARBOR_RUNTIME_PROJECT
 fi
