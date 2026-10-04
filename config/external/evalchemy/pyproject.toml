@@ -8,5 +8,5 @@ dependencies = ["evalchemy"]
 package = false
 
 [tool.uv.sources]
-# Pin the matched-subset fixes for the Russell coding spike.
+# Preserve sample IDs through subset selection and scoring.
 evalchemy = { git = "https://github.com/marin-community/evalchemy.git", rev = "022f3ced2ab888eb017183c44b615d4360b0fe75" }

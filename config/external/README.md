@@ -11,7 +11,7 @@ source. Its adjacent `uv.lock` records the exact commit that Marin uses.
 Verified evaluation cohorts select revisions from `RUNTIME_COMMITS` in
 `lib/marin/src/marin/evaluation/eval_policy.py`. The `harbor/pins/<Harbor commit>/`
 snapshots retain their full dependency locks. Preflight and workers run the
-selected lock with `uv run --frozen`; the external dependency updater advances
+selected lock with `uv run --frozen`. The external dependency updater changes
 only the top-level projects.
 
 `vllm/gpu.toml` records the promoted CUDA release, Torch backend, and
@@ -30,14 +30,15 @@ The packaged pin table at
 vLLM GPU release config, and the TPU serving fork descriptor. Runtime code imports
 that module instead of reading repository-relative configuration.
 
-Advance one project with:
+Update one project's lock and generated requirements with:
 
 ```bash
 uv run config/update-external.py evalchemy
 ```
 
-Omit the project name to advance all three Git projects. The command updates
-the selected lockfiles and regenerates the packaged requirements. Regenerate
+Omit the project name to update all three Git projects. Branch sources can
+advance to a new commit. Fixed `rev` sources retain their selected commit
+until the source config changes. Regenerate
 only the promoted vLLM release after editing `vllm/gpu.toml` with:
 
 ```bash
