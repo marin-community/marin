@@ -23,14 +23,35 @@ from rigging.runtime_bundle import RuntimeBundle
 from experiments.post_training.russell_rsi.bootstrap_loop import LoopState
 from experiments.post_training.russell_rsi.calibration_recovery import calibration_recovery_step
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
-from experiments.post_training.russell_rsi.launch import MODEL, MODEL_REVISION, run_bootstrap_loop
+from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
+from experiments.post_training.russell_rsi.launch import (
+    MODEL,
+    MODEL_REVISION,
+    ReviewedConstructionInputs,
+    run_bootstrap_loop,
+)
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV, IRIS_TASK_ID_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 
+def canonical_labels(capabilities_bytes: bytes) -> tuple[str, ...]:
+    """Parse a canonical capability file and return its unique labels."""
+    record = json.loads(capabilities_bytes)
+    if set(record) != {"skills"} or any(set(skill) != {"label", "description"} for skill in record["skills"]):
+        raise ValueError("Capability feedback does not match the canonical schema")
+    labels = tuple(skill["label"] for skill in record["skills"])
+    if len(labels) != len(set(labels)):
+        raise ValueError("Capability feedback contains duplicate labels")
+    for skill in record["skills"]:
+        if SKILL_DESCRIPTIONS[CodingSkill(skill["label"])] != skill["description"]:
+            raise ValueError("Capability feedback changes a canonical description")
+    return labels
+
+
 def execute_loop(config: dict) -> None:
     """Resolve reviewed bank inputs and seal progress at each stage boundary."""
+    reviewed_feedback_by_pilot = config["reviewed_feedback"]
 
     def adopted(value: dict, kind: type = Artifact) -> ArtifactStep:
         return ArtifactStep.adopt(
@@ -51,36 +72,66 @@ def execute_loop(config: dict) -> None:
         else None
     )
 
-    def next_bank(
+    def next_construction_inputs(
         feedback: ArtifactStep[Artifact], state: LoopState, response_cap: int
-    ) -> ArtifactStep[Artifact] | None:
-        supplied = config["reviewed_banks"].get(str(state.completed_pilots))
+    ) -> ReviewedConstructionInputs | None:
+        supplied = reviewed_feedback_by_pilot.get(str(state.completed_pilots))
         if supplied is None:
             return None
         prior = compact_json_sha256({"tasks": [asdict(task) for task in state.bank]})
-        if supplied["prior_bank_sha256"] != prior or supplied["feedback_identity"] != artifact_identity(feedback):
-            raise ValueError("Reviewed construction does not identify this prior bank and coding feedback")
+        if supplied["raw_feedback_identity"] != artifact_identity(feedback):
+            raise ValueError("Reviewed feedback does not identify this raw coding feedback")
         feedback_result = resolve(feedback)
-        actual_feedback_sha256 = hashlib.sha256(
-            StoragePath(prefix_join(feedback_result.path, "capabilities.json")).read_bytes()
-        ).hexdigest()
-        if supplied["capabilities_sha256"] != actual_feedback_sha256:
-            raise ValueError("Reviewed construction changed its canonical feedback bytes")
-        record = json.loads(pinned_bytes(prefix_join(supplied["uri"], "bank.json"), supplied["bank_sha256"]))
-        if record["feedback_identity"] != supplied["capabilities_sha256"] or supplied["response_cap"] != response_cap:
-            raise ValueError("Reviewed construction changed its canonical feedback or response budget")
-        return ArtifactStep.adopt(
-            supplied["name"],
-            supplied["version"],
-            supplied["uri"],
+        raw_bytes = StoragePath(prefix_join(feedback_result.path, "capabilities.json")).read_bytes()
+        raw_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+        if supplied["raw_capabilities_sha256"] != raw_sha256:
+            raise ValueError("Reviewed feedback does not identify the raw capability bytes")
+        reviewed = supplied["reviewed_feedback"]
+        review_record = json.loads(pinned_bytes(reviewed["review_record_uri"], reviewed["review_record_sha256"]))
+        reviewed_bytes = pinned_bytes(prefix_join(reviewed["uri"], "capabilities.json"), reviewed["capabilities_sha256"])
+        raw_labels = canonical_labels(raw_bytes)
+        reviewed_labels = canonical_labels(reviewed_bytes)
+        if any(label not in raw_labels for label in reviewed_labels):
+            raise ValueError("Reviewed feedback adds a label absent from raw feedback")
+        if (
+            review_record["source_capabilities_sha256"] != raw_sha256
+            or review_record["reviewed_capabilities_sha256"] != reviewed["capabilities_sha256"]
+        ):
+            raise ValueError("Review record does not identify the raw and reviewed capability bytes")
+        reviewed_feedback = ArtifactStep.adopt(
+            reviewed["name"],
+            reviewed["version"],
+            reviewed["uri"],
             config={
-                **supplied["identity_config"],
-                "bank_sha256": supplied["bank_sha256"],
-                "prior_bank_sha256": prior,
-                "feedback_identity": artifact_identity(feedback),
-                "capabilities_sha256": actual_feedback_sha256,
+                **reviewed["identity_config"],
+                "raw_feedback_identity": artifact_identity(feedback),
+                "raw_capabilities_sha256": raw_sha256,
+                "reviewed_capabilities_sha256": reviewed["capabilities_sha256"],
+                "review_record_uri": reviewed["review_record_uri"],
+                "review_record_sha256": reviewed["review_record_sha256"],
             },
         )
+        bank_value = supplied.get("bank")
+        if bank_value is None:
+            return ReviewedConstructionInputs(reviewed_feedback, reviewed_bytes, None)
+        if supplied["prior_bank_sha256"] != prior or supplied["response_cap"] != response_cap:
+            raise ValueError("Reviewed construction does not identify this prior bank and response budget")
+        bank_record = json.loads(pinned_bytes(prefix_join(bank_value["uri"], "bank.json"), bank_value["bank_sha256"]))
+        if bank_record["feedback_identity"] != reviewed["capabilities_sha256"]:
+            raise ValueError("Reviewed construction bank does not cite the reviewed feedback")
+        bank = ArtifactStep.adopt(
+            bank_value["name"],
+            bank_value["version"],
+            bank_value["uri"],
+            config={
+                **bank_value["identity_config"],
+                "bank_sha256": bank_value["bank_sha256"],
+                "prior_bank_sha256": prior,
+                "feedback_identity": artifact_identity(reviewed_feedback),
+                "capabilities_sha256": reviewed["capabilities_sha256"],
+            },
+        )
+        return ReviewedConstructionInputs(reviewed_feedback, reviewed_bytes, bank)
 
     run_bootstrap_loop(
         seed,
@@ -98,7 +149,7 @@ def execute_loop(config: dict) -> None:
         config["machine_config"],
         config["relay_job"],
         StoragePath(config["manifest_prefix"]),
-        next_bank,
+        next_construction_inputs,
         initial_calibration=initial_calibration,
     )
 

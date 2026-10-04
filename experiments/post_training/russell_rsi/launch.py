@@ -113,6 +113,13 @@ class Scale:
     ttl_days: int
 
 
+@dataclass(frozen=True)
+class ReviewedConstructionInputs:
+    feedback: ArtifactStep[Artifact]
+    capabilities_bytes: bytes
+    bank: ArtifactStep[Artifact] | None
+
+
 SCALES = {"smoke": Scale(1, 1), "pilot": Scale(4, 7)}
 
 
@@ -823,10 +830,10 @@ def run_bootstrap_loop(
     machine_config: dict,
     relay_job: str,
     manifest_directory: StoragePath,
-    build_next_bank: Callable[[ArtifactStep[Artifact], LoopState, int], ArtifactStep[Artifact] | None],
+    next_construction_inputs: Callable[[ArtifactStep[Artifact], LoopState, int], ReviewedConstructionInputs | None],
     initial_calibration: ArtifactStep[Artifact] | None = None,
 ) -> LoopState:
-    """Execute bounded artifact rounds with an explicit independent source builder."""
+    """Execute bounded artifact rounds with reviewed construction inputs."""
     heldout_manifest = json.loads(pinned_bytes(heldout_manifest_uri, heldout_manifest_sha256))
     heldout_panel_ids(panel, heldout_manifest)
     heldout = {"manifest_sha256": heldout_manifest_sha256, "development": asdict(panel)}
@@ -1014,7 +1021,6 @@ def run_bootstrap_loop(
             if artifact_identity(adopted) != candidate_identity:
                 raise ValueError("Resumed export identity changed")
             checkpoint_handles[candidate_identity] = adopted
-            # The independent builder consumes only the canonical capability artifact.
             capabilities = outputs["capabilities"]
             if artifact_identity(capabilities) != value["feedback_identity"]:
                 raise ValueError("Resumed capability artifact identity changed")
@@ -1085,23 +1091,52 @@ def run_bootstrap_loop(
                     },
                 )
                 return state
-            next_bank = build_next_bank(capabilities, state, 24)
-            if next_bank is None:
+            construction_inputs = next_construction_inputs(capabilities, state, 24)
+            if construction_inputs is None:
                 write_once(
-                    manifest_directory / f"construction-required-after-{state.completed_pilots}.json",
+                    manifest_directory / f"review-required-after-{state.completed_pilots}.json",
                     {
                         "state": asdict(state),
                         "last_round_sha256": previous_sha256,
                         "prior_bank_sha256": compact_json_sha256({"tasks": [asdict(task) for task in state.bank]}),
-                        "feedback_identity": artifact_identity(capabilities),
-                        "capabilities_uri": prefix_join(capability_artifact.path, "capabilities.json"),
-                        "capabilities_sha256": hashlib.sha256(capabilities_bytes).hexdigest(),
+                        "raw_feedback_identity": artifact_identity(capabilities),
+                        "raw_capabilities_uri": prefix_join(capability_artifact.path, "capabilities.json"),
+                        "raw_capabilities_sha256": hashlib.sha256(capabilities_bytes).hexdigest(),
                         "response_cap": 24,
                     },
                 )
                 return state
-            bank_handle = next_bank
-            feedback_identity = artifact_identity(capabilities)
+            reviewed_feedback = construction_inputs.feedback
+            reviewed_bytes = construction_inputs.capabilities_bytes
+            reviewed_record = json.loads(reviewed_bytes)
+            feedback_labels = {skill["label"] for skill in reviewed_record["skills"]}
+            if not feedback_labels:
+                write_once(
+                    manifest_directory / f"reviewed-feedback-insufficient-after-{state.completed_pilots}.json",
+                    {
+                        "state": asdict(state),
+                        "last_round_sha256": previous_sha256,
+                        "raw_feedback_identity": artifact_identity(capabilities),
+                        "reviewed_feedback_identity": artifact_identity(reviewed_feedback),
+                        "reviewed_capabilities_sha256": hashlib.sha256(reviewed_bytes).hexdigest(),
+                    },
+                )
+                return state
+            if construction_inputs.bank is None:
+                write_once(
+                    manifest_directory / f"reviewed-construction-required-after-{state.completed_pilots}.json",
+                    {
+                        "state": asdict(state),
+                        "last_round_sha256": previous_sha256,
+                        "prior_bank_sha256": compact_json_sha256({"tasks": [asdict(task) for task in state.bank]}),
+                        "raw_feedback_identity": artifact_identity(capabilities),
+                        "reviewed_feedback_identity": artifact_identity(reviewed_feedback),
+                        "reviewed_capabilities_sha256": hashlib.sha256(reviewed_bytes).hexdigest(),
+                    },
+                )
+                return state
+            bank_handle = construction_inputs.bank
+            feedback_identity = artifact_identity(reviewed_feedback)
     terminal = {
         "state": asdict(state),
         "last_round_sha256": previous_sha256,

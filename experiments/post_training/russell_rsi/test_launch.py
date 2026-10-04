@@ -37,6 +37,7 @@ from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingPanel,
     PanelItem,
 )
+from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.launch import (
     MODEL,
     MODEL_REVISION,
@@ -67,9 +68,9 @@ def test_coordinator_submits_new_config_and_reuses_identical_config(tmp_path, mo
     initial = {
         "version": "2026.10.04.5",
         "manifest_prefix": "s3://test/immutable-rounds",
-        "reviewed_banks": {},
+        "reviewed_feedback": {},
     }
-    reviewed = {**initial, "reviewed_banks": {"1": {}}}
+    reviewed = {**initial, "reviewed_feedback": {"1": {}}}
     for index, config in enumerate((initial, reviewed, reviewed)):
         source = tmp_path / f"config-{index}.json"
         source.write_text(json.dumps(config) + "\n")
@@ -520,18 +521,21 @@ def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_c
 
 
 @pytest.mark.parametrize(
-    "next_bank_supplied,calibration_source,empty_feedback",
+    "review_case,calibration_source",
     [
-        (True, "normal", False),
-        (False, "normal", False),
-        (False, "normal", True),
-        (False, "changed_recovery", False),
-        (False, "fresh_recovery", False),
-        (False, "incomplete_recovery", False),
+        ("bank", "normal"),
+        ("construction_pending", "normal"),
+        ("review_pending", "normal"),
+        ("raw_empty", "normal"),
+        ("reviewed_empty", "normal"),
+        ("construction_pending", "changed_recovery"),
+        ("construction_pending", "fresh_recovery"),
+        ("construction_pending", "incomplete_recovery"),
+        ("plan", "normal"),
     ],
 )
 def test_driver_validates_calibration_and_feedback_before_training_or_resume(
-    tmp_path, monkeypatch, next_bank_supplied, calibration_source, empty_feedback
+    tmp_path, monkeypatch, review_case, calibration_source
 ):
     bank_path = tmp_path / "bank"
     bank_path.mkdir()
@@ -542,6 +546,17 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         json.dumps({"tasks": [asdict(task) for task in bank], "feedback_identity": "seed-feedback"})
     )
     seed = ArtifactStep.adopt("documents/sealed-bank", "2026.10.04", str(bank_path))
+    next_bank_path = tmp_path / "next-bank"
+    next_bank_path.mkdir()
+    reviewed_only_task = QualifiedTask(
+        "reviewed-task", "reviewed-hash", "reviewed-proof", "reviewed-source", "types", "reviewed-contract"
+    )
+    raw_only_task = QualifiedTask("raw-task", "raw-hash", "raw-proof", "raw-source", "boundaries", "raw-contract")
+    next_bank_records = (*bank, reviewed_only_task, raw_only_task)
+    (next_bank_path / "bank.json").write_text(
+        json.dumps({"tasks": [asdict(task) for task in next_bank_records], "feedback_identity": "reviewed-feedback"})
+    )
+    next_bank = ArtifactStep.adopt("documents/reviewed-bank", "2026.10.04", str(next_bank_path))
     parent = ArtifactStep.adopt("checkpoints/parent", "2026.10.04", "/tmp/parent", kind=LevanterCheckpoint)
     retention = ArtifactStep.adopt("documents/retention", "2026.10.04", "/tmp/retention")
     panel = CodingPanel(
@@ -587,13 +602,38 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
     capabilities_path = tmp_path / "capabilities"
     capabilities_path.mkdir()
     (capabilities_path / "capabilities.json").write_text(
-        json.dumps({"skills": [] if empty_feedback else [{"label": "types"}]})
+        json.dumps(
+            {
+                "skills": (
+                    []
+                    if review_case == "raw_empty"
+                    else [
+                        {"label": skill.value, "description": SKILL_DESCRIPTIONS[skill]}
+                        for skill in (CodingSkill.TYPES, CodingSkill.BOUNDARIES, CodingSkill.STATE)
+                    ]
+                )
+            }
+        )
     )
     capabilities = ArtifactStep.adopt("documents/capabilities", "2026.10.04", str(capabilities_path))
+    reviewed_path = tmp_path / "reviewed-capabilities"
+    reviewed_path.mkdir()
+    (reviewed_path / "capabilities.json").write_text(
+        json.dumps(
+            {
+                "skills": (
+                    []
+                    if review_case in {"raw_empty", "reviewed_empty"}
+                    else [{"label": CodingSkill.TYPES.value, "description": SKILL_DESCRIPTIONS[CodingSkill.TYPES]}]
+                )
+            }
+        )
+    )
+    reviewed_feedback = ArtifactStep.adopt("documents/reviewed-capabilities", "2026.10.04", str(reviewed_path))
     trained = ArtifactStep.adopt("checkpoints/trained", "2026.10.04", "/tmp/trained")
     outputs = {"rl": trained, "reload": reload, "capabilities": capabilities}
     monkeypatch.setattr(russell_launch, "development_step", lambda *args, **kwargs: difficulty)
-    if empty_feedback:
+    if review_case in {"raw_empty", "reviewed_empty"}:
         monkeypatch.setattr(
             russell_launch,
             "final_coding_evaluation",
@@ -606,17 +646,51 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         )
     if calibration_source not in ("fresh_recovery", "incomplete_recovery"):
         monkeypatch.setattr(russell_launch, "bootstrap_round_workflow", lambda *args, **kwargs: outputs)
-    monkeypatch.setattr(russell_launch, "run", lambda *args: pytest.fail("Resume started GPU work"))
+
+    class CapturedPlan(Exception):
+        pass
+
+    captured_plan = {}
+    if review_case == "plan":
+        calibration_path = tmp_path / "next-calibration"
+        calibration_path.mkdir()
+        (calibration_path / "failure_summary.json").write_text(
+            json.dumps(
+                {
+                    "model_identity": artifact_identity(parent),
+                    "tasks_identity": artifact_identity(next_bank),
+                    "count": len(next_bank_records),
+                    "samples_per_task": 8,
+                    "task_rewards": {task.task_id: [1, 0] * 4 for task in next_bank_records},
+                }
+            )
+        )
+        original_round_plan = russell_launch.round_plan
+
+        def capture_plan(*args, **kwargs):
+            captured_plan["plan"] = original_round_plan(*args, **kwargs)
+            raise CapturedPlan
+
+        monkeypatch.setattr(russell_launch, "round_plan", capture_plan)
+        monkeypatch.setattr(russell_launch, "run", lambda *args: pytest.fail("Captured plan proceeded to GPU work"))
+    else:
+        monkeypatch.setattr(russell_launch, "run", lambda *args: pytest.fail("Resume started GPU work"))
 
     def resolver(handle):
         if handle is difficulty:
             if calibration_source in ("fresh_recovery", "incomplete_recovery"):
                 return Artifact(path=str(tmp_path / "recovery"))
+            if review_case == "plan":
+                return Artifact(path=str(calibration_path))
             pytest.fail("Resume repeated calibration")
         if handle is seed:
             return Artifact(path=str(bank_path))
         if handle is capabilities:
             return Artifact(path=str(capabilities_path))
+        if handle is reviewed_feedback:
+            return Artifact(path=str(reviewed_path))
+        if handle is next_bank:
+            return Artifact(path=str(next_bank_path))
         return Artifact(path="/tmp/final")
 
     monkeypatch.setattr(russell_launch, "resolve", resolver)
@@ -663,6 +737,10 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
             "parent_retention_sha256": hashes[2],
         }
     )
+    raw_construction_boundary = directory / "construction-required-after-1.json"
+    if review_case == "construction_pending":
+        raw_construction_boundary.write_text("preserve legacy raw boundary\n")
+        raw_construction_boundary_bytes = raw_construction_boundary.read_bytes()
     allocation_plans = []
     if calibration_source in ("fresh_recovery", "incomplete_recovery"):
         recovery_path = tmp_path / "recovery"
@@ -715,11 +793,19 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         expected = pytest.raises(RuntimeError, match="Training allocation intercepted")
     elif calibration_source == "incomplete_recovery":
         expected = pytest.raises(ValueError, match="eight finite grades")
+    if review_case == "plan":
+        expected = pytest.raises(CapturedPlan)
 
-    def build_next_bank(*args):
-        if empty_feedback:
+    def next_construction_inputs(*args):
+        if review_case == "raw_empty":
             pytest.fail("Source construction started without capability feedback")
-        return seed if next_bank_supplied else None
+        if review_case == "review_pending":
+            return None
+        bank_handle = next_bank if review_case == "plan" else seed
+        supplied_bank = bank_handle if review_case in {"bank", "plan"} else None
+        return russell_launch.ReviewedConstructionInputs(
+            reviewed_feedback, (reviewed_path / "capabilities.json").read_bytes(), supplied_bank
+        )
 
     def resume():
         return russell_launch.run_bootstrap_loop(
@@ -738,13 +824,34 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
             {"backend": "qemu"},
             "relay",
             directory,
-            build_next_bank,
+            next_construction_inputs,
             initial_calibration=initial_calibration,
         )
 
     with expected:
         restored = resume()
     if calibration_source == "changed_recovery":
+        assert not (directory / "terminal-state.json").exists()
+        return
+    if review_case == "reviewed_empty":
+        boundary = json.loads((directory / "reviewed-feedback-insufficient-after-1.json").read_text())
+        assert boundary["raw_feedback_identity"] == artifact_identity(capabilities)
+        assert boundary["reviewed_feedback_identity"] == artifact_identity(reviewed_feedback)
+        assert restored.completed_pilots == 1
+        assert not (directory / "reviewed-construction-required-after-1.json").exists()
+        assert not (directory / "terminal-state.json").exists()
+        return
+    if review_case == "plan":
+        captured = captured_plan["plan"]
+        assert tuple(captured.feedback_labels) == (CodingSkill.TYPES.value,)
+        assert captured.feedback_identity == artifact_identity(reviewed_feedback)
+        selected_contracts = {task.contract_id for task in captured.selected_tasks}
+        assert "reviewed-contract" in selected_contracts
+        assert "raw-contract" not in selected_contracts
+        sealed_path = directory / f"{plan.name}.json"
+        assert json.loads(sealed_path.read_text())["payload"]["result"]["feedback_identity"] == artifact_identity(
+            capabilities
+        )
         assert not (directory / "terminal-state.json").exists()
         return
     if calibration_source in ("fresh_recovery", "incomplete_recovery"):
@@ -756,7 +863,7 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         else:
             assert allocation_plans == []
         return
-    if empty_feedback:
+    if review_case == "raw_empty":
         boundary_path = directory / "feedback-insufficient-after-1.json"
         boundary_bytes = boundary_path.read_bytes()
         boundary = json.loads(boundary_bytes)
@@ -765,21 +872,32 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         assert boundary["last_round_sha256"] == sealed_hash
         assert boundary["feedback_identity"] == artifact_identity(capabilities)
         assert boundary["capabilities_sha256"] == hashlib.sha256(capabilities_bytes).hexdigest()
-        assert boundary["reason"] == "empty_capability_feedback"
         assert restored.completed_pilots == 1
         assert restored.stop_reason is None
         assert restored.working == restored.champion == score
         assert not (directory / "terminal-state.json").exists()
-        assert not (directory / "construction-required-after-1.json").exists()
+        assert not (directory / "reviewed-construction-required-after-1.json").exists()
         sealed_path = directory / f"{plan.name}.json"
         sealed_bytes = sealed_path.read_bytes()
+        sealed_record = json.loads(sealed_bytes)
+        assert sealed_record["payload"]["result"]["feedback_identity"] == artifact_identity(capabilities)
         repeated = resume()
         assert repeated == restored
         assert boundary_path.read_bytes() == boundary_bytes
         assert sealed_path.read_bytes() == sealed_bytes
         return
+    if review_case == "review_pending":
+        assert restored.completed_pilots == 1
+        assert restored.stop_reason is None
+        assert (directory / "review-required-after-1.json").exists()
+        assert not (directory / "reviewed-construction-required-after-1.json").exists()
+        assert not (directory / "terminal-state.json").exists()
+        return
     assert restored.completed_pilots == 1
-    assert restored.stop_reason == (StopReason.TASK_SUPPLY if next_bank_supplied else None)
-    assert (directory / "terminal-state.json").exists() == next_bank_supplied
-    assert (directory / "construction-required-after-1.json").exists() != next_bank_supplied
+    bank_supplied = review_case == "bank"
+    assert restored.stop_reason == (StopReason.TASK_SUPPLY if bank_supplied else None)
+    assert (directory / "terminal-state.json").exists() == bank_supplied
+    assert (directory / "reviewed-construction-required-after-1.json").exists() != bank_supplied
+    if review_case == "construction_pending":
+        assert raw_construction_boundary.read_bytes() == raw_construction_boundary_bytes
     assert restored.working == restored.champion == score
