@@ -567,18 +567,21 @@ The artifact identity includes the two exclusion sets.
 Neither stage requires topic clusters, source quotas, or incumbent quality bins.
 
 Without `--run`, the commands print their artifact plans.
-Add `--prepare-only --run` to the quality command for scoring and cache preparation without model training.
+The quality command defaults to `--stage train`.
+Use `--stage select --run` to score and prepare the selected cache without model training.
 In this mode, `--training-tokens` can set a small experiment budget.
 For a training run, add `--run` inside an Iris CPU coordinator.
+
 The default scoring workers use CPUs. Use the Python builder's `worker_resources` for a scorer that requires GPUs.
 
-For a custom head that reads cached Harrier vectors, prepare the features once:
+For a custom head that reads cached Harrier vectors, inspect the feature plan:
 
 ```bash
 uv run python -m experiments.grug.fast_track.quality_cli \
-  --raw-pool <raw-corpus-artifact> --features-only --size d512 --version 2026.10.04
+  --raw-pool <raw-corpus-artifact> --stage features --size d512 --version 2026.10.04
 ```
 
+Run this command with `--run` inside an Iris CPU coordinator to build the feature artifact.
 Pass that completed artifact as `--prepared-features` with the generic scorer options.
 The feature budget must match the scorer's raw-prefix budget. The ridge-head command prepares and reuses these features automatically.
 

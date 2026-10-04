@@ -8,6 +8,7 @@ import importlib
 import json
 import math
 from collections.abc import Callable
+from enum import StrEnum
 
 import click
 from marin.execution.artifact import Artifact
@@ -38,6 +39,12 @@ from experiments.grug.fast_track.quality_pipeline import (
     build_ridge_scored_pool,
     build_scored_pool,
 )
+
+
+class QualityStage(StrEnum):
+    FEATURES = "features"
+    SELECT = "select"
+    TRAIN = "train"
 
 
 def _factory(path: str) -> Callable[[], DocumentQualityScorer]:
@@ -90,8 +97,13 @@ def _adopt_path(path: str, *, name: str, kind: type[Artifact]) -> ArtifactStep:
 @click.option("--tie-seed", type=click.IntRange(min=0), default=0, show_default=True)
 @click.option("--seed", type=click.IntRange(min=0), default=0, show_default=True)
 @click.option("--data-seed", type=click.IntRange(min=0), default=0, show_default=True)
-@click.option("--prepare-only", is_flag=True)
-@click.option("--features-only", is_flag=True, help="Prepare the bounded Harrier feature artifact, then exit.")
+@click.option(
+    "--stage",
+    type=click.Choice([stage.value for stage in QualityStage]),
+    default=QualityStage.TRAIN.value,
+    show_default=True,
+    help="Artifact graph boundary: features, select, or train.",
+)
 @build_options
 def main(
     raw_pool: str,
@@ -109,9 +121,9 @@ def main(
     tie_seed: int,
     seed: int,
     data_seed: int,
-    prepare_only: bool,
-    features_only: bool,
+    stage: str,
 ) -> ArtifactStep[QualityData] | ArtifactStep[ThroughputResult] | ArtifactStep[PreparedQualityPool]:
+    selected_stage = QualityStage(stage)
     rung_tokens = resolve_h100_ladder_budget(
         size=size,
         dense=True,
@@ -119,12 +131,14 @@ def main(
         num_steps=None,
         batch_size=None,
     ).token_count
-    if not (prepare_only or features_only) and training_tokens is not None and training_tokens != rung_tokens:
+    if selected_stage is QualityStage.TRAIN and training_tokens is not None and training_tokens != rung_tokens:
         raise click.UsageError("--training-tokens must equal the resolved rung budget when training")
-    selected_tokens = training_tokens if (prepare_only or features_only) and training_tokens is not None else rung_tokens
+    selected_tokens = (
+        training_tokens if selected_stage is not QualityStage.TRAIN and training_tokens is not None else rung_tokens
+    )
     raw_step = _adopt_path(raw_pool, name="raw-pool", kind=RawCorpusPool)
     token_cap = math.ceil(selected_tokens / QUALITY_FRACTION)
-    if features_only:
+    if selected_stage is QualityStage.FEATURES:
         if any(
             (
                 scorer_factory,
@@ -137,7 +151,7 @@ def main(
                 run_id,
             )
         ):
-            raise click.UsageError("--features-only cannot combine with scoring or training options")
+            raise click.UsageError("--stage features cannot combine with scoring or training options")
         return build_quality_features(raw_step, token_budget=token_cap)
     if ridge_head_artifact is not None:
         if any((scorer_factory, classifier_identity, label_exclusion_manifest, prepared_features)):
@@ -174,7 +188,7 @@ def main(
             incumbent_identity=incumbent_id,
         )
     selection = build_quality_data(QualitySpec(scored, selected_tokens, SelectionMethod(selection_method), tie_seed))
-    if prepare_only:
+    if selected_stage is QualityStage.SELECT:
         return selection
     if run_id is None or not run_id.strip():
         raise click.UsageError("--run-id is required when training")
