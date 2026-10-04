@@ -77,6 +77,8 @@ async def evaluate_development(
         SubmissionConvention,
     )
 
+    from experiments.post_training.russell_rsi.token_preflight import run_token_preflight  # noqa: PLC0415
+
     tasks = list(islice(read_tasks(config.tasks_path), config.limit))
     if not tasks:
         raise ValueError("The frozen development cohort is empty")
@@ -90,7 +92,7 @@ async def evaluate_development(
             response.raise_for_status()
             return response.json()
 
-        async def turn(request: ModelRequest) -> ModelTurn:
+        async def turn(request: ModelRequest, temperature: float = config.temperature) -> ModelTurn:
             body = {
                 "model": model,
                 "messages": list(request.messages),
@@ -115,7 +117,7 @@ async def evaluate_development(
                 "model": model,
                 "prompt": prompt_ids,
                 "max_tokens": RESPONSE_TOKENS,
-                "temperature": config.temperature,
+                "temperature": temperature,
                 "return_token_ids": True,
                 "skip_special_tokens": True,
                 "stop_token_ids": list(STOP_TOKEN_IDS),
@@ -142,6 +144,7 @@ async def evaluate_development(
                 text=choice["text"],
             )
 
+        await run_token_preflight(lambda request: turn(request, temperature=0.0), client, config.output_path)
         engine = ShellboxRolloutEngine(
             turn,
             {

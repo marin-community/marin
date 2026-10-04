@@ -383,7 +383,7 @@ def spike_workflow(
 
 
 @click.command(help=__doc__)
-@click.option("--stage", type=click.Choice(("rl", "reload", "evaluation", "spike")), required=True)
+@click.option("--stage", type=click.Choice(("rl", "reload", "evaluation", "spike", "parent-development")), required=True)
 @click.option("--scale", type=click.Choice(tuple(SCALES)), required=True)
 @click.option("--data-name", required=True)
 @click.option("--data-version", required=True)
@@ -426,9 +426,16 @@ def main(
             raise click.UsageError(
                 "--stage spike requires --relay-job, --task-image, " "--machine-config-json, and --dependency-wheels-uri"
             )
+    if stage in ("spike", "parent-development"):
+        if machine_config_json is None:
+            raise click.UsageError(f"--stage {stage} requires --machine-config-json")
         machine_config = json.loads(machine_config_json)
         if machine_config["backend"] != "qemu":
-            raise click.UsageError("The bounded spike requires the network-disabled QEMU task backend")
+            raise click.UsageError("The current Python repair tasks require the network-disabled QEMU task backend")
+        runtime_bundle = RuntimeBundle(**machine_config["runtime_bundle"])
+        if stage == "parent-development":
+            return development_step(data, model, version, runtime_bundle, "parent")
+        assert relay_job is not None and task_image is not None and dependency_wheels_uri is not None
         wheels = ArtifactStep.adopt("documents/russell-rsi-dependency-wheels", version, dependency_wheels_uri)
         return spike_workflow(
             data,
@@ -437,7 +444,7 @@ def main(
             version,
             relay_job,
             task_image,
-            RuntimeBundle(**machine_config["runtime_bundle"]),
+            runtime_bundle,
             machine_config,
             wheels,
         )
