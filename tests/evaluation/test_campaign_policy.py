@@ -94,16 +94,23 @@ def test_campaign_accepts_model_specific_harbor_profile_and_rejects_other_varian
         name="bixbench-pi",
         mechanism="harbor",
         source_digest=profile.sources[variant],
-        tasks=(EvalTaskRef(name=profile.identity["dataset"], num_fewshot=None),),
+        tasks=(EvalTaskRef(name=profile.identity.dataset, num_fewshot=None),),
         harbor=HarborRef(
-            **profile.identity, config_digest="sha256:" + "1" * 64, max_input_tokens=context, max_output_tokens=16384
+            **profile.identity.model_dump(),
+            config_digest="sha256:" + "1" * 64,
+            max_input_tokens=context,
+            max_output_tokens=16384,
         ),
     )
     assert policy_violations(SEPTEMBER_29_R2_VERSION, model, evaluation) == ()
     other = "native32k" if variant == "standard" else "standard"
     changed = evaluation.model_copy(update={"source_digest": profile.sources[other]})
     assert policy_violations(SEPTEMBER_29_R2_VERSION, model, changed)
+
     assert evaluation.harbor is not None
+    for field in ("dataset", "version", "agent", "env"):
+        changed = evaluation.model_copy(update={"harbor": evaluation.harbor.model_copy(update={field: "different"})})
+        assert policy_violations(SEPTEMBER_29_R2_VERSION, model, changed)
     changed = evaluation.model_copy(update={"harbor": evaluation.harbor.model_copy(update={"max_output_tokens": 256})})
     assert policy_violations(SEPTEMBER_29_R2_VERSION, model, changed)
 
@@ -111,7 +118,7 @@ def test_campaign_accepts_model_specific_harbor_profile_and_rejects_other_varian
 def test_campaign_accepts_sotopia_hugging_face_record_identity():
     model, _ = _campaign_run("Qwen-Qwen3.6-35B-A3B", "math500")
     profile = CAMPAIGN.harbor["sotopia-hard"]
-    identity = {**profile.identity, "dataset": "hf://open-athena/sotopia-hard-harbor"}
+    identity = {**profile.identity.model_dump(), "dataset": "hf://open-athena/sotopia-hard-harbor"}
     evaluation = EvalRef(
         name="sotopia-hard",
         mechanism="harbor",
@@ -159,9 +166,12 @@ def test_historical_and_revised_harbor_configs_stay_in_their_own_cohorts(version
         name="swebench-verified",
         mechanism="harbor",
         source_digest=profile.sources["standard"],
-        tasks=(EvalTaskRef(name=profile.identity["dataset"], num_fewshot=None),),
+        tasks=(EvalTaskRef(name=profile.identity.dataset, num_fewshot=None),),
         harbor=HarborRef(
-            **profile.identity, config_digest="sha256:" + "1" * 64, max_input_tokens=32768, max_output_tokens=8192
+            **profile.identity.model_dump(),
+            config_digest="sha256:" + "1" * 64,
+            max_input_tokens=32768,
+            max_output_tokens=8192,
         ),
     )
     assert policy_violations(version, model, evaluation) == ()

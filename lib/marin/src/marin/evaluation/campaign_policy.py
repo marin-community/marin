@@ -22,12 +22,21 @@ SEPTEMBER_29_R2_VERSION = "eval-policy-2026-09-29-r2-verified"
 MAX_SERVED_CONTEXT = 73728
 
 
+class HarborIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dataset: str
+    version: str
+    agent: str
+    env: str
+
+
 class HarborProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     sources: dict[Literal["standard", "native32k"], str]
     model_info: dict[str, int]
-    identity: dict[Literal["dataset", "version", "agent", "env"], str]
+    identity: HarborIdentity
 
 
 class CampaignProfile(BaseModel):
@@ -124,10 +133,10 @@ def campaign_policy_violations(model: ModelRef, evaluation: EvalRef, profile: Ca
         actual_harbor = evaluation.harbor.model_dump()
         problems.extend(
             f"Harbor {key} differs from the approved benchmark policy"
-            for key, value in approved_harbor.identity.items()
+            for key, value in approved_harbor.identity.model_dump().items()
             if actual_harbor[key] != value
         )
-        if len(evaluation.tasks) != 1 or evaluation.tasks[0].name != approved_harbor.identity["dataset"]:
+        if len(evaluation.tasks) != 1 or evaluation.tasks[0].name != approved_harbor.identity.dataset:
             problems.append("Harbor task differs from the approved benchmark policy")
         if evaluation.harbor.config_digest is None:
             problems.append("missing normalized Harbor configuration digest")

@@ -1,7 +1,7 @@
 # open-athena Snowball 67B-A2B 10T Mixed RLVR Sync Step92: GrugMoE 256-expert MoE, ~134 GB bf16,
 # same lineage as the Datakit SFT export (June recipe, disable_pko/disable_long_rope explicit in
 # config.json). Trained at max_seq_len 262,144 (config.json max_position_embeddings); served at
-# the suite cap 73,728 per the canonical full-context protocol from marin#7505. Serve follows the
+# the suite cap 73,728 per https://github.com/marin-community/marin/issues/7505. Serve follows the
 # grug-agentic-s3-step1903 catalog recipe: TP1 + DP8 + expert parallel on one 8xH100 node (the
 # per-head TP heuristic cannot infer this shape, hence auto_overrides: false), shards streamed
 # distributed across ranks (~134 GB through host buffers, hence memory 512g).
