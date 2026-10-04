@@ -14,6 +14,13 @@ const $ = (s) => document.querySelector(s),
           "'": "&#39;",
         })[c],
     );
+const COOLDOWN_ROOTS = {
+  "2.7T": "base-2.7",
+  "5.7T": "base-5.7",
+  "10T": "base-10",
+};
+const TIMELINE_ROWS = 6;
+const SCRUBBER_STEPS = Number($("#timeline-scrub").max);
 const SEPT21 = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21";
 let detailId = null,
   resultsDismissed = false,
@@ -93,7 +100,8 @@ function shortTitle(n) {
     .replace("Mini-swe-agent relay SFT · 2,394", "MSA relay · 2394")
     .replace("GLM5.3 rollout SFT · September 23", "GLM5.3 SFT · 09.23");
 }
-function card(n, reading = false) {
+function card(n, presentation = "map") {
+  const reading = presentation === "read";
   const expanded = reading || expandedNode === n.id;
   return `<article class="node ${n.org === "community" ? "community" : ""} ${expanded ? "expanded" : "collapsed"} ${selected === n.id ? "selected" : ""}" data-node="${esc(n.id)}" ${reading ? "" : `id="node-${esc(n.id)}"`} aria-label="${esc(n.title)}">
  <h2>${reading ? esc(n.title) : `<button class="node-toggle" data-expand="${esc(n.id)}" aria-expanded="${expanded}" aria-label="${expanded ? "Collapse" : "Expand"} ${esc(n.title)}">${esc(expanded ? n.title : shortTitle(n))}</button>`}</h2>
@@ -127,11 +135,7 @@ function matches(n) {
 }
 function treeMembers() {
   const family = $("#family").value;
-  const root =
-    focusRoot ||
-    (family === "all"
-      ? null
-      : { "2.7T": "base-2.7", "5.7T": "base-5.7", "10T": "base-10" }[family]);
+  const root = focusRoot || (family === "all" ? null : COOLDOWN_ROOTS[family]);
   if (!root) return nodes;
   const keep = descendants(root);
   for (const id of ancestors(root)) keep.add(id);
@@ -141,7 +145,7 @@ function render() {
   visibleNodes = treeMembers();
   $("#tree-nodes").innerHTML = visibleNodes.map((n) => card(n)).join("");
   $("#read-grid").innerHTML = ordered(nodes)
-    .map((n) => card(n, true))
+    .map((n) => card(n, "read"))
     .join("");
 
   const label = focusRoot
@@ -154,12 +158,7 @@ function render() {
   $("#collapse-node").disabled = !expandedNode;
   requestAnimationFrame(() => {
     detail(selected);
-    const workspace = $(".workspace");
-    if (innerWidth > 760)
-      workspace.style.height =
-        Math.max(360, innerHeight - workspace.getBoundingClientRect().top) +
-        "px";
-    else workspace.style.height = "";
+    sizeWorkspace();
     if (viewMode === "map") {
       layout();
       if (overviewMode) fitTree();
@@ -515,9 +514,7 @@ $("#family").addEventListener("input", () => {
   selected =
     $("#family").value === "all"
       ? "pretrain"
-      : { "2.7T": "base-2.7", "5.7T": "base-5.7", "10T": "base-10" }[
-          $("#family").value
-        ];
+      : COOLDOWN_ROOTS[$("#family").value];
   render();
 });
 $("#collapse-node").onclick = () => {
@@ -646,12 +643,7 @@ function endDrag() {
 $("#viewport").addEventListener("pointerup", endDrag);
 $("#viewport").addEventListener("pointercancel", endDrag);
 window.addEventListener("resize", () => {
-  const workspace = $(".workspace");
-  workspace.style.height =
-    innerWidth > 760
-      ? Math.max(360, innerHeight - workspace.getBoundingClientRect().top) +
-        "px"
-      : "";
+  sizeWorkspace();
   if (viewMode === "map") {
     if (overviewMode) fitTree();
     else applyZoom();
@@ -712,7 +704,7 @@ function timelineModels(list, label) {
     )
     .join("");
 }
-function sizeTimeline() {
+function sizeWorkspace() {
   const workspace = $(".workspace");
   workspace.style.height =
     innerWidth > 760
@@ -723,11 +715,7 @@ function sizeTimeline() {
 function setupTimeline(autoplay = true) {
   stopTimeline();
   timelineFamily = $("#timeline-family").value;
-  timelineRoot = byId.get(
-    { "2.7T": "base-2.7", "5.7T": "base-5.7", "10T": "base-10" }[
-      timelineFamily
-    ],
-  );
+  timelineRoot = byId.get(COOLDOWN_ROOTS[timelineFamily]);
   timelineNodes = ordered(
     nodes.filter((n) => n.lane === timelineFamily && n.id !== timelineRoot.id),
   );
@@ -745,7 +733,8 @@ function setupTimeline(autoplay = true) {
   );
   timelineTime = timelineStart;
   timelineLastDay = null;
-  const columns = Math.ceil(timelineNodes.length / 6);
+  const columns = Math.ceil(timelineNodes.length / TIMELINE_ROWS);
+  $("#timeline-events").style.setProperty("--timeline-rows", TIMELINE_ROWS);
   $("#timeline-events").style.gridTemplateColumns =
     `repeat(${columns},minmax(0,1fr))`;
   $("#timeline-events").innerHTML = timelineNodes
@@ -759,7 +748,10 @@ function setupTimeline(autoplay = true) {
   $("#timeline-ticks").style.gridTemplateColumns =
     `repeat(${columns},minmax(0,1fr))`;
   $("#timeline-ticks").innerHTML = Array.from({ length: columns }, (_, i) => {
-    const group = timelineNodes.slice(i * 6, i * 6 + 6),
+    const group = timelineNodes.slice(
+        i * TIMELINE_ROWS,
+        (i + 1) * TIMELINE_ROWS,
+      ),
       first = group[0],
       last = group[group.length - 1];
     return `<span>${first.timeline.date ? shortDate.format(nodeTime(first)) : "Undated"}${last.timeline.date !== first.timeline.date ? " – " + (last.timeline.date ? shortDate.format(nodeTime(last)) : "undated") : ""}</span>`;
@@ -767,7 +759,7 @@ function setupTimeline(autoplay = true) {
   $("#tree-caption").textContent =
     `${timelineFamily} timeline · ${timelineNodes.length + 1} nodes · temporal grouping under one cooldown; original lineage remains in Details`;
   detail(timelineRoot.id);
-  sizeTimeline();
+  sizeWorkspace();
   paintTimeline();
   if (autoplay && !matchMedia("(prefers-reduced-motion: reduce)").matches)
     playTimeline();
@@ -783,7 +775,8 @@ function paintTimeline() {
   });
   $("#timeline-clock").textContent = fullDate.format(timelineTime);
   $("#timeline-scrub").value = Math.round(
-    ((timelineTime - timelineStart) / (timelineEnd - timelineStart)) * 1000,
+    ((timelineTime - timelineStart) / (timelineEnd - timelineStart)) *
+      SCRUBBER_STEPS,
   );
   $("#timeline-scrub").setAttribute(
     "aria-valuetext",
@@ -848,7 +841,7 @@ function selectTimelineNode(id) {
   timelineTime = Math.max(timelineTime, nodeTime(n));
   paintTimeline();
   detail(id);
-  sizeTimeline();
+  sizeWorkspace();
   document
     .querySelectorAll(".timeline-event")
     .forEach((e) => e.classList.toggle("selected", e.dataset.timeNode === id));
@@ -896,7 +889,8 @@ $("#timeline-scrub").oninput = () => {
   stopTimeline();
   timelineTime =
     timelineStart +
-    ((timelineEnd - timelineStart) * Number($("#timeline-scrub").value)) / 1000;
+    ((timelineEnd - timelineStart) * Number($("#timeline-scrub").value)) /
+      SCRUBBER_STEPS;
   paintTimeline();
 };
 document.addEventListener("click", (e) => {

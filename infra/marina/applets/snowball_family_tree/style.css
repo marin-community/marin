@@ -1077,7 +1077,7 @@ h1 {
 .timeline-events {
   display: grid;
   grid-auto-flow: column;
-  grid-template-rows: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(var(--timeline-rows), minmax(0, 1fr));
   gap: 9px;
   min-height: 0;
   min-width: 0;
