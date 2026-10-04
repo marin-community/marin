@@ -119,6 +119,12 @@ class _SampleResult:
     rows: int
 
 
+@dataclass(frozen=True)
+class _HeroRecipe:
+    weights: dict[str, float]
+    sha256: str
+
+
 class _ComponentMarker(AsyncDataset[str]):
     def __init__(self, name: str, length: int):
         self.name = name
@@ -160,7 +166,7 @@ def _mixture_component_examples(weights: Mapping[str, float], total_tokens: int)
     return Counter({name: count * block_count for name, count in counts.items()})
 
 
-def _recipe() -> tuple[dict[str, int], dict[str, float], str]:
+def _recipe() -> _HeroRecipe:
     raw_bytes = HERO_RECIPE.read_bytes()
     raw = json.loads(raw_bytes)
     if raw["candidate_store_uri"] != HERO_SOURCE_STORE:
@@ -177,7 +183,7 @@ def _recipe() -> tuple[dict[str, int], dict[str, float], str]:
         raise ValueError("hero recipe source token counts must be positive")
     if not any(weight > 0 for weight in main_weights.values()):
         raise ValueError("hero main-phase weights must contain a positive component")
-    return available_tokens, main_weights, hashlib.sha256(raw_bytes).hexdigest()
+    return _HeroRecipe(main_weights, hashlib.sha256(raw_bytes).hexdigest())
 
 
 def _component_shuffle_index(recipe: dict, name: str) -> int:
@@ -195,7 +201,7 @@ def _component_cache_path(root: str, name: str) -> str:
 
 def hero_sample_manifest(root: str) -> FrozenBaselineManifest:
     """Return the fixed phase-one component weights at one sample artifact path."""
-    _, weights, _ = _recipe()
+    weights = _recipe().weights
     return FrozenBaselineManifest(
         tokenizer=HERO_TARGET_TOKENIZER,
         components=tuple(
@@ -346,7 +352,8 @@ def prepare_hero_sample(
         raise ValueError(f"requested_tokens must be between 1 and {HERO_TARGET_TOKENS:,}")
     if config.data_seed < 0:
         raise ValueError("data_seed must be non-negative")
-    _, weights, recipe_sha256 = _recipe()
+    parsed_recipe = _recipe()
+    weights = parsed_recipe.weights
     recipe = json.loads(HERO_RECIPE.read_text())
     source_tokenizer = recipe["tokenizer"]
     source_tokenizer_hash = config.source_tokenizer_hash
@@ -393,7 +400,7 @@ def prepare_hero_sample(
         source_tokenizer=source_tokenizer,
         source_tokenizer_hash=source_tokenizer_hash,
         target_tokenizer_hash=target_tokenizer_hash,
-        recipe_sha256=recipe_sha256,
+        recipe_sha256=parsed_recipe.sha256,
         phase="main",
         loader_policy=HERO_LOADER_POLICY,
         sequence_length=HERO_SEQUENCE_LENGTH,
@@ -418,7 +425,7 @@ def hero_sample_step(
         raise ValueError("hero sample source must match the pinned production store")
     if data_seed < 0:
         raise ValueError("data_seed must be non-negative")
-    _, _, recipe_sha256 = _recipe()
+    recipe_sha256 = _recipe().sha256
     source_tokenizer_hash = tokenizer_content_hash(marin_tokenizer)
     target_tokenizer_hash = tokenizer_content_hash(HERO_TARGET_TOKENIZER)
     identity = {
