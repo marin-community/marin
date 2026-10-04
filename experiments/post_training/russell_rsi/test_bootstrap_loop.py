@@ -181,15 +181,18 @@ def test_selected_tasks_retain_bands_and_manifests_reject_changed_resume(tmp_pat
     assert frozen.absent_bands == ()
     result = RoundResult(CheckpointScore("candidate", (26 / 32, 26 / 32), 0.8), "reload", "eval", 4)
     updated = advance(state, frozen, result)
-    digest = seal_round(StoragePath(str(tmp_path)), updated, frozen, result, "previous")
-    assert seal_round(StoragePath(str(tmp_path)), updated, frozen, result, "previous") == digest
+    replay_plan = {"schedule_sha256": "sealed-schedule"}
+    digest = seal_round(StoragePath(str(tmp_path)), updated, frozen, result, "previous", replay_plan)
+    assert seal_round(StoragePath(str(tmp_path)), updated, frozen, result, "previous", replay_plan) == digest
     path = StoragePath(str(tmp_path)) / f"{frozen.name}.json"
     inputs = {
         key: value
         for key, value in asdict(frozen).items()
         if key not in {"name", "selected_tasks", "retained_count", "fresh_count", "absent_bands"}
     }
-    assert load_round(path, inputs, "previous").state == updated
+    resumed = load_round(path, inputs, "previous")
+    assert resumed.state == updated
+    assert resumed.replay_plan == replay_plan
     with pytest.raises(ValueError, match="resume input"):
         load_round(path, {**inputs, "runtime_identity": "different-runtime"}, "previous")
     with pytest.raises(ValueError, match="sealed record"):

@@ -8,6 +8,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
+from enum import StrEnum
 from typing import cast
 
 import click
@@ -75,6 +76,18 @@ from experiments.post_training.russell_rsi.repair_tasks import (
     run_qualified_union_in_project,
     run_repair_tasks_in_project,
 )
+from experiments.post_training.russell_rsi.replay import (
+    REPLAY_BATCH_POLICY,
+    REPLAY_DATA_SHUFFLE,
+    REPLAY_EPOCHS,
+    REPLAY_MAX_STALENESS_STEPS,
+    REQUIRED_WEIGHTED_Q4,
+    ReplayDatasetConfig,
+    calibration_signal_failure,
+    freeze_replay_dataset,
+    replay_plan,
+    validate_replay_plan,
+)
 from experiments.post_training.russell_rsi.rollout_eval import DevelopmentEvaluationConfig, run_development_evaluation
 from experiments.post_training.russell_rsi.settings import (
     CHAT_TEMPLATE_KWARGS,
@@ -123,93 +136,111 @@ class ReviewedConstructionInputs:
 SCALES = {"smoke": Scale(1, 1), "pilot": Scale(4, 7)}
 
 
-def recipe(scale: Scale, machine_config: dict | None = None) -> str:
+class SamplingMode(StrEnum):
+    FROZEN_ROUND = "frozen_round"
+    CALIBRATED_REPLAY = "calibrated_replay"
+
+
+def recipe(
+    scale: Scale,
+    machine_config: dict | None = None,
+    *,
+    sampling_mode: SamplingMode = SamplingMode.FROZEN_ROUND,
+) -> str:
     """Configure shared task rollouts and bounded GRPO training."""
-    return yaml.safe_dump(
-        {
-            "entrypoint": "taskcompendium",
-            "context_budget": {
-                "request_window_tokens": CONTEXT_TOKENS,
-                "max_new_tokens_per_turn": RESPONSE_TOKENS,
-                "max_turns": 16,
-                "max_prompt_tokens": PROMPT_TOKENS,
-            },
-            "data": {"kind": "tasks", "train_data": [], "val_data": []},
-            "trainer": {
-                "strategy": "megatron",
-                "flash_attn": False,
-                "use_sample_packing": False,
-                "offload_optimizer_during_rollouts": True,
-                "gradient_checkpointing": True,
-                "algorithm": {"advantage_estimator": "grpo", "use_kl_loss": False},
-                # SkyRL schedules floor(rows / batch) * epochs; sixteen rows need one epoch per update.
-                "epochs": scale.updates,
-                "max_steps": scale.updates,
-                "update_epochs_per_batch": 1,
-                "eval_batch_size": 64,
-                "micro_forward_batch_size_per_gpu": 1,
-                "eval_before_train": False,
-                "eval_interval": scale.updates if scale.updates > 1 else -1,
-                "ckpt_interval": scale.updates,
-                "resume_mode": "none",
-                "logger": "console",
-                "project_name": "marin-russell-rsi",
-                "hf_hub_repo_id": None,
-                "policy": {
-                    "optimizer_config": {"lr": 5.0e-7, "max_grad_norm": 1.0},
-                    "megatron_config": {
-                        "tensor_model_parallel_size": 1,
-                        "pipeline_model_parallel_size": 2,
-                        "context_parallel_size": 1,
-                        "expert_model_parallel_size": 8,
-                        "expert_tensor_parallel_size": 1,
-                        "optimizer_checkpoint_sharding_type": "dp_reshardable",
-                        "ddp_config": {
-                            "overlap_grad_reduce": True,
-                            "overlap_param_gather": True,
-                            "grad_reduce_in_fp32": False,
-                        },
-                    },
+    replay = sampling_mode is SamplingMode.CALIBRATED_REPLAY
+    data_config: dict[str, object] = {"kind": "tasks", "train_data": [], "val_data": []}
+    trainer_config: dict[str, object] = {
+        "strategy": "megatron",
+        "flash_attn": False,
+        "use_sample_packing": False,
+        "offload_optimizer_during_rollouts": True,
+        "gradient_checkpointing": True,
+        "algorithm": {"advantage_estimator": "grpo", "use_kl_loss": False},
+        "epochs": REPLAY_EPOCHS if replay else scale.updates,
+        "max_steps": scale.updates,
+        "update_epochs_per_batch": 1,
+        "eval_batch_size": 64,
+        "micro_forward_batch_size_per_gpu": 1,
+        "eval_before_train": False,
+        "eval_interval": scale.updates if scale.updates > 1 else -1,
+        "ckpt_interval": scale.updates,
+        "resume_mode": "none",
+        "logger": "console",
+        "project_name": "marin-russell-rsi",
+        "hf_hub_repo_id": None,
+        "policy": {
+            "optimizer_config": {"lr": 5.0e-7, "max_grad_norm": 1.0},
+            "megatron_config": {
+                "tensor_model_parallel_size": 1,
+                "pipeline_model_parallel_size": 2,
+                "context_parallel_size": 1,
+                "expert_model_parallel_size": 8,
+                "expert_tensor_parallel_size": 1,
+                "optimizer_checkpoint_sharding_type": "dp_reshardable",
+                "ddp_config": {
+                    "overlap_grad_reduce": True,
+                    "overlap_param_gather": True,
+                    "grad_reduce_in_fp32": False,
                 },
             },
-            "generator": {
-                "backend": "vllm",
-                "model_dtype": "bfloat16",
-                "vllm_attention_backend": "FLASH_ATTN",
-                "gpu_memory_utilization": 0.75,
-                "max_num_batched_tokens": PROMPT_TOKENS,
-                "run_engines_locally": True,
-                "weight_sync_backend": "nccl",
-                "chat_template_kwargs": CHAT_TEMPLATE_KWARGS,
-                "engine_init_kwargs": {
-                    "moe_backend": "triton",
-                    "enable_auto_tool_choice": True,
-                    "tool_call_parser": "hermes",
-                },
-                "sampling_params": {
-                    "temperature": 1.0,
-                    "top_p": 1.0,
-                    "stop_token_ids": list(STOP_TOKEN_IDS),
-                },
-                "error_handling": {"default_error_treatment": "mask", "preserve_logprobs_on_timeout": True},
-                "trajectory_retention": {
-                    "enabled": True,
-                    "phases": ["train", "eval"],
-                    "sample_count_per_step": 256,
-                    "always_retain_failures": True,
-                    "required": True,
-                    "max_bytes_per_run": 1073741824,
-                },
-            },
-            "trajectory_runner": {
-                **({"machine": machine_config} if machine_config is not None else {}),
-                "command_timeout": 120,
-                "max_concurrent_tasks": ROLLOUT_CONCURRENCY,
-                "rollout_workers": {"num_workers": 4, "cpus_per_worker": 8, "executor_threads": 32},
-            },
-            "extra_env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+        },
+    }
+    if replay:
+        data_config["shuffle"] = REPLAY_DATA_SHUFFLE
+        trainer_config["rollout_buffer"] = {
+            "max_staleness_steps": REPLAY_MAX_STALENESS_STEPS,
+            "batch_policy": REPLAY_BATCH_POLICY,
         }
-    )
+    # One frozen 16-row pass uses one epoch per update. Replay uses one 64-row pass for four updates.
+    config = {
+        "entrypoint": "taskcompendium",
+        "context_budget": {
+            "request_window_tokens": CONTEXT_TOKENS,
+            "max_new_tokens_per_turn": RESPONSE_TOKENS,
+            "max_turns": 16,
+            "max_prompt_tokens": PROMPT_TOKENS,
+        },
+        "data": data_config,
+        "trainer": trainer_config,
+        "generator": {
+            "backend": "vllm",
+            "model_dtype": "bfloat16",
+            "vllm_attention_backend": "FLASH_ATTN",
+            "gpu_memory_utilization": 0.75,
+            "max_num_batched_tokens": PROMPT_TOKENS,
+            "run_engines_locally": True,
+            "weight_sync_backend": "nccl",
+            "chat_template_kwargs": CHAT_TEMPLATE_KWARGS,
+            "engine_init_kwargs": {
+                "moe_backend": "triton",
+                "enable_auto_tool_choice": True,
+                "tool_call_parser": "hermes",
+            },
+            "sampling_params": {
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "stop_token_ids": list(STOP_TOKEN_IDS),
+            },
+            "error_handling": {"default_error_treatment": "mask", "preserve_logprobs_on_timeout": True},
+            "trajectory_retention": {
+                "enabled": True,
+                "phases": ["train", "eval"],
+                "sample_count_per_step": 256,
+                "always_retain_failures": True,
+                "required": True,
+                "max_bytes_per_run": 1073741824,
+            },
+        },
+        "trajectory_runner": {
+            **({"machine": machine_config} if machine_config is not None else {}),
+            "command_timeout": 120,
+            "max_concurrent_tasks": ROLLOUT_CONCURRENCY,
+            "rollout_workers": {"num_workers": 4, "cpus_per_worker": 8, "executor_threads": 32},
+        },
+        "extra_env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+    }
+    return yaml.safe_dump(config)
 
 
 def train_step(
@@ -220,6 +251,7 @@ def train_step(
     development: ArtifactStep[Artifact] | None = None,
     machine_config: dict | None = None,
     name_component: str | None = None,
+    sampling_mode: SamplingMode = SamplingMode.FROZEN_ROUND,
 ) -> ArtifactStep[SkyRLRun]:
     selected = SCALES[scale]
     label = f"{name_component}-{scale}" if name_component else scale
@@ -228,7 +260,7 @@ def train_step(
         SkyRLSpec(
             name=f"checkpoints/russell-rsi-{label}",
             version=version,
-            config_yaml=recipe(selected, machine_config),
+            config_yaml=recipe(selected, machine_config, sampling_mode=sampling_mode),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(model, MODEL, MODEL_REVISION, relative_path=""),
             train_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
@@ -535,6 +567,35 @@ def require_optimizer_updates(config: OptimizerStepConfig) -> None:
         raise ValueError("Training did not publish the exact bounded optimizer updates and HF export")
 
 
+def stop_for_training_signal(
+    manifest_directory: StoragePath,
+    state: LoopState,
+    pilot_number: int,
+    previous_sha256: str,
+    bank_identity: str,
+    calibration_identity: str,
+    parent_identity: str,
+    reason: str,
+    evidence: dict | None = None,
+) -> LoopState:
+    """Seal a failed replay gate without advancing pilot or no-gain counts."""
+    write_once(
+        manifest_directory / f"replay-insufficient-signal-pilot-{pilot_number}.json",
+        {
+            **(evidence or {}),
+            "reason": reason,
+            "pilot_number": pilot_number,
+            "state": asdict(state),
+            "last_round_sha256": previous_sha256,
+            "bank_identity": bank_identity,
+            "calibration_identity": calibration_identity,
+            "parent_identity": parent_identity,
+            "signal_gate": REQUIRED_WEIGHTED_Q4,
+        },
+    )
+    return replace(state, stop_reason=StopReason.TRAINING_SIGNAL)
+
+
 def bootstrap_round_workflow(
     training: ArtifactStep[Artifact],
     retention: ArtifactStep[Artifact],
@@ -548,10 +609,16 @@ def bootstrap_round_workflow(
     relay_job: str,
     calibration: ArtifactStep[Artifact],
     scale: str = "pilot",
+    sampling_mode: SamplingMode = SamplingMode.FROZEN_ROUND,
 ) -> dict[str, ArtifactStep]:
     """Bind one new protocol round to coding eval feedback, without a parent rerun."""
-    label = "bootstrap-initial" if scale == "smoke" else f"bootstrap-round-{round_number}"
-    trained = train_step(training, model, scale, version, retention, machine_config, label)
+    if scale == "smoke":
+        label = "bootstrap-initial-replay-v1" if sampling_mode is SamplingMode.CALIBRATED_REPLAY else "bootstrap-initial"
+    else:
+        label = f"bootstrap-round-{round_number}"
+        if sampling_mode is SamplingMode.CALIBRATED_REPLAY:
+            label = f"{label}-replay-v1"
+    trained = train_step(training, model, scale, version, retention, machine_config, label, sampling_mode=sampling_mode)
     trained = replace(trained, deps=(*trained.deps, calibration))
 
     def optimizer_config(ctx: StepContext) -> OptimizerStepConfig | dict:
@@ -878,7 +945,8 @@ def run_bootstrap_loop(
             "parent_retention_sha256": parent_retention_evidence_sha256,
         }
     )
-    smoke_complete = False
+    smoke_path = manifest_directory / "smoke.json"
+    smoke_complete = smoke_path.exists()
     feedback_labels: set[str] = set()
     while state.stop_reason is None:
         number = state.completed_pilots + 1
@@ -892,12 +960,15 @@ def run_bootstrap_loop(
         fresh = tuple(task for task in bank if task.task_sha256 not in retained_hashes)
         if {task.task_sha256 for task in state.bank} - {task.task_sha256 for task in bank}:
             raise ValueError("A new bank discarded qualified retained tasks")
-        if state.completed_pilots and not any(
-            task.contract_id not in {retained.contract_id for retained in state.bank}
+        retained_contracts = {task.contract_id for task in state.bank}
+        targeted = tuple(
+            task
+            for task in fresh
+            if task.contract_id not in retained_contracts
             and task.relation not in {"variant", "replacement", "alias"}
             and feedback_labels.intersection(task.capability.split(","))
-            for task in fresh
-        ):
+        )
+        if state.completed_pilots and not targeted:
             state = replace(state, stop_reason=StopReason.TASK_SUPPLY)
             break
         difficulty = (
@@ -908,11 +979,11 @@ def run_bootstrap_loop(
                 current,
                 version,
                 runtime_bundle,
-                f"bootstrap-round-{number}-bank-difficulty",
+                f"bootstrap-round-{number}-bank-difficulty{'-replay-v1' if number >= 2 else ''}",
                 relative_path="train.parquet",
                 samples_per_task=8,
                 temperature=CALIBRATION_TEMPERATURE,
-                require_reward_variation=True,
+                require_reward_variation=number == 1,
                 limit=len(bank),
             )
         )
@@ -930,14 +1001,30 @@ def run_bootstrap_loop(
         )
         path = manifest_directory / f"bootstrap-{version}-pilot-{number}.json"
         resumed = load_round(path, inputs, previous_sha256) if path.exists() else None
-        if resumed is not None:
-            plan = resumed.plan
-        else:
+        measurements = None
+        if resumed is None:
             measured = resolve(difficulty)
             summary = json.loads(StoragePath(prefix_join(measured.path, "failure_summary.json")).read_text())
             measurements = calibration_measurements(
                 summary, bank, artifact_identity(current), artifact_identity(bank_handle)
             )
+        if number >= 2 and resumed is None and measurements is not None:
+            signal_failure = calibration_signal_failure(measurements)
+            if signal_failure is not None:
+                state = stop_for_training_signal(
+                    manifest_directory,
+                    state,
+                    number,
+                    previous_sha256,
+                    artifact_identity(bank_handle),
+                    artifact_identity(difficulty),
+                    state.working.checkpoint_identity,
+                    signal_failure,
+                )
+                break
+        if resumed is not None:
+            plan = resumed.plan
+        else:
             plan = round_plan(
                 state,
                 fresh,
@@ -966,8 +1053,70 @@ def run_bootstrap_loop(
                 pip_packages=["./lib/taskcompendium"],
             ),
         )
+        replay_training = frozen
+        replay_enabled = number >= 2
+        if replay_enabled:
+            if resumed is not None:
+                sealed_replay = resumed.replay_plan
+                if sealed_replay is None:
+                    raise ValueError("Sealed replay round is missing its training schedule")
+                validate_replay_plan(
+                    sealed_replay,
+                    plan,
+                    pilot_number=number,
+                    bank_identity=artifact_identity(bank_handle),
+                    calibration_identity=artifact_identity(difficulty),
+                    frozen_identity=artifact_identity(frozen),
+                    parent_identity=state.working.checkpoint_identity,
+                    model_identity=artifact_identity(current),
+                )
+            else:
+                assert measurements is not None
+                sealed_replay = replay_plan(
+                    plan,
+                    measurements,
+                    targeted,
+                    pilot_number=number,
+                    bank_identity=artifact_identity(bank_handle),
+                    calibration_identity=artifact_identity(difficulty),
+                    frozen_identity=artifact_identity(frozen),
+                    parent_identity=state.working.checkpoint_identity,
+                    model_identity=artifact_identity(current),
+                )
+            if not sealed_replay["signal_gate_passed"]:
+                if resumed is not None:
+                    raise ValueError("A resumed training schedule failed its sealed signal gate")
+                state = stop_for_training_signal(
+                    manifest_directory,
+                    state,
+                    number,
+                    previous_sha256,
+                    artifact_identity(bank_handle),
+                    artifact_identity(difficulty),
+                    state.working.checkpoint_identity,
+                    "weighted_q4_below_gate",
+                    sealed_replay,
+                )
+                break
+            replay_training = ArtifactStep(
+                name=f"documents/russell-rsi-bootstrap-replay-round-{number}-replay-v1-train",
+                version=version,
+                artifact_type=Artifact,
+                deps=(bank_handle, difficulty, frozen, current),
+                build_config=lambda ctx, tasks=bank, schedule=sealed_replay, source=bank_handle: ReplayDatasetConfig(
+                    bank_path=ctx.artifact_path(source),
+                    output_path=ctx.output_path,
+                    tasks=tasks,
+                    replay_plan=schedule,
+                ),
+                run=remote(
+                    freeze_replay_dataset,
+                    resources=ResourceConfig.with_cpu(cpu=4, ram="16GB", disk="64GB"),
+                    pip_packages=["./lib/taskcompendium"],
+                ),
+            )
         outputs = bootstrap_round_workflow(
-            frozen,
+            replay_training,
             retention,
             current,
             version,
@@ -977,10 +1126,11 @@ def run_bootstrap_loop(
             panel=panel,
             relay_job=relay_job,
             calibration=difficulty,
+            sampling_mode=(SamplingMode.CALIBRATED_REPLAY if replay_enabled else SamplingMode.FROZEN_ROUND),
         )
         if not smoke_complete:
             smoke = bootstrap_round_workflow(
-                frozen,
+                replay_training,
                 retention,
                 parent,
                 version,
@@ -991,6 +1141,7 @@ def run_bootstrap_loop(
                 relay_job=relay_job,
                 calibration=difficulty,
                 scale="smoke",
+                sampling_mode=(SamplingMode.CALIBRATED_REPLAY if replay_enabled else SamplingMode.FROZEN_ROUND),
             )
             expected_smoke = {
                 "rl": artifact_identity(smoke["rl"]),
@@ -998,7 +1149,6 @@ def run_bootstrap_loop(
                 "coding_baseline_sha256": parent_coding_evidence_sha256,
                 "retention_baseline_sha256": parent_retention_evidence_sha256,
             }
-            smoke_path = manifest_directory / "smoke.json"
             if not smoke_path.exists():
                 if resumed is not None:
                     raise ValueError("Sealed pilot is missing its smoke completion record")
@@ -1072,7 +1222,14 @@ def run_bootstrap_loop(
                 checkpoint_uri=export_uri,
             )
             state = advance(state, plan, result)
-            previous_sha256 = seal_round(manifest_directory, state, plan, result, previous_sha256)
+            previous_sha256 = seal_round(
+                manifest_directory,
+                state,
+                plan,
+                result,
+                previous_sha256,
+                replay_plan=sealed_replay if replay_enabled else None,
+            )
             capabilities = outputs["capabilities"]
         if state.stop_reason is None:
             capability_artifact = resolve(capabilities)

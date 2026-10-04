@@ -427,6 +427,56 @@ def test_bootstrap_round_uses_coding_eval_feedback_after_reload_without_parent_r
     assert terminals["coding-evidence"].name.endswith(f"-coding-evidence-{CODING_ANALYSIS_CONTEXT_PROTOCOL}")
     assert terminals["capabilities"].name.endswith(f"-capabilities-{CODING_ANALYSIS_CONTEXT_PROTOCOL}")
 
+    replay_terminals = bootstrap_round_workflow(
+        training,
+        retention,
+        parent,
+        "2026.10.04",
+        runtime,
+        {"backend": "qemu"},
+        round_number=2,
+        panel=CodingPanel((), {}),
+        relay_job="relay",
+        calibration=calibration,
+        sampling_mode=russell_launch.SamplingMode.CALIBRATED_REPLAY,
+    )
+    replay_config = yaml.safe_load(json.loads(replay_terminals["rl"].fingerprint_payload())["launch_config_yaml"])
+    assert replay_config["skyrl"]["trainer"]["epochs"] == 1
+    assert replay_config["skyrl"]["trainer"]["max_steps"] == 4
+    assert replay_config["skyrl"]["data"]["shuffle"] is False
+    assert replay_config["skyrl"]["trainer"]["rollout_buffer"] == {
+        "max_staleness_steps": 0,
+        "batch_policy": "full_batch",
+    }
+
+
+def test_replay_signal_stop_records_failure_without_advancing_pilot_counts(tmp_path):
+    parent = CheckpointScore("parent", (0.5, 0.5), 0.8)
+    bank = tuple(
+        QualifiedTask(str(index), f"task-{index}", f"proof-{index}", f"source-{index}", "types", f"contract-{index}")
+        for index in range(16)
+    )
+    state = LoopState(parent, parent, parent, bank, completed_pilots=1, rounds_without_improvement=1)
+
+    stopped = russell_launch.stop_for_training_signal(
+        StoragePath(str(tmp_path)),
+        state,
+        2,
+        "previous",
+        "bank",
+        "calibration",
+        "parent",
+        "no_calibration_reward_variation",
+    )
+    record = json.loads((tmp_path / "replay-insufficient-signal-pilot-2.json").read_text())
+
+    assert stopped.stop_reason == StopReason.TRAINING_SIGNAL
+    assert stopped.completed_pilots == 1
+    assert stopped.rounds_without_improvement == 1
+    assert record["state"]["completed_pilots"] == 1
+    assert record["state"]["rounds_without_improvement"] == 1
+    assert record["reason"] == "no_calibration_reward_variation"
+
 
 def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_contracts(tmp_path, monkeypatch):
     bank = tmp_path / "bank"

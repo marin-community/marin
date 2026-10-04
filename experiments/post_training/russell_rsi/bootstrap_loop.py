@@ -35,6 +35,7 @@ class StopReason(StrEnum):
     QUALIFICATION = "qualification_failure"
     REWARD_VARIATION = "reward_variation_failure"
     TASK_SUPPLY = "task_supply_exhausted"
+    TRAINING_SIGNAL = "insufficient_training_signal"
 
 
 @dataclass(frozen=True)
@@ -318,7 +319,12 @@ def write_once(path: StoragePath, value: dict) -> None:
 
 
 def seal_round(
-    directory: StoragePath, state: LoopState, plan: RoundPlan, result: RoundResult, previous_sha256: str
+    directory: StoragePath,
+    state: LoopState,
+    plan: RoundPlan,
+    result: RoundResult,
+    previous_sha256: str,
+    replay_plan: dict | None = None,
 ) -> str:
     """Write a result to regional storage before the next round starts."""
     payload = {
@@ -328,6 +334,8 @@ def seal_round(
         "result": asdict(result),
         "state": asdict(state),
     }
+    if replay_plan is not None:
+        payload["training_replay_plan"] = replay_plan
     digest = compact_json_sha256(payload)
     write_once(directory / f"{plan.name}.json", {"sha256": digest, "payload": payload})
     return digest
@@ -343,6 +351,7 @@ class ResumedRound:
     state: LoopState
     result: RoundResult
     sha256: str
+    replay_plan: dict | None
 
 
 def load_round(path: StoragePath, expected_inputs: dict, previous_sha256: str) -> ResumedRound:
@@ -375,7 +384,7 @@ def load_round(path: StoragePath, expected_inputs: dict, previous_sha256: str) -
         stop_reason=StopReason(value["stop_reason"]) if value["stop_reason"] else None,
     )
     result = RoundResult(**{**payload["result"], "candidate": checkpoint_score(payload["result"]["candidate"])})
-    return ResumedRound(plan, state, result, record["sha256"])
+    return ResumedRound(plan, state, result, record["sha256"], payload.get("training_replay_plan"))
 
 
 @dataclass(frozen=True)
