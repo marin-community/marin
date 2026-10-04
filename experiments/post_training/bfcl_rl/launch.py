@@ -61,9 +61,9 @@ def recovered_model(recovery_version: str, policy_export_version: str | None) ->
     return ArtifactHfModel(step, source.model, source.revision)
 
 
-def rl_recipe(base_config: Path, images: tuple[str, str, str], num_train_steps: int) -> str:
+def rl_recipe(images: tuple[str, str, str], num_train_steps: int) -> str:
     """Adapt the copied v125 recipe to Harbor without changing optimizer settings."""
-    recipe = yaml.safe_load(base_config.read_text())["skyrl"]
+    recipe = yaml.safe_load(Path(__file__).with_name("v125_async.yaml").read_text())["skyrl"]
     recipe["entrypoint"] = "terminal_bench"
     recipe["config_groups"] = {"terminal_bench_config": "terminal_bench"}
     collection = yaml.safe_load(collection_recipe(images))
@@ -126,7 +126,6 @@ def rl_recipe(base_config: Path, images: tuple[str, str, str], num_train_steps: 
 
 
 def rl_step(
-    base_config: Path,
     recovery_version: str,
     policy_export_version: str | None,
     num_train_steps: int,
@@ -137,7 +136,7 @@ def rl_step(
         collection_spec("student", None, images),
         name=name,
         version=resolve_version(name, None),
-        config_yaml=rl_recipe(base_config, images, num_train_steps),
+        config_yaml=rl_recipe(images, num_train_steps),
         model=recovered_model(recovery_version, policy_export_version),
         topology=SkyRLTopology(num_nodes=10, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
     )
@@ -145,7 +144,6 @@ def rl_step(
 
 
 @click.command(help=__doc__)
-@click.option("--base-config", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
 @click.option("--recovery-version", required=True)
 @click.option("--policy-export-version", default=None, help="Use an explicit saved-policy CPU export producer.")
 @click.option("--num-train-steps", type=click.IntRange(min=2), required=True)
@@ -154,7 +152,6 @@ def rl_step(
 @click.option("--javascript-image", required=True)
 @rl_build_options
 def main(
-    base_config: Path,
     recovery_version: str,
     policy_export_version: str | None,
     num_train_steps: int,
@@ -163,7 +160,6 @@ def main(
     javascript_image: str,
 ) -> ArtifactStep[SkyRLRun]:
     return rl_step(
-        base_config,
         recovery_version,
         policy_export_version,
         num_train_steps,
