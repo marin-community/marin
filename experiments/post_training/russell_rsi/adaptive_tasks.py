@@ -15,6 +15,8 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle
 
+from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
+
 
 @dataclass(frozen=True)
 class AdaptiveTasksConfig:
@@ -93,7 +95,7 @@ def prepare_adaptive_tasks(config: AdaptiveTasksConfig) -> None:
                         snapshots=root / "snapshots.jsonl",
                         output=candidates,
                         relay_job=config.relay_job,
-                        token_env="GLM_API_TOKEN",
+                        token_env=GLM_TOKEN_ENV,
                         failure_summary=feedback,
                         max_candidates=config.max_candidates,
                         max_tokens=8192,

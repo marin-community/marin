@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.glm import GLM_MODEL, resolve_glm_base_url
+from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 
 
 class CodingSkill(StrEnum):
@@ -116,7 +117,7 @@ async def abstract_failure_skills(traces_uri: str, relay_job: str, artifact: Pat
             raise ValueError("Stored feedback has a different request identity")
         response = stored["response"]
     elif failures:
-        async with AsyncOpenAI(base_url=resolve_glm_base_url(relay_job), api_key=os.environ["GLM_API_TOKEN"]) as client:
+        async with AsyncOpenAI(base_url=resolve_glm_base_url(relay_job), api_key=os.environ[GLM_TOKEN_ENV]) as client:
             completion = await client.chat.completions.create(**request)
         response = completion.model_dump(mode="json")
         artifact.write_text(

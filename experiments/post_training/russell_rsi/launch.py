@@ -43,6 +43,7 @@ from experiments.post_training.russell_rsi.rollout_eval import DevelopmentEvalua
 from experiments.post_training.russell_rsi.settings import (
     CHAT_TEMPLATE_KWARGS,
     CONTEXT_TOKENS,
+    GLM_TOKEN_ENV,
     PROMPT_TOKENS,
     RESPONSE_TOKENS,
     ROLLOUT_CONCURRENCY,
@@ -285,7 +286,7 @@ def run_adaptive_tasks(config: AdaptiveTasksConfig) -> None:
     remote(
         run_adaptive_tasks_in_project,
         resources=ResourceConfig.with_cpu(cpu=8, ram="32GB", disk="64GB", target_cluster=CLUSTER),
-        env_vars={"GLM_API_TOKEN": os.environ["GLM_API_TOKEN"]},
+        env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
     )(config)
 
 
@@ -419,8 +420,8 @@ def main(
         config={"repository": MODEL, "revision": MODEL_REVISION},
     )
     if stage == "spike":
-        if click.get_current_context().params.get("do_run") and not os.environ.get("GLM_API_TOKEN"):
-            raise click.UsageError("--stage spike --run requires GLM_API_TOKEN before any GPU work")
+        if click.get_current_context().params.get("do_run") and not os.environ.get(GLM_TOKEN_ENV):
+            raise click.UsageError(f"--stage spike --run requires {GLM_TOKEN_ENV} before any GPU work")
         if relay_job is None or task_image is None or machine_config_json is None or dependency_wheels_uri is None:
             raise click.UsageError(
                 "--stage spike requires --relay-job, --task-image, " "--machine-config-json, and --dependency-wheels-uri"

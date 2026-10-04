@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from rigging.filesystem.storage_path import prefix_join
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.machines import _install_files, _task_machine
 from shellbox.backends.docker.machine import DockerMachineFactory
@@ -38,6 +39,7 @@ from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from experiments.post_training.glm import GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.russell_rsi.corpus import CommitRecord
+from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import SourceSnapshot, source_group_id, source_path
 
 WORKSPACE = "/workspace"
@@ -276,7 +278,7 @@ def build_task(
             wheels.append(
                 EnvironmentAsset(
                     path=f"{WHEEL_ROOT}/{path.name}",
-                    uri=dependency_wheels_uri.rstrip("/") + "/" + path.name,
+                    uri=prefix_join(dependency_wheels_uri, path.name),
                     sha256=hashlib.sha256(content).hexdigest(),
                     size_bytes=len(content),
                 )
@@ -518,7 +520,6 @@ def attacked_source(content: str, attack: str) -> str:
 
 async def patch_controls(task: TaskSpec, snapshot: SourceSnapshot, *, factory: MachineFactory) -> dict[str, dict]:
     """Replay repair and attack controls through patch collection and the fresh grader."""
-    # marin#9623 exposes this path through _grade_rollout and _task_machine.
     factories = {EnvironmentKind.DOCKER: factory}
     outcomes = {}
     for control in CONTROL_REWARDS:
@@ -749,7 +750,7 @@ def repository_wheels(bundles: Path, repository: str) -> DependencyWheels | None
     wheels = (bundles / relative).resolve()
     if not wheels.is_relative_to(bundles.resolve()):
         raise ValueError("Wheel bundle is outside its recorded artifact root")
-    return DependencyWheels(wheels, manifest["base_uri"].rstrip("/") + "/" + relative)
+    return DependencyWheels(wheels, prefix_join(manifest["base_uri"], relative))
 
 
 async def accept_candidates(args: argparse.Namespace) -> None:
@@ -828,7 +829,7 @@ def main() -> None:
     generate.add_argument("--snapshots", type=Path, required=True)
     generate.add_argument("--output", type=Path, required=True)
     generate.add_argument("--relay-job", required=True)
-    generate.add_argument("--token-env", default="GLM_API_TOKEN")
+    generate.add_argument("--token-env", default=GLM_TOKEN_ENV)
     generate.add_argument("--failure-summary", required=True)
     generate.add_argument("--max-candidates", type=int, required=True)
     generate.add_argument("--max-tokens", type=int, required=True)

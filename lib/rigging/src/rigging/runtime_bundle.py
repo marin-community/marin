@@ -43,7 +43,12 @@ def _verify_files(root: Path, files: dict[str, str]) -> None:
 
 
 def install_runtime_bundle(config: RuntimeBundle) -> dict:
-    """Install a verified runtime and add its executable directories to this process PATH."""
+    """Install a verified runtime and add its executable directories to this process PATH.
+
+    Returns:
+        The verified JSON manifest, including its installation directory, file
+        hashes, tool paths, and runtime-specific metadata.
+    """
     manifest_bytes = StoragePath(config.manifest_uri).read_bytes()
     if hashlib.sha256(manifest_bytes).hexdigest() != config.manifest_sha256:
         raise ValueError("Runtime manifest hash mismatch")
