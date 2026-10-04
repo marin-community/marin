@@ -1,0 +1,243 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Build a Snowball Harmony SFT corpus from completed native Qwen collections."""
+
+import json
+from collections import Counter, defaultdict
+from collections.abc import Iterator
+from contextlib import ExitStack
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+import click
+from fray.types import ResourceConfig
+from marin.datakit.sft import SftTokenStore
+from marin.execution.artifact import Artifact, read_artifact
+from marin.execution.build_context import resolve_version
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.remote import remote
+from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
+from rigging.filesystem.storage_path import StoragePath
+
+from experiments.post_training.bfcl_rl.collect import MODELS, NATIVE_AGENT_PROFILES, ModelSource, complement_data_step
+from experiments.post_training.bfcl_rl.data import BFCLPartition
+from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
+from experiments.post_training.bfcl_rl.offline_data import (
+    NativeTeacherTrace,
+    build_verified_sft_store,
+    native_teacher_trace,
+)
+from experiments.post_training.bfcl_rl.preferences import RolloutOutcome
+from experiments.post_training.bfcl_rl.recovery_data import generation_collection_receipt, load_audited_partition
+from experiments.post_training.bfcl_rl.retained_preferences import retained_archive_records, retained_rollout
+
+
+@dataclass(frozen=True)
+class OfflineCollectionInput:
+    terminal_uri: str
+    teacher_source: str
+    seed: int
+
+
+@dataclass(frozen=True)
+class OfflineCorpusConfig:
+    collections: tuple[OfflineCollectionInput, ...]
+    data_root: str
+    student_tokenizer: str
+    max_length: int
+    output_path: str
+    seed: int
+    num_shards: int
+    max_workers: int
+
+
+@dataclass(frozen=True)
+class LiteralSpan:
+    path: str
+    offset: int
+    length: int
+
+
+def collection_teacher_traces(
+    source: OfflineCollectionInput, partition: BFCLPartition, audit_path: str
+) -> Iterator[NativeTeacherTrace]:
+    """Join complete collection evidence with bounded memory and exact token prefixes."""
+    terminal = json.loads(StoragePath(source.terminal_uri).read_text())
+    resolved = json.loads(StoragePath(terminal["config"]["artifacts"]["resolved_config_uri"]).read_text())
+    receipt = generation_collection_receipt(
+        terminal,
+        resolved,
+        model=ModelSource(TEACHER_MODEL, TEACHER_REVISION, source.teacher_source, "pinned"),
+        harness="native",
+        partition=partition,
+    )
+    skyrl = resolved["config"]["skyrl"]
+    if skyrl["trainer"]["seed"] != source.seed:
+        raise ValueError("Teacher seed differs from the declared collection")
+    harbor = skyrl["terminal_bench_config"]["harbor"]
+    if harbor["agent_profiles"] != list(NATIVE_AGENT_PROFILES):
+        raise ValueError("Teacher collection differs from the fixed native harness panel")
+    if receipt.task_names != frozenset(task.name for task in partition.complement):
+        raise ValueError("Offline corpus requires a full complement collection")
+    trials = {}
+    trace_root = StoragePath(terminal["config"]["artifacts"]["attempts_root"]) / "trace_jobs"
+    for path in sorted((trace_root / "eval_sessions" / "*" / "*" / "result.json").glob(), key=str):
+        trial = json.loads(path.read_text())
+        task = trial["task_name"]
+        if task not in receipt.task_names or task in trials:
+            raise ValueError(f"Unexpected or duplicate canonical native trial: {task}")
+        trials[task] = (str(path), trial)
+    if set(trials) != receipt.task_names:
+        raise ValueError("Canonical native results do not cover the complement")
+    correct_ids = {
+        trial["agent_result"]["metadata"]["rollout_correlation_id"]
+        for _, trial in trials.values()
+        if trial["exception_info"] is None and trial["verifier_result"]["rewards"] == {"reward": 1.0}
+    }
+    literal_root = StoragePath(terminal["config"]["runtime"]["experiments_dir"]) / "logs"
+    spans: dict[str, list[LiteralSpan]] = defaultdict(list)
+    literal_paths = sorted((literal_root / "*_literal.jsonl").glob(), key=str)
+    for path in literal_paths:
+        with path.open("rb") as stream:
+            while True:
+                offset = stream.tell()
+                line = stream.readline()
+                if not line:
+                    break
+                entry = json.loads(line)
+                if entry["trial_id"] in correct_ids and entry["literal"] is not None:
+                    spans[entry["trial_id"]].append(LiteralSpan(str(path), offset, len(line)))
+    archives = sorted(
+        str(path) for path in (StoragePath(receipt.trajectory_root) / "schema_v6" / "archives" / "**" / "*.zip").glob()
+    )
+    dispositions: Counter[str] = Counter()
+    seen = set()
+    task_indices = {name: index for index, name in enumerate(sorted(receipt.task_names))}
+    with ExitStack() as resources:
+        literal_files = {str(path): resources.enter_context(path.open("rb")) for path in literal_paths}
+        for uri, record in retained_archive_records(archives):
+            task = record["trajectory"]["instance_id"]
+            if task not in trials or task in seen or record["trajectory"]["repetition_id"] != 0:
+                raise ValueError(f"Unexpected or duplicate retained native task: {task}")
+            seen.add(task)
+            native_uri, trial = trials[task]
+            profile = NATIVE_AGENT_PROFILES[task_indices[task] % len(NATIVE_AGENT_PROFILES)]
+            identity = replace(receipt.identity, harness=f"{profile['name']}@{profile['version']}")
+            retained = retained_rollout(record, identity=identity, partition=partition, trajectory_uri=uri)
+            dispositions[f"{identity.harness}/{retained.rollout.outcome.value}"] += 1
+            if retained.rollout.outcome is not RolloutOutcome.CORRECT:
+                continue
+            correlation_id = trial["agent_result"]["metadata"]["rollout_correlation_id"]
+            entries = []
+            for span in spans[correlation_id]:
+                stream = literal_files[span.path]
+                stream.seek(span.offset)
+                entries.append(json.loads(stream.read(span.length)))
+            trace = native_teacher_trace(
+                identity=identity,
+                seed=source.seed,
+                retained_record=record,
+                retained_uri=uri,
+                native_trace_uri=native_uri,
+                trial_result=trial,
+                literal_entries=entries,
+                partition=partition,
+                assistant_prefill="<think>\n",
+            )
+            if trace is None:
+                raise ValueError("Correct retained trace was excluded by native evidence")
+            yield trace
+    if seen != receipt.task_names:
+        raise ValueError("Retained native evidence does not cover the complement")
+    StoragePath(audit_path).write_text(
+        json.dumps(
+            {
+                "terminal_uri": source.terminal_uri,
+                "teacher_revision": TEACHER_REVISION,
+                "teacher_source": source.teacher_source,
+                "runtime_commit": terminal["config"]["runtime"]["launcher_commit"],
+                "seed": source.seed,
+                "canonical_trials": len(trials),
+                "retained_tasks": len(seen),
+                "dispositions": dict(dispositions),
+                "literal_paths": [str(path) for path in literal_paths],
+                "archives": archives,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def build_offline_corpus(config: OfflineCorpusConfig) -> SftTokenStore:
+    partition = load_audited_partition(config.data_root)
+    root = StoragePath(config.output_path)
+    (root / "collections").mkdirs()
+    traces = (
+        trace
+        for index, source in enumerate(config.collections)
+        for trace in collection_teacher_traces(source, partition, str(root / "collections" / f"{index:03d}.json"))
+    )
+    return build_verified_sft_store(
+        traces,
+        partition=partition,
+        output_path=config.output_path,
+        student_tokenizer=config.student_tokenizer,
+        max_length=config.max_length,
+        seed=config.seed,
+        num_shards=config.num_shards,
+        max_workers=config.max_workers,
+    )
+
+
+def dispatch_offline_corpus(config: OfflineCorpusConfig) -> SftTokenStore:
+    remote(build_offline_corpus, resources=ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi"))(config)
+    return read_artifact(str(StoragePath(config.output_path) / "student-store"), SftTokenStore).model_copy(
+        update={"path": config.output_path}
+    )
+
+
+def offline_corpus_step(collections: tuple[tuple[str, int], ...], teacher_source: str) -> ArtifactStep[SftTokenStore]:
+    data = complement_data_step()
+    inputs = tuple(
+        ArtifactStep.adopt(
+            user_owned_name(f"inputs/bfcl-rl-qwen36-collection-{seed}"), Path(path).name, path, kind=Artifact
+        )
+        for path, seed in collections
+    )
+    student = MODELS["student"]
+    tokenizer = f"{student.model}@{student.revision}"
+    name = user_owned_name("data/bfcl-rl-qwen36-harmony")
+
+    def build_config(ctx: StepContext) -> OfflineCorpusConfig:
+        sources = tuple(
+            OfflineCollectionInput(str(StoragePath(ctx.artifact_path(step)) / "terminal.json"), teacher_source, seed)
+            for step, (_, seed) in zip(inputs, collections, strict=True)
+        )
+        return OfflineCorpusConfig(sources, ctx.artifact_path(data), tokenizer, 40960, ctx.output_path, 42, 8, 4)
+
+    return ArtifactStep(
+        name=name,
+        version=resolve_version(name, None),
+        artifact_type=SftTokenStore,
+        run=dispatch_offline_corpus,
+        build_config=build_config,
+        deps=(*inputs, data),
+    )
+
+
+@click.command(help=__doc__)
+@click.option(
+    "--collection", type=(str, int), multiple=True, required=True, help="Completed artifact root and teacher seed."
+)
+@click.option("--teacher-source", required=True)
+@rl_build_options
+def main(collection: tuple[tuple[str, int], ...], teacher_source: str) -> ArtifactStep:
+    return offline_corpus_step(collection, teacher_source)
+
+
+if __name__ == "__main__":
+    main()

@@ -20,8 +20,10 @@ from marin.execution.artifact import ArtifactRecord, result_type_name, write_rec
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS
+from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS, NATIVE_AGENT_PROFILES
 from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, BFCLPartition, TaskIdentity
+from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
+from experiments.post_training.bfcl_rl.offline_curate import OfflineCollectionInput, collection_teacher_traces
 from experiments.post_training.bfcl_rl.offline_data import (
     NativeTeacherTrace,
     build_verified_sft_store,
@@ -123,11 +125,20 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
             "timestamp": index,
             "status_code": 200,
             "request": {"messages": messages[:2] if index == 0 else messages[:-1], "tools": tools},
-            "literal": {"completion_token_ids": tokens, "assistant_message": assistant},
+            "literal": {
+                "prompt_token_ids": teacher_record["response"]["step_boundaries"][index]["prompt_token_ids"],
+                "completion_token_ids": tokens,
+                "assistant_message": assistant,
+            },
         }
         for index, tokens, assistant in ((0, [248000, 248001], messages[2]), (1, [248003], messages[-1]))
     ]
     foreign = {**entries[0], "trial_id": "another-trial"}
+    auxiliary = {
+        **entries[0],
+        "timestamp": -1,
+        "literal": {**entries[0]["literal"], "prompt_token_ids": [999], "completion_token_ids": [248999]},
+    }
     trace = native_teacher_trace(
         identity=identity,
         seed=7,
@@ -135,7 +146,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         retained_uri="retained",
         native_trace_uri="literal",
         trial_result=trial,
-        literal_entries=[foreign, *reversed(entries)],
+        literal_entries=[foreign, auxiliary, *reversed(entries)],
         partition=PARTITION,
         assistant_prefill="<think>\n",
     )
@@ -379,6 +390,79 @@ def _receipts(model: str) -> tuple[dict, dict]:
     }
     resolved["config"] = {"skyrl": resolved["config"]}
     return terminal, resolved
+
+
+def test_completed_native_collection_joins_archives_and_literal_messages(tmp_path: Path):
+    terminal, resolved = _receipts("teacher")
+    config = terminal["config"]
+    skyrl = resolved["config"]["skyrl"]
+    teacher_source = "region-local-qwen-snapshot"
+    config["inputs"]["model"].update(
+        uri=teacher_source, tokenizer_uri=TEACHER_MODEL, tokenizer_revision=TEACHER_REVISION
+    )
+    config["inputs"]["train_data"][0]["relative_path"] = "bfcl_complement"
+    resolved["train_data_sources"][0]["relative_path"] = "bfcl_complement"
+    skyrl["trainer"]["policy"]["model"]["source_uri"] = teacher_source
+    skyrl["trainer"]["seed"] = 7
+    skyrl["terminal_bench_config"]["harbor"]["agent_profiles"] = list(NATIVE_AGENT_PROFILES)
+    skyrl["generator"]["trajectory_retention"]["output_path"] = str(tmp_path / "trajectories")
+    config["artifacts"] = {
+        "attempts_root": str(tmp_path / "attempts"),
+        "resolved_config_uri": str(tmp_path / "resolved.json"),
+    }
+    config["runtime"].update(experiments_dir=str(tmp_path / "literal"), launcher_commit="pinned-runtime")
+    (tmp_path / "terminal.json").write_text(json.dumps(terminal))
+    (tmp_path / "resolved.json").write_text(json.dumps(resolved))
+    messages = [{"role": "user", "content": "BFCL instruction"}, {"role": "assistant", "content": "Correct"}]
+    trial = {
+        "task_name": TASK.name,
+        "exception_info": None,
+        "verifier_result": {"rewards": {"reward": 1.0}},
+        "config": {"agent": {"name": "opencode", "version": "1.18.2"}},
+        "agent_result": {"metadata": {"rollout_correlation_id": "correct-trial"}},
+    }
+    trial_path = tmp_path / "attempts/trace_jobs/eval_sessions/native/task/result.json"
+    trial_path.parent.mkdir(parents=True)
+    trial_path.write_text(json.dumps(trial))
+    record = _record("teacher", 1.0)
+    archive_path = tmp_path / "trajectories/schema_v6/archives/phase=eval/step=00000000/records.zip"
+    archive_path.parent.mkdir(parents=True)
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("records/correct.json.gz", gzip.compress(json.dumps(record).encode()))
+    literal_path = tmp_path / "literal/logs/native_literal.jsonl"
+    literal_path.parent.mkdir(parents=True)
+    entries = [
+        {
+            "trial_id": "correct-trial",
+            "timestamp": index,
+            "status_code": 200,
+            "request": {"messages": messages[:1]},
+            "literal": {
+                "prompt_token_ids": boundary["prompt_token_ids"],
+                "completion_token_ids": completion,
+                "assistant_message": messages[1],
+            },
+        }
+        for index, (boundary, completion) in enumerate(
+            zip(record["response"]["step_boundaries"], ([10, 11], [21]), strict=True)
+        )
+    ]
+    literal_path.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n")
+    source = OfflineCollectionInput(str(tmp_path / "terminal.json"), teacher_source, 7)
+    traces = list(collection_teacher_traces(source, PARTITION, str(tmp_path / "audit.json")))
+    assert len(traces) == 1
+    assert traces[0].messages == messages
+    assert traces[0].identity.model_revision == TEACHER_REVISION
+    assert traces[0].identity.harness == "opencode@1.18.2"
+    assert traces[0].retained_uri == f"{archive_path}#records/correct.json.gz"
+    assert traces[0].native_trace_uri == str(trial_path)
+    assert json.loads((tmp_path / "audit.json").read_text())["retained_tasks"] == 1
+    literal_path.write_text(
+        json.dumps({**entries[0], "literal": {**entries[0]["literal"], "completion_token_ids": [999]}}) + "\n"
+    )
+    with pytest.raises(ValueError, match="differ from retained"):
+        list(collection_teacher_traces(source, PARTITION, str(tmp_path / "invalid-audit.json")))
+    assert not (tmp_path / "invalid-audit.json").exists()
 
 
 def test_recovery_cache_roundtrip_preserves_causal_scoring_with_tool_context(tmp_path: Path):

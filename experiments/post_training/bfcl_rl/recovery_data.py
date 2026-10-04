@@ -16,7 +16,7 @@ from levanter.store.cache import write_levanter_cache
 from marin.execution.artifact import Artifact
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS
+from experiments.post_training.bfcl_rl.collect import DATA_URI, MODELS, ModelSource
 from experiments.post_training.bfcl_rl.data import (
     DATASET_COMMIT,
     FULL_TASK_COUNT,
@@ -83,10 +83,15 @@ def load_audited_partition(data_root: str) -> BFCLPartition:
     return partition
 
 
-def collection_receipt(
-    terminal: Mapping[str, Any], resolved: Mapping[str, Any], *, model: str, partition: BFCLPartition
+def generation_collection_receipt(
+    terminal: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    *,
+    model: ModelSource,
+    harness: str,
+    partition: BFCLPartition,
 ) -> CollectionReceipt:
-    """Bind native terminal and worker receipts to the mandated model, data and Pi conditions."""
+    """Bind native terminal and worker receipts to an explicit model and audited complement."""
     config = terminal["config"]
     result = terminal["result"]
     if result["state"] != "succeeded" or result["run_id"] != config["run"]["id"]:
@@ -95,7 +100,7 @@ def collection_receipt(
         raise ValueError("collection attempt or Iris job identity is missing or inconsistent")
     if config["runtime"]["entrypoint"] != "skyrl_train.entrypoints.terminal_bench_generate":
         raise ValueError("recovery collection must be generation-only")
-    expected = MODELS[model]
+    expected = model
     locator = config["inputs"]["model"]
     if (locator["uri"], locator["tokenizer_uri"], locator["tokenizer_revision"]) != (
         expected.uri,
@@ -136,8 +141,6 @@ def collection_receipt(
     if skyrl["generator"]["n_samples_per_prompt"] != 1:
         raise ValueError("initial recovery requires one paired rollout per model and task")
     harbor = skyrl["terminal_bench_config"]["harbor"]
-    if (harbor["name"], harbor["version"], harbor["thinking_format"]) != ("pi", "0.87.0", "chat-template"):
-        raise ValueError("recovery collection must use the fixed policy Pi harness")
     if harbor["container_profile"] != "gvisor" or harbor["import_path"] != (
         "marinskyrl.iris_harbor_environment:IrisEnvironment"
     ):
@@ -159,11 +162,23 @@ def collection_receipt(
         retention["run_id"],
         locator["identity"],
         expected.revision,
-        "pi@0.87.0",
+        harness,
         partition.dataset_commit,
         str(task_root),
     )
     return CollectionReceipt(identity, task_names, conditions_digest, retention["output_path"])
+
+
+def collection_receipt(
+    terminal: Mapping[str, Any], resolved: Mapping[str, Any], *, model: str, partition: BFCLPartition
+) -> CollectionReceipt:
+    """Bind recovery generation receipts to the mandated model and fixed Pi conditions."""
+    harbor = resolved["config"]["skyrl"]["terminal_bench_config"]["harbor"]
+    if (harbor["name"], harbor["version"], harbor["thinking_format"]) != ("pi", "0.87.0", "chat-template"):
+        raise ValueError("recovery collection must use the fixed policy Pi harness")
+    return generation_collection_receipt(
+        terminal, resolved, model=MODELS[model], harness="pi@0.87.0", partition=partition
+    )
 
 
 def recovery_preference_rows(

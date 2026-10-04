@@ -7,6 +7,7 @@ import json
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
+from itertools import pairwise
 from typing import Any
 
 from marin.datakit.chat_normalize import normalize_chat_to_parquet
@@ -72,12 +73,21 @@ def native_teacher_trace(
         ),
         key=lambda entry: entry["timestamp"],
     )
-    captured = [token for entry in entries for token in entry["literal"]["completion_token_ids"]]
-    response = retained_record["response"]
-    trainable = [token for token, mask in zip(response["token_ids"], response["loss_mask"], strict=True) if mask]
-    if not entries or captured != trainable:
-        raise ValueError("Native literal completions differ from retained trainable teacher tokens")
-    final = entries[-1]
+    selected = []
+    for step in retained.steps:
+        trainable = [token for token, mask in zip(step.response_token_ids, step.loss_mask, strict=True) if mask]
+        matches = [
+            entry
+            for entry in entries
+            if entry["literal"]["prompt_token_ids"] == list(step.prompt_token_ids)
+            and entry["literal"]["completion_token_ids"] == trainable
+        ]
+        if len(matches) != 1:
+            raise ValueError("Native literal completions differ from retained trainable teacher tokens")
+        selected.append(matches[0])
+    if not selected or any(a["timestamp"] >= b["timestamp"] for a, b in pairwise(selected)):
+        raise ValueError("Retained native steps lack an ordered literal chain")
+    final = selected[-1]
     request = final["request"]
     assistant = final["literal"]["assistant_message"]
     if assistant is None or assistant["role"] != "assistant":

@@ -6,7 +6,7 @@
 import gzip
 import json
 import zipfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
@@ -128,11 +128,8 @@ def retained_rollout(
     return RetainedRollout(rollout, record["record_id"], tuple(steps))
 
 
-def read_retained_archives(
-    archives: Sequence[str], *, identity: CollectionIdentity, partition: BFCLPartition
-) -> tuple[RetainedRollout, ...]:
-    """Read native retention ZIP archives without extracting files or retokenizing."""
-    records = []
+def retained_archive_records(archives: Sequence[str]) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Read retention records and their archive locations without extracting files."""
     record_ids = set()
     for path in archives:
         with StoragePath(path).open("rb") as source, zipfile.ZipFile(source) as archive:
@@ -140,16 +137,22 @@ def read_retained_archives(
                 if not name.startswith("records/") or not name.endswith(".json.gz"):
                     continue
                 record = json.loads(gzip.decompress(archive.read(name)))
-                retained = retained_rollout(
-                    record, identity=identity, partition=partition, trajectory_uri=f"{path}#{name}"
-                )
-                if retained.record_id in record_ids:
-                    raise ValueError(f"duplicate retained record: {retained.record_id}")
-                record_ids.add(retained.record_id)
-                records.append(retained)
-    if not records:
+                if record["record_id"] in record_ids:
+                    raise ValueError(f"duplicate retained record: {record['record_id']}")
+                record_ids.add(record["record_id"])
+                yield f"{path}#{name}", record
+    if not record_ids:
         raise ValueError("collection archives contain no retained records")
-    return tuple(records)
+
+
+def read_retained_archives(
+    archives: Sequence[str], *, identity: CollectionIdentity, partition: BFCLPartition
+) -> tuple[RetainedRollout, ...]:
+    """Validate native retention archives without retokenizing."""
+    return tuple(
+        retained_rollout(record, identity=identity, partition=partition, trajectory_uri=uri)
+        for uri, record in retained_archive_records(archives)
+    )
 
 
 def causal_token_sequence(steps: Sequence[TokenStep], *, max_length: int) -> tuple[list[int], list[int]]:
