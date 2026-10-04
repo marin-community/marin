@@ -10,6 +10,7 @@ import equinox as eqx
 import haliax
 import jax
 import jax.numpy as jnp
+from jax.sharding import AxisType
 
 from haliax import Axis
 
@@ -82,7 +83,8 @@ def main(config: ConvertLmConfig):
 
     exit_stack = ExitStack()
     if config.use_cpu:
-        exit_stack.enter_context(local_cpu_mesh())
+        mesh_axis_type = AxisType.Explicit if config.model.requires_explicit_mesh_axes else AxisType.Auto
+        exit_stack.enter_context(local_cpu_mesh(mesh_axis_type))
     else:
         # exit_stack.enter_context(Mesh(jax.local_devices(), "dev"))
         exit_stack.enter_context(config.trainer.device_mesh)

@@ -12,6 +12,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
+from jax.sharding import AxisType
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerFast
@@ -24,6 +26,7 @@ from levanter.testing import tiny_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, SAFE_TENSORS_INDEX_NAME
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.models.snowball import SnowballConfig
 from levanter.utils.jax_utils import is_inexact_arrayish, local_cpu_mesh
 from levanter.testing.helpers import has_torch
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
@@ -135,13 +138,37 @@ def test_export_lm_to_hf_custom_subpath_without_tokenizer():
         assert len(glob.glob(os.path.join(output_dir, "*.safetensors"))) > 1
 
 
-def test_export_dpo_policy_subtree_to_bfloat16(tmp_path):
-    model_config = TokenizerlessGpt2Config(
-        num_layers=1, num_heads=2, max_seq_len=16, use_flash_attention=False, hidden_dim=16
-    )
+@pytest.mark.parametrize("model_kind", ["gpt2", "snowball"])
+def test_export_dpo_policy_subtree_to_bfloat16(tmp_path, model_kind):
+    if model_kind == "gpt2":
+        model_config = TokenizerlessGpt2Config(
+            num_layers=1, num_heads=2, max_seq_len=16, use_flash_attention=False, hidden_dim=16
+        )
+    else:
+        tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(WordLevel({f"t{i}": i for i in range(64)})))
+        tokenizer_path = tmp_path / "tokenizer"
+        tokenizer.save_pretrained(tokenizer_path)
+        model_config = SnowballConfig(
+            vocab_size=64,
+            hidden_dim=32,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=32,
+            num_experts=8,
+            num_experts_per_token=2,
+            num_layers=1,
+            num_heads=4,
+            num_kv_heads=2,
+            head_dim=8,
+            max_seq_len=16,
+            sliding_window=4,
+            attention_implementation="reference",
+            tokenizer=str(tokenizer_path),
+        )
+    mesh_axis_type = AxisType.Explicit if model_config.requires_explicit_mesh_axes else AxisType.Auto
     Vocab = haliax.Axis("vocab", 64)
-    policy = Gpt2LMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))
-    reference = Gpt2LMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(1))
+    with local_cpu_mesh(mesh_axis_type):
+        policy = model_config.build(Vocab, key=jax.random.PRNGKey(0))
+        reference = model_config.build(Vocab, key=jax.random.PRNGKey(1))
     policy_params, _ = eqx.partition(policy, is_inexact_arrayish)
     reference_params, _ = eqx.partition(reference, is_inexact_arrayish)
     checkpoint_path = str(tmp_path / "checkpoint")
@@ -161,7 +188,7 @@ def test_export_dpo_policy_subtree_to_bfloat16(tmp_path):
             use_cpu=True,
         )
     )
-    with local_cpu_mesh():
+    with local_cpu_mesh(mesh_axis_type):
         exported = model_config.hf_checkpoint_converter().load_state_dict(output_dir)
     expected = to_state_dict(flatten_modules_for_export(policy_params))
     assert exported.keys() == expected.keys()
