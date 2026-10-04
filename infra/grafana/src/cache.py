@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A TTL cache that coalesces concurrent misses on one key into a single call.
+"""A TTL cache with per-key coordination and an optional size limit.
 
-N callers that miss the same key at once run compute once and share its result
-or failure. Entries are pruned on write.
+Concurrent callers share a cached result or failure. Entries are pruned on
+write and may be evicted before their TTL to meet an optional size budget.
 """
 
 import copy
@@ -32,12 +32,11 @@ class _Failure:
 
 
 class TtlCache(Generic[V]):
-    """Cache outcomes under a key for ttl seconds, coalescing concurrent misses.
+    """Cache outcomes for up to ttl seconds, subject to the size budget.
 
     A miss holds a per-key lock while it computes; concurrent callers for the same
-    key wait and read the fresh outcome. Failures are cached too, so an upstream
-    timeout does not turn client retries into repeated work. Different keys do
-    not block one another.
+    key wait and reuse the outcome if it remains cached. Cached failures suppress
+    repeated upstream work on retries. Different keys do not block one another.
     """
 
     def __init__(

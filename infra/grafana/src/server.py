@@ -550,6 +550,38 @@ def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
     return sources[name]
 
 
+def _dataset_source(
+    source: MetricSource,
+    cluster: str,
+    query: SourceQuery,
+    max_rows: int,
+    cache: TtlCache[pa.Table],
+) -> pa.Table:
+    max_rows = min(query.max_rows, max_rows)
+
+    def run() -> pa.Table:
+        started = time.monotonic()
+        table = source.query(query.sql, max_rows=max_rows)
+        validate_table_budget(
+            query.name,
+            table,
+            max_rows=query.max_rows,
+            max_samples=query.max_samples,
+        )
+        logger.info(
+            "dashboard source query source=%s cluster=%s rows=%d elapsed_ms=%d",
+            query.name,
+            cluster,
+            table.num_rows,
+            round((time.monotonic() - started) * 1000),
+        )
+        return table
+
+    # A source such as current task state does not depend on panel resolution.
+    # Share its Arrow result across datasets without retaining duplicate copies.
+    return cache.get_or_compute((cluster, query), run)
+
+
 def create_app(
     config: BridgeConfig,
     finelog_sources: Mapping[str, MetricSource],
@@ -577,31 +609,6 @@ def create_app(
     dashboard_projection_lock = threading.Lock()
     finelog_queries = _FinelogQueries(config, finelog_sources, finelog_cache)
 
-    def dataset_source(target: ClusterTarget, query: SourceQuery) -> pa.Table:
-        max_rows = min(query.max_rows, config.max_rows)
-
-        def run() -> pa.Table:
-            started = time.monotonic()
-            table = finelog_sources[target.name].query(query.sql, max_rows=max_rows)
-            validate_table_budget(
-                query.name,
-                table,
-                max_rows=query.max_rows,
-                max_samples=query.max_samples,
-            )
-            logger.info(
-                "dashboard source query source=%s cluster=%s rows=%d elapsed_ms=%d",
-                query.name,
-                target.name,
-                table.num_rows,
-                round((time.monotonic() - started) * 1000),
-            )
-            return table
-
-        # A source such as current task state does not depend on panel resolution.
-        # Share its Arrow result across datasets without retaining duplicate copies.
-        return dataset_source_cache.get_or_compute((target.name, query), run)
-
     def dataset_rows(target: ClusterTarget, dataset: DashboardDataset) -> list[dict[str, object]]:
         key = (target.name, dataset.name, *dataset.cache_key)
 
@@ -610,7 +617,9 @@ def create_app(
             started = time.monotonic()
             for source_query in dataset.sources:
                 query_started = time.monotonic()
-                table = dataset_source(target, source_query)
+                table = _dataset_source(
+                    finelog_sources[target.name], target.name, source_query, config.max_rows, dataset_source_cache
+                )
                 source_tables[source_query.name] = table
                 logger.info(
                     "dashboard dataset source dataset=%s source=%s cluster=%s rows=%d elapsed_ms=%d",
