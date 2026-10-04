@@ -7,15 +7,17 @@ import dataclasses
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
+from itertools import islice
 from typing import Any
 
 import numpy as np
 from datasets import load_dataset
+from fray.types import ResourceConfig
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text.datasets import DatasetComponent, DatasetComponentBase, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, write_levanter_cache
-from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from levanter.tokenizers import load_tokenizer, tokenizer_content_hash
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -23,18 +25,21 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.store_builder import write_stats_json
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import prefix_join
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
 from experiments.grug.fast_track.contracts import (
     TRAIN_SPLIT,
     AddDatasetConfig,
     DatasetPrefix,
-    FrozenBaselineManifest,
     PreparedAddDatasetCache,
     ResolvedTrainingBudget,
     add_dataset_mixture_weights,
     unique_token_sample_cap,
 )
-from experiments.grug.fast_track.launch import FROZEN_BASELINE, FlatCacheTrainingSource
+from experiments.grug.fast_track.launch import TrainingSource
+
+PREFIX_TOKENIZE_BLOCK_ROWS = 2048
 
 
 @dataclasses.dataclass(frozen=True)
@@ -58,29 +63,38 @@ def _tokenized_prefix(
     config: AddDatasetPreparationConfig,
     counts: _PrefixCounts,
 ) -> Iterable[dict[str, np.ndarray]]:
+    """Read and tokenize bounded blocks in source order within one Zephyr task."""
     row_iter = iter(rows)
     while counts.scanned_rows < config.prefix.max_rows and counts.total_tokens < config.prefix.requested_token_cap:
-        try:
-            row = next(row_iter)
-        except StopIteration:
+        remaining_rows = config.prefix.max_rows - counts.scanned_rows
+        block = list(islice(row_iter, min(PREFIX_TOKENIZE_BLOCK_ROWS, remaining_rows)))
+        if not block:
             break
-        text = row.get(config.prefix.text_field)
-        if not isinstance(text, str):
-            raise ValueError(f"row {counts.scanned_rows} has no string field {config.prefix.text_field!r}")
-        encoded = preprocessor([{config.prefix.text_field: text}])
-        if not isinstance(encoded, list) or len(encoded) != 1:
+
+        texts = [row.get(config.prefix.text_field) for row in block]
+        valid_rows = [{config.prefix.text_field: text} for text in texts if isinstance(text, str)]
+        encoded = preprocessor(valid_rows) if valid_rows else []
+        if not isinstance(encoded, list) or len(encoded) != len(valid_rows):
             raise ValueError("text preprocessor must return one token record for each input row")
-        input_ids = np.asarray(encoded[0]["input_ids"], dtype=np.int32)
-        next_tokens = counts.total_tokens + len(input_ids)
-        if next_tokens > config.prefix.requested_token_cap + config.prefix.max_overshoot_tokens:
-            raise ValueError(
-                f"row {counts.scanned_rows} exceeds the token cap by "
-                f"{next_tokens - config.prefix.requested_token_cap:,} tokens; "
-                f"the limit is {config.prefix.max_overshoot_tokens:,}"
-            )
-        counts.scanned_rows += 1
-        counts.total_tokens = next_tokens
-        yield {"input_ids": input_ids}
+        token_records = iter(encoded)
+        for text in texts:
+            row_count = counts.scanned_rows
+            # An invalid look-ahead row must fail only if the requested prefix consumes it.
+            if not isinstance(text, str):
+                raise ValueError(f"row {row_count} has no string field {config.prefix.text_field!r}")
+            input_ids = np.asarray(next(token_records)["input_ids"], dtype=np.int32)
+            next_tokens = counts.total_tokens + len(input_ids)
+            if next_tokens > config.prefix.requested_token_cap + config.prefix.max_overshoot_tokens:
+                raise ValueError(
+                    f"row {row_count} exceeds the token cap by "
+                    f"{next_tokens - config.prefix.requested_token_cap:,} tokens; "
+                    f"the limit is {config.prefix.max_overshoot_tokens:,}"
+                )
+            counts.scanned_rows += 1
+            counts.total_tokens = next_tokens
+            yield {"input_ids": input_ids}
+            if counts.total_tokens >= config.prefix.requested_token_cap:
+                break
 
     if counts.total_tokens < config.prefix.requested_token_cap:
         raise ValueError(
@@ -93,20 +107,22 @@ def prepare_add_dataset_cache(
     config: AddDatasetPreparationConfig,
     *,
     rows: Iterable[Mapping[str, Any]],
-    tokenizer: MarinTokenizer,
+    tokenizer: str,
 ) -> PreparedAddDatasetCache:
     """Tokenize and write a bounded row prefix to a Levanter cache."""
-    preprocessor = TextLmDatasetFormat(text_key=config.prefix.text_field).build_preprocessor(tokenizer)
+    actual_tokenizer_hash = tokenizer_content_hash(tokenizer)
+    if actual_tokenizer_hash != config.prefix.tokenizer_hash:
+        raise ValueError(
+            f"tokenizer content differs from the dataset prefix: "
+            f"expected {config.prefix.tokenizer_hash}, got {actual_tokenizer_hash}"
+        )
     counts = _PrefixCounts()
     train_path = prefix_join(config.output_path, TRAIN_SPLIT)
+    preprocessor = TextLmDatasetFormat(text_key=config.prefix.text_field).build_preprocessor(load_tokenizer(tokenizer))
     write_levanter_cache(
         _tokenized_prefix(rows, preprocessor=preprocessor, config=config, counts=counts),
         train_path,
-        metadata={
-            "tokenizer": config.prefix.tokenizer,
-            "format": "text",
-            "text_field": config.prefix.text_field,
-        },
+        metadata=preprocessor.metadata,
     )
     ledger = CacheLedger.load(train_path)
     if ledger.total_num_rows != counts.scanned_rows or ledger.field_counts.get("input_ids", 0) != counts.total_tokens:
@@ -120,7 +136,7 @@ def prepare_add_dataset_cache(
     )
 
 
-def _build_prepared_cache(config: AddDatasetPreparationConfig) -> PreparedAddDatasetCache:
+def _prepare_hf_prefix(config: AddDatasetPreparationConfig) -> PreparedAddDatasetCache:
     rows = load_dataset(
         config.prefix.repo,
         name=config.prefix.subset,
@@ -128,7 +144,17 @@ def _build_prepared_cache(config: AddDatasetPreparationConfig) -> PreparedAddDat
         split=config.prefix.split,
         streaming=True,
     )
-    return prepare_add_dataset_cache(config, rows=rows, tokenizer=load_tokenizer(config.prefix.tokenizer))
+    return prepare_add_dataset_cache(config, rows=rows, tokenizer=config.prefix.tokenizer)
+
+
+def _build_prepared_cache(config: AddDatasetPreparationConfig) -> PreparedAddDatasetCache:
+    # A single streaming task preserves the bounded HF prefix without per-block job startup.
+    with ZephyrContext(
+        name="fast-track-add-dataset-tokenize",
+        max_workers=1,
+        resources=ResourceConfig(cpu=4, ram="8g", disk="8g"),
+    ) as context:
+        return context.execute(Dataset.from_list([config]).map(_prepare_hf_prefix)).results[0]
 
 
 def add_dataset_cache_step(
@@ -161,7 +187,7 @@ def add_prepared_dataset_component(
     name: str,
     component: DatasetComponentBase,
     fraction: float,
-    max_train_batches: int,
+    max_train_sequences: int,
 ) -> LmDataConfig:
     """Add a prepared dataset at its token share without a second simulated slice."""
     weights = baseline.train_weights
@@ -169,12 +195,20 @@ def add_prepared_dataset_component(
         raise ValueError("add-dataset training requires fixed dictionary weights")
     if name in baseline.components:
         raise ValueError(f"new dataset component {name!r} already exists")
+    if fraction * baseline.mixture_block_size < 1:
+        raise ValueError(
+            f"add-dataset fraction must be at least {1 / baseline.mixture_block_size:.6g} "
+            f"to select one sequence in a mixture block of {baseline.mixture_block_size}"
+        )
+    max_train_sequences_by_component = baseline.max_train_sequences or {}
+    if name in max_train_sequences_by_component:
+        raise ValueError(f"new dataset component {name!r} already has a sequence limit")
 
     return replace(
         baseline,
         components={**baseline.components, name: component},
         train_weights=add_dataset_mixture_weights(weights, new_component=name, fraction=fraction),
-        max_train_batches={name: max_train_batches},
+        max_train_sequences={**max_train_sequences_by_component, name: max_train_sequences},
         target_budget=None,
         experiment_budget=None,
     )
@@ -185,10 +219,10 @@ class AddDatasetTrainingSource:
     """Add one prepared Hugging Face token cache to the frozen baseline."""
 
     config: AddDatasetConfig
-    baseline: FrozenBaselineManifest = FROZEN_BASELINE
+    baseline: TrainingSource
 
     def dependencies(self) -> tuple[ArtifactStep, ...]:
-        return (self.config.token_cache,)
+        return (*self.baseline.dependencies(), self.config.token_cache)
 
     def data_config(
         self,
@@ -198,27 +232,32 @@ class AddDatasetTrainingSource:
         tokenizer: str,
         budget: ResolvedTrainingBudget,
     ) -> LmDataConfig:
-        baseline = FlatCacheTrainingSource(manifest=self.baseline).data_config(
+        baseline = self.baseline.data_config(
             ctx=ctx,
             validation=validation,
             tokenizer=tokenizer,
             budget=budget,
         )
-        loader_unit = budget.batch_size * budget.sequence_length
         sample_cap = unique_token_sample_cap(
             target_production_tokens=self.config.target_production_tokens,
             fast_track_budget=budget.token_count,
             available_unique_tokens=self.config.available_unique_tokens,
             fraction=self.config.fraction,
-            loader_unit=loader_unit,
+            sequence_length=budget.sequence_length,
         )
-        if sample_cap < loader_unit:
-            raise ValueError("add-dataset share yields fewer than one full training batch")
+        if sample_cap < budget.sequence_length:
+            raise ValueError("add-dataset share yields fewer than one training sequence")
 
         if ctx.is_fingerprint:
             cache_dir = ctx.artifact_path(self.config.token_cache)
         else:
             token_cache = ctx.resolved(self.config.token_cache)
+            actual_tokenizer_hash = tokenizer_content_hash(tokenizer)
+            if actual_tokenizer_hash != self.config.prefix.tokenizer_hash:
+                raise ValueError(
+                    f"tokenizer content differs from the prepared add-dataset prefix: "
+                    f"expected {self.config.prefix.tokenizer_hash}, got {actual_tokenizer_hash}"
+                )
             if token_cache.prefix.tokenizer != tokenizer:
                 raise ValueError(
                     f"add-dataset tokenizer {token_cache.prefix.tokenizer!r} does not match requested {tokenizer!r}"
@@ -248,5 +287,5 @@ class AddDatasetTrainingSource:
                 flat_cache=True,
             ),
             fraction=self.config.fraction,
-            max_train_batches=sample_cap // loader_unit,
+            max_train_sequences=sample_cap // budget.sequence_length,
         )
