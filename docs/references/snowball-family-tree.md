@@ -27,15 +27,16 @@ without encoding elapsed duration.
 
 The graph includes [the broad-domain RLVR campaign](https://github.com/marin-community/marin/issues/9735),
 including the Antidoom step-20 checkpoint trained with a frozen-reference KL
-penalty from public Antidoom step 12. The step-45 export's exact earlier weight ancestry remains qualified. Compute labels
-identify the estimate's scope; unknown training and rollout totals remain unknown.
+penalty from public Antidoom step 12. The step-45 export's exact earlier weight
+ancestry remains qualified. Compute labels identify the estimate's scope; unknown
+training and rollout totals remain unknown.
 
 ## Maintain the applet
 
 The source package is `infra/marina/applets/snowball_family_tree/`.
-`graph-data.json` contains the reviewed nodes, parents, source links, compute
-assumptions and per-node timeline dates. Update that file when adding a checkpoint.
-Adding a checkpoint normally requires only a graph update. The extracts
+Follow the [contributor README](https://github.com/marin-community/marin/blob/main/infra/marina/applets/snowball_family_tree/README.md)
+to add a checkpoint to `graph-data.json`, verify its parent and timeline, and
+submit a focused PR. The extracts
 `evidence/evidence-glm53async48-telemetry.json` and
 `evidence/evidence-antidoom12-telemetry.json` support scoped RL compute estimates
 for their respective runs. Update or add an extract when new token accounting
