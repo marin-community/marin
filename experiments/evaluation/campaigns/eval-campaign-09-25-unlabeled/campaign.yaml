@@ -48,6 +48,7 @@ model_config_overrides:
     tau3-pi: model-configs/tau3/Aleph-Alpha-Kolibri-1.yaml
   IFM-K2-Horizon-MoVA-36B-A4B:
     tau3-pi: model-configs/tau3/IFM-K2-Horizon-MoVA-36B-A4B.yaml
+    tb2-recovery: ablations/k2/model-recommended-tb2.yaml
   Qwen-Qwen3-Coder-30B-A3B-Instruct:
     tau3-pi: model-configs/tau3/Qwen-Qwen3-Coder-30B-A3B-Instruct.yaml
   Qwen-Qwen3-Next-80B-A3B-Instruct:
@@ -82,5 +83,3 @@ model_config_overrides:
     tau3-pi: model-configs/tau3/openai-gpt-oss-20b.yaml
   zai-org-GLM-4.7-Flash:
     tau3-pi: model-configs/tau3/zai-org-GLM-4.7-Flash.yaml
-  IFM-K2-Horizon-MoVA-36B-A4B:
-    tb2-recovery: ablations/k2/model-recommended-tb2.yaml
