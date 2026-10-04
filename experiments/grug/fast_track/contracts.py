@@ -46,7 +46,6 @@ class ResolvedTrainingBudget:
 
     @property
     def token_count(self) -> int:
-        """Return the number of tokens in the resolved run."""
         return self.batch_size * self.num_steps * self.sequence_length
 
 

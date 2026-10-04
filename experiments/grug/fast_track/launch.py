@@ -299,7 +299,7 @@ class TrainingSource(Protocol):
 
 @dataclasses.dataclass(frozen=True)
 class FlatCacheTrainingSource:
-    """Train on one prebuilt flat cache."""
+    """Train on a fixed mixture of prebuilt flat caches."""
 
     manifest: FrozenBaselineManifest = FROZEN_BASELINE
 
@@ -681,9 +681,10 @@ def _submit_fast_track(
     run_id: str,
     *,
     target_cluster: str | None,
-    uses_datakit: bool,
+    source_mode: SourceMode,
     stop_after: Stage,
 ) -> NoReturn:
+    uses_datakit = source_mode is not SourceMode.CACHE
     if stop_after is Stage.DATAKIT:
         wandb_policy = WandbPolicy.NOT_REQUIRED
     elif uses_datakit:
@@ -802,15 +803,14 @@ def main(
 ) -> ArtifactStep[ThroughputResult] | ArtifactStep[FastTrackDataStore]:
     selected_source_mode = SourceMode(source_mode)
     selected_stage = Stage(stop_after)
-    uses_datakit = selected_source_mode is not SourceMode.CACHE
-    if not uses_datakit and selected_stage is Stage.DATAKIT:
+    if selected_source_mode is SourceMode.CACHE and selected_stage is Stage.DATAKIT:
         raise click.UsageError("--stop-after datakit requires a non-cache --source-mode")
 
     if submit:
         _submit_fast_track(
             run_id,
             target_cluster=target_cluster,
-            uses_datakit=uses_datakit,
+            source_mode=selected_source_mode,
             stop_after=selected_stage,
         )
 
