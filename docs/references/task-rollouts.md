@@ -91,7 +91,7 @@ lower-priority file after a parse failure.
 An optional `pass_above` threshold supplies the separate pass/fail result.
 Harbor conversion sets this threshold to zero, so a positive grade is a pass.
 For a JSON object, the configured key supplies the scalar grade. Other finite
-numeric keys remain in `grade.diagnostics["rewards"]` for stage gates and aggregation.
+numeric keys remain in `grade.rewards` for stage gates and aggregation.
 `GradeResult.failure` identifies a verifier timeout, missing reward, empty reward,
 invalid reward, or execution failure. Error policies use this field without parsing
 the error message.
