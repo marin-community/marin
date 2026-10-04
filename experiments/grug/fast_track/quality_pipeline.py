@@ -137,6 +137,13 @@ class ScoreShardSummary:
 
 
 @dataclass(frozen=True)
+class _ScoringPrefix:
+    raw_prefix: PrefixResult
+    feature_paths: tuple[str, ...] | None
+    feature_identity: dict[str, str | int | float] | None
+
+
+@dataclass(frozen=True)
 class QualitySpec:
     scored_pool: ArtifactStep[ScoredPool]
     training_tokens: int
@@ -193,6 +200,186 @@ def _has_pinned_harrier_identity(identity: dict[str, str | int | float]) -> bool
     return all(identity.get(key) == value for key, value in HARRIER_FEATURE_IDENTITY.items())
 
 
+def _prepare_scoring_prefix(
+    pool: RawCorpusPool,
+    *,
+    ctx: ZephyrContext,
+    output_path: str,
+    token_budget: int,
+    prepared_features: PreparedQualityPool | None,
+) -> _ScoringPrefix:
+    if prepared_features is None:
+        raw_prefix = take_token_prefix(
+            RankedPool(pool.shards, pool.range_totals, pool.documents, pool.actual_tokens),
+            ctx=ctx,
+            output_path=prefix_join(output_path, "raw_prefix"),
+            token_budget=token_budget,
+        )
+        return _ScoringPrefix(raw_prefix, None, None)
+
+    expected_sources = pinned_quality_feature_sources(pool.sources)
+    if (
+        prepared_features.raw_manifest_path != pool.manifest_path
+        or prepared_features.raw_seed != pool.seed
+        or prepared_features.tokenizer_hash != pool.tokenizer_hash
+        or prepared_features.requested_tokens != token_budget
+        or prepared_features.sources != expected_sources
+    ):
+        raise ValueError("prepared feature pool does not match the raw scoring pool and exact token budget")
+    raw_prefix = PrefixResult(
+        prepared_features.raw_prefix_shards,
+        token_budget,
+        prepared_features.documents,
+        prepared_features.actual_tokens,
+        prepared_features.actual_tokens - token_budget,
+    )
+    feature_paths = tuple(item.path for item in prepared_features.feature_shards)
+    if len(feature_paths) != len(raw_prefix.shards):
+        raise ValueError("prepared features do not match the raw prefix shard count")
+    feature_identity = prepared_features.feature_identity
+    if not _has_pinned_harrier_identity(feature_identity):
+        raise ValueError("prepared quality pool has different Harrier feature pins")
+    return _ScoringPrefix(raw_prefix, feature_paths, feature_identity)
+
+
+def _prepare_scoring_batch(
+    rows: list[dict],
+    *,
+    feature_batches: Iterator[pa.RecordBatch] | None,
+    row_offset: int,
+    label_exclusion: LabelExclusion,
+) -> tuple[QualityScoringBatch, list[str]]:
+    texts = [row["text"] for row in rows]
+    if any(not isinstance(text, str) for text in texts):
+        raise ValueError("raw corpus records require string text")
+
+    token_hashes = []
+    for row in rows:
+        if row["duplicate_group"] in label_exclusion.duplicate_groups:
+            raise ValueError(
+                "raw quality pool overlaps a frozen train, development, or audit duplicate group "
+                f"({row['source']}/{row['id']})"
+            )
+        if row["id"] in label_exclusion.normalized_document_ids:
+            raise ValueError(f"raw quality pool overlaps a frozen normalized label ID ({row['source']}/{row['id']})")
+        tokens = np.asarray(row["input_ids"], dtype="<i4")
+        if len(tokens) != row["token_count"]:
+            raise ValueError("raw corpus token_count differs from input_ids length")
+        token_hashes.append(hashlib.sha256(tokens.tobytes()).hexdigest())
+
+    embeddings = None
+    if feature_batches is not None:
+        try:
+            feature_batch = next(feature_batches)
+        except StopIteration as exc:
+            raise ValueError("prepared feature shard ended before its raw prefix shard") from exc
+        feature_rows = feature_batch.to_pylist()
+        if len(feature_rows) != len(rows):
+            raise ValueError("prepared feature and raw prefix batch lengths differ")
+        for row_index, (raw_row, feature_row) in enumerate(zip(rows, feature_rows, strict=True)):
+            if raw_row["id"] != feature_row["id"] or feature_row["raw_row_index"] != row_offset + row_index:
+                raise ValueError("prepared feature ID or row position differs from the raw prefix")
+        embeddings = normalize_harrier_embeddings(np.asarray([row["embedding"] for row in feature_rows], dtype=np.int8))
+    return QualityScoringBatch(texts, [row["id"] for row in rows], embeddings), token_hashes
+
+
+def _score_raw_file(
+    file: dict[str, str | int],
+    *,
+    output_path: str,
+    scorer: DocumentQualityScorer,
+    incumbent_scorer: DocumentQualityScorer | None,
+    label_exclusion: LabelExclusion,
+) -> ScoreShardSummary:
+    path = prefix_join(output_path, f"part-{int(file['index']):05d}.parquet")
+    ensure_parent_dir(path)
+    documents = 0
+    tokens_total = 0
+    candidate_minimum = math.inf
+    candidate_maximum = -math.inf
+    candidate_rank_sample = []
+    incumbent_minimum = math.inf
+    incumbent_maximum = -math.inf
+    incumbent_rank_sample = []
+    writer = None
+    with ExitStack() as stack:
+        source = stack.enter_context(StoragePath(str(file["path"])).open("rb"))
+        target = stack.enter_context(StoragePath(path).open("wb"))
+        feature_batches = None
+        if "feature_path" in file:
+            feature_stream = stack.enter_context(StoragePath(str(file["feature_path"])).open("rb"))
+            feature_batches = iter(pq.ParquetFile(feature_stream).iter_batches(batch_size=SCORER_BATCH_ROWS))
+        for batch in pq.ParquetFile(source).iter_batches(batch_size=SCORER_BATCH_ROWS):
+            rows = batch.to_pylist()
+            scoring_batch, token_hashes = _prepare_scoring_batch(
+                rows,
+                feature_batches=feature_batches,
+                row_offset=documents,
+                label_exclusion=label_exclusion,
+            )
+            scores = np.asarray(scorer.scores(scoring_batch), dtype=np.float64)
+            if scores.shape != (len(rows),) or not np.isfinite(scores).all():
+                raise ValueError("text scorer must return one finite score per document")
+            candidate_minimum = min(candidate_minimum, float(scores.min()))
+            candidate_maximum = max(candidate_maximum, float(scores.max()))
+            if len(candidate_rank_sample) < SCORE_SAMPLE_ROWS:
+                candidate_rank_sample.extend(
+                    (float(score), row["source"], row["id"]) for row, score in zip(rows, scores, strict=True)
+                )
+                candidate_rank_sample = candidate_rank_sample[:SCORE_SAMPLE_ROWS]
+            incumbent_scores = None
+            if incumbent_scorer is not None:
+                incumbent_scores = np.asarray(incumbent_scorer.scores(scoring_batch), dtype=np.float64)
+                if incumbent_scores.shape != (len(rows),) or not np.isfinite(incumbent_scores).all():
+                    raise ValueError("incumbent scorer must return one finite score per document")
+                incumbent_minimum = min(incumbent_minimum, float(incumbent_scores.min()))
+                incumbent_maximum = max(incumbent_maximum, float(incumbent_scores.max()))
+                if len(incumbent_rank_sample) < SCORE_SAMPLE_ROWS:
+                    incumbent_rank_sample.extend(
+                        (float(score), row["source"], row["id"])
+                        for row, score in zip(rows, incumbent_scores, strict=True)
+                    )
+                    incumbent_rank_sample = incumbent_rank_sample[:SCORE_SAMPLE_ROWS]
+            output = []
+            for index, (row, score) in enumerate(zip(rows, scores, strict=True)):
+                scored_row = {key: value for key, value in row.items() if key not in {"text", "input_ids"}}
+                scored_row.update(
+                    {
+                        "raw_shard_index": int(file["index"]),
+                        "raw_row_index": documents + index,
+                        "token_sha256": token_hashes[index],
+                        SCORE_COLUMN: float(score),
+                    }
+                )
+                if incumbent_scores is not None:
+                    scored_row["incumbent_score"] = float(incumbent_scores[index])
+                output.append(scored_row)
+            table = pa.Table.from_pylist(output)
+            if writer is None:
+                writer = stack.enter_context(pq.ParquetWriter(target, table.schema))
+            writer.write_table(table)
+            documents += len(rows)
+            tokens_total += sum(row["token_count"] for row in rows)
+        if feature_batches is not None:
+            try:
+                next(feature_batches)
+            except StopIteration:
+                pass
+            else:
+                raise ValueError("prepared feature shard has rows beyond its raw prefix shard")
+    if documents == 0:
+        raise ValueError("raw scoring shard must contain at least one document")
+    return ScoreShardSummary(
+        RangeTokenTotal(int(file["index"]), path, documents, tokens_total),
+        candidate_minimum,
+        candidate_maximum,
+        tuple(candidate_rank_sample),
+        None if incumbent_scorer is None else incumbent_minimum,
+        None if incumbent_scorer is None else incumbent_maximum,
+        tuple(incumbent_rank_sample),
+    )
+
+
 def score_raw_pool(
     pool: RawCorpusPool,
     *,
@@ -220,164 +407,28 @@ def score_raw_pool(
     if incumbent_identity is not None:
         _validate_identity(incumbent_identity)
     label_exclusion_fingerprint = hashlib.sha256(canonical_json(label_exclusion.identity()).encode()).hexdigest()
-    if prepared_features is None:
-        raw_prefix = take_token_prefix(
-            RankedPool(pool.shards, pool.range_totals, pool.documents, pool.actual_tokens),
-            ctx=ctx,
-            output_path=prefix_join(output_path, "raw_prefix"),
-            token_budget=token_budget,
-        )
-        feature_paths: tuple[str, ...] | None = None
-        feature_identity = None
-    else:
-        expected_sources = pinned_quality_feature_sources(pool.sources)
-        if (
-            prepared_features.raw_manifest_path != pool.manifest_path
-            or prepared_features.raw_seed != pool.seed
-            or prepared_features.tokenizer_hash != pool.tokenizer_hash
-            or prepared_features.requested_tokens != token_budget
-            or prepared_features.sources != expected_sources
-        ):
-            raise ValueError("prepared feature pool does not match the raw scoring pool and exact token budget")
-        raw_prefix = PrefixResult(
-            prepared_features.raw_prefix_shards,
-            token_budget,
-            prepared_features.documents,
-            prepared_features.actual_tokens,
-            prepared_features.actual_tokens - token_budget,
-        )
-        feature_paths = tuple(item.path for item in prepared_features.feature_shards)
-        if len(feature_paths) != len(raw_prefix.shards):
-            raise ValueError("prepared features do not match the raw prefix shard count")
-        feature_identity = prepared_features.feature_identity
-        if not _has_pinned_harrier_identity(feature_identity):
-            raise ValueError("prepared quality pool has different Harrier feature pins")
-
-    def score_file(
-        file: dict[str, str | int], scorer: DocumentQualityScorer, incumbent_scorer: DocumentQualityScorer | None
-    ) -> ScoreShardSummary:
-        path = prefix_join(output_path, f"part-{int(file['index']):05d}.parquet")
-        ensure_parent_dir(path)
-        documents = 0
-        tokens_total = 0
-        candidate_minimum = math.inf
-        candidate_maximum = -math.inf
-        candidate_rank_sample = []
-        incumbent_minimum = math.inf
-        incumbent_maximum = -math.inf
-        incumbent_rank_sample = []
-        writer = None
-        with ExitStack() as stack:
-            source = stack.enter_context(StoragePath(str(file["path"])).open("rb"))
-            target = stack.enter_context(StoragePath(path).open("wb"))
-            feature_batches = None
-            if "feature_path" in file:
-                feature_stream = stack.enter_context(StoragePath(str(file["feature_path"])).open("rb"))
-                feature_batches = iter(pq.ParquetFile(feature_stream).iter_batches(batch_size=SCORER_BATCH_ROWS))
-            for batch in pq.ParquetFile(source).iter_batches(batch_size=SCORER_BATCH_ROWS):
-                rows = batch.to_pylist()
-                texts = [row["text"] for row in rows]
-                if any(not isinstance(text, str) for text in texts):
-                    raise ValueError("raw corpus records require string text")
-                token_hashes = []
-                for row in rows:
-                    if row["duplicate_group"] in label_exclusion.duplicate_groups:
-                        raise ValueError(
-                            "raw quality pool overlaps a frozen train, development, or audit duplicate group "
-                            f"({row['source']}/{row['id']})"
-                        )
-                    if row["id"] in label_exclusion.normalized_document_ids:
-                        raise ValueError(
-                            f"raw quality pool overlaps a frozen normalized label ID ({row['source']}/{row['id']})"
-                        )
-                    tokens = np.asarray(row["input_ids"], dtype="<i4")
-                    if len(tokens) != row["token_count"]:
-                        raise ValueError("raw corpus token_count differs from input_ids length")
-                    token_hash = hashlib.sha256(tokens.tobytes()).hexdigest()
-                    token_hashes.append(token_hash)
-                embeddings = None
-                if feature_batches is not None:
-                    try:
-                        feature_batch = next(feature_batches)
-                    except StopIteration as exc:
-                        raise ValueError("prepared feature shard ended before its raw prefix shard") from exc
-                    feature_rows = feature_batch.to_pylist()
-                    if len(feature_rows) != len(rows):
-                        raise ValueError("prepared feature and raw prefix batch lengths differ")
-                    for row_index, (raw_row, feature_row) in enumerate(zip(rows, feature_rows, strict=True)):
-                        if raw_row["id"] != feature_row["id"] or feature_row["raw_row_index"] != documents + row_index:
-                            raise ValueError("prepared feature ID or row position differs from the raw prefix")
-                    embeddings = normalize_harrier_embeddings(
-                        np.asarray([row["embedding"] for row in feature_rows], dtype=np.int8)
-                    )
-                scoring_batch = QualityScoringBatch(texts, [row["id"] for row in rows], embeddings)
-                scores = np.asarray(scorer.scores(scoring_batch), dtype=np.float64)
-                if scores.shape != (len(rows),) or not np.isfinite(scores).all():
-                    raise ValueError("text scorer must return one finite score per document")
-                candidate_minimum = min(candidate_minimum, float(scores.min()))
-                candidate_maximum = max(candidate_maximum, float(scores.max()))
-                if len(candidate_rank_sample) < SCORE_SAMPLE_ROWS:
-                    candidate_rank_sample.extend(
-                        (float(score), row["source"], row["id"]) for row, score in zip(rows, scores, strict=True)
-                    )
-                    candidate_rank_sample = candidate_rank_sample[:SCORE_SAMPLE_ROWS]
-                incumbent_scores = None
-                if incumbent_scorer is not None:
-                    incumbent_scores = np.asarray(incumbent_scorer.scores(scoring_batch), dtype=np.float64)
-                    if incumbent_scores.shape != (len(rows),) or not np.isfinite(incumbent_scores).all():
-                        raise ValueError("incumbent scorer must return one finite score per document")
-                    incumbent_minimum = min(incumbent_minimum, float(incumbent_scores.min()))
-                    incumbent_maximum = max(incumbent_maximum, float(incumbent_scores.max()))
-                    if len(incumbent_rank_sample) < SCORE_SAMPLE_ROWS:
-                        incumbent_rank_sample.extend(
-                            (float(score), row["source"], row["id"])
-                            for row, score in zip(rows, incumbent_scores, strict=True)
-                        )
-                        incumbent_rank_sample = incumbent_rank_sample[:SCORE_SAMPLE_ROWS]
-                output = []
-                for index, (row, score) in enumerate(zip(rows, scores, strict=True)):
-                    scored_row = {key: value for key, value in row.items() if key not in {"text", "input_ids"}}
-                    scored_row.update(
-                        {
-                            "raw_shard_index": int(file["index"]),
-                            "raw_row_index": documents + index,
-                            "token_sha256": token_hashes[index],
-                            SCORE_COLUMN: float(score),
-                        }
-                    )
-                    if incumbent_scores is not None:
-                        scored_row["incumbent_score"] = float(incumbent_scores[index])
-                    output.append(scored_row)
-                table = pa.Table.from_pylist(output)
-                if writer is None:
-                    writer = stack.enter_context(pq.ParquetWriter(target, table.schema))
-                writer.write_table(table)
-                documents += len(rows)
-                tokens_total += sum(row["token_count"] for row in rows)
-            if feature_batches is not None:
-                try:
-                    next(feature_batches)
-                except StopIteration:
-                    pass
-                else:
-                    raise ValueError("prepared feature shard has rows beyond its raw prefix shard")
-        if documents == 0:
-            raise ValueError("raw scoring shard must contain at least one document")
-        return ScoreShardSummary(
-            RangeTokenTotal(int(file["index"]), path, documents, tokens_total),
-            candidate_minimum,
-            candidate_maximum,
-            tuple(candidate_rank_sample),
-            None if incumbent_scorer is None else incumbent_minimum,
-            None if incumbent_scorer is None else incumbent_maximum,
-            tuple(incumbent_rank_sample),
-        )
+    scoring_prefix = _prepare_scoring_prefix(
+        pool,
+        ctx=ctx,
+        output_path=output_path,
+        token_budget=token_budget,
+        prepared_features=prepared_features,
+    )
+    raw_prefix = scoring_prefix.raw_prefix
+    feature_paths = scoring_prefix.feature_paths
+    feature_identity = scoring_prefix.feature_identity
 
     def score_shard(files: Iterator[dict[str, str | int]], _: ShardInfo) -> Iterator[ScoreShardSummary]:
         scorer = scorer_factory()
         incumbent_scorer = incumbent_scorer_factory() if incumbent_scorer_factory is not None else None
         for file in files:
-            yield score_file(file, scorer, incumbent_scorer)
+            yield _score_raw_file(
+                file,
+                output_path=output_path,
+                scorer=scorer,
+                incumbent_scorer=incumbent_scorer,
+                label_exclusion=label_exclusion,
+            )
 
     file_records = []
     for index, path in enumerate(raw_prefix.shards):

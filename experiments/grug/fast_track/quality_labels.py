@@ -86,6 +86,14 @@ class _Label:
     content_type: str
 
 
+@dataclass(frozen=True)
+class _JoinedLabels:
+    records: dict[str, dict]
+    keys: set[tuple[str, str]]
+    duplicate_groups: set[str]
+    duplicate_rows: list[dict]
+
+
 def _label(row: dict, *, prefix: str = "") -> _Label:
     if row[prefix + "label_batch"] != LABEL_BATCH:
         raise ValueError(f"unexpected label batch for {row['id']}")
@@ -125,18 +133,10 @@ def _embedding_difference(retained: np.ndarray, duplicate: np.ndarray) -> tuple[
     return max_abs_delta, l2_delta, cosine, identical
 
 
-def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> FrozenQualityLabels:
-    """Validate the original/joined tables and seal a compact, content-hashed label set.
-
-    Original label text can contain excerpts. Only joined full text supplies
-    SHA-256 exclusion groups. All original normalized IDs remain excluded.
-    """
-    if spec.feature_identity != HARRIER_FEATURE_IDENTITY:
-        raise ValueError("joined quality labels require the pinned Harrier feature identity")
-    hashes: dict[str, str] = {}
+def _read_original_labels(path: str, hashes: dict[str, str]) -> tuple[dict[tuple[str, str], _Label], dict[str, float]]:
     originals: dict[tuple[str, str], _Label] = {}
     global_scores: dict[str, float] = {}
-    for batch in _read_input(spec.labels_path, hashes).iter_batches(batch_size=256, columns=LABEL_COLUMNS):
+    for batch in _read_input(path, hashes).iter_batches(batch_size=256, columns=LABEL_COLUMNS):
         for row in batch.to_pylist():
             label = _label(row)
             key = label.source, label.document_id
@@ -148,15 +148,21 @@ def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> Frozen
             global_scores[label.document_id] = label.score
     if not originals:
         raise ValueError("the original label table is empty")
+    return originals, global_scores
 
+
+def _read_joined_labels(
+    joined_path: str, originals: dict[tuple[str, str], _Label], hashes: dict[str, str]
+) -> _JoinedLabels:
     paths = sorted(
         str(directory / filename)
-        for directory, _, filenames in StoragePath(prefix_join(spec.joined_path, "outputs")).walk()
+        for directory, _, filenames in StoragePath(prefix_join(joined_path, "outputs")).walk()
         for filename in filenames
         if filename.endswith(".parquet") and not filename.startswith((".", "_"))
     )
     if not paths:
-        raise ValueError(f"no joined label shards at {spec.joined_path}/outputs")
+        raise ValueError(f"no joined label shards at {joined_path}/outputs")
+
     records: dict[str, dict] = {}
     joined_keys: set[tuple[str, str]] = set()
     duplicate_groups: set[str] = set()
@@ -217,8 +223,18 @@ def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> Frozen
                 joined_row += 1
     if not records:
         raise ValueError("the joined artifact has no quality labels")
+    return _JoinedLabels(records, joined_keys, duplicate_groups, duplicate_rows)
 
-    missing = [label for key, label in originals.items() if key not in joined_keys]
+
+def _write_frozen_quality_labels(
+    spec: QualityLabelSpec,
+    output_path: str,
+    hashes: dict[str, str],
+    originals: dict[tuple[str, str], _Label],
+    global_scores: dict[str, float],
+    joined: _JoinedLabels,
+) -> FrozenQualityLabels:
+    missing = [label for key, label in originals.items() if key not in joined.keys]
     missing_by_source = dict(Counter(label.source for label in missing))
     missing_by_type = dict(Counter(label.content_type for label in missing))
     schema = pa.schema(
@@ -231,8 +247,8 @@ def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> Frozen
         ]
     )
     table_rows = [
-        {name: records[key][name] for name in ("source", "id", "duplicate_group", "embedding", "label")}
-        for key in sorted(records)
+        {name: joined.records[key][name] for name in ("source", "id", "duplicate_group", "embedding", "label")}
+        for key in sorted(joined.records)
     ]
     table = pa.Table.from_pylist(table_rows, schema=schema)
     buffer = io.BytesIO()
@@ -254,7 +270,7 @@ def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> Frozen
             ("embedding_cosine_similarity_int8", pa.float64()),
         ]
     )
-    duplicate_table = pa.Table.from_pylist(duplicate_rows, schema=duplicate_schema)
+    duplicate_table = pa.Table.from_pylist(joined.duplicate_rows, schema=duplicate_schema)
     duplicate_buffer = io.BytesIO()
     pq.write_table(duplicate_table, duplicate_buffer, compression="zstd")
     duplicate_report_path = prefix_join(output_path, "duplicate_embeddings.parquet")
@@ -262,14 +278,14 @@ def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> Frozen
     duplicate_report_hash = hashlib.sha256(duplicate_report_bytes).hexdigest()
     duplicate_summary = {
         "policy": DUPLICATE_EMBEDDING_POLICY,
-        "occurrences": len(duplicate_rows),
-        "affected_documents": len({row["id"] for row in duplicate_rows}),
-        "identical_occurrences": sum(row["embedding_identical"] for row in duplicate_rows),
-        "differing_occurrences": sum(not row["embedding_identical"] for row in duplicate_rows),
-        "max_abs_delta_int8": max((row["embedding_max_abs_delta_int8"] for row in duplicate_rows), default=0),
-        "max_l2_delta_int8": max((row["embedding_l2_delta_int8"] for row in duplicate_rows), default=0.0),
+        "occurrences": len(joined.duplicate_rows),
+        "affected_documents": len({row["id"] for row in joined.duplicate_rows}),
+        "identical_occurrences": sum(row["embedding_identical"] for row in joined.duplicate_rows),
+        "differing_occurrences": sum(not row["embedding_identical"] for row in joined.duplicate_rows),
+        "max_abs_delta_int8": max((row["embedding_max_abs_delta_int8"] for row in joined.duplicate_rows), default=0),
+        "max_l2_delta_int8": max((row["embedding_l2_delta_int8"] for row in joined.duplicate_rows), default=0.0),
         "minimum_cosine_similarity_int8": min(
-            (row["embedding_cosine_similarity_int8"] for row in duplicate_rows), default=None
+            (row["embedding_cosine_similarity_int8"] for row in joined.duplicate_rows), default=None
         ),
         "report_path": duplicate_report_path,
     }
@@ -286,7 +302,7 @@ def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> Frozen
     ).hexdigest()
     exclusion = LabelExclusion(
         label_revision=f"sha256:{revision}",
-        duplicate_groups=frozenset(duplicate_groups),
+        duplicate_groups=frozenset(joined.duplicate_groups),
         normalized_document_ids=frozenset(global_scores),
     )
     table_path = StoragePath(prefix_join(output_path, "labels.parquet"))
@@ -304,8 +320,8 @@ def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> Frozen
                 "label_revision": exclusion.label_revision,
                 "original_source_id_pairs": len(originals),
                 "original_unique_ids": len(global_scores),
-                "joined_source_id_pairs": len(joined_keys),
-                "labelled_unique_documents": len(records),
+                "joined_source_id_pairs": len(joined.keys),
+                "labelled_unique_documents": len(joined.records),
                 "missing_by_source": missing_by_source,
                 "missing_by_content_type": missing_by_type,
                 "duplicate_embeddings": duplicate_summary,
@@ -322,11 +338,21 @@ def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> Frozen
         duplicate_report_path=duplicate_report_path,
         label_exclusion=exclusion,
         feature_identity=spec.feature_identity,
-        documents=len(records),
+        documents=len(joined.records),
         original_documents=len(global_scores),
         missing_by_source=missing_by_source,
         missing_by_content_type=missing_by_type,
     )
+
+
+def freeze_quality_labels(spec: QualityLabelSpec, *, output_path: str) -> FrozenQualityLabels:
+    """Validate original and joined labels, then seal the content-hashed label artifact."""
+    if spec.feature_identity != HARRIER_FEATURE_IDENTITY:
+        raise ValueError("joined quality labels require the pinned Harrier feature identity")
+    hashes: dict[str, str] = {}
+    originals, global_scores = _read_original_labels(spec.labels_path, hashes)
+    joined = _read_joined_labels(spec.joined_path, originals, hashes)
+    return _write_frozen_quality_labels(spec, output_path, hashes, originals, global_scores, joined)
 
 
 def read_labelled_embeddings(labels: FrozenQualityLabels) -> list[LabelledEmbedding]:
