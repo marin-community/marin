@@ -61,7 +61,7 @@ def recovered_model(recovery_version: str, policy_export_version: str | None) ->
     return ArtifactHfModel(step, source.model, source.revision)
 
 
-def rl_recipe(images: tuple[str, str, str], num_train_steps: int) -> str:
+def rl_recipe(images: tuple[str, str, str], num_train_steps: int, reader_concurrency: int) -> str:
     """Adapt the copied v125 recipe to Harbor without changing optimizer settings."""
     recipe = yaml.safe_load(Path(__file__).with_name("v125_async.yaml").read_text())["skyrl"]
     recipe["entrypoint"] = "terminal_bench"
@@ -118,6 +118,7 @@ def rl_recipe(images: tuple[str, str, str], num_train_steps: int) -> str:
         "max_bytes_per_run": MAX_RETAINED_BYTES_PER_STEP * num_train_steps,
     }
     generator["engine_init_kwargs"].pop("served_model_name")
+    generator["engine_init_kwargs"]["model_loader_extra_config"] = {"concurrency": reader_concurrency}
     recipe["data"] = {"kind": "tasks", "train_data": [], "val_data": [], "shuffle": False}
     recipe.pop("environment")
     recipe.pop("terminal_bench_config")
@@ -130,13 +131,14 @@ def rl_step(
     policy_export_version: str | None,
     num_train_steps: int,
     images: tuple[str, str, str],
+    reader_concurrency: int,
 ) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name("models/bfcl-rl-multi-harness")
     spec = replace(
         collection_spec("student", None, images),
         name=name,
         version=resolve_version(name, None),
-        config_yaml=rl_recipe(images, num_train_steps),
+        config_yaml=rl_recipe(images, num_train_steps, reader_concurrency),
         model=recovered_model(recovery_version, policy_export_version),
         topology=SkyRLTopology(num_nodes=10, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
     )
@@ -147,6 +149,12 @@ def rl_step(
 @click.option("--recovery-version", required=True)
 @click.option("--policy-export-version", default=None, help="Use an explicit saved-policy CPU export producer.")
 @click.option("--num-train-steps", type=click.IntRange(min=2), required=True)
+@click.option(
+    "--reader-concurrency",
+    type=click.IntRange(min=1),
+    required=True,
+    help="Concurrent S3 checkpoint readers per rollout-engine process.",
+)
 @click.option("--python-image", required=True)
 @click.option("--java-image", required=True)
 @click.option("--javascript-image", required=True)
@@ -155,6 +163,7 @@ def main(
     recovery_version: str,
     policy_export_version: str | None,
     num_train_steps: int,
+    reader_concurrency: int,
     python_image: str,
     java_image: str,
     javascript_image: str,
@@ -164,6 +173,7 @@ def main(
         policy_export_version,
         num_train_steps,
         (python_image, java_image, javascript_image),
+        reader_concurrency,
     )
 
 
