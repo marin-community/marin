@@ -78,15 +78,21 @@ uploads screenshots for inspection through the `Marin - Unit` run.
 
 `ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
 MarinSkyRL projects at 00:17, 06:17, 12:17, and 18:17 UTC. It runs
-`uv run config/update-external.py` without a project selector, records each
-resolved version and commit in the job summary, and includes every upstream
-commit subject between the old and new revisions. It opens or refreshes one
-`automation/external-dependencies` pull request when generated state changes
+`uv run config/update-external.py PROJECT` in a separate matrix job for each project, records the
+selected version and commit in that job's summary, and includes every upstream
+commit subject between the old and new revisions. Each job opens or refreshes its own
+pull request on `automation/external-dependencies-marinskyrl`,
+`automation/external-dependencies-evalchemy`, or `automation/external-dependencies-harbor` when generated state changes,
 using the dedicated `marin-external-runtime-updater` GitHub App. The workflow
 checks the app author, branch, title, exact head SHA, and changed-file allowlist,
-then waits up to one hour for the four required main checks before squash
+then waits up to one hour for the required main checks before squash
 merging. A failure or timeout leaves the pull request open and makes the
-scheduled workflow red.
+scheduled workflow red. Other project jobs continue when one project fails.
+
+The Marin unit job loads the supported post-training launch documents with the installed MarinSkyRL
+pin. Recipe, RL library, pin and updater changes explicitly select this compatibility test, whose result
+contributes to the required `unit-tests` check. A breaking launcher update needs a human pull request
+that advances the pin and migrates its affected producers together.
 
 The app key is an environment secret released only to `main`; a pull-request
 workflow cannot receive it. The GitHub Pulumi stack gives the app a

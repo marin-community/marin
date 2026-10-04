@@ -13,6 +13,14 @@ class DependencyUpdate(StrEnum):
     NATIVE_PACKAGE = "native-package"
 
 
+class ExternalRuntime(StrEnum):
+    """Projects admitted to the external-runtime bot's file policy."""
+
+    MARIN_SKYRL = "MarinSkyRL"
+    EVALCHEMY = "evalchemy"
+    HARBOR = "harbor"
+
+
 @dataclass(frozen=True)
 class PullRequestPolicy:
     base_branch: str
@@ -21,20 +29,21 @@ class PullRequestPolicy:
     allowed_files: frozenset[str]
 
 
-EXTERNAL_RUNTIME_POLICY = PullRequestPolicy(
-    base_branch="main",
-    head_branch="automation/external-dependencies",
-    title="[dependencies] Advance external runtimes",
-    allowed_files=frozenset(
-        {
-            "config/external/MarinSkyRL/uv.lock",
-            "config/external/evalchemy/uv.lock",
-            "config/external/harbor/uv.lock",
-            "lib/marin/src/marin/external_dependencies.py",
-            "pyproject.toml",
-            "uv.lock",
-        }
-    ),
+EXTERNAL_RUNTIME_POLICIES = MappingProxyType(
+    {
+        project: PullRequestPolicy(
+            base_branch="main",
+            head_branch=f"automation/external-dependencies-{project.value.lower()}",
+            title=f"[dependencies] Advance {project.value}",
+            allowed_files=frozenset(
+                {
+                    f"config/external/{project.value}/uv.lock",
+                    "lib/marin/src/marin/external_dependencies.py",
+                }
+            ),
+        )
+        for project in ExternalRuntime
+    }
 )
 NATIVE_PACKAGE_POLICY = PullRequestPolicy(
     base_branch="main",
@@ -48,13 +57,6 @@ NATIVE_PACKAGE_POLICY = PullRequestPolicy(
         }
     ),
 )
-DEPENDENCY_UPDATE_POLICIES = MappingProxyType(
-    {
-        DependencyUpdate.EXTERNAL_RUNTIME: EXTERNAL_RUNTIME_POLICY,
-        DependencyUpdate.NATIVE_PACKAGE: NATIVE_PACKAGE_POLICY,
-    }
-)
-
 REQUIRED_CHECKS = (
     "marin-docs",
     "marin-integration",

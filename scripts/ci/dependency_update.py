@@ -14,9 +14,11 @@ from enum import StrEnum
 from pathlib import Path
 
 from scripts.ci.dependency_update_policy import (
-    DEPENDENCY_UPDATE_POLICIES,
+    EXTERNAL_RUNTIME_POLICIES,
+    NATIVE_PACKAGE_POLICY,
     REQUIRED_CHECKS,
     DependencyUpdate,
+    ExternalRuntime,
     PullRequestPolicy,
 )
 from scripts.ci.package_release import emit_github_output
@@ -469,12 +471,22 @@ def _parser() -> argparse.ArgumentParser:
     merge.add_argument("--expected-head-sha", required=True)
     merge.add_argument("--timeout", type=float, default=3600)
     merge.add_argument("--poll-interval", type=float, default=30)
+    for command in (changed_files, prepare, publish, merge):
+        command.add_argument("--project", choices=ExternalRuntime)
     return parser
 
 
 def main() -> None:
-    args = _parser().parse_args()
-    policy = DEPENDENCY_UPDATE_POLICIES[DependencyUpdate(args.kind)]
+    parser = _parser()
+    args = parser.parse_args()
+    if args.kind == DependencyUpdate.EXTERNAL_RUNTIME:
+        if args.project is None:
+            parser.error("external-runtime updates require --project")
+        policy = EXTERNAL_RUNTIME_POLICIES[ExternalRuntime(args.project)]
+    else:
+        if args.project is not None:
+            parser.error("--project applies only to external-runtime updates")
+        policy = NATIVE_PACKAGE_POLICY
     if args.command == "changed-files":
         print("\n".join(validate_changed_files(changed_worktree_files(), policy=policy)))
         return

@@ -1,11 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
+import runpy
+import shutil
 import subprocess
+import sys
+import tomllib
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.ci.dependency_update import (
     BranchPushMode,
@@ -20,13 +26,19 @@ from scripts.ci.dependency_update import (
     validate_changed_files,
     validated_pull_request,
 )
-from scripts.ci.dependency_update_policy import EXTERNAL_RUNTIME_POLICY, NATIVE_PACKAGE_POLICY, PullRequestPolicy
+from scripts.ci.dependency_update_policy import (
+    EXTERNAL_RUNTIME_POLICIES,
+    NATIVE_PACKAGE_POLICY,
+    ExternalRuntime,
+    PullRequestPolicy,
+)
 from scripts.ci.package_release import PACKAGES, requirement_paths_for_packages
 
 EXPECTED_SHA = "a" * 40
+SKYRL_POLICY = EXTERNAL_RUNTIME_POLICIES[ExternalRuntime.MARIN_SKYRL]
 
 
-def _pull_request(policy: PullRequestPolicy = EXTERNAL_RUNTIME_POLICY, **overrides) -> PullRequestSnapshot:
+def _pull_request(policy: PullRequestPolicy = SKYRL_POLICY, **overrides) -> PullRequestSnapshot:
     values = {
         "author": "app/marin-external-runtime-updater",
         "base_branch": "main",
@@ -66,7 +78,7 @@ def _git_repository(tmp_path: Path) -> tuple[Path, Path, str]:
     return repository, remote, _git(repository, "rev-parse", "HEAD")
 
 
-@pytest.mark.parametrize("policy", [EXTERNAL_RUNTIME_POLICY, NATIVE_PACKAGE_POLICY])
+@pytest.mark.parametrize("policy", [*EXTERNAL_RUNTIME_POLICIES.values(), NATIVE_PACKAGE_POLICY])
 def test_returns_the_dedicated_apps_exact_generated_pull_request(policy: PullRequestPolicy) -> None:
     pull_request = _pull_request(policy)
 
@@ -88,16 +100,17 @@ def test_returns_the_dedicated_apps_exact_generated_pull_request(policy: PullReq
         {"head_branch": "feature/unrelated"},
         {"head_sha": "b" * 40},
         {"title": "Update dependencies"},
-        {"files": (*tuple(sorted(EXTERNAL_RUNTIME_POLICY.allowed_files)), "src/backdoor.py")},
+        {"files": (*tuple(sorted(SKYRL_POLICY.allowed_files)), "src/backdoor.py")},
+        {"files": (*tuple(sorted(SKYRL_POLICY.allowed_files)), "config/external/harbor/uv.lock")},
         {"files": ()},
     ],
-    ids=["author", "base", "head", "sha", "title", "files", "empty"],
+    ids=["author", "base", "head", "sha", "title", "files", "other-project", "empty"],
 )
 def test_rejects_a_pull_request_outside_the_generated_boundary(override: dict) -> None:
     with pytest.raises(ValueError):
         validated_pull_request(
             _pull_request(**override),
-            policy=EXTERNAL_RUNTIME_POLICY,
+            policy=SKYRL_POLICY,
             expected_app_slug="marin-external-runtime-updater",
             expected_head_sha=EXPECTED_SHA,
         )
@@ -175,13 +188,17 @@ def test_no_registered_github_checks_is_a_missing_gate_not_a_cli_failure(monkeyp
 
 def test_changed_files_are_sorted_and_restricted_to_the_policy() -> None:
     changed = validate_changed_files(
-        ["uv.lock", "config/external/harbor/uv.lock", "uv.lock"],
-        policy=EXTERNAL_RUNTIME_POLICY,
+        [
+            "lib/marin/src/marin/external_dependencies.py",
+            "config/external/MarinSkyRL/uv.lock",
+            "config/external/MarinSkyRL/uv.lock",
+        ],
+        policy=SKYRL_POLICY,
     )
 
-    assert changed == ("config/external/harbor/uv.lock", "uv.lock")
+    assert changed == ("config/external/MarinSkyRL/uv.lock", "lib/marin/src/marin/external_dependencies.py")
     with pytest.raises(ValueError):
-        validate_changed_files(["uv.lock", "src/backdoor.py"], policy=EXTERNAL_RUNTIME_POLICY)
+        validate_changed_files(["config/external/MarinSkyRL/uv.lock", "src/backdoor.py"], policy=SKYRL_POLICY)
 
 
 def test_prepare_update_branch_resets_main_with_a_lease_for_an_existing_branch(monkeypatch, tmp_path: Path) -> None:
@@ -245,6 +262,172 @@ def test_publish_update_stages_the_allowlist_and_creates_an_app_pull_request(mon
     ).stdout.strip()
     assert published.head_sha == remote_sha
     assert _git(repository, "show", f"{remote_sha}:uv.lock") == "published update"
+
+
+def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_project_files(tmp_path: Path) -> None:
+    repository, _remote, _main_sha = _git_repository(tmp_path)
+    source = Path(__file__).resolve().parents[2]
+    shutil.copytree(source / "config/external", repository / "config/external")
+    shutil.copy2(source / "config/update-external.py", repository / "config/update-external.py")
+    scripts = repository / "scripts/ci"
+    scripts.mkdir(parents=True)
+    for package in ("scripts", "scripts/ci"):
+        shutil.copy2(source / package / "__init__.py", repository / package / "__init__.py")
+    for name in ("dependency_update.py", "dependency_update_policy.py", "package_release.py"):
+        shutil.copy2(source / "scripts/ci" / name, scripts / name)
+    pins = repository / "lib/marin/src/marin/external_dependencies.py"
+    pins.parent.mkdir(parents=True)
+    shutil.copy2(source / "lib/marin/src/marin/external_dependencies.py", pins)
+    _git(repository, "add", "config", "scripts", "lib")
+    _git(repository, "commit", "-m", "external project inputs")
+    _git(repository, "push", "origin", "main")
+    main_sha = _git(repository, "rev-parse", "HEAD")
+    locks = {project: repository / f"config/external/{project.value}/uv.lock" for project in ExternalRuntime}
+    originals = {project: path.read_bytes() for project, path in locks.items()}
+    distributions = {
+        dependency.config_name: dependency.distribution
+        for dependency in runpy.run_path(str(pins))["EXTERNAL_DEPENDENCIES"]
+    }
+    initial_commits = {
+        project.value: next(
+            entry["source"]["git"].rsplit("#", 1)[1]
+            for entry in tomllib.loads(path.read_text())["package"]
+            if entry["name"] == distributions[project.value]
+        )
+        for project, path in locks.items()
+    }
+    new_commit = "b" * 40
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    resolver = fake_bin / "uv"
+    resolver.write_text(
+        f"#!{sys.executable}\n"
+        "import sys, tomllib\n"
+        "from pathlib import Path\n"
+        "directory = Path(sys.argv[sys.argv.index('--project') + 1])\n"
+        "distribution = sys.argv[sys.argv.index('--upgrade-package') + 1]\n"
+        "path = directory / 'uv.lock'\n"
+        "original = path.read_text()\n"
+        "package = next(p for p in tomllib.loads(original)['package'] if p['name'] == distribution)\n"
+        "git_source = package['source']['git']\n"
+        f"updated = git_source.rsplit('#', 1)[0] + '#{new_commit}'\n"
+        "path.write_text(original.replace(git_source, updated))\n"
+    )
+    github = fake_bin / "gh"
+    github.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "if sys.argv[1:3] == ['pr', 'list']:\n"
+        "    print('[]')\n"
+        "elif sys.argv[1] == 'api':\n"
+        f"    print(json.dumps([{{'status': 'ahead', 'total_commits': 1, 'commits': [{{'sha': '{new_commit}', "
+        "'commit': {'message': 'Upstream runtime update'}}]}]))\n"
+        "else:\n"
+        "    raise RuntimeError('unexpected GitHub operation')\n"
+    )
+    resolver.chmod(0o755)
+    github.chmod(0o755)
+    environment = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "PYTHONPATH": ""}
+    workflow = yaml.safe_load((source / ".github/workflows/ops-external-dependencies.yaml").read_text())
+    select_projects = next(step for step in workflow["jobs"]["projects"]["steps"] if step.get("id") == "projects")
+    matrix_output = tmp_path / "projects-output"
+    subprocess.run(
+        ["bash", "-c", select_projects["run"]],
+        cwd=repository,
+        env={**environment, "GITHUB_OUTPUT": str(matrix_output)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    projects = json.loads(matrix_output.read_text().removeprefix("projects="))
+    branches = []
+    for name in projects:
+        project = ExternalRuntime(name)
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.ci.dependency_update",
+                "prepare",
+                "--kind",
+                "external-runtime",
+                "--project",
+                project.value,
+                "--repository",
+                "marin-community/marin",
+                "--github-output",
+                "outputs",
+            ],
+            cwd=repository,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert _git(repository, "rev-parse", "HEAD") == main_sha
+        branches.append(_git(repository, "branch", "--show-current"))
+        summary = repository / "summary.md"
+        subprocess.run(
+            [sys.executable, "config/update-external.py", project.value, "--summary-file", str(summary)],
+            cwd=repository,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        changed_command = [
+            sys.executable,
+            "-m",
+            "scripts.ci.dependency_update",
+            "changed-files",
+            "--kind",
+            "external-runtime",
+            "--project",
+            project.value,
+        ]
+        changed = subprocess.run(
+            changed_command,
+            cwd=repository,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert set(changed.stdout.splitlines()) == {
+            f"config/external/{project.value}/uv.lock",
+            str(pins.relative_to(repository)),
+        }
+        for other, path in locks.items():
+            if other != project:
+                assert path.read_bytes() == originals[other]
+        generated = runpy.run_path(str(pins))
+        assert {pin.config_name: pin.commit for pin in generated["EXTERNAL_DEPENDENCIES"]} == {
+            **initial_commits,
+            project.value: new_commit,
+        }
+        rows = [line.split("|")[1].strip(" `") for line in summary.read_text().splitlines() if line.startswith("| `")]
+        assert rows == [project.value]
+        other_project = next(other for other in ExternalRuntime if other != project)
+        foreign_lock = locks[other_project]
+        foreign_lock.write_bytes(originals[other_project] + b"\n# foreign update\n")
+        rejected = subprocess.run(
+            changed_command,
+            cwd=repository,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert rejected.returncode != 0
+        for other, path in locks.items():
+            path.write_bytes(originals[other])
+        shutil.copy2(source / "lib/marin/src/marin/external_dependencies.py", pins)
+    assert len(set(branches)) == len(ExternalRuntime)
+    assert (repository / "uv.lock").read_text() == "initial\n"
 
 
 def test_native_package_policy_matches_every_compatibility_floor() -> None:
