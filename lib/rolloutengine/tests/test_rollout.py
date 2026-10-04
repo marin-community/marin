@@ -53,10 +53,6 @@ from rolloutengine.contracts import (
 from rolloutengine.engine import ShellboxRolloutEngine
 
 
-async def run_task(runner: ShellboxRolloutEngine, task: TaskSpec):
-    return await runner.run(task)
-
-
 @dataclass
 class ReplayModel:
     messages: list[dict]
@@ -117,7 +113,7 @@ async def test_executable_answer_task_keeps_submission_instruction_and_shell_too
     task = arithmetic_task().model_copy(update={"environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM)})
     model = ReplayModel([{"role": "assistant", "content": "12"}])
 
-    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}), task)
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(task)
 
     assert result.grade.reward == 1.0
     assert model.requests[0].messages[-1] == {"role": "user", "content": "Give your answer as plain text."}
@@ -161,6 +157,10 @@ async def test_executable_native_action_keeps_final_and_shell_tools():
     task = arithmetic_task().model_copy(
         update={
             "answer_type": AnswerType.NATIVE_ACTION,
+            "verifier": VerifierSpec(
+                kind=VerifierKind.PREDICTED_ACTION,
+                parameters_json=json.dumps({"expected_calls": [{"name": "finish", "arguments": {}}]}),
+            ),
             "final_tools": (FunctionDefinition(name="finish", parameters={"type": "object"}),),
             "environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
         }
@@ -178,6 +178,7 @@ async def test_executable_native_action_keeps_final_and_shell_tools():
 
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["finish", "shell"]
     assert result.response_token_ids == (20,)
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
 
 
 async def test_rollout_rejects_legacy_environment_requirements():
@@ -268,7 +269,7 @@ async def test_shellbox_tools_persist_files_and_mask_observations():
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}), file_task())
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
     assert result.response_token_ids == (20, 90, 91, 21)
     assert result.loss_mask == (1, 0, 0, 1)
@@ -291,9 +292,7 @@ async def test_custom_session_uses_prepared_machine_and_releases_it_after_sessio
             ),
             "verifier": VerifierSpec(
                 kind=VerifierKind.EXTERNAL,
-                parameters_json=ExternalVerifierSpec(
-                    name="file-answer", parameters={"expected": "12"}
-                ).model_dump_json(),
+                parameters_json=ExternalVerifierSpec(parameters={"expected": "12"}).model_dump_json(),
             ),
         }
     )
@@ -379,7 +378,7 @@ async def test_context_limit_grades_only_completed_shell_operations(completed_tu
             }
         ]
     )
-    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}), file_task())
+    result = await engine(model, {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(file_task())
     assert result.stop_reason == "length"
     if completed_turns:
         assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
@@ -401,13 +400,10 @@ async def test_failed_shell_grader_has_no_reward():
             )
         }
     )
-    result = await run_task(
-        engine(
-            ReplayModel([{"role": "assistant", "content": "Completed."}]),
-            {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-        ),
-        task,
-    )
+    result = await engine(
+        ReplayModel([{"role": "assistant", "content": "Completed."}]),
+        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+    ).run(task)
     assert (result.grade.status, result.grade.reward) == (Outcome.INFRA_ERROR, None)
 
 
@@ -437,7 +433,7 @@ async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine(
     )
     task = file_task().model_copy(update={"agent_timeout": 1.0})
     with pytest.raises(RolloutInterrupted) as failure:
-        await run_task(engine(model, {EnvironmentKind.SHELLSIM: factory}), task)
+        await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(task)
     assert isinstance(failure.value.__cause__, TimeoutError)
     assert failure.value.operation == RolloutOperation.MODEL
     rollout = failure.value.rollout
@@ -483,13 +479,10 @@ async def test_file_grader_preserves_priority_and_rejects_agent_scores(script, s
             "verifier": VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
         }
     )
-    result = await run_task(
-        engine(
-            ReplayModel([{"role": "assistant", "content": "Completed."}]),
-            {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
-        ),
-        task,
-    )
+    result = await engine(
+        ReplayModel([{"role": "assistant", "content": "Completed."}]),
+        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+    ).run(task)
     assert (result.grade.status, result.grade.reward) == (status, reward)
 
 
@@ -502,7 +495,7 @@ async def test_model_failure_releases_the_shellbox_machine():
             raise ConnectionError("Inference endpoint unavailable")
 
     with pytest.raises(RolloutInterrupted) as failure:
-        await run_task(engine(FailedModel(), {EnvironmentKind.SHELLSIM: factory}), file_task())
+        await engine(FailedModel(), {EnvironmentKind.SHELLSIM: factory}).run(file_task())
     assert isinstance(failure.value.__cause__, ConnectionError)
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(argv=("true",)))
@@ -521,7 +514,7 @@ async def test_machine_setup_failure_releases_resources_and_retains_an_empty_rec
         }
     )
     with pytest.raises(RolloutInterrupted) as failure:
-        await run_task(engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: factory}), task)
+        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: factory}).run(task)
     assert failure.value.operation == RolloutOperation.START
     assert failure.value.rollout.task_id == task.id
     assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
@@ -623,7 +616,7 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
     )
     model = Model([{"role": "assistant", "content": "Done."}])
     runner = engine(model, {EnvironmentKind.SHELLSIM: Factory()})
-    pending = asyncio.create_task(run_task(runner, task))
+    pending = asyncio.create_task(runner.run(task))
     await asyncio.wait_for(entered.wait(), timeout=5)
     if phase in {"cancel", "cleanup_cancel", "cancel_twice"}:
         try:
@@ -685,7 +678,7 @@ async def test_attempt_deadline_and_cancellation_wait_for_machine_cleanup():
         }
     )
     runner = engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: Factory()})
-    pending = asyncio.create_task(run_task(runner, task))
+    pending = asyncio.create_task(runner.run(task))
     cleanup_loop, release = await asyncio.wait_for(close_started, timeout=5)
     pending.cancel()
     cleanup_loop.call_soon_threadsafe(release.set)
@@ -754,7 +747,7 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(answ
     factory = RecordingShellSimFactory()
     machines = factory.machines
 
-    result = await run_task(engine(model, {EnvironmentKind.SHELLSIM: factory}), task)
+    result = await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(task)
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected_reward)
     assert len(machines) == 2
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0

@@ -20,7 +20,7 @@ def source_task(
     environment: EnvironmentSpec | None = None,
 ) -> TaskSpec:
     """Convert a source row to a self-contained task with private grading inputs."""
-    verifier = ExternalVerifierSpec(name=session, parameters={"extras": extras, "config": config})
+    verifier = ExternalVerifierSpec(parameters={"extras": extras, "config": config})
     machine = EnvironmentSpec(kind=EnvironmentKind.NULL) if environment is None else environment
     return TaskSpec(
         id=f"{source.dataset}:{source.row}",
