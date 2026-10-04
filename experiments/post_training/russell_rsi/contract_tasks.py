@@ -4,9 +4,10 @@
 """Build statements for fixed source-backed contracts and admit reviewed versions.
 
 The pinned manifest owns source, probes, obligations, runtime, and dependencies.
-The prepare stage captures observations and a teacher statement, or imports
-verified observations and renders frozen obligations with zero provider calls. The
-admit stage requires a separate review of the unchanged statement hash.
+The prepare stage captures observations for a teacher statement, imports verified
+observations for rendered obligations, or captures fresh observations with a
+deterministic statement. Rendered paths make zero provider calls. The admit stage
+requires a separate review of the unchanged statement hash.
 """
 
 import argparse
@@ -37,6 +38,7 @@ MAX_RESPONSES = 24
 MAX_ATTEMPTS = 2
 TEACHER_METHOD = "teacher-statement-v1"
 RENDERED_METHOD = "frozen-obligations-v1"
+FRESH_RENDERED_METHOD = "fresh-frozen-obligations-v1"
 RENDERER_PREFIX = "Implement the following behavior in the repository:\n\n"
 RENDERER_SPEC = {"prefix": RENDERER_PREFIX, "item_format": "- {item}", "separator": "\n"}
 
@@ -550,23 +552,27 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
         save_admission_record,
     )
 
-    if config.method not in {TEACHER_METHOD, RENDERED_METHOD}:
+    if config.method not in {TEACHER_METHOD, RENDERED_METHOD, FRESH_RENDERED_METHOD}:
         raise ValueError("Unknown construction method")
-    rendered = config.method == RENDERED_METHOD
-    if rendered and not all(
-        (
-            config.observation_manifest_uri,
-            config.observation_manifest_sha256,
-            config.observation_source_manifest_uri,
-            config.observation_source_manifest_sha256,
-        )
-    ):
+    imported_rendering = config.method == RENDERED_METHOD
+    rendered_method = config.method in {RENDERED_METHOD, FRESH_RENDERED_METHOD}
+    observation_inputs = (
+        config.observation_manifest_uri,
+        config.observation_manifest_sha256,
+        config.observation_source_manifest_uri,
+        config.observation_source_manifest_sha256,
+    )
+    if imported_rendering and not all(observation_inputs):
         raise ValueError("Rendered construction requires pinned observation inputs")
+    if config.method == FRESH_RENDERED_METHOD and any(observation_inputs):
+        raise ValueError("Fresh rendered construction does not accept observation inputs")
     if not 1 <= config.max_contracts <= MAX_RESPONSES:
         raise ValueError("Invalid contract count bound")
     if config.admission_concurrency < 1:
         raise ValueError("Invalid admission concurrency")
-    if (rendered and config.response_cap != 0) or (not rendered and not 1 <= config.response_cap <= MAX_RESPONSES):
+    if (rendered_method and config.response_cap != 0) or (
+        config.method == TEACHER_METHOD and not 1 <= config.response_cap <= MAX_RESPONSES
+    ):
         raise ValueError("Invalid provider response bound")
     capabilities = json.loads(pinned_bytes(config.capabilities_uri, config.capabilities_sha256))
     review = (
@@ -586,7 +592,7 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                 raise ValueError("Contract does not target the frozen capability labels")
         if len(contracts) > config.max_contracts:
             raise ValueError("Fixed source pool exceeds the contract count bound")
-        if not rendered and len(contracts) > config.response_cap:
+        if config.method == TEACHER_METHOD and len(contracts) > config.response_cap:
             raise ValueError("Fixed source pool exceeds the provider response bound")
         if len({row["contract_id"] for row in contracts}) != len(contracts):
             raise ValueError("Repeated semantic contract identity")
@@ -624,12 +630,12 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
         if any(s.split != "train" for s in snapshots.values()):
             raise ValueError("Construction includes a non-training source")
         requests = (
-            {}
-            if rendered
-            else {row["contract_id"]: statement_request(fixed_contract(row), capabilities) for row in contracts}
+            {row["contract_id"]: statement_request(fixed_contract(row), capabilities) for row in contracts}
+            if config.method == TEACHER_METHOD
+            else {}
         )
         imports = {}
-        if rendered:
+        if imported_rendering:
             imported_directory = root / "observation-import"
             imported_manifest = download_evidence(
                 config.observation_manifest_uri, config.observation_manifest_sha256, imported_directory
@@ -684,15 +690,18 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
             "code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "admission_code_sha256": admission_code_sha256(),
         }
-        if rendered:
-            scientific_identity.update(
-                {
-                    "renderer_sha256": digest(RENDERER_SPEC),
-                    "observation_manifest_sha256": config.observation_manifest_sha256,
-                    "observation_source_manifest_sha256": config.observation_source_manifest_sha256,
-                    "derivations_sha256": digest(imports),
-                }
-            )
+        if rendered_method:
+            scientific_identity["renderer_sha256"] = digest(RENDERER_SPEC)
+            if imported_rendering:
+                scientific_identity.update(
+                    {
+                        "observation_manifest_sha256": config.observation_manifest_sha256,
+                        "observation_source_manifest_sha256": config.observation_source_manifest_sha256,
+                        "derivations_sha256": digest(imports),
+                    }
+                )
+            else:
+                scientific_identity["observation_origin"] = "fresh-capture"
         else:
             scientific_identity["requests_sha256"] = {
                 identifier: digest(request) for identifier, request in requests.items()
@@ -734,13 +743,19 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                     "source_sha256": digest(snapshot.model_dump(mode="json")),
                     "probes_sha256": digest(contract.probes),
                 }
-                if rendered:
+                if rendered_method:
                     identity["statement_sha256"] = digest(rendered_statement(contract).model_dump())
                 else:
                     identity["request_sha256"] = digest(request)
                 directory = work / "contracts" / contract.contract_id
-                if rendered:
+                if rendered_method:
                     directory.mkdir(parents=True, exist_ok=True)
+                    statement_path = directory / "statement.json"
+                    statement = rendered_statement(contract).model_dump()
+                    if statement_path.exists() and json.loads(statement_path.read_text()) != statement:
+                        raise ValueError("Rendered evidence changed: statement.json")
+                    await save_admission_record(statement_path, statement, persist)
+                if imported_rendering:
                     derivation = {
                         "method": config.method,
                         "obligations_sha256": digest(contract.obligations),
@@ -750,7 +765,6 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                     for name, record in (
                         ("derivation.json", derivation),
                         ("expected.json", {"observations": derivation["observations"]}),
-                        ("statement.json", rendered_statement(contract).model_dump()),
                     ):
                         path = directory / name
                         if path.exists() and json.loads(path.read_text()) != record:
@@ -761,6 +775,17 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                         target.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(imported_directory / relative, target)
                         await persist(target)
+                elif rendered_method:
+                    derivation = {
+                        "method": config.method,
+                        "observation_origin": "fresh-capture",
+                        "renderer_sha256": digest(RENDERER_SPEC),
+                        "obligations_sha256": digest(contract.obligations),
+                    }
+                    path = directory / "derivation.json"
+                    if path.exists() and json.loads(path.read_text()) != derivation:
+                        raise ValueError("Rendered evidence changed: derivation.json")
+                    await save_admission_record(path, derivation, persist)
                 result = await contract_attempt(
                     contract,
                     snapshot,

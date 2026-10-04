@@ -289,9 +289,11 @@ def test_retry_cannot_replace_frozen_reference_values(tmp_path, monkeypatch, sou
     assert len(list((tmp_path / "attempts").iterdir())) == 2
 
 
-@pytest.mark.parametrize("rendered", [False, True])
+@pytest.mark.parametrize(
+    "method", [contract_tasks.TEACHER_METHOD, contract_tasks.RENDERED_METHOD, contract_tasks.FRESH_RENDERED_METHOD]
+)
 def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs(
-    tmp_path, monkeypatch, provider, source, contract, rendered
+    tmp_path, monkeypatch, provider, source, contract, method
 ):
     artifact = tmp_path / "input"
     artifact.mkdir()
@@ -392,8 +394,14 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
         observation_source_manifest_uri="",
         observation_source_manifest_sha256="",
     )
-    contract_tasks.prepare_contract_tasks(config)
-    if rendered:
+    if method != contract_tasks.FRESH_RENDERED_METHOD:
+        contract_tasks.prepare_contract_tasks(config)
+    expected_statement = {
+        "problem_statement": (
+            "Implement the following behavior in the repository:\n\n" "- Add two integers; preserve negative operands."
+        )
+    }
+    if method == contract_tasks.RENDERED_METHOD:
         original_handoff = tmp_path / "prepare" / "repair-manifest.json"
         config = replace(
             config,
@@ -423,12 +431,40 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
         assert not (directory / "generation.json").exists()
         assert not (directory / "request-start.json").exists()
         assert json.loads((directory / "derivation.json").read_text())["original_capture_reports"] == 4
-        assert json.loads((directory / "statement.json").read_text()) == {
-            "problem_statement": (
-                "Implement the following behavior in the repository:\n\n"
-                "- Add two integers; preserve negative operands."
-            )
+        assert json.loads((directory / "statement.json").read_text()) == expected_statement
+    elif method == contract_tasks.FRESH_RENDERED_METHOD:
+        monkeypatch.delenv(GLM_TOKEN_ENV, raising=False)
+        config = replace(
+            config,
+            method=contract_tasks.FRESH_RENDERED_METHOD,
+            response_cap=0,
+            output_path=str(tmp_path / "fresh-prepare"),
+        )
+        contract_tasks.prepare_contract_tasks(config)
+        directory = tmp_path / "fresh-prepare" / "contracts" / contract.contract_id
+        statement = json.loads((directory / "statement.json").read_text())
+        assert statement == expected_statement
+        derivation = json.loads((directory / "derivation.json").read_text())
+        assert derivation == {
+            "method": contract_tasks.FRESH_RENDERED_METHOD,
+            "observation_origin": "fresh-capture",
+            "renderer_sha256": digest(contract_tasks.RENDERER_SPEC),
+            "obligations_sha256": digest(contract.obligations),
         }
+        scientific_identity = json.loads((tmp_path / "fresh-prepare" / "cohort-identity.json").read_text())
+        assert scientific_identity["observation_origin"] == "fresh-capture"
+        assert "observation_manifest_sha256" not in scientific_identity
+        assert "observation_source_manifest_sha256" not in scientific_identity
+        expected = json.loads((directory / "expected.json").read_text())
+        assert expected["observations"] == [5, 2]
+        assert len(provider[0]) == 0
+        captures = sorted((directory / "attempts/0001").glob("capture-*.json"))
+        assert len(captures) == 4
+        capture_hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in captures}
+        expected_hash = hashlib.sha256((directory / "expected.json").read_bytes()).hexdigest()
+        contract_tasks.prepare_contract_tasks(config)
+        assert capture_hashes == {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in captures}
+        assert expected_hash == hashlib.sha256((directory / "expected.json").read_bytes()).hexdigest()
     preparation = Path(config.output_path)
     prepared = preparation / "contracts" / contract.contract_id / "prepared.json"
     prepared_record = json.loads(prepared.read_text())
@@ -448,7 +484,7 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
         prepared_manifest_uri=str(handoff),
         prepared_manifest_sha256=hashlib.sha256(handoff.read_bytes()).hexdigest(),
     )
-    if rendered:
+    if method in {contract_tasks.RENDERED_METHOD, contract_tasks.FRESH_RENDERED_METHOD}:
         wrong_review = tmp_path / "wrong-review.json"
         wrong_review.write_text(
             json.dumps({contract.contract_id: {"statement_sha256": "changed", "decision": "approve"}})
@@ -480,7 +516,7 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
         (tmp_path / "admit" / "contracts" / contract.contract_id / "attempts/0001/controls.json").read_text()
     )
     assert tasks.controls_pass(controls)
-    assert len(provider[0]) == 1
+    assert len(provider[0]) == (0 if method == contract_tasks.FRESH_RENDERED_METHOD else 1)
     assert factory.created == 28
 
 

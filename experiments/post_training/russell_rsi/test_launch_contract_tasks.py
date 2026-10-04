@@ -11,9 +11,27 @@ from marin.experiment import cli as experiment_cli
 from experiments.post_training.russell_rsi import launch_contract_tasks as contract_launch
 
 
-@pytest.mark.parametrize("method,response_cap", [("teacher-statement-v1", 6), ("frozen-obligations-v1", 0)])
+@pytest.mark.parametrize(
+    "method,response_cap",
+    [("teacher-statement-v1", 6), ("frozen-obligations-v1", 0), ("fresh-frozen-obligations-v1", 0)],
+)
 def test_contract_cpu_entrypoint_binds_pinned_inputs_without_execution(tmp_path, monkeypatch, method, response_cap):
     config = tmp_path / "contracts.json"
+    observation_inputs = (
+        {
+            "observation_manifest_uri": "/tmp/observations.json",
+            "observation_manifest_sha256": "b" * 64,
+            "observation_source_manifest_uri": "/tmp/original-source.json",
+            "observation_source_manifest_sha256": "c" * 64,
+        }
+        if method == "frozen-obligations-v1"
+        else {
+            "observation_manifest_uri": "",
+            "observation_manifest_sha256": "",
+            "observation_source_manifest_uri": "",
+            "observation_source_manifest_sha256": "",
+        }
+    )
     config.write_text(
         json.dumps(
             {
@@ -32,10 +50,7 @@ def test_contract_cpu_entrypoint_binds_pinned_inputs_without_execution(tmp_path,
                 "prepared_manifest_sha256": "",
                 "method": method,
                 "max_contracts": 6,
-                "observation_manifest_uri": "/tmp/observations.json",
-                "observation_manifest_sha256": "b" * 64,
-                "observation_source_manifest_uri": "/tmp/original-source.json",
-                "observation_source_manifest_sha256": "c" * 64,
+                **observation_inputs,
             }
         )
     )
@@ -58,7 +73,7 @@ def test_contract_cpu_entrypoint_binds_pinned_inputs_without_execution(tmp_path,
     assert payload["stage"] == "prepare"
     assert payload["response_cap"] == response_cap
     assert payload["method"] == method
-    if method == "frozen-obligations-v1":
+    if method != "teacher-statement-v1":
         monkeypatch.delenv(contract_launch.GLM_TOKEN_ENV, raising=False)
         invocations = []
 
