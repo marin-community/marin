@@ -12,9 +12,11 @@ def _noop(_: object) -> None:
     pass
 
 
-def test_dispatch_forwards_allocator_environment(monkeypatch):
+def test_dispatch_forwards_runtime_environment(monkeypatch):
     monkeypatch.setenv("LD_PRELOAD", "libjemalloc.so.2")
     monkeypatch.setenv("MALLOC_CONF", "background_thread:true,narenas:2")
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+    monkeypatch.setenv("WANDB_MODE", "disabled")
     submitted = []
     job = SimpleNamespace(wait=lambda **_: None)
     client = SimpleNamespace(submit=lambda request: submitted.append(request) or job)
@@ -29,3 +31,4 @@ def test_dispatch_forwards_allocator_environment(monkeypatch):
 
     assert submitted[0].environment.env_vars["LD_PRELOAD"] == "libjemalloc.so.2"
     assert submitted[0].environment.env_vars["MALLOC_CONF"] == "background_thread:true,narenas:2"
+    assert submitted[0].environment.env_vars["WANDB_MODE"] == "disabled"

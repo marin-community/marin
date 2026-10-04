@@ -50,6 +50,29 @@ Pass `include_file_paths=True` to add `__file_path` to each row (or set `file_pa
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 
+An entered context owns one shared pool. Use `pool.execution_scope()` to run
+existing pipelines that construct their own contexts on that pool:
+
+```python
+with ZephyrContext(max_workers=1, resources=worker_resources) as pool:
+    with pool.execution_scope():
+        download_source()
+        normalize_source()
+```
+
+Contexts constructed in the scope use the pool's workers, runner, and retry
+policy. Each context retains its own shared data. Its resource configuration
+supplies the default task request. Explicit map and reduce requests take
+precedence. Task requests must fit one worker. The pool schedules concurrent
+tasks according to their CPU and RAM requests. It does not partition GPUs or
+account for concurrent disk use.
+
+The scope does not own the pool. Scope exit and nested context exit leave the
+pool available. Copy the context into new threads with `copy_context().run`.
+For a remote driver, serialize the pool and enter `execution_scope()` in that
+process. Wait for all pipeline executions to finish before pool exit. Pool exit
+stops the workers and fails any active executions.
+
 ### Read-only memory stores
 
 `ZephyrContext.load_memory_store()` loads an existing partitioned dataset into
