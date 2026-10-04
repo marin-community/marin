@@ -141,11 +141,3 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
 
 def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))
-
-
-def skipped_verifier(reason: str) -> VerifierSpec:
-    """Describe an explicit rollout-time grading omission."""
-    return VerifierSpec(
-        kind=VerifierKind.SKIPPED,
-        parameters_json=SkippedVerifierSpec(reason=reason).model_dump_json(),
-    )
