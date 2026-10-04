@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
+import numpy as np
 from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config
 
@@ -20,8 +22,9 @@ from levanter.testing import tiny_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, SAFE_TENSORS_INDEX_NAME
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
-from levanter.utils.jax_utils import is_inexact_arrayish
+from levanter.utils.jax_utils import is_inexact_arrayish, local_cpu_mesh
 from levanter.testing.helpers import has_torch
+from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 
 
 class TokenizerlessGpt2Config(Gpt2Config):
@@ -128,3 +131,38 @@ def test_export_lm_to_hf_custom_subpath_without_tokenizer():
         assert not os.path.exists(os.path.join(output_dir, "tokenizer.json"))
         assert os.path.exists(os.path.join(output_dir, SAFE_TENSORS_INDEX_NAME))
         assert len(glob.glob(os.path.join(output_dir, "*.safetensors"))) > 1
+
+
+def test_export_dpo_policy_subtree_to_bfloat16(tmp_path):
+    model_config = TokenizerlessGpt2Config(
+        num_layers=1, num_heads=2, max_seq_len=16, use_flash_attention=False, hidden_dim=16
+    )
+    Vocab = haliax.Axis("vocab", 64)
+    policy = Gpt2LMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))
+    reference = Gpt2LMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(1))
+    policy_params, _ = eqx.partition(policy, is_inexact_arrayish)
+    reference_params, _ = eqx.partition(reference, is_inexact_arrayish)
+    checkpoint_path = str(tmp_path / "checkpoint")
+    save_checkpoint({"model": {"policy": policy_params, "reference": reference_params}}, 1, checkpoint_path)
+    output_dir = str(tmp_path / "output")
+    export_lm_to_hf.main(
+        export_lm_to_hf.ConvertLmConfig(
+            trainer=SimpleNamespace(device_mesh=contextlib.nullcontext(), parameter_axis_mapping={}),
+            checkpoint_path=checkpoint_path,
+            checkpoint_subpath="model/policy",
+            output_dir=output_dir,
+            model=model_config,
+            save_tokenizer=False,
+            override_vocab_size=Vocab.size,
+            max_shard_size=512,
+            export_dtype="bfloat16",
+            use_cpu=True,
+        )
+    )
+    with local_cpu_mesh():
+        exported = model_config.hf_checkpoint_converter().load_state_dict(output_dir)
+    expected = to_state_dict(flatten_modules_for_export(policy_params))
+    assert exported.keys() == expected.keys()
+    for name, value in exported.items():
+        assert value.dtype == jnp.bfloat16
+        np.testing.assert_array_equal(value, expected[name].astype(jnp.bfloat16))

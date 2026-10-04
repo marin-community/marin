@@ -9,6 +9,7 @@ from typing import Any, Optional, Protocol, runtime_checkable
 import equinox as eqx
 import haliax
 import jax
+import jax.numpy as jnp
 
 from haliax import Axis
 
@@ -46,6 +47,7 @@ class ConvertLmConfig:
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
     export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES
     max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS
+    export_dtype: str | None = None
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
@@ -116,6 +118,7 @@ def main(config: ConvertLmConfig):
             max_shard_size=config.max_shard_size,
             export_host_budget_bytes=config.export_host_budget_bytes,
             max_concurrent_shards=config.max_concurrent_shards,
+            dtype=jnp.dtype(config.export_dtype) if config.export_dtype is not None else None,
         )
 
 
