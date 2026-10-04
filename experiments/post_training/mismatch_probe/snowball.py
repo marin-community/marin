@@ -145,7 +145,7 @@ def snowball_recipe(
                 },
                 "megatron_config": {
                     **asdict(megatron),
-                    "moe_router_replay_keep_fraction": settings.keep_fraction if routing is Routing.FILTERED else None,
+                    **({"moe_router_replay_keep_fraction": settings.keep_fraction} if routing is Routing.FILTERED else {}),
                 },
             },
             "ref": {"megatron_config": asdict(megatron)},
@@ -154,7 +154,7 @@ def snowball_recipe(
             "backend": "vllm",
             "model_dtype": "bfloat16",
             "vllm_attention_backend": "FLASH_ATTN",
-            "decode_invariant": decode_invariant,
+            **({"decode_invariant": True} if decode_invariant else {}),
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
             "gpu_memory_utilization": SLICE_GPU_MEMORY_UTILIZATION if model_slice else 0.75,
