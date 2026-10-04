@@ -85,7 +85,9 @@ export async function fetchChatShare(shareId: string): Promise<unknown> {
   throw new Error(`chat share returned ${response.status}: ${await response.text()}`)
 }
 
-/** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */
+/** POST an OpenAI request and invoke onData for buffered JSON or SSE events.
+ * Returns the first choice's finish reason, or null when the server omits it.
+ * With a vLLM context length, count prompt tokens and cap the output budget. */
 export async function requestCompletion(
   path: string,
   body: Record<string, unknown>,
@@ -93,36 +95,56 @@ export async function requestCompletion(
   signal: AbortSignal,
   onData: (data: any) => void,
   baseUrl?: string,
-): Promise<void> {
+  contextLength?: number | null,
+): Promise<string | null> {
+  if (contextLength != null) {
+    const tokenization: Record<string, unknown> = { model: body.model }
+    if (body.messages) {
+      tokenization.messages = body.messages
+      tokenization.add_generation_prompt = true
+      tokenization.chat_template_kwargs = body.chat_template_kwargs
+      tokenization.tools = body.tools
+    } else {
+      tokenization.prompt = body.prompt
+      tokenization.add_special_tokens = body.add_special_tokens ?? true
+    }
+    const { count } = await postJsonResult<{ count: number }>(
+      'tokenize', tokenization, signal, 'tokenization', baseUrl,
+    )
+    const available = contextLength - count
+    if (available <= 0) throw new Error('Prompt fills the model context. Shorten it before generating.')
+    body = { ...body, max_tokens: Math.min(Number(body.max_tokens), available) }
+  }
   const response = await postJson(path, body, signal, baseUrl)
   if (!response.ok || !response.body) {
     throw new Error(`${response.status} — ${await response.text()}`)
   }
   if (!streaming) {
-    onData(await response.json())
-    return
+    const data = await response.json()
+    onData(data)
+    return data.choices?.[0]?.finish_reason ?? null
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let finishReason: string | null = null
   while (true) {
     const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+    buffer += done ? decoder.decode() + '\n' : decoder.decode(value, { stream: true })
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed.startsWith('data:')) continue
       const payload = trimmed.slice(5).trim()
-      if (payload === '[DONE]') return
-      try {
-        onData(JSON.parse(payload))
-      } catch {
-        // Skip keepalives and partial frames.
-      }
+      if (payload === '[DONE]') return finishReason
+      const data = JSON.parse(payload)
+      finishReason = data.choices?.[0]?.finish_reason ?? finishReason
+      onData(data)
     }
+    if (done) break
   }
+  return finishReason
 }
 
 function postJson(path: string, body: object, signal: AbortSignal | undefined, baseUrl?: string): Promise<Response> {

@@ -27,6 +27,7 @@ watch(params, () => saveParams(params))
 
 const conversations = ref<Conversation[]>(loadConversations())
 const initialHash = window.location.hash
+const initialComparisonUrl = new URLSearchParams(initialHash.slice(1)).get('compare') ?? ''
 const sharedHashPresent = isSharedChatHash(initialHash)
 const sharedChatId = sharedChatIdFromHash(initialHash)
 const active = ref<Conversation>(createConversation(model.value))
@@ -38,8 +39,8 @@ if (sharedHashPresent) {
 
 const sorted = computed(() => [...conversations.value].sort((a, b) => b.updatedAt - a.updatedAt))
 
-const mode = ref<'chat' | 'compare' | 'completion'>('chat')
-const userPickedMode = ref(false)
+const mode = ref<'chat' | 'compare' | 'completion'>(initialComparisonUrl ? 'compare' : 'chat')
+const userPickedMode = ref(!!initialComparisonUrl)
 const savedCompareSettings = loadComparison()?.left
 const compareSettings = reactive({
   system: savedCompareSettings?.system ?? '',
@@ -194,14 +195,14 @@ function clearHistory() {
             <span class="hidden sm:inline">{{ shareLabel }}</span>
           </button>
           <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
-            Max tokens
+            Max tokens (incl. thinking)
             <input
               v-model.number="params.maxTokens"
               type="number"
               min="1"
               step="1"
               aria-label="Maximum output tokens"
-              title="Maximum output tokens generated for each response"
+              title="Maximum output tokens for each response, including thinking"
               class="w-20 rounded-lg border border-surface-border bg-surface px-2 py-1 text-sm text-text outline-none transition-colors focus:border-accent"
             />
           </label>
@@ -235,6 +236,7 @@ function clearHistory() {
         <ChatView
           v-if="mode === 'chat'"
           :conversation="active"
+          :context-length="info?.backend === 'vllm' ? info.max_model_len : null"
           :params="params"
           :model="model"
           :has-chat-template="info ? info.has_chat_template : true"
@@ -243,6 +245,7 @@ function clearHistory() {
           @persist="persist"
         />
         <CompareView
+          :initial-url="initialComparisonUrl"
           v-show="mode === 'compare'"
           :model="model"
           :info="info"
@@ -251,7 +254,7 @@ function clearHistory() {
           :thinking-mode="compareSettings.thinkingMode"
           :custom-instructions="compareSettings.customInstructions"
         />
-        <CompletionView v-if="mode === 'completion'" :params="params" :model="model" :streaming="info ? info.streaming : true" />
+        <CompletionView :context-length="info?.backend === 'vllm' ? info.max_model_len : null" v-if="mode === 'completion'" :params="params" :model="model" :streaming="info ? info.streaming : true" />
       </main>
     </div>
   </div>

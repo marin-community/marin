@@ -850,9 +850,10 @@ def test_mint_and_print_capability_url_prints_off_cluster_url(capsys):
     assert "https://iris.oa.dev/proxy/t/ep-token-xyz/serve.foo/v1" in out
 
 
-def _invoke_iris_serve(monkeypatch, *args: str):
+def _invoke_iris_serve(monkeypatch, *args: str, command=main, models=("Qwen/Qwen3-0.6B",), submission_results=None):
     client = MagicMock()
     client.submit.return_value = "/power/serve-test"
+    client.submit.side_effect = submission_results
     client.resolve_endpoint.return_value = "https://controller/proxy/serve.test"
 
     @contextmanager
@@ -876,11 +877,11 @@ def _invoke_iris_serve(monkeypatch, *args: str):
         lambda _fn, service: services.append(service) or MagicMock(),
     )
     monkeypatch.setattr("marin.inference.iris_cli._wait_for_endpoint", MagicMock())
-    mint = MagicMock()
+    mint = MagicMock(side_effect=lambda _client, endpoint, _dashboard, _ttl: f"https://iris.oa.dev/proxy{endpoint}")
     monkeypatch.setattr("marin.inference.iris_cli._mint_and_print_capability_url", mint)
     monkeypatch.setattr("marin.inference.iris_cli.time.sleep", MagicMock(side_effect=KeyboardInterrupt))
 
-    result = CliRunner().invoke(main, ["Qwen/Qwen3-0.6B", "--name", "serve-test", *args])
+    result = CliRunner().invoke(command, [*models, "--name", "serve-test", *args])
     return result, client, services, mint
 
 
@@ -902,6 +903,34 @@ def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
     assert result.exit_code == 0, result.output
     mint.assert_not_called()
     assert "Submitted" in result.output
+
+
+def test_two_model_command_submits_distinct_servers_and_a_shared_link(monkeypatch):
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch, command=serve_main, models=("compare", "Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B")
+    )
+    assert result.exit_code == 0, result.output
+    assert [service.model.weights for service in services] == ["Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B"]
+    assert len({service.endpoint_name for service in services}) == 2
+    comparison = urlsplit(re.search(r"https://\S+/#compare=\S+", result.output).group())
+    assert comparison.path == "/proxy/serve/serve-test/"
+    assert parse_qs(comparison.fragment)["compare"] == ["https://iris.oa.dev/proxy/serve/serve-test-right/"]
+
+
+def test_two_model_command_reports_first_job_when_second_submission_fails(monkeypatch):
+    failure = RuntimeError("controller rejected second job")
+    result, _client, _services, mint = _invoke_iris_serve(
+        monkeypatch,
+        "--cluster",
+        "marin",
+        command=serve_main,
+        models=("compare", "Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B"),
+        submission_results=["/power/serve-test", failure],
+    )
+
+    assert result.exception is failure
+    assert "iris --cluster marin job cancel /power/serve-test" in result.output
+    mint.assert_not_called()
 
 
 def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):

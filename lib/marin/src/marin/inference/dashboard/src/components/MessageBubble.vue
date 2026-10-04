@@ -104,6 +104,9 @@ async function copy() {
         <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-text-muted [animation-delay:300ms]"></span>
       </div>
       <div v-if="empty" class="text-sm italic text-text-muted">(no output)</div>
+      <p v-if="!streaming && message.finishReason === 'length'" role="status" class="mt-2 text-sm text-text-secondary">
+        Response cut off at the token limit. Max tokens includes thinking. Increase it and retry for a longer answer.
+      </p>
       <div v-if="message.error" class="mt-1 whitespace-pre-wrap break-words font-mono text-sm text-status-danger">
         {{ message.error }}
       </div>

@@ -8,6 +8,7 @@ const props = defineProps<{
   params: SamplingParams
   model: string
   streaming: boolean
+  contextLength?: number | null
 }>()
 
 const PROMPT_KEY = 'marin-serve:completion-prompt:v1'
@@ -23,6 +24,7 @@ function storedPrompt(): string {
 const prompt = ref(storedPrompt())
 const output = ref('')
 const error = ref('')
+const finishReason = ref<string | null>(null)
 const busy = ref(false)
 const started = ref(false)
 let abort: AbortController | null = null
@@ -50,9 +52,10 @@ async function run() {
   started.value = true
   output.value = ''
   error.value = ''
+  finishReason.value = null
   abort = new AbortController()
   try {
-    await requestCompletion(
+    finishReason.value = await requestCompletion(
       'v1/completions',
       {
         model: props.model,
@@ -68,6 +71,8 @@ async function run() {
         const text = data.choices?.[0]?.text
         if (text) output.value += text
       },
+      undefined,
+      props.contextLength,
     )
   } catch (err) {
     if (!isAbortError(err)) error.value = String(err)
@@ -129,6 +134,9 @@ async function run() {
             <span v-if="busy" class="animate-pulse text-text-muted">▍</span>
           </template>
         </div>
+        <p v-if="!busy && finishReason === 'length'" role="status" class="mt-2 text-sm text-text-secondary">
+          Response cut off at the token limit. Increase Max tokens and retry for a longer answer.
+        </p>
       </div>
     </div>
   </div>

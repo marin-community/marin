@@ -20,6 +20,22 @@ regenerated artifact alongside the source change.
 
 ## Compare models
 
+Launch two models and get one shareable comparison link:
+
+```bash
+uv run marin-serve compare Qwen/Qwen3-0.6B Qwen/Qwen3-1.7B --cluster marin
+```
+
+The command accepts the same options as `marin-serve iris`; both jobs receive
+the same supplied serving options. Both jobs start before it waits for readiness.
+It then prints a URL for the first dashboard with the second dashboard URL
+encoded in a `#compare=` fragment. Opening or reloading the link selects
+**Compare** and connects both models automatically. The URL includes access
+tokens for both servers and works until a server stops or its token expires.
+Both the server lifetime and the requested token lifetime use `--timeout-hours`
+(24 hours by default); the controller may cap token lifetime. Ctrl-C detaches
+the command; the servers stay up until their configured timeout expires.
+
 Open **Compare** from a Marin serve dashboard, then paste the second model's
 dashboard URL. Both URLs must have the same browser origin, such as two Iris
 capability URLs on one controller. The shared composer sends each prompt to
@@ -29,8 +45,19 @@ or **Both bad**. Click the selected choice again to clear it. The latest paired
 transcripts and selections are stored in the same browser's local storage as
 chat history. **New comparison** clears them. The second endpoint URL is not
 stored because its capability token grants access to that server; reconnect it
-after reloading the page to continue the saved comparison. No selection is
-sent to a server.
+after reloading a dashboard without a comparison fragment. The **Copy comparison
+link** button includes both endpoints' access tokens in a link that restores the
+connection. It does not include messages or preference votes. Share it only with
+people who should have access to both servers. No selection is sent to a server.
+
+The output limit is 16,384 tokens when no sampling settings have been saved.
+For vLLM, each request counts its prompt tokens and caps the output budget at
+the remaining context space. Thinking consumes the same budget as the final
+answer. Saved settings retain
+their existing limit. When a server reports that generation
+reached the limit, the reply displays a cutoff notice. Increase **Max tokens**
+or disable thinking in **More settings**, when the model supports it, to leave
+more room for the answer.
 
 ## Chat template controls
 

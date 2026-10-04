@@ -151,3 +151,16 @@ def local(
 
 
 main.add_command(iris, name="iris")
+main.add_command(
+    click.Command(
+        "compare",
+        callback=iris.callback,
+        params=[
+            click.Argument(["model"]),
+            click.Argument(["compare_model"]),
+            *[parameter for parameter in iris.params if parameter.name not in ("model", "compare_model")],
+        ],
+        help="Launch two models on Iris and print a shared comparison URL. Serving options apply to both models.",
+        context_settings={"show_default": True},
+    )
+)
