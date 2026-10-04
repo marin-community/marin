@@ -59,6 +59,13 @@ uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.j
 Both commands update `vllm/gpu.toml` from a verified manifest and regenerate
 the packaged pins. Do not edit the wheel fields by hand.
 
+Staging checks the current `main-next` tip and published candidate source and
+wheel digests. Promoting a staged pin requires the final manifest to name that
+candidate and preserve its full source SHA and both wheel digests. Rejected
+manifests leave the descriptor and generated pins unchanged. The same promotion
+command also supports an ordinary final-to-final upgrade; that path accepts
+the newer qualified release's source and wheels.
+
 The generated module also carries the isolated TPU-vLLM requirements from
 `vllm/tpu.toml`; those forks are not part of the nightly upgrade set.
 Verify that all generated state is current without contacting the repositories:
