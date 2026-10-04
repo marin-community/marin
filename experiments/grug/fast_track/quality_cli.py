@@ -33,6 +33,7 @@ from experiments.grug.fast_track.quality_pipeline import (
     QualityData,
     QualitySpec,
     QualityTrainingSource,
+    ScoredPool,
     SelectionMethod,
     build_quality_data,
     build_quality_features,
@@ -43,6 +44,7 @@ from experiments.grug.fast_track.quality_pipeline import (
 
 class QualityStage(StrEnum):
     FEATURES = "features"
+    SCORE = "score"
     SELECT = "select"
     TRAIN = "train"
 
@@ -75,7 +77,11 @@ def _adopt_path(path: str, *, name: str, kind: type[Artifact]) -> ArtifactStep:
 
 
 @click.command()
-@click.option("--raw-pool", required=True, help="RawCorpusPool artifact path.")
+@click.option("--raw-pool", help="RawCorpusPool artifact path.")
+@click.option(
+    "--scored-pool",
+    help="Reusable ScoredPool artifact path with at least 10x the requested training tokens.",
+)
 @click.option("--scorer-factory", help="Worker-loaded document scorer factory as module:callable.")
 @click.option("--classifier-identity", help="Stable classifier identity as JSON.")
 @click.option("--ridge-head-artifact", help="Fitted ridge artifact. Its labels and Harrier pins stay paired.")
@@ -85,6 +91,7 @@ def _adopt_path(path: str, *, name: str, kind: type[Artifact]) -> ArtifactStep:
 @click.option("--prepared-features", help="Prepared Harrier feature pool artifact path for a generic scorer.")
 @click.option("--run-id", help="Run identifier for training.")
 @click.option("--size", type=click.Choice(H100_LADDER_SIZES), default="d512", show_default=True)
+@click.option("--dense/--moe", default=True, show_default=True, help="Select the dense or MoE model.")
 @click.option(
     "--training-tokens", type=click.IntRange(min=1), help="Override the rung token budget for preparation only."
 )
@@ -102,11 +109,12 @@ def _adopt_path(path: str, *, name: str, kind: type[Artifact]) -> ArtifactStep:
     type=click.Choice([stage.value for stage in QualityStage]),
     default=QualityStage.TRAIN.value,
     show_default=True,
-    help="Artifact graph boundary: features, select, or train.",
+    help="Artifact graph boundary: features, score, select, or train.",
 )
 @build_options
 def main(
-    raw_pool: str,
+    raw_pool: str | None,
+    scored_pool: str | None,
     scorer_factory: str | None,
     classifier_identity: str | None,
     ridge_head_artifact: str | None,
@@ -116,29 +124,39 @@ def main(
     prepared_features: str | None,
     run_id: str | None,
     size: str,
+    dense: bool,
     training_tokens: int | None,
     selection_method: str,
     tie_seed: int,
     seed: int,
     data_seed: int,
     stage: str,
-) -> ArtifactStep[QualityData] | ArtifactStep[ThroughputResult] | ArtifactStep[PreparedQualityPool]:
+) -> (
+    ArtifactStep[QualityData]
+    | ArtifactStep[ThroughputResult]
+    | ArtifactStep[PreparedQualityPool]
+    | ArtifactStep[ScoredPool]
+):
     selected_stage = QualityStage(stage)
     rung_tokens = resolve_h100_ladder_budget(
         size=size,
-        dense=True,
+        dense=dense,
         match=MatchMode.DATA,
         num_steps=None,
         batch_size=None,
     ).token_count
-    if selected_stage is QualityStage.TRAIN and training_tokens is not None and training_tokens != rung_tokens:
-        raise click.UsageError("--training-tokens must equal the resolved rung budget when training")
+    if selected_stage is QualityStage.TRAIN and training_tokens is not None:
+        raise click.UsageError("--training-tokens is only valid for preparation stages")
     selected_tokens = (
         training_tokens if selected_stage is not QualityStage.TRAIN and training_tokens is not None else rung_tokens
     )
-    raw_step = _adopt_path(raw_pool, name="raw-pool", kind=RawCorpusPool)
-    token_cap = math.ceil(selected_tokens / QUALITY_FRACTION)
-    if selected_stage is QualityStage.FEATURES:
+    if selected_stage is not QualityStage.TRAIN and run_id is not None:
+        raise click.UsageError(f"--stage {selected_stage.value} cannot combine with --run-id")
+    if (raw_pool is None) == (scored_pool is None):
+        raise click.UsageError("provide exactly one of --raw-pool or --scored-pool")
+    if scored_pool is not None:
+        if selected_stage in (QualityStage.FEATURES, QualityStage.SCORE):
+            raise click.UsageError("--scored-pool requires --stage select or --stage train")
         if any(
             (
                 scorer_factory,
@@ -148,45 +166,65 @@ def main(
                 incumbent_identity,
                 label_exclusion_manifest,
                 prepared_features,
-                run_id,
             )
         ):
-            raise click.UsageError("--stage features cannot combine with scoring or training options")
-        return build_quality_features(raw_step, token_budget=token_cap)
-    if ridge_head_artifact is not None:
-        if any((scorer_factory, classifier_identity, label_exclusion_manifest, prepared_features)):
-            raise click.UsageError("--ridge-head-artifact supplies its scorer, labels, and features")
-        if incumbent_scorer_factory is not None or incumbent_identity is not None:
-            raise click.UsageError("--ridge-head-artifact cannot combine with an incumbent scorer")
-        scored = build_ridge_scored_pool(
-            raw_step,
-            head_artifact_path=ridge_head_artifact,
-            token_budget=token_cap,
-        )
+            raise click.UsageError("--scored-pool cannot combine with scorer, head, label, or feature options")
+        scored = _adopt_path(scored_pool, name="scored-pool", kind=ScoredPool)
     else:
-        if scorer_factory is None or classifier_identity is None or label_exclusion_manifest is None:
-            raise click.UsageError(
-                "generic scoring requires --scorer-factory, --classifier-identity, and --label-exclusion-manifest"
+        assert raw_pool is not None
+        raw_step = _adopt_path(raw_pool, name="raw-pool", kind=RawCorpusPool)
+        token_cap = math.ceil(selected_tokens / QUALITY_FRACTION)
+        if selected_stage is QualityStage.FEATURES:
+            if any(
+                (
+                    scorer_factory,
+                    classifier_identity,
+                    ridge_head_artifact,
+                    incumbent_scorer_factory,
+                    incumbent_identity,
+                    label_exclusion_manifest,
+                    prepared_features,
+                    run_id,
+                )
+            ):
+                raise click.UsageError("--stage features cannot combine with scoring or training options")
+            return build_quality_features(raw_step, token_budget=token_cap)
+        if ridge_head_artifact is not None:
+            if any((scorer_factory, classifier_identity, label_exclusion_manifest, prepared_features)):
+                raise click.UsageError("--ridge-head-artifact supplies its scorer, labels, and features")
+            if incumbent_scorer_factory is not None or incumbent_identity is not None:
+                raise click.UsageError("--ridge-head-artifact cannot combine with an incumbent scorer")
+            scored = build_ridge_scored_pool(
+                raw_step,
+                head_artifact_path=ridge_head_artifact,
+                token_budget=token_cap,
             )
-        identity = _identity(classifier_identity)
-        incumbent_factory = _factory(incumbent_scorer_factory) if incumbent_scorer_factory else None
-        incumbent_id = _identity(incumbent_identity) if incumbent_identity else None
-        if (incumbent_factory is None) != (incumbent_id is None):
-            raise click.UsageError("--incumbent-scorer-factory and --incumbent-identity must appear together")
-        label_exclusion = read_label_exclusion(label_exclusion_manifest)
-        feature_step = None
-        if prepared_features is not None:
-            feature_step = _adopt_path(prepared_features, name="quality-features", kind=PreparedQualityPool)
-        scored = build_scored_pool(
-            raw_step,
-            scorer_factory=_factory(scorer_factory),
-            classifier_identity=identity,
-            label_exclusion=label_exclusion,
-            token_budget=token_cap,
-            prepared_features=feature_step,
-            incumbent_scorer_factory=incumbent_factory,
-            incumbent_identity=incumbent_id,
-        )
+        else:
+            if scorer_factory is None or classifier_identity is None or label_exclusion_manifest is None:
+                raise click.UsageError(
+                    "generic scoring requires --scorer-factory, --classifier-identity, and --label-exclusion-manifest"
+                )
+            identity = _identity(classifier_identity)
+            incumbent_factory = _factory(incumbent_scorer_factory) if incumbent_scorer_factory else None
+            incumbent_id = _identity(incumbent_identity) if incumbent_identity else None
+            if (incumbent_factory is None) != (incumbent_id is None):
+                raise click.UsageError("--incumbent-scorer-factory and --incumbent-identity must appear together")
+            label_exclusion = read_label_exclusion(label_exclusion_manifest)
+            feature_step = None
+            if prepared_features is not None:
+                feature_step = _adopt_path(prepared_features, name="quality-features", kind=PreparedQualityPool)
+            scored = build_scored_pool(
+                raw_step,
+                scorer_factory=_factory(scorer_factory),
+                classifier_identity=identity,
+                label_exclusion=label_exclusion,
+                token_budget=token_cap,
+                prepared_features=feature_step,
+                incumbent_scorer_factory=incumbent_factory,
+                incumbent_identity=incumbent_id,
+            )
+    if selected_stage is QualityStage.SCORE:
+        return scored
     selection = build_quality_data(QualitySpec(scored, selected_tokens, SelectionMethod(selection_method), tie_seed))
     if selected_stage is QualityStage.SELECT:
         return selection
@@ -195,7 +233,7 @@ def main(
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
-        dense=True,
+        dense=dense,
         training_source=QualityTrainingSource(selection, selected_tokens),
         seed=seed,
         data_seed=data_seed,

@@ -39,10 +39,16 @@ from experiments.grug.fast_track.contracts import FrozenBaselineComponent, Froze
 from experiments.grug.fast_track.corpus_sample import RawCorpusPool
 from experiments.grug.fast_track.label_exclusion import LabelExclusion
 from experiments.grug.fast_track.launch import FlatCacheTrainingSource
-from experiments.grug.fast_track.quality import DocumentQualityScorer, EmbeddingHeadScorer, QualityScoringBatch
+from experiments.grug.fast_track.quality import (
+    DocumentQualityScorer,
+    EmbeddingHeadScorer,
+    QualityScoringBatch,
+    quality_classifier_identity,
+)
 from experiments.grug.fast_track.quality_features import (
     HARRIER_FEATURE_IDENTITY,
     PreparedQualityPool,
+    QualityFeatureSource,
     normalize_harrier_embeddings,
     pinned_quality_feature_sources,
     prepare_quality_features,
@@ -122,22 +128,14 @@ class ScoredPool(Artifact):
     raw_prefix_shards: tuple[str, ...]
     shards: tuple[str, ...]
     range_totals: tuple[RangeTokenTotal, ...]
-    candidate_score_bounds: tuple[float, float]
-    candidate_rank_sample: tuple[tuple[float, str, str], ...]
-    incumbent_score_bounds: tuple[float, float] | None
-    incumbent_rank_sample: tuple[tuple[float, str, str], ...]
     feature_identity: dict[str, str | int | float] | None
 
 
 @dataclass(frozen=True)
-class ScoreShardSummary:
-    range_total: RangeTokenTotal
-    candidate_minimum: float
-    candidate_maximum: float
-    candidate_rank_sample: tuple[tuple[float, str, str], ...]
-    incumbent_minimum: float | None
-    incumbent_maximum: float | None
-    incumbent_rank_sample: tuple[tuple[float, str, str], ...]
+class _ScoreColumnSummary:
+    minimum: float
+    maximum: float
+    rank_sample: tuple[tuple[float, str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -194,12 +192,6 @@ class QualityFeatureBuildConfig:
     resources: ResourceConfig
 
 
-def _validate_identity(identity: dict[str, str | int | float | bool]) -> None:
-    if not isinstance(identity.get("implementation"), str) or not isinstance(identity.get("revision"), str):
-        raise ValueError("classifier identity requires implementation and revision strings")
-    json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
 def _has_pinned_harrier_identity(identity: dict[str, str | int | float]) -> bool:
     return all(identity.get(key) == value for key, value in HARRIER_FEATURE_IDENTITY.items())
 
@@ -211,6 +203,7 @@ def _prepare_scoring_prefix(
     output_path: str,
     token_budget: int,
     prepared_features: PreparedQualityPool | None,
+    expected_feature_sources: Sequence[QualityFeatureSource] | None,
 ) -> _ScoringPrefix:
     if prepared_features is None:
         raw_prefix = take_token_prefix(
@@ -221,7 +214,23 @@ def _prepare_scoring_prefix(
         )
         return _ScoringPrefix(raw_prefix, None, None)
 
-    expected_sources = pinned_quality_feature_sources(pool.sources)
+    expected_sources = tuple(
+        sorted(
+            (
+                pinned_quality_feature_sources(pool.sources)
+                if expected_feature_sources is None
+                else expected_feature_sources
+            ),
+            key=lambda item: item.source,
+        )
+    )
+    if not expected_sources or len({source.source for source in expected_sources}) != len(expected_sources):
+        raise ValueError("expected feature source pins must be non-empty and unique")
+    source_paths = {source.name: source.normalized_path for source in pool.sources}
+    if {source.source for source in expected_sources} != source_paths.keys():
+        raise ValueError("expected feature source pins must match the raw pool sources")
+    if any(source.normalized_path != source_paths[source.source] for source in expected_sources):
+        raise ValueError("expected feature normalized paths must match the raw pool source pins")
     if (
         prepared_features.raw_manifest_path != pool.manifest_path
         or prepared_features.raw_seed != pool.seed
@@ -294,17 +303,11 @@ def _score_raw_file(
     scorer: DocumentQualityScorer,
     incumbent_scorer: DocumentQualityScorer | None,
     label_exclusion: LabelExclusion,
-) -> ScoreShardSummary:
+) -> RangeTokenTotal:
     path = prefix_join(output_path, f"part-{int(file['index']):05d}.parquet")
     ensure_parent_dir(path)
     documents = 0
     tokens_total = 0
-    candidate_minimum = math.inf
-    candidate_maximum = -math.inf
-    candidate_rank_sample = []
-    incumbent_minimum = math.inf
-    incumbent_maximum = -math.inf
-    incumbent_rank_sample = []
     writer = None
     with ExitStack() as stack:
         source = stack.enter_context(StoragePath(str(file["path"])).open("rb"))
@@ -324,26 +327,11 @@ def _score_raw_file(
             scores = np.asarray(scorer.scores(scoring_batch), dtype=np.float64)
             if scores.shape != (len(rows),) or not np.isfinite(scores).all():
                 raise ValueError("text scorer must return one finite score per document")
-            candidate_minimum = min(candidate_minimum, float(scores.min()))
-            candidate_maximum = max(candidate_maximum, float(scores.max()))
-            if len(candidate_rank_sample) < SCORE_SAMPLE_ROWS:
-                candidate_rank_sample.extend(
-                    (float(score), row["source"], row["id"]) for row, score in zip(rows, scores, strict=True)
-                )
-                candidate_rank_sample = candidate_rank_sample[:SCORE_SAMPLE_ROWS]
             incumbent_scores = None
             if incumbent_scorer is not None:
                 incumbent_scores = np.asarray(incumbent_scorer.scores(scoring_batch), dtype=np.float64)
                 if incumbent_scores.shape != (len(rows),) or not np.isfinite(incumbent_scores).all():
                     raise ValueError("incumbent scorer must return one finite score per document")
-                incumbent_minimum = min(incumbent_minimum, float(incumbent_scores.min()))
-                incumbent_maximum = max(incumbent_maximum, float(incumbent_scores.max()))
-                if len(incumbent_rank_sample) < SCORE_SAMPLE_ROWS:
-                    incumbent_rank_sample.extend(
-                        (float(score), row["source"], row["id"])
-                        for row, score in zip(rows, incumbent_scores, strict=True)
-                    )
-                    incumbent_rank_sample = incumbent_rank_sample[:SCORE_SAMPLE_ROWS]
             output = []
             for index, (row, score) in enumerate(zip(rows, scores, strict=True)):
                 scored_row = {key: value for key, value in row.items() if key not in {"text", "input_ids"}}
@@ -373,15 +361,7 @@ def _score_raw_file(
                 raise ValueError("prepared feature shard has rows beyond its raw prefix shard")
     if documents == 0:
         raise ValueError("raw scoring shard must contain at least one document")
-    return ScoreShardSummary(
-        RangeTokenTotal(int(file["index"]), path, documents, tokens_total),
-        candidate_minimum,
-        candidate_maximum,
-        tuple(candidate_rank_sample),
-        None if incumbent_scorer is None else incumbent_minimum,
-        None if incumbent_scorer is None else incumbent_maximum,
-        tuple(incumbent_rank_sample),
-    )
+    return RangeTokenTotal(int(file["index"]), path, documents, tokens_total)
 
 
 def score_raw_pool(
@@ -394,11 +374,12 @@ def score_raw_pool(
     label_exclusion: LabelExclusion,
     token_budget: int,
     prepared_features: PreparedQualityPool | None = None,
+    expected_feature_sources: Sequence[QualityFeatureSource] | None = None,
     incumbent_scorer_factory: Callable[[], DocumentQualityScorer] | None = None,
     incumbent_identity: dict[str, str | int | float | bool] | None = None,
 ) -> ScoredPool:
-    """Score one bounded raw token prefix and write token records with scores."""
-    _validate_identity(classifier_identity)
+    """Score one bounded raw token prefix and write document locators with scores."""
+    classifier_identity = quality_classifier_identity(classifier_identity)
     if token_budget <= 0:
         raise ValueError("scoring token budget must be positive")
     if token_budget > pool.requested_tokens:
@@ -406,10 +387,12 @@ def score_raw_pool(
             f"raw corpus pool was limited to {pool.requested_tokens} requested tokens, below the "
             f"{token_budget} scoring budget"
         )
+    if prepared_features is None and expected_feature_sources is not None:
+        raise ValueError("expected feature source pins require a prepared feature pool")
     if (incumbent_scorer_factory is None) != (incumbent_identity is None):
         raise ValueError("incumbent scorer and identity must be supplied together")
     if incumbent_identity is not None:
-        _validate_identity(incumbent_identity)
+        incumbent_identity = quality_classifier_identity(incumbent_identity)
     label_exclusion_fingerprint = hashlib.sha256(canonical_json(label_exclusion.identity()).encode()).hexdigest()
     scoring_prefix = _prepare_scoring_prefix(
         pool,
@@ -417,12 +400,13 @@ def score_raw_pool(
         output_path=output_path,
         token_budget=token_budget,
         prepared_features=prepared_features,
+        expected_feature_sources=expected_feature_sources,
     )
     raw_prefix = scoring_prefix.raw_prefix
     feature_paths = scoring_prefix.feature_paths
     feature_identity = scoring_prefix.feature_identity
 
-    def score_shard(files: Iterator[dict[str, str | int]], _: ShardInfo) -> Iterator[ScoreShardSummary]:
+    def score_shard(files: Iterator[dict[str, str | int]], _: ShardInfo) -> Iterator[RangeTokenTotal]:
         scorer = scorer_factory()
         incumbent_scorer = incumbent_scorer_factory() if incumbent_scorer_factory is not None else None
         for file in files:
@@ -442,22 +426,7 @@ def score_raw_pool(
         file_records.append(file_record)
     files = Dataset.from_list(file_records).reshard(len(raw_prefix.shards))
     summaries = ctx.execute(files.map_shard(score_shard)).results
-    summaries = tuple(sorted(summaries, key=lambda item: item.range_total.range_key))
-    ranges = tuple(item.range_total for item in summaries)
-    candidate_bounds = (
-        min(item.candidate_minimum for item in summaries),
-        max(item.candidate_maximum for item in summaries),
-    )
-    candidate_rank_sample = tuple(sample for item in summaries for sample in item.candidate_rank_sample)
-    incumbent_bounds = (
-        (
-            min(item.incumbent_minimum for item in summaries if item.incumbent_minimum is not None),
-            max(item.incumbent_maximum for item in summaries if item.incumbent_maximum is not None),
-        )
-        if incumbent_scorer_factory is not None
-        else None
-    )
-    incumbent_rank_sample = tuple(sample for item in summaries for sample in item.incumbent_rank_sample)
+    ranges = tuple(sorted(summaries, key=lambda item: item.range_key))
     if (
         sum(item.documents for item in ranges) != raw_prefix.total_documents
         or sum(item.tokens for item in ranges) != raw_prefix.total_tokens
@@ -479,10 +448,6 @@ def score_raw_pool(
         raw_prefix_shards=raw_prefix.shards,
         shards=tuple(paths),
         range_totals=ranges,
-        candidate_score_bounds=candidate_bounds,
-        candidate_rank_sample=candidate_rank_sample,
-        incumbent_score_bounds=incumbent_bounds,
-        incumbent_rank_sample=incumbent_rank_sample,
         feature_identity=feature_identity,
     )
 
@@ -502,26 +467,52 @@ def select_scored_pool(
         raise ValueError("training token budget must be positive")
     score_column = SCORE_COLUMN
     classifier_identity = pool.classifier_identity
-    score_bounds = pool.candidate_score_bounds
-    rank_sample = pool.candidate_rank_sample
     if selection_method is SelectionMethod.INCUMBENT:
         if pool.incumbent_identity is None:
             raise ValueError("scored pool does not contain incumbent scores")
-        if pool.incumbent_score_bounds is None:
-            raise ValueError("scored pool does not contain incumbent score summaries")
         score_column = "incumbent_score"
         classifier_identity = pool.incumbent_identity
-        score_bounds = pool.incumbent_score_bounds
-        rank_sample = pool.incumbent_rank_sample
     raw_token_budget = math.ceil(training_tokens / QUALITY_FRACTION)
-    if raw_token_budget != pool.requested_tokens:
+    if raw_token_budget > pool.requested_tokens:
         raise ValueError(
-            f"scored raw prefix budget {pool.requested_tokens} does not match the {raw_token_budget} token rung prefix"
+            f"scored raw prefix budget {pool.requested_tokens} is below the {raw_token_budget} token rung prefix"
         )
-    prefix_records = Dataset.from_list(list(pool.shards)).flat_map(load_parquet)
-    minimum, maximum = score_bounds
+    raw_prefix = take_token_prefix(
+        RankedPool(pool.shards, pool.range_totals, pool.documents, pool.tokens),
+        ctx=ctx,
+        output_path=prefix_join(output_path, "raw_prefix"),
+        token_budget=raw_token_budget,
+    )
+
+    def summarize(files: Iterator[dict[str, str | int]], _: ShardInfo) -> Iterator[_ScoreColumnSummary]:
+        for file in files:
+            minimum = math.inf
+            maximum = -math.inf
+            rank_sample = []
+            with StoragePath(str(file["path"])).open("rb") as stream:
+                for batch in pq.ParquetFile(stream).iter_batches(
+                    batch_size=SCORER_BATCH_ROWS, columns=[score_column, "source", "id"]
+                ):
+                    rows = batch.to_pylist()
+                    scores = [float(row[score_column]) for row in rows]
+                    minimum = min(minimum, min(scores))
+                    maximum = max(maximum, max(scores))
+                    if len(rank_sample) < SCORE_SAMPLE_ROWS:
+                        rank_sample.extend(
+                            (score, row["source"], row["id"]) for row, score in zip(rows, scores, strict=True)
+                        )
+                        rank_sample = rank_sample[:SCORE_SAMPLE_ROWS]
+            yield _ScoreColumnSummary(minimum, maximum, tuple(rank_sample))
+
+    prefix_files = Dataset.from_list([{"path": path} for path in raw_prefix.shards]).reshard(len(raw_prefix.shards))
+    summaries = ctx.execute(prefix_files.map_shard(summarize)).results
+    minimum = min(item.minimum for item in summaries)
+    maximum = max(item.maximum for item in summaries)
+    rank_sample = tuple(sample for item in summaries for sample in item.rank_sample)
     if selection_method is not SelectionMethod.RANDOM and minimum == maximum:
         raise ValueError(f"{selection_method.value} scores are constant on the rung raw prefix")
+
+    prefix_records = Dataset.from_list(list(raw_prefix.shards)).flat_map(load_parquet)
 
     def tie_hash(source: str, document_id: str) -> str:
         return hashlib.sha256(f"{tie_seed}:{source}:{document_id}".encode()).hexdigest()
@@ -574,12 +565,12 @@ def select_scored_pool(
     report_path = prefix_join(output_path, "selection.json")
     report = {
         "raw_manifest_path": pool.raw_manifest_path,
-        "scored_pool_shards": pool.shards,
+        "rung_prefix_shards": raw_prefix.shards,
         "classifier_identity": classifier_identity,
         "raw_prefix_requested_tokens": raw_token_budget,
-        "raw_prefix_usable_tokens": pool.requested_tokens,
-        "raw_prefix_selected_tokens": pool.tokens,
-        "raw_prefix_documents": pool.documents,
+        "raw_prefix_usable_tokens": raw_prefix.usable_tokens,
+        "raw_prefix_selected_tokens": raw_prefix.total_tokens,
+        "raw_prefix_documents": raw_prefix.total_documents,
         "selection_method": selection_method.value,
         "tie_seed": tie_seed,
         "requested_training_tokens": training_tokens,
@@ -601,9 +592,9 @@ def select_scored_pool(
         selected_tokens=selection.total_tokens,
         usable_tokens=selection.usable_tokens,
         documents=selection.total_documents,
-        raw_prefix_tokens=pool.requested_tokens,
-        raw_prefix_documents=pool.documents,
-        raw_prefix_shards=pool.shards,
+        raw_prefix_tokens=raw_prefix.total_tokens,
+        raw_prefix_documents=raw_prefix.total_documents,
+        raw_prefix_shards=raw_prefix.shards,
         raw_source_shards=pool.raw_prefix_shards,
         shards=selection.shards,
         report_path=report_path,
@@ -813,6 +804,7 @@ def build_scored_pool(
     label_exclusion: LabelExclusion,
     token_budget: int,
     prepared_features: ArtifactStep[PreparedQualityPool] | None = None,
+    expected_feature_sources: Sequence[QualityFeatureSource] | None = None,
     extra_dependencies: Sequence[ArtifactStep] = (),
     incumbent_scorer_factory: Callable[[], DocumentQualityScorer] | None = None,
     incumbent_identity: dict[str, str | int | float | bool] | None = None,
@@ -821,11 +813,18 @@ def build_scored_pool(
     version: str | None = None,
 ) -> ArtifactStep[ScoredPool]:
     """Bind one worker-loaded classifier to a fixed raw token prefix."""
-    _validate_identity(classifier_identity)
+    classifier_identity = quality_classifier_identity(classifier_identity)
     if token_budget <= 0:
         raise ValueError("scoring token budget must be positive")
+    normalized_expected_feature_sources = (
+        None
+        if expected_feature_sources is None
+        else tuple(sorted(tuple(expected_feature_sources), key=lambda item: item.source))
+    )
+    if prepared_features is None and normalized_expected_feature_sources is not None:
+        raise ValueError("expected feature source pins require a prepared feature pool")
     if incumbent_identity is not None:
-        _validate_identity(incumbent_identity)
+        incumbent_identity = quality_classifier_identity(incumbent_identity)
     label_exclusion_identity = label_exclusion.identity()
     identity = {
         "raw_pool": raw_pool.name,
@@ -836,6 +835,11 @@ def build_scored_pool(
         "token_budget": token_budget,
         "prepared_features": (
             None if prepared_features is None else {"name": prepared_features.name, "version": prepared_features.version}
+        ),
+        "expected_feature_sources": (
+            None
+            if normalized_expected_feature_sources is None
+            else [asdict(item) for item in normalized_expected_feature_sources]
         ),
         "extra_dependencies": [(dependency.name, dependency.version) for dependency in extra_dependencies],
     }
@@ -876,6 +880,7 @@ def build_scored_pool(
                 label_exclusion=label_exclusion,
                 token_budget=config.token_budget,
                 prepared_features=features,
+                expected_feature_sources=normalized_expected_feature_sources,
             )
 
     return ArtifactStep(
