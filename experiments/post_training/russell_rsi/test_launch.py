@@ -3,19 +3,38 @@
 
 import hashlib
 import json
+from dataclasses import asdict
 
 import pytest
 import yaml
 from click.testing import CliRunner
+from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, artifact_identity
 from marin.experiment import cli as experiment_cli
 from marin.experiment.cli import graph_handles
+from marin.external_dependencies import MARIN_SKYRL
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle
 
+from experiments.post_training.russell_rsi import launch as russell_launch
+from experiments.post_training.russell_rsi.bootstrap_loop import (
+    CheckpointScore,
+    LoopState,
+    Measurement,
+    QualifiedTask,
+    RoundResult,
+    StopReason,
+    advance,
+    manifest_digest,
+    round_plan,
+    seal_round,
+)
+from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
 from experiments.post_training.russell_rsi.launch import (
     MODEL,
     MODEL_REVISION,
+    bootstrap_round_workflow,
     development_step,
     main,
     repair_spike_workflow,
@@ -315,3 +334,274 @@ def test_repair_cli_rejects_changed_evidence_before_building(change, tmp_path, m
     error = str(result.exception) + result.output
     assert ("digest mismatch" if change == "bytes" else "parent-development identity") in error
     assert captured == []
+
+
+def test_bootstrap_round_uses_coding_eval_feedback_after_reload_without_parent_rerun():
+    training = ArtifactStep.adopt("documents/bootstrap-bank", "2026.10.04", "/tmp/bank")
+    retention = ArtifactStep.adopt("documents/retention", "2026.10.04", "/tmp/retention")
+    parent = ArtifactStep.adopt("checkpoints/pinned-parent", "2026.09.21", "/tmp/model", kind=LevanterCheckpoint)
+    runtime = RuntimeBundle("/tmp/runtime.json", "0" * 64, "/tmp/runtime.tar.gz", "0" * 64)
+    calibration = ArtifactStep.adopt("documents/bank-difficulty", "2026.10.04", "/tmp/difficulty")
+    terminals = bootstrap_round_workflow(
+        training,
+        retention,
+        parent,
+        "2026.10.04",
+        runtime,
+        {"backend": "qemu"},
+        round_number=1,
+        panel=CodingPanel((), {}),
+        relay_job="relay",
+        calibration=calibration,
+    )
+    trained = terminals["rl"]
+    assert calibration in trained.deps
+    config = yaml.safe_load(json.loads(trained.fingerprint_payload())["launch_config_yaml"])
+    assert config["skyrl"]["trainer"]["epochs"] == 4
+    assert config["skyrl"]["trainer"]["max_steps"] == 4
+    assert terminals["reload"] in terminals["coding-development"].deps
+    assert terminals["coding-development"] in terminals["coding-evidence"].deps
+    assert terminals["capabilities"].deps == (terminals["coding-evidence"],)
+
+
+def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_contracts(tmp_path, monkeypatch):
+    bank = tmp_path / "bank"
+    bank.mkdir()
+    records = [
+        {
+            "task_id": str(index),
+            "task_sha256": f"task-{index}",
+            "admission_sha256": f"admission-{index}",
+            "source_id": f"source-{index}",
+            "capability": "types",
+            "contract_id": f"contract-{index}",
+        }
+        for index in range(12)
+    ]
+    (bank / "bank.json").write_text(json.dumps({"tasks": records, "feedback_identity": "parent-coding"}))
+    seed = ArtifactStep.adopt("documents/twelve-qualified", "2026.10.04", str(bank))
+    parent = ArtifactStep.adopt("checkpoints/pinned-parent", "2026.09.21", "/tmp/model", kind=LevanterCheckpoint)
+    retention = ArtifactStep.adopt("documents/retention", "2026.10.04", "/tmp/retention")
+    holdout = tmp_path / "holdout.json"
+    holdout.write_text(
+        json.dumps(
+            {
+                "suites": {
+                    suite: {"sample_ids": [f"held-out-{i}" for i in range(32)], "demonstration_ids": []}
+                    for suite in ("humanevalplus", "mbppplus")
+                }
+            }
+        )
+    )
+    holdout_hash = hashlib.sha256(holdout.read_bytes()).hexdigest()
+
+    def resolve_bank(handle):
+        if handle is not seed:
+            raise AssertionError("A GPU stage started before bank qualification")
+        return Artifact(path=str(bank))
+
+    def no_source_builder(*args):
+        raise AssertionError("The driver reached source construction before admission")
+
+    monkeypatch.setattr(russell_launch, "resolve", resolve_bank)
+    runtime = RuntimeBundle("/tmp/runtime.json", "0" * 64, "/tmp/runtime.tar.gz", "0" * 64)
+    manifests = tmp_path / "manifests"
+    panel = CodingPanel(
+        tuple(
+            PanelItem(suite, str(index), "prompt-hash") for suite in ("humanevalplus", "mbppplus") for index in range(32)
+        ),
+        {suite: "protocol" for suite in ("humanevalplus", "mbppplus")},
+    )
+    coding = tmp_path / "parent-coding.json"
+    coding.write_text(
+        json.dumps(
+            {
+                "model_identity": artifact_identity(parent),
+                "panel_sha256": russell_launch.manifest_digest(asdict(panel)),
+                "scores": {"humanevalplus": 25 / 32, "mbppplus": 25 / 32},
+            }
+        )
+    )
+    retention_evidence = tmp_path / "parent-retention.json"
+    retention_evidence.write_text(
+        json.dumps(
+            {
+                "model_identity": artifact_identity(parent),
+                "tasks_identity": artifact_identity(retention),
+                "count": 1,
+                "task_rewards": {"task": [1.0]},
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="Do not allocate"):
+        russell_launch.run_bootstrap_loop(
+            seed,
+            parent,
+            retention,
+            panel,
+            str(holdout),
+            holdout_hash,
+            str(coding),
+            hashlib.sha256(coding.read_bytes()).hexdigest(),
+            str(retention_evidence),
+            hashlib.sha256(retention_evidence.read_bytes()).hexdigest(),
+            "2026.10.04",
+            runtime,
+            {"backend": "qemu"},
+            "relay",
+            StoragePath(str(manifests)),
+            no_source_builder,
+        )
+    assert json.loads((manifests / "panels.json").read_text())["manifest_sha256"] == holdout_hash
+    assert list(manifests.glob("*pilot*.json")) == []
+
+
+@pytest.mark.parametrize("next_bank_supplied", [True, False])
+def test_driver_restores_sealed_round_before_any_calibration(tmp_path, monkeypatch, next_bank_supplied):
+    bank_path = tmp_path / "bank"
+    bank_path.mkdir()
+    bank = tuple(
+        QualifiedTask(str(i), f"hash-{i}", f"proof-{i}", f"source-{i}", "types", f"contract-{i}") for i in range(16)
+    )
+    (bank_path / "bank.json").write_text(
+        json.dumps({"tasks": [asdict(task) for task in bank], "feedback_identity": "seed-feedback"})
+    )
+    seed = ArtifactStep.adopt("documents/sealed-bank", "2026.10.04", str(bank_path))
+    parent = ArtifactStep.adopt("checkpoints/parent", "2026.10.04", "/tmp/parent", kind=LevanterCheckpoint)
+    retention = ArtifactStep.adopt("documents/retention", "2026.10.04", "/tmp/retention")
+    panel = CodingPanel(
+        tuple(PanelItem(suite, str(i), "prompt") for suite in ("humanevalplus", "mbppplus") for i in range(32)),
+        {suite: "protocol" for suite in ("humanevalplus", "mbppplus")},
+    )
+    holdout = tmp_path / "holdout.json"
+    holdout.write_text(
+        json.dumps(
+            {
+                "suites": {
+                    suite: {"sample_ids": [f"held-{i}" for i in range(32)], "demonstration_ids": []}
+                    for suite in panel.protocols
+                }
+            }
+        )
+    )
+    coding = tmp_path / "coding.json"
+    coding.write_text(
+        json.dumps(
+            {
+                "model_identity": artifact_identity(parent),
+                "panel_sha256": manifest_digest(asdict(panel)),
+                "scores": {suite: 25 / 32 for suite in panel.protocols},
+            }
+        )
+    )
+    retained = tmp_path / "retention.json"
+    retained.write_text(
+        json.dumps(
+            {
+                "model_identity": artifact_identity(parent),
+                "tasks_identity": artifact_identity(retention),
+                "task_rewards": {"task": [1]},
+                "count": 1,
+            }
+        )
+    )
+    hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in (holdout, coding, retained)]
+    runtime = RuntimeBundle("/tmp/runtime.json", "0" * 64, "/tmp/runtime.tar.gz", "0" * 64)
+    difficulty = ArtifactStep.adopt("evals/difficulty", "2026.10.04", "/tmp/difficulty")
+    reload = ArtifactStep.adopt("evals/reload", "2026.10.04", "/tmp/reload")
+    capabilities_path = tmp_path / "capabilities"
+    capabilities_path.mkdir()
+    (capabilities_path / "capabilities.json").write_text(json.dumps({"skills": [{"label": "types"}]}))
+    capabilities = ArtifactStep.adopt("documents/capabilities", "2026.10.04", str(capabilities_path))
+    trained = ArtifactStep.adopt("checkpoints/trained", "2026.10.04", "/tmp/trained")
+    outputs = {"rl": trained, "reload": reload, "capabilities": capabilities}
+    monkeypatch.setattr(russell_launch, "development_step", lambda *args, **kwargs: difficulty)
+    monkeypatch.setattr(russell_launch, "bootstrap_round_workflow", lambda *args, **kwargs: outputs)
+    monkeypatch.setattr(russell_launch, "run", lambda *args: pytest.fail("Resume started GPU work"))
+
+    def resolver(handle):
+        if handle is difficulty:
+            pytest.fail("Resume repeated calibration")
+        if handle is seed:
+            return Artifact(path=str(bank_path))
+        if handle is capabilities:
+            return Artifact(path=str(capabilities_path))
+        return Artifact(path="/tmp/final")
+
+    monkeypatch.setattr(russell_launch, "resolve", resolver)
+    score = CheckpointScore(artifact_identity(parent), (25 / 32, 25 / 32), 1)
+    initial = LoopState(score, score, score, bank)
+    plan = round_plan(
+        initial,
+        (),
+        tuple(Measurement(score.checkpoint_identity, task.task_sha256, (1, 0) * 4) for task in bank),
+        run_id="bootstrap-2026.10.04",
+        bank_identity=artifact_identity(seed),
+        calibration_identity=artifact_identity(difficulty),
+        feedback_labels=(),
+        development_identity=manifest_digest(asdict(panel)),
+        retention_identity=artifact_identity(retention),
+        feedback_identity="seed-feedback",
+        runtime_identity=manifest_digest(
+            {"qemu": runtime.archive_sha256, "skyrl": MARIN_SKYRL.commit, "machine": {"backend": "qemu"}}
+        ),
+        seed=9528,
+    )
+    adopted = ArtifactStep.adopt(
+        "checkpoints/russell-rsi-bootstrap-round-1-export",
+        "2026.10.04",
+        "/tmp/export",
+        kind=LevanterCheckpoint,
+        config={"producer": artifact_identity(reload)},
+    )
+    result = RoundResult(
+        CheckpointScore(artifact_identity(adopted), (24 / 32, 25 / 32), 1),
+        artifact_identity(reload),
+        artifact_identity(capabilities),
+        4,
+        "/tmp/export",
+    )
+    state = advance(initial, plan, result)
+    directory = StoragePath(str(tmp_path / "manifests"))
+    previous = manifest_digest(
+        {
+            "manifest_sha256": hashes[0],
+            "development": asdict(panel),
+            "source_bank": artifact_identity(seed),
+            "parent_coding_sha256": hashes[1],
+            "parent_retention_sha256": hashes[2],
+        }
+    )
+    seal_round(directory, state, plan, result, previous)
+    russell_launch.write_once(
+        directory / "smoke.json",
+        {
+            "rl": artifact_identity(trained),
+            "reload": artifact_identity(reload),
+            "coding_baseline_sha256": hashes[1],
+            "retention_baseline_sha256": hashes[2],
+        },
+    )
+    restored = russell_launch.run_bootstrap_loop(
+        seed,
+        parent,
+        retention,
+        panel,
+        str(holdout),
+        hashes[0],
+        str(coding),
+        hashes[1],
+        str(retained),
+        hashes[2],
+        "2026.10.04",
+        runtime,
+        {"backend": "qemu"},
+        "relay",
+        directory,
+        lambda *args: seed if next_bank_supplied else None,
+    )
+    assert restored.completed_pilots == 1
+    assert restored.stop_reason == (StopReason.TASK_SUPPLY if next_bank_supplied else None)
+    assert (directory / "terminal-state.json").exists() == next_bank_supplied
+    assert (directory / "construction-required-after-1.json").exists() != next_bank_supplied
+    assert restored.working == restored.champion == score

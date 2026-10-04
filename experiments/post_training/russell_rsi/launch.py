@@ -3,9 +3,11 @@
 
 """Build Russell code-repair RL, checkpoint export, and evaluation artifacts."""
 
+import hashlib
 import json
 import os
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, replace
 from typing import cast
 
 import click
@@ -14,7 +16,7 @@ from fray.types import ResourceConfig
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, resolve, run
 from marin.execution.remote import remote
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.cli import rl_build_options
@@ -33,12 +35,39 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
-from experiments.evaluation.pipeline import eval_step
+from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.post_training.russell_rsi.adaptive_tasks import AdaptiveTasksConfig, run_adaptive_tasks_in_project
+from experiments.post_training.russell_rsi.bootstrap_loop import (
+    CheckpointScore,
+    FrozenRoundConfig,
+    LoopState,
+    Measurement,
+    QualifiedTask,
+    RoundResult,
+    StopReason,
+    advance,
+    freeze_round_dataset,
+    load_round,
+    manifest_digest,
+    pinned_file,
+    qualified_bank,
+    round_inputs,
+    round_plan,
+    seal_round,
+    write_once,
+)
+from experiments.post_training.russell_rsi.coding_eval_feedback import (
+    CodingAnalysisConfig,
+    CodingEvidenceConfig,
+    CodingPanel,
+    analyze_coding_eval_failures,
+    collect_coding_eval_evidence,
+)
+from experiments.post_training.russell_rsi.heldout_evaluation import heldout_comparison_step, heldout_panel_ids
 from experiments.post_training.russell_rsi.repair_tasks import (
     QualifiedUnionConfig,
     RepairTasksConfig,
@@ -99,7 +128,8 @@ def recipe(scale: Scale, machine_config: dict | None = None) -> str:
                 "offload_optimizer_during_rollouts": True,
                 "gradient_checkpointing": True,
                 "algorithm": {"advantage_estimator": "grpo", "use_kl_loss": False},
-                "epochs": 1,
+                # SkyRL schedules floor(rows / batch) * epochs; sixteen rows need one epoch per update.
+                "epochs": scale.updates,
                 "max_steps": scale.updates,
                 "update_epochs_per_batch": 1,
                 "max_prompt_length": PROMPT_TOKENS,
@@ -435,6 +465,128 @@ def spike_workflow(
     return post_admission_workflow(adaptive, seed, model, scale, version, runtime_bundle, machine_config)
 
 
+def coding_feedback_steps(
+    coding_eval: ArtifactStep[EvaluationResult],
+    model: ArtifactStep,
+    panel: CodingPanel,
+    version: str,
+    label: str,
+    relay_job: str,
+) -> dict[str, ArtifactStep]:
+    """Validate coding eval archives before the private capability analyst."""
+
+    def evidence_config(ctx: StepContext) -> CodingEvidenceConfig | dict:
+        if ctx.is_fingerprint:
+            return {"coding_eval": artifact_identity(coding_eval), "model": artifact_identity(model), "panel": panel}
+        result = ctx.resolved(coding_eval)
+        return CodingEvidenceConfig(
+            records_prefix=result.records_prefix,
+            run_ids=result.run_ids,
+            results_paths=result.results_paths,
+            model_identity=artifact_identity(model),
+            panel=panel,
+            output_path=ctx.output_path,
+        )
+
+    evidence = ArtifactStep(
+        name=f"documents/russell-rsi-{label}-coding-evidence",
+        version=version,
+        artifact_type=Artifact,
+        deps=(coding_eval, model),
+        build_config=evidence_config,
+        run=collect_coding_eval_evidence,
+    )
+    analysis = ArtifactStep(
+        name=f"documents/russell-rsi-{label}-capabilities",
+        version=version,
+        artifact_type=Artifact,
+        deps=(evidence,),
+        build_config=lambda ctx: CodingAnalysisConfig(
+            evidence_path=ctx.artifact_path(evidence),
+            evidence_identity=artifact_identity(evidence),
+            relay_job=relay_job,
+            output_path=ctx.output_path,
+        ),
+        run=analyze_coding_eval_failures,
+    )
+    return {"coding-evidence": evidence, "capabilities": analysis}
+
+
+@dataclass(frozen=True)
+class OptimizerStepConfig:
+    expected_updates: int
+    actual_updates: int | None
+    export_uri: str | None
+
+
+def require_optimizer_updates(config: OptimizerStepConfig) -> None:
+    if config.actual_updates != config.expected_updates or not config.export_uri:
+        raise ValueError("Training did not publish the exact bounded optimizer updates and HF export")
+
+
+def bootstrap_round_workflow(
+    training: ArtifactStep[Artifact],
+    retention: ArtifactStep[Artifact],
+    model: ArtifactStep[LevanterCheckpoint],
+    version: str,
+    runtime_bundle: RuntimeBundle,
+    machine_config: dict,
+    *,
+    round_number: int,
+    panel: CodingPanel,
+    relay_job: str,
+    calibration: ArtifactStep[Artifact],
+    scale: str = "pilot",
+) -> dict[str, ArtifactStep]:
+    """Bind one new protocol round to coding eval feedback, without a parent rerun."""
+    label = "bootstrap-initial" if scale == "smoke" else f"bootstrap-round-{round_number}"
+    trained = train_step(training, model, scale, version, retention, machine_config, label)
+    trained = replace(trained, deps=(*trained.deps, calibration))
+
+    def optimizer_config(ctx: StepContext) -> OptimizerStepConfig | dict:
+        if ctx.is_fingerprint:
+            return {"producer": artifact_identity(trained), "expected_updates": SCALES[scale].updates}
+        result = ctx.resolved(trained)
+        return OptimizerStepConfig(SCALES[scale].updates, result.global_step, result.hf_model_uri)
+
+    optimizer_gate = ArtifactStep(
+        name=f"documents/russell-rsi-{label}-optimizer-gate",
+        version=version,
+        artifact_type=Artifact,
+        deps=(trained,),
+        build_config=optimizer_config,
+        run=require_optimizer_updates,
+    )
+    selected_model = evaluation_model(f"russell-rsi-{label}", SKYRL_POLICY_LOCATION, None)
+    reload = eval_step(
+        selected_model,
+        "mmlu-smoke",
+        version=version,
+        deps=(trained, optimizer_gate),
+        resolve_model=lambda ctx: resolve_skyrl_model(ctx, trained, selected_model),
+        limit=1,
+        accelerator="H100x8",
+        submission_cluster=CLUSTER,
+        federated_cluster=CLUSTER,
+    )
+    if scale == "smoke":
+        return {"rl": trained, "reload": reload}
+    coding = eval_step(
+        selected_model,
+        "humanevalplus,mbppplus",
+        version=version,
+        deps=(trained, reload),
+        resolve_model=lambda ctx: resolve_skyrl_model(ctx, trained, selected_model),
+        limit=32,
+        accelerator="H100x8",
+        submission_cluster=CLUSTER,
+        federated_cluster=CLUSTER,
+    )
+    outputs = coding_feedback_steps(coding, trained, panel, version, label, relay_job)
+    outputs.update({"rl": trained, "reload": reload, "coding-development": coding})
+    return outputs
+
+
 def post_admission_workflow(
     training: ArtifactStep[Artifact],
     seed: ArtifactStep[Artifact],
@@ -627,6 +779,339 @@ def main(
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
+
+
+def run_bootstrap_loop(
+    seed_bank: ArtifactStep[Artifact],
+    parent: ArtifactStep[LevanterCheckpoint],
+    retention: ArtifactStep[Artifact],
+    panel: CodingPanel,
+    heldout_manifest_uri: str,
+    heldout_manifest_sha256: str,
+    parent_coding_evidence_uri: str,
+    parent_coding_evidence_sha256: str,
+    parent_retention_evidence_uri: str,
+    parent_retention_evidence_sha256: str,
+    version: str,
+    runtime_bundle: RuntimeBundle,
+    machine_config: dict,
+    relay_job: str,
+    manifest_directory: StoragePath,
+    build_next_bank: Callable[[ArtifactStep[Artifact], LoopState, int], ArtifactStep[Artifact] | None],
+) -> LoopState:
+    """Execute bounded artifact rounds with an explicit independent source builder."""
+    heldout_manifest = json.loads(pinned_file(heldout_manifest_uri, heldout_manifest_sha256))
+    heldout_panel_ids(panel, heldout_manifest)
+    heldout = {"manifest_sha256": heldout_manifest_sha256, "development": asdict(panel)}
+    write_once(manifest_directory / "panels.json", heldout)
+    panel_identity = manifest_digest(asdict(panel))
+    runtime_identity = manifest_digest(
+        {"qemu": runtime_bundle.archive_sha256, "skyrl": MARIN_SKYRL.commit, "machine": machine_config}
+    )
+    parent_coding = json.loads(pinned_file(parent_coding_evidence_uri, parent_coding_evidence_sha256))
+    parent_retention = json.loads(pinned_file(parent_retention_evidence_uri, parent_retention_evidence_sha256))
+    if (
+        parent_coding["model_identity"] != artifact_identity(parent)
+        or parent_coding["panel_sha256"] != panel_identity
+        or parent_retention["model_identity"] != artifact_identity(parent)
+        or parent_retention["tasks_identity"] != artifact_identity(retention)
+    ):
+        raise ValueError("Parent baseline evidence does not identify the pinned model and panels")
+    baseline_rewards = [reward for group in parent_retention["task_rewards"].values() for reward in group]
+    if (
+        not baseline_rewards
+        or len(baseline_rewards) != parent_retention["count"]
+        or any(len(group) != 1 for group in parent_retention["task_rewards"].values())
+    ):
+        raise ValueError("Parent retention baseline requires one graded reward per task")
+    parent_score = CheckpointScore(
+        artifact_identity(parent),
+        (parent_coding["scores"]["humanevalplus"], parent_coding["scores"]["mbppplus"]),
+        sum(baseline_rewards) / len(baseline_rewards),
+    )
+    bank_artifact = resolve(seed_bank)
+    bank_record = json.loads(StoragePath(prefix_join(bank_artifact.path, "bank.json")).read_text())
+    initial_bank = qualified_bank(tuple(QualifiedTask(**item) for item in bank_record["tasks"]))
+    state = LoopState(parent_score, parent_score, parent_score, initial_bank)
+    checkpoint_handles = {artifact_identity(parent): parent}
+    bank_handle = seed_bank
+    feedback_identity = bank_record["feedback_identity"]
+    previous_sha256 = manifest_digest(
+        {
+            **heldout,
+            "source_bank": artifact_identity(seed_bank),
+            "parent_coding_sha256": parent_coding_evidence_sha256,
+            "parent_retention_sha256": parent_retention_evidence_sha256,
+        }
+    )
+    smoke_complete = False
+    feedback_labels: set[str] = set()
+    while state.stop_reason is None:
+        number = state.completed_pilots + 1
+        current = checkpoint_handles[state.working.checkpoint_identity]
+        bank_artifact = resolve(bank_handle)
+        bank_record = json.loads(StoragePath(prefix_join(bank_artifact.path, "bank.json")).read_text())
+        bank = qualified_bank(tuple(QualifiedTask(**item) for item in bank_record["tasks"]))
+        if len(bank) < 16:
+            raise ValueError("Fewer than sixteen qualified tasks. Do not allocate calibration GPUs")
+        retained_hashes = {task.task_sha256 for task in state.bank}
+        fresh = tuple(task for task in bank if task.task_sha256 not in retained_hashes)
+        if {task.task_sha256 for task in state.bank} - {task.task_sha256 for task in bank}:
+            raise ValueError("A new bank discarded qualified retained tasks")
+        if state.completed_pilots and not any(
+            task.contract_id not in {retained.contract_id for retained in state.bank}
+            and task.relation not in {"variant", "replacement", "alias"}
+            and feedback_labels.intersection(task.capability.split(","))
+            for task in fresh
+        ):
+            state = replace(state, stop_reason=StopReason.TASK_SUPPLY)
+            break
+        difficulty = development_step(
+            bank_handle,
+            current,
+            version,
+            runtime_bundle,
+            f"bootstrap-round-{number}-bank-difficulty",
+            relative_path="train.parquet",
+            samples_per_task=8,
+            temperature=1.0,
+            require_reward_variation=True,
+            limit=len(bank),
+        )
+        inputs = round_inputs(
+            state,
+            bank,
+            bank_identity=artifact_identity(bank_handle),
+            calibration_identity=artifact_identity(difficulty),
+            feedback_labels=tuple(sorted(feedback_labels)),
+            development_identity=panel_identity,
+            retention_identity=artifact_identity(retention),
+            feedback_identity=feedback_identity,
+            runtime_identity=runtime_identity,
+            seed=9528,
+        )
+        path = manifest_directory / f"bootstrap-{version}-pilot-{number}.json"
+        resumed = load_round(path, inputs, previous_sha256) if path.exists() else None
+        if resumed is not None:
+            plan = resumed.plan
+        else:
+            measured = resolve(difficulty)
+            summary = json.loads(StoragePath(prefix_join(measured.path, "failure_summary.json")).read_text())
+            measurements = tuple(
+                Measurement(artifact_identity(current), task.task_sha256, tuple(summary["task_rewards"][task.task_id]))
+                for task in bank
+            )
+            plan = round_plan(
+                state,
+                fresh,
+                measurements,
+                run_id=f"bootstrap-{version}",
+                **{
+                    key: value
+                    for key, value in inputs.items()
+                    if key
+                    not in {"current_checkpoint", "champion_checkpoint", "task_bank", "updates", "max_glm_responses"}
+                },
+            )
+        frozen = ArtifactStep(
+            name=f"documents/russell-rsi-bootstrap-round-{number}-train",
+            version=version,
+            artifact_type=Artifact,
+            deps=(bank_handle, difficulty),
+            build_config=lambda ctx, selected=plan, source=bank_handle: FrozenRoundConfig(
+                bank_path=ctx.artifact_path(source),
+                plan=selected,
+                output_path=ctx.output_path,
+            ),
+            run=freeze_round_dataset,
+        )
+        outputs = bootstrap_round_workflow(
+            frozen,
+            retention,
+            current,
+            version,
+            runtime_bundle,
+            machine_config,
+            round_number=number,
+            panel=panel,
+            relay_job=relay_job,
+            calibration=difficulty,
+        )
+        if not smoke_complete:
+            smoke = bootstrap_round_workflow(
+                frozen,
+                retention,
+                parent,
+                version,
+                runtime_bundle,
+                machine_config,
+                round_number=1,
+                panel=panel,
+                relay_job=relay_job,
+                calibration=difficulty,
+                scale="smoke",
+            )
+            expected_smoke = {
+                "rl": artifact_identity(smoke["rl"]),
+                "reload": artifact_identity(smoke["reload"]),
+                "coding_baseline_sha256": parent_coding_evidence_sha256,
+                "retention_baseline_sha256": parent_retention_evidence_sha256,
+            }
+            smoke_path = manifest_directory / "smoke.json"
+            if not smoke_path.exists():
+                if resumed is not None:
+                    raise ValueError("Sealed pilot is missing its smoke completion record")
+                run(smoke["rl"], smoke["reload"])
+            write_once(smoke_path, expected_smoke)
+            smoke_complete = True
+        if resumed is not None:
+            state = resumed.state
+            value = asdict(resumed.result)
+            candidate_identity = resumed.result.candidate.checkpoint_identity
+            export_uri = resumed.result.checkpoint_uri
+            previous_sha256 = resumed.sha256
+            adopted = ArtifactStep.adopt(
+                f"checkpoints/russell-rsi-bootstrap-round-{number}-export",
+                version,
+                export_uri,
+                kind=LevanterCheckpoint,
+                config={"producer": value["reload_identity"]},
+            )
+            if artifact_identity(adopted) != candidate_identity:
+                raise ValueError("Resumed export identity changed")
+            checkpoint_handles[candidate_identity] = adopted
+            # The independent builder consumes only the canonical capability artifact.
+            capabilities = outputs["capabilities"]
+            if artifact_identity(capabilities) != value["feedback_identity"]:
+                raise ValueError("Resumed capability artifact identity changed")
+        else:
+            values = run(outputs["rl"], outputs["reload"], outputs["coding-evidence"], outputs["capabilities"])
+            trained = cast(SkyRLRun, values[0])
+            evidence = json.loads(StoragePath(prefix_join(values[2].path, "coding-evidence.json")).read_text())
+            export_uri = cast(str, trained.hf_model_uri)
+            adopted = ArtifactStep.adopt(
+                f"checkpoints/russell-rsi-bootstrap-round-{number}-export",
+                version,
+                export_uri,
+                kind=LevanterCheckpoint,
+                config={"producer": artifact_identity(outputs["reload"])},
+            )
+            candidate_identity = artifact_identity(adopted)
+            checkpoint_handles[candidate_identity] = adopted
+            retention_eval = development_step(
+                retention,
+                outputs["rl"],
+                version,
+                runtime_bundle,
+                f"bootstrap-round-{number}-retention",
+                relative_path="development.parquet",
+                limit=len(parent_retention["task_rewards"]),
+            )
+            retention_result = resolve(retention_eval)
+            retention_summary = json.loads(
+                StoragePath(prefix_join(retention_result.path, "failure_summary.json")).read_text()
+            )
+            retention_rewards = [reward for group in retention_summary["task_rewards"].values() for reward in group]
+            if (
+                retention_summary["model_identity"] != artifact_identity(outputs["rl"])
+                or retention_summary["tasks_identity"] != artifact_identity(retention)
+                or retention_summary["task_rewards"].keys() != parent_retention["task_rewards"].keys()
+                or retention_summary["count"] != parent_retention["count"]
+                or any(len(group) != 1 for group in retention_summary["task_rewards"].values())
+            ):
+                raise ValueError("Retention panel does not have a graded reward for each task")
+            result = RoundResult(
+                candidate=CheckpointScore(
+                    candidate_identity,
+                    tuple(evidence["scores"][suite] for suite in ("humanevalplus", "mbppplus")),
+                    sum(retention_rewards) / len(retention_rewards),
+                ),
+                reload_identity=artifact_identity(outputs["reload"]),
+                feedback_identity=artifact_identity(outputs["capabilities"]),
+                optimizer_steps=cast(int, trained.global_step),
+                checkpoint_uri=export_uri,
+            )
+            state = advance(state, plan, result)
+            previous_sha256 = seal_round(manifest_directory, state, plan, result, previous_sha256)
+            capabilities = outputs["capabilities"]
+        if state.stop_reason is None:
+            capability_artifact = resolve(capabilities)
+            capability_record = json.loads(
+                StoragePath(prefix_join(capability_artifact.path, "capabilities.json")).read_text()
+            )
+            feedback_labels = {skill["label"] for skill in capability_record["skills"]}
+            next_bank = build_next_bank(capabilities, state, 24)
+            if next_bank is None:
+                write_once(
+                    manifest_directory / f"construction-required-after-{state.completed_pilots}.json",
+                    {
+                        "state": asdict(state),
+                        "last_round_sha256": previous_sha256,
+                        "prior_bank_sha256": manifest_digest({"tasks": [asdict(task) for task in state.bank]}),
+                        "feedback_identity": artifact_identity(capabilities),
+                        "capabilities_uri": prefix_join(capability_artifact.path, "capabilities.json"),
+                        "capabilities_sha256": (
+                            hashlib.sha256(
+                                StoragePath(prefix_join(capability_artifact.path, "capabilities.json")).read_bytes()
+                            ).hexdigest()
+                        ),
+                        "response_cap": 24,
+                    },
+                )
+                return state
+            bank_handle = next_bank
+            feedback_identity = artifact_identity(capabilities)
+    terminal = {
+        "state": asdict(state),
+        "last_round_sha256": previous_sha256,
+        "heldout_manifest_sha256": heldout_manifest_sha256,
+    }
+    write_once(manifest_directory / "terminal-state.json", terminal)
+    champion = checkpoint_handles[state.champion.checkpoint_identity]
+    parent_model = evaluation_model("russell-rsi-final-parent", MODEL, None)
+    parent_final = eval_step(
+        parent_model,
+        "humanevalplus,mbppplus",
+        version=version,
+        deps=(parent,),
+        resolve_model=lambda ctx: replace(
+            parent_model, location=ctx.artifact_path(parent), identity=artifact_identity(parent)
+        ),
+        limit=64,
+        accelerator="H100x8",
+        submission_cluster=CLUSTER,
+        federated_cluster=CLUSTER,
+    )
+    if artifact_identity(champion) == artifact_identity(parent):
+        champion_final = parent_final
+    else:
+        champion_model = evaluation_model("russell-rsi-final-champion", MODEL, None)
+        champion_final = eval_step(
+            champion_model,
+            "humanevalplus,mbppplus",
+            version=version,
+            deps=(champion,),
+            resolve_model=lambda ctx: replace(
+                champion_model, location=ctx.artifact_path(champion), identity=artifact_identity(champion)
+            ),
+            limit=64,
+            accelerator="H100x8",
+            submission_cluster=CLUSTER,
+            federated_cluster=CLUSTER,
+        )
+    comparison = heldout_comparison_step(
+        parent_final,
+        champion_final,
+        parent_identity=artifact_identity(parent),
+        champion_identity=artifact_identity(champion),
+        working_panel=panel,
+        manifest_uri=heldout_manifest_uri,
+        manifest_sha256=heldout_manifest_sha256,
+        terminal_state=terminal,
+        version=version,
+    )
+    resolve(comparison)
+    return state
 
 
 if __name__ == "__main__":
