@@ -307,10 +307,11 @@ def download_wheels(uri: str, manifest_bytes: bytes, root: Path) -> None:
 
 
 def publish_manifest(root: Path, output_uri: str, manifest: dict) -> None:
+    # Root dot paths belong to the executor and can change after publication.
     manifest["files"] = {
         path.relative_to(root).as_posix(): sha256(path.read_bytes())
         for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "repair-manifest.json"
+        if path.is_file() and path.name != "repair-manifest.json" and not path.relative_to(root).parts[0].startswith(".")
     }
     manifest["original_artifact_uri"] = output_uri
     for relative in manifest["files"]:

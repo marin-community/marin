@@ -341,6 +341,22 @@ def test_union_verifies_each_recorded_code_and_publishes_partial_before_gate(uni
     prepare_qualified_union(replace(config, minimum_train_rows=2))
 
 
+def test_union_survives_executor_updates_after_manifest_publication(union_evidence, tmp_path):
+    config, repaired, manifest, _ = union_evidence
+    for name in (".executor_info", ".executor_status", ".executor_status.lock", ".artifact.json"):
+        (repaired / name).write_text("RUNNING")
+    published = tmp_path / "published"
+    published.mkdir()
+    (published / ".executor_status").write_text("executor owns this status")
+    repair_tasks.publish_manifest(repaired, str(published), manifest)
+    assert (published / ".executor_status").read_text() == "executor owns this status"
+    (published / ".executor_status").write_text("SUCCESS")
+    (published / ".artifact.json").write_text('{"result": null}')
+
+    prepare_qualified_union(replace(config, repair_output_uri=str(published), minimum_train_rows=2))
+    assert json.loads((Path(config.output_path) / "summary.json").read_text())["train_rows"] == 2
+
+
 @pytest.mark.parametrize("mutation", ["report", "row", "duplicate"])
 def test_union_rejects_inconsistent_qualification_even_when_files_are_resealed(union_evidence, mutation):
     config, repaired, manifest, expected = union_evidence
