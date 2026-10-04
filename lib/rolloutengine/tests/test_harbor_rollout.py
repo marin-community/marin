@@ -18,8 +18,7 @@ from shellbox.machine import ExitReason, Result, ShellSimBuiltins
 from taskcompendium.environment import DockerBuild, EnvironmentKind, ShellVerifierSpec
 from taskcompendium.grading import Outcome
 from taskcompendium.importers.harbor import harbor_task
-from taskcompendium.models import Source
-from taskcompendium.parquet import read_tasks, write_tasks
+from taskcompendium.models import Source, TaskSpec
 
 from rolloutengine.contracts import RolloutInterrupted, RolloutOperation
 
@@ -80,7 +79,7 @@ class TarMachine:
         (True, True, "answer", 0.75, True),
     ],
 )
-async def test_harbor_package_grades_private_files_after_parquet_reload(
+async def test_harbor_package_grades_private_files_after_json_reload(
     tmp_path, monkeypatch, separate, selected_artifacts, expected, reward, passed
 ):
     directory = tmp_path / "source"
@@ -119,8 +118,7 @@ async def test_harbor_package_grades_private_files_after_parquet_reload(
     (directory / "tests/test.sh").write_bytes(grader)
     source = Source(dataset="harbor-fixture", revision="1", row="task", importer_revision="1")
     task = harbor_task(directory, source=source)
-    parquet = str(tmp_path / "tasks.parquet")
-    write_tasks(parquet, iter([task]))
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     shutil.rmtree(directory)
     monkeypatch.setenv("HARBOR_TEST_EXPECTED", expected)
     machines = []
@@ -178,7 +176,7 @@ async def test_harbor_package_grades_private_files_after_parquet_reload(
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await run_task(engine(model, {EnvironmentKind.DOCKER: ImageFactory()}), next(read_tasks(parquet)))
+    result = await run_task(engine(model, {EnvironmentKind.DOCKER: ImageFactory()}), task)
     assert (result.grade.status, result.grade.reward, result.grade.passed) == (Outcome.GRADED, reward, passed)
     assert result.grade.diagnostics["exit_code"] == 7
     assert result.response_token_ids == (20, 90, 91, 21)
@@ -260,8 +258,7 @@ async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
         else "echo broken > /logs/verifier/reward.json\n"
     )
     task = harbor_task(directory, source=Source(dataset="stages", revision="1", row="0", importer_revision="1"))
-    path = str(tmp_path / "tasks.parquet")
-    write_tasks(path, iter([task]))
+    task = TaskSpec.model_validate_json(task.model_dump_json())
     shutil.rmtree(directory)
     machines = []
 
@@ -297,12 +294,12 @@ async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
     runner = engine(model, {EnvironmentKind.DOCKER: Factory()})
     if last_grader == "setup_failed":
         with pytest.raises(RolloutInterrupted) as caught:
-            await run_task(runner, next(read_tasks(path)))
+            await run_task(runner, task)
         result = caught.value.rollout
         assert caught.value.operation == RolloutOperation.PREPARE
         assert isinstance(caught.value.__cause__, RuntimeError)
     else:
-        result = await run_task(runner, next(read_tasks(path)))
+        result = await run_task(runner, task)
     assert (result.grade.status, result.grade.reward) == (status, reward)
     assert len(result.grade.diagnostics["stages"]) == stage_count
     assert len(machines) == 1
