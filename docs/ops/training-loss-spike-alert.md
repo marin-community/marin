@@ -13,7 +13,7 @@ The bridge reads `train_loss` from `levanter.metrics` for the enrolled run IDs o
 The run alerts when either condition holds:
 
 - The lowest `train_loss` in the recent window exceeds `mean(baseline) + max(0.05, 6 * stddev(baseline))`. Labeled `spiking`.
-- Any reduction of the recent window is not finite, which is how a loss that has gone to NaN or infinity arrives. Labeled `not_finite`.
+- The recent window's mean or peak is not finite, which is how a loss that has gone to NaN or infinity arrives. Labeled `not_finite`.
 
 Six standard deviations is the band Levanter's `SkipStepConfig` rejects an individual step on, so a run with skip-step enabled and a run without it are judged against the same shape. The absolute floor of 0.05 keeps a very stable run from alerting on a rise too small to act on.
 

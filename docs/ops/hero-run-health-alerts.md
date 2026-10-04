@@ -127,21 +127,41 @@ Quiet runs emit zero-valued `healthy` rows and an empty fleet emits one `fleet` 
 7. `task_retried` is information, not a fault. It explains a W&B gap while the new attempt redoes
    steps below the high-water mark.
 
-Verify what a rule saw with a bounded Finelog query:
+Inspect recent signals from the execution selected by the rule with a bounded Finelog query:
 
 ```sql
+WITH current_execution AS (
+  SELECT execution_uid
+  FROM "levanter.metrics"
+  WHERE run_id = '<hero-run-id>'
+    AND COALESCE(NULLIF(cluster, ''), 'unknown') = '<cluster>'
+    AND name = 'phase'
+    AND process_index = 0
+    AND job_id IS NOT NULL
+    AND execution_uid IS NOT NULL
+    AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '24 hours') * 1000 AS BIGINT)
+    AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT)
+  ORDER BY timestamp_ms DESC, seq DESC
+  LIMIT 1
+)
 SELECT
   name,
   value,
   to_timestamp_millis(timestamp_ms) AS observed_at
 FROM "levanter.metrics"
+JOIN current_execution USING (execution_uid)
 WHERE run_id = '<hero-run-id>'
+  AND COALESCE(NULLIF(cluster, ''), 'unknown') = '<cluster>'
+  AND process_index = 0
   AND name IN ('phase', 'grad_norm_total', 'optim_skipped_step', 'moe_drop_fraction',
                'train_router_routing_entropy_mean', 'throughput_mfu')
   AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '15 minutes') * 1000 AS BIGINT)
 ORDER BY timestamp_ms DESC, seq DESC
 LIMIT 50;
 ```
+
+The sample window is 15 minutes. For a longer telemetry outage, use the
+[24-hour phase query](training-stall-alert-contract.md) to check when the run last published.
 
 ## Tuning
 
