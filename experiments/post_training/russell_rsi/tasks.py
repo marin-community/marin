@@ -50,6 +50,7 @@ PRIVATE_CASES = "/tmp/taskcompendium/cases.json"
 RUNNER_PATH = "/tmp/taskcompendium/runner.py"
 GUARD_PATH = "/tmp/taskcompendium/guard.py"
 RESULT_PREFIX = "RSI_RESULT="
+VERIFIER_DIAGNOSTIC_BYTES = 1024
 WHEEL_ROOT = "/opt/rsi-wheels"
 MAX_WHEEL_BYTES = 50_000_000
 MAX_WHEEL_FILES = 50
@@ -63,6 +64,10 @@ AdmissionPersistence = Callable[[Path], Awaitable[None]]
 
 class InvalidRepair(ValueError):
     """Generated task code or source scope cannot enter acceptance."""
+
+
+class VerifierExecutionError(RuntimeError):
+    """The isolated grader did not return a valid execution report."""
 
 
 class ObservationCase(BaseModel):
@@ -421,8 +426,8 @@ class AcceptanceResult:
 
 async def run_verifier(
     files: dict[str, str], verifier: ShellVerifierSpec, *, environment: EnvironmentSpec, factory: MachineFactory
-) -> VerifierReport | None:
-    """Collect metrics with the same image and dependency setup as patch admission."""
+) -> VerifierReport:
+    """Collect behavioral metrics. Raise if the grader has no valid execution report."""
     source_files = tuple(
         EnvironmentFile(path=f"{WORKSPACE}/{path}", content=text.encode()) for path, text in sorted(files.items())
     )
@@ -431,15 +436,26 @@ async def run_verifier(
         assert machine is not None
         await _install_files(machine, verifier.files)
         result = await machine.run(Command(argv=("python", "-I", RUNNER_PATH), cwd=WORKSPACE, timeout=verifier.timeout))
+        context = json.dumps(
+            {
+                "reason": result.reason.value,
+                "exit_code": result.exit_code,
+                "stdout": result.stdout[:VERIFIER_DIAGNOSTIC_BYTES].decode(errors="replace"),
+                "stderr": result.stderr[:VERIFIER_DIAGNOSTIC_BYTES].decode(errors="replace"),
+                "stdout_truncated": result.stdout_truncated or len(result.stdout) > VERIFIER_DIAGNOSTIC_BYTES,
+                "stderr_truncated": result.stderr_truncated or len(result.stderr) > VERIFIER_DIAGNOSTIC_BYTES,
+            },
+            sort_keys=True,
+        )
         if result.reason != ExitReason.EXITED or result.exit_code not in (0, 1):
-            return None
+            raise VerifierExecutionError(f"Verifier command failed: {context}")
         lines = [line for line in result.stdout.decode(errors="replace").splitlines() if line.startswith(RESULT_PREFIX)]
         if len(lines) != 1:
-            return None
+            raise VerifierExecutionError(f"Expected one verifier result, got {len(lines)}: {context}")
         try:
             report = VerifierReport.model_validate_json(lines[0][len(RESULT_PREFIX) :])
-        except ValidationError:
-            return None
+        except ValidationError as error:
+            raise VerifierExecutionError(f"Invalid verifier report: {context}") from error
         return report
 
 
@@ -460,14 +476,12 @@ async def accept_candidate(
             if progress is not None:
                 await progress(
                     name,
-                    {"stage": name, "completed": True, "report": report.model_dump(mode="json") if report else None},
+                    {"stage": name, "completed": True, "report": report.model_dump(mode="json")},
                 )
         outcomes.append(reports)
     parent, reference = outcomes[0][0], outcomes[1][0]
     stable = all(
-        first is not None
-        and second is not None
-        and first.model_dump_json(exclude={"case_diagnostics"}) == second.model_dump_json(exclude={"case_diagnostics"})
+        first.model_dump_json(exclude={"case_diagnostics"}) == second.model_dump_json(exclude={"case_diagnostics"})
         for first, second in outcomes
     )
     accepted = bool(

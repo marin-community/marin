@@ -12,6 +12,7 @@ from argparse import Namespace
 from dataclasses import asdict
 
 import pytest
+from pydantic import ValidationError
 from shellbox.machine import ExitReason, MachineStartupError, NetworkPolicy, Result
 from taskcompendium.environment import ShellVerifierSpec
 from taskcompendium.importers.swe import PATCH_PATH
@@ -27,6 +28,8 @@ from experiments.post_training.russell_rsi.tasks import (
     GeneratedRepair,
     InvalidRepair,
     ObservationCase,
+    RecordedAdmissionError,
+    VerifierExecutionError,
     VerifierReport,
     accept_candidate,
     accept_candidates,
@@ -83,7 +86,8 @@ def test_task_solver_contains_only_parent_and_private_tests_stay_in_verifier():
 
 
 class ResultMachine:
-    def __init__(self, metrics):
+    def __init__(self, metrics, command_result: Result | None = None):
+        self.command_result = command_result
         self.metrics = VerifierReport(
             tests=metrics["tests"],
             failures=metrics["failures"],
@@ -103,6 +107,8 @@ class ResultMachine:
     async def run(self, command):
         if command.argv != ("python", "-I", "/tmp/taskcompendium/runner.py"):
             return Result(0, b"", b"", False, False, ExitReason.EXITED)
+        if self.command_result is not None:
+            return self.command_result
         successful = self.metrics.tests > 0 and self.metrics.failures == self.metrics.errors == 0
         return Result(
             0 if successful else 1,
@@ -118,14 +124,15 @@ class ResultMachine:
 
 
 class ResultFactory:
-    def __init__(self, outcomes):
+    def __init__(self, outcomes, command_result: Result | None = None):
         self.outcomes = iter(outcomes)
+        self.command_result = command_result
         self.machines = []
         self.specs = []
 
     async def create(self, spec):
         self.specs.append(spec)
-        machine = ResultMachine(next(self.outcomes))
+        machine = ResultMachine(next(self.outcomes), self.command_result)
         self.machines.append(machine)
         return machine
 
@@ -151,6 +158,84 @@ def test_acceptance_requires_behavioral_failure_and_reference_success(parent, re
     assert all(b"return a+b" not in machine.files["/workspace/maths.py"] for machine in factory.machines[:2])
     assert all(b"return a+b" in machine.files["/workspace/maths.py"] for machine in factory.machines[2:])
     assert all("/tmp/taskcompendium/cases.json" in machine.files for machine in factory.machines)
+
+
+@pytest.mark.parametrize(
+    "command_result,message,parse_failure",
+    [
+        (Result(None, b"", b"runtime diagnostic", False, False, ExitReason.TIMED_OUT), "Verifier command failed", False),
+        (Result(137, b"", b"runtime diagnostic", False, False, ExitReason.EXITED), "Verifier command failed", False),
+        (Result(1, b"no metrics", b"runtime diagnostic", False, False, ExitReason.EXITED), "got 0", False),
+        (
+            Result(0, b"RSI_RESULT={}\nRSI_RESULT={}", b"runtime diagnostic", False, False, ExitReason.EXITED),
+            "got 2",
+            False,
+        ),
+        (
+            Result(1, b"RSI_RESULT={broken", b"runtime diagnostic", False, False, ExitReason.EXITED),
+            "Invalid verifier report",
+            True,
+        ),
+        (
+            Result(1, b'RSI_RESULT={"tests":"invalid"}', b"runtime diagnostic", False, False, ExitReason.EXITED),
+            "Invalid verifier report",
+            True,
+        ),
+    ],
+    ids=("timeout", "invalid-exit", "missing", "multiple", "invalid-json", "invalid-schema"),
+)
+def test_acceptance_preserves_runner_failure_instead_of_rejecting_task(command_result, message, parse_failure):
+    snapshot = seed()
+    task = build_task(snapshot, repair(), image="python-git", timeout=10)
+    factory = ResultFactory([{"tests": 2, "failures": 0, "errors": 0}], command_result)
+    with pytest.raises(VerifierExecutionError, match=message) as error:
+        asyncio.run(accept_candidate(task, snapshot, factory=factory))
+    context = json.loads(str(error.value).partition(": ")[2])
+    assert context["reason"] == command_result.reason.value
+    assert context["exit_code"] == command_result.exit_code
+    assert "runtime diagnostic" in context["stderr"]
+    assert isinstance(error.value.__cause__, ValidationError) == parse_failure
+    assert factory.machines and all(machine.closed for machine in factory.machines)
+
+
+def test_verifier_failure_keeps_bounded_output_context():
+    snapshot = seed()
+    task = build_task(snapshot, repair(), image="python-git", timeout=10)
+    failed = Result(
+        1,
+        b"stdout start " + b"x" * 8192 + b"stdout tail",
+        b"stderr start " + b"x" * 8192 + b"stderr tail",
+        False,
+        False,
+        ExitReason.EXITED,
+    )
+    factory = ResultFactory([{"tests": 2, "failures": 0, "errors": 0}], failed)
+    with pytest.raises(VerifierExecutionError) as error:
+        asyncio.run(accept_candidate(task, snapshot, factory=factory))
+    message = str(error.value)
+    assert "stdout start" in message and "stderr start" in message
+    assert "stdout tail" not in message and "stderr tail" not in message
+    context = json.loads(message.partition(": ")[2])
+    assert context["stdout_truncated"] and context["stderr_truncated"]
+
+
+def test_admission_persists_runner_failure_and_rethrows_it_on_resume(tmp_path):
+    args = admission_args(tmp_path)
+    failed = Result(1, b"no metrics", b"runner initialization failed", False, False, ExitReason.EXITED)
+    factory = ResultFactory([{"tests": 2, "failures": 0, "errors": 0}], failed)
+    with pytest.raises(ExceptionGroup) as error:
+        asyncio.run(accept_candidates(args, factory=factory))
+    assert isinstance(error.value.exceptions[0], VerifierExecutionError)
+    record = args.candidates / "candidate-0/attempts/0001/exception.json"
+    original = record.read_bytes()
+    exception = json.loads(original)
+    assert exception["exception_type"] == "VerifierExecutionError"
+    assert "runner initialization failed" in exception["message"]
+    assert json.loads((args.candidates / "candidate-0/acceptance.json").read_text())["stage"] == "unexpected_error"
+    with pytest.raises(ExceptionGroup) as resumed:
+        asyncio.run(accept_candidates(args, factory=ResultFactory([])))
+    assert isinstance(resumed.value.exceptions[0], RecordedAdmissionError)
+    assert record.read_bytes() == original
 
 
 def stored_generation(directory, snapshot, summary, content):

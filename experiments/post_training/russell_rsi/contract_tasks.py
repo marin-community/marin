@@ -295,13 +295,11 @@ async def contract_attempt(
                         report = await run_verifier(
                             files, verifier, environment=provisional_task.environment, factory=factory
                         )
-                        record = report.model_dump(mode="json") if report is not None else None
+                        record = report.model_dump(mode="json")
                         await save_admission_record(attempt / f"{name}.json", {"report": record}, persist)
                         reports[name] = record
                 stable = all(
-                    reports[f"capture-{label}-1"] is not None
-                    and reports[f"capture-{label}-2"] is not None
-                    and reports[f"capture-{label}-1"]["errors"] == 0
+                    reports[f"capture-{label}-1"]["errors"] == 0
                     and reports[f"capture-{label}-1"]["observations"] == reports[f"capture-{label}-2"]["observations"]
                     and reports[f"capture-{label}-2"]["errors"] == 0
                     for label in ("parent", "reference")
