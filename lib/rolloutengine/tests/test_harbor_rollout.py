@@ -15,14 +15,14 @@ import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import ExitReason, Result, ShellSimBuiltins
-from taskcompendium.environment import DockerBuild, EnvironmentKind, ShellVerifierSpec
+from taskcompendium.environment import EnvironmentKind
 from taskcompendium.grading import Outcome
 from taskcompendium.importers.harbor import harbor_task
 from taskcompendium.models import Source, TaskSpec
 
 from rolloutengine.contracts import RolloutInterrupted, RolloutOperation
 
-from .test_rollout import ReplayModel, engine, run_task
+from .test_rollout import ReplayModel, engine
 
 GRADER = b"""#!/bin/sh
 if [ "$(cat /logs/artifacts/answer)" = "$EXPECTED" ]; then
@@ -71,17 +71,19 @@ class TarMachine:
 
 
 @pytest.mark.parametrize(
-    "separate,selected_artifacts,expected,reward,passed",
+    "verifier_environment,selected_artifacts,expected,reward,passed",
     [
-        (False, False, "answer", 0.75, True),
-        (False, False, "wrong", 0.0, False),
-        (True, False, "answer", 0.75, True),
-        (True, True, "answer", 0.75, True),
+        ("shared", False, "answer", 0.75, True),
+        ("shared", False, "wrong", 0.0, False),
+        ("registry", False, "answer", 0.75, True),
+        ("registry", True, "answer", 0.75, True),
+        ("agent_build", False, "answer", 0.75, True),
     ],
 )
 async def test_harbor_package_grades_private_files_after_json_reload(
-    tmp_path, monkeypatch, separate, selected_artifacts, expected, reward, passed
+    tmp_path, monkeypatch, verifier_environment, selected_artifacts, expected, reward, passed
 ):
+    separate = verifier_environment != "shared"
     directory = tmp_path / "source"
     for name in ("environment", "tests", "setup_files"):
         (directory / name).mkdir(parents=True)
@@ -96,11 +98,13 @@ async def test_harbor_package_grades_private_files_after_json_reload(
         "[environment.healthcheck]\ninterval_sec = 0\nretries = 2\n"
         'command = "if [ -f /workspace/started ]; then touch /workspace/ready; '
         'else touch /workspace/started; false; fi"\n'
-        '[verifier]\ntimeout_sec = 5\n[verifier.env]\nEXPECTED = "${HARBOR_TEST_EXPECTED}"\n'
+        "[verifier]\ntimeout_sec = 5\n"
+        + ('environment_mode = "separate"\n' if separate else "")
+        + '[verifier.env]\nEXPECTED = "${HARBOR_TEST_EXPECTED}"\n'
         + (
             '[verifier.environment]\ndocker_image = "fixture-grader"\nallow_internet = false\n'
             'workdir = "/workspace"\n'
-            if separate
+            if verifier_environment == "registry"
             else ""
         )
     )
@@ -176,7 +180,7 @@ async def test_harbor_package_grades_private_files_after_json_reload(
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await run_task(engine(model, {EnvironmentKind.DOCKER: ImageFactory()}), task)
+    result = await engine(model, {EnvironmentKind.DOCKER: ImageFactory()}).run(task)
     assert (result.grade.status, result.grade.reward, result.grade.passed) == (Outcome.GRADED, reward, passed)
     assert result.grade.diagnostics["exit_code"] == 7
     assert result.response_token_ids == (20, 90, 91, 21)
@@ -187,29 +191,6 @@ async def test_harbor_package_grades_private_files_after_json_reload(
         with pytest.raises(RuntimeError, match="closed"):
             await machine.upload(tmp_path / "unused", "/unused")
     assert "HARBOR_TEST_EXPECTED" not in json.dumps([request.messages for request in model.requests])
-
-
-def test_separate_verifier_can_reuse_the_agent_build_context(tmp_path):
-    directory = tmp_path / "source"
-    for name in ("environment", "tests", "setup_files"):
-        (directory / name).mkdir(parents=True)
-    (directory / "instruction.md").write_text("Complete the task.")
-    (directory / "task.toml").write_text(
-        '[environment]\nworkdir = "/workspace"\n' '[verifier]\nenvironment_mode = "separate"\ntimeout_sec = 5\n'
-    )
-    (directory / "environment/Dockerfile").write_text("FROM busybox\n")
-    (directory / "tests/test.sh").write_text("echo 1\n")
-
-    task = harbor_task(
-        directory,
-        source=Source(dataset="harbor-fixture", revision="1", row="task", importer_revision="1"),
-    )
-    specification = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
-
-    assert specification.environment is not None
-    assert isinstance(specification.environment.image, DockerBuild)
-    assert {file.path for file in specification.environment.image.files} == {"/Dockerfile"}
-    assert {file.path for file in specification.environment.files} == {"/tests/test.sh"}
 
 
 @pytest.mark.parametrize(
@@ -294,12 +275,12 @@ async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
     runner = engine(model, {EnvironmentKind.DOCKER: Factory()})
     if last_grader == "setup_failed":
         with pytest.raises(RolloutInterrupted) as caught:
-            await run_task(runner, task)
+            await runner.run(task)
         result = caught.value.rollout
         assert caught.value.operation == RolloutOperation.PREPARE
         assert isinstance(caught.value.__cause__, RuntimeError)
     else:
-        result = await run_task(runner, task)
+        result = await runner.run(task)
     assert (result.grade.status, result.grade.reward) == (status, reward)
     assert len(result.grade.diagnostics["stages"]) == stage_count
     assert len(machines) == 1
