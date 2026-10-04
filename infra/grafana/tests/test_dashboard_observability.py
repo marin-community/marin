@@ -9,14 +9,14 @@ from types import SimpleNamespace as Record
 import duckdb
 import pytest
 from accelerator_observability import accelerator_overview_dataset
-from async_rl_observability import async_rl_overview_dataset
 from config import ClusterTarget
 from conftest import bridge_config
 from dashboard_dataset import DashboardDataset
 from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
 from node_observability import node_overview_dataset
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_attempt_observability import rl_attempt_dataset
+from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from runs_observability import runs_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
@@ -216,11 +216,12 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "training": frozenset(training_overview_dataset("run", start_ms, end_ms, 15_000).views),
         "runs": frozenset(runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000).views),
         "rl": frozenset(rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
+        "rl_gpu": frozenset(rl_gpu_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
         "accelerator": frozenset(accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000).views),
         "jobs": frozenset(jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000).views),
         "recent_rl": frozenset(recent_rl_runs_dataset(start_ms, end_ms).views),
-        "async_rl": frozenset(
-            async_rl_overview_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000).views
+        "rl_attempt": frozenset(
+            rl_attempt_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000).views
         ),
     }
     expected = {
@@ -228,8 +229,11 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "zephyr.json": {"/v1/zephyr/overview": (4, sections["zephyr"])},
         "training.json": {"/v1/training/overview": (16, sections["training"])},
         "runs.json": {"/v1/runs/overview": (8, sections["runs"])},
-        "rl_runs.json": {"/v1/rl/overview": (13, sections["rl"])},
-        "async_rl.json": {"/v1/async-rl/overview": (47, sections["async_rl"])},
+        "rl_runs.json": {
+            "/v1/rl/overview": (10, sections["rl"]),
+            "/v1/rl/gpu": (5, sections["rl_gpu"]),
+            "/v1/rl/attempt": (50, sections["rl_attempt"]),
+        },
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
         "home.json": {
@@ -274,21 +278,23 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "training": training_overview_dataset("run", start_ms, end_ms, 15_000),
         "runs": runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000),
         "rl": rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
+        "rl_gpu": rl_gpu_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
         "accelerator": accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000),
         "jobs": jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000),
         "recent_rl": recent_rl_runs_dataset(start_ms, end_ms),
-        "async_rl": async_rl_overview_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000),
+        "rl_attempt": rl_attempt_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000),
     }
     assert {name: len(dataset.sources) for name, dataset in datasets.items()} == {
         "node": 1,
         "zephyr": 1,
         "training": 3,
         "runs": 2,
-        "rl": 3,
+        "rl": 2,
+        "rl_gpu": 1,
         "accelerator": 3,
         "jobs": 5,
         "recent_rl": 1,
-        "async_rl": 9,
+        "rl_attempt": 10,
     }
 
 

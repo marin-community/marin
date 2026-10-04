@@ -1,0 +1,1242 @@
+{
+  "2": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "policy_step · driver",
+        1.0
+      ],
+      [
+        1788566460000,
+        "weight_sync_completed · driver",
+        1.0
+      ],
+      [
+        1788566460000,
+        "producing policy · driver",
+        0.0
+      ]
+    ]
+  },
+  "3": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "consumed_response_token · driver",
+        3.3333333333333335
+      ],
+      [
+        1788566460000,
+        "consumed_loss_token · driver",
+        3.0
+      ],
+      [
+        1788566460000,
+        "generated_token · driver",
+        5.0
+      ]
+    ]
+  },
+  "4": {
+    "columns": [
+      "execution_uid",
+      "role",
+      "process",
+      "event",
+      "status",
+      "reason",
+      "export_lost_records",
+      "export_queued_records",
+      "last_record_ms"
+    ],
+    "rows": [
+      [
+        "driver",
+        "trainer",
+        "trainer",
+        "terminal",
+        "completed",
+        "normal_exit",
+        null,
+        null,
+        1788566460001
+      ]
+    ]
+  },
+  "6": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "step · driver",
+        2.0
+      ],
+      [
+        1788566460000,
+        "fwd_logprobs_values_reward · driver",
+        2.0
+      ],
+      [
+        1788566460000,
+        "run_training · driver",
+        2.0
+      ],
+      [
+        1788566460000,
+        "wait_for_generation_buffer · driver",
+        2.0
+      ],
+      [
+        1788566460000,
+        "train_critic_and_policy · driver",
+        2.0
+      ]
+    ]
+  },
+  "7": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "slot mean · driver",
+        3.3333333333333335
+      ],
+      [
+        1788566460000,
+        "slot max · driver",
+        18.0
+      ]
+    ]
+  },
+  "8": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "rollout_capacity · driver",
+        64.0
+      ],
+      [
+        1788566460000,
+        "rollout_queue_depth · driver",
+        3.0
+      ]
+    ]
+  },
+  "10": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "p50 · driver",
+        0.5
+      ],
+      [
+        1788566460000,
+        "p95 · driver",
+        8.15
+      ],
+      [
+        1788566460000,
+        "max · driver",
+        9.0
+      ]
+    ]
+  },
+  "11": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "p50 · driver",
+        1.0
+      ],
+      [
+        1788566460000,
+        "p95 · driver",
+        6.2
+      ],
+      [
+        1788566460000,
+        "max · driver",
+        9.0
+      ]
+    ]
+  },
+  "12": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "p50 · driver",
+        2.0
+      ],
+      [
+        1788566460000,
+        "p95 · driver",
+        27.2
+      ],
+      [
+        1788566460000,
+        "max · driver",
+        30.0
+      ]
+    ]
+  },
+  "14": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "offload_policy_model_to_cpu success · driver",
+        2.0
+      ],
+      [
+        1788566460000,
+        "sync_weights success · driver",
+        2.0
+      ],
+      [
+        1788566460000,
+        "init_weight_sync_state success · driver",
+        2.0
+      ]
+    ]
+  },
+  "15": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "max lag · driver",
+        0.1
+      ]
+    ]
+  },
+  "16": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "ppo_train_residual · all ranks",
+        -0.5
+      ],
+      [
+        1788566460000,
+        "rollout_call_residual rank driver · driver",
+        -0.25
+      ]
+    ]
+  },
+  "18": {
+    "columns": [
+      "execution_uid",
+      "step",
+      "coverage",
+      "completed_calls",
+      "returned_tokens"
+    ],
+    "rows": [
+      [
+        "driver",
+        1,
+        "observed",
+        2,
+        18.0
+      ]
+    ]
+  },
+  "19": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "epoch_discarded · driver",
+        1.0
+      ],
+      [
+        1788566460000,
+        "consumed · driver",
+        1.0
+      ]
+    ]
+  },
+  "20": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "consumed · driver",
+        100.0
+      ],
+      [
+        1788566460000,
+        "epoch_discarded · driver",
+        50.0
+      ]
+    ]
+  },
+  "22": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460044,
+        "reward/avg_raw_reward train · driver",
+        0.5
+      ],
+      [
+        1788566460124,
+        "reward/avg_pass_at_1 train · driver",
+        0.75
+      ],
+      [
+        1788566460125,
+        "reward/avg_pass_at_16 train · driver",
+        0.25
+      ]
+    ]
+  },
+  "23": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460045,
+        "eval/all/avg_score eval · driver",
+        0.25
+      ],
+      [
+        1788566460046,
+        "eval/all/response_tokens_mean eval · driver",
+        150.0
+      ],
+      [
+        1788566460047,
+        "eval/all/response_tokens_max eval · driver",
+        300.0
+      ],
+      [
+        1788566460048,
+        "eval/all/length_stop_fraction eval · driver",
+        0.5
+      ],
+      [
+        1788566460049,
+        "eval/all/completed_stop_fraction eval · driver",
+        0.5
+      ],
+      [
+        1788566460050,
+        "eval/all/stop_reason_coverage eval · driver",
+        1.0
+      ],
+      [
+        1788566460051,
+        "eval/all/length_stop_score_contribution eval · driver",
+        0.2
+      ],
+      [
+        1788566460052,
+        "eval/all/completed_stop_score_contribution eval · driver",
+        0.05
+      ]
+    ]
+  },
+  "40": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460056,
+        "consumed/length_stop_fraction · driver",
+        0.25
+      ],
+      [
+        1788566460056,
+        "consumed/stop_reason_coverage · driver",
+        1.0
+      ]
+    ]
+  },
+  "24": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460053,
+        "policy/policy_loss train · driver",
+        -0.2
+      ],
+      [
+        1788566460054,
+        "policy/raw_grad_norm train · driver",
+        4.0
+      ]
+    ]
+  },
+  "26": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "ppo_train max · all ranks",
+        8.0
+      ],
+      [
+        1788566460000,
+        "ppo_train mean · all ranks",
+        8.0
+      ],
+      [
+        1788566460000,
+        "ppo_train min · all ranks",
+        8.0
+      ]
+    ]
+  },
+  "27": {
+    "columns": [
+      "execution_uid",
+      "step",
+      "rank",
+      "phase",
+      "outcome",
+      "seconds"
+    ],
+    "rows": [
+      [
+        "worker",
+        1,
+        "0",
+        "ppo_train_residual",
+        "success",
+        -0.5
+      ],
+      [
+        "worker",
+        1,
+        "0",
+        "ppo_train",
+        "success",
+        8.0
+      ]
+    ]
+  },
+  "28": {
+    "columns": [
+      "execution_uid",
+      "process",
+      "name",
+      "observed_value",
+      "last_record_ms"
+    ],
+    "rows": [
+      [
+        "driver",
+        "trainer/trainer",
+        "telemetry_lost_records",
+        0.0,
+        1788566460122
+      ],
+      [
+        "driver",
+        "trainer/trainer",
+        "telemetry_rejected_records",
+        0.0,
+        1788566460123
+      ]
+    ]
+  },
+  "30": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460057,
+        "policy/mismatch/pooled/log_ratio_mean · driver",
+        -0.1
+      ],
+      [
+        1788566460059,
+        "policy/mismatch/pooled/log_ratio_abs_p99 · driver",
+        0.7
+      ]
+    ]
+  },
+  "31": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460060,
+        "policy/mismatch/pooled/lower_clip_pressure · driver",
+        0.2
+      ],
+      [
+        1788566460061,
+        "policy/mismatch/pooled/upper_clip_pressure · driver",
+        0.1
+      ]
+    ]
+  },
+  "32": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460062,
+        "policy/mismatch/pooled/finite_fraction · driver",
+        0.75
+      ],
+      [
+        1788566460063,
+        "policy/mismatch/pooled/ess_fraction · driver",
+        0.8
+      ]
+    ]
+  },
+  "44": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460058,
+        "policy/mismatch/pooled/log_ratio_mean_squared · driver",
+        0.04
+      ]
+    ]
+  },
+  "46": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460104,
+        "policy/correction/weight_mean · driver",
+        0.75
+      ],
+      [
+        1788566460118,
+        "policy/correction/weight_mean · driver",
+        1.5
+      ]
+    ]
+  },
+  "34": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460064,
+        "async/performance/core_seconds · driver",
+        10.0
+      ],
+      [
+        1788566460065,
+        "async/performance/cycle_seconds · driver",
+        25.0
+      ]
+    ]
+  },
+  "35": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460066,
+        "async/performance/consumed_loss_tokens_per_core_second · driver",
+        100.0
+      ],
+      [
+        1788566460067,
+        "async/performance/consumed_loss_tokens_per_cycle_second · driver",
+        40.0
+      ]
+    ]
+  },
+  "36": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460068,
+        "async/performance/buffer_wait_fraction · driver",
+        0.2
+      ]
+    ]
+  },
+  "38": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460069,
+        "async/performance/loss_tokens_per_configured_policy_gpu_second · driver",
+        5.0
+      ]
+    ]
+  },
+  "39": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460070,
+        "async/performance/configured_policy_gpus · driver",
+        8.0
+      ],
+      [
+        1788566460071,
+        "async/performance/configured_inference_gpus · driver",
+        8.0
+      ]
+    ]
+  },
+  "41": {
+    "columns": [
+      "execution",
+      "host",
+      "rank",
+      "gpu",
+      "phase",
+      "observations",
+      "peak_allocated_gib",
+      "peak_reserved_gib",
+      "sampled_allocated_gib",
+      "sampled_free_gib",
+      "device_total_gib"
+    ],
+    "rows": [
+      [
+        "worker",
+        "learner",
+        "0",
+        "GPU-A",
+        "ppo_train",
+        1,
+        4.0,
+        6.0,
+        3.0,
+        1.0,
+        8.0
+      ]
+    ]
+  },
+  "42": {
+    "columns": [
+      "execution",
+      "collector",
+      "phase",
+      "engine",
+      "model",
+      "counter",
+      "tokens_per_sampled_second",
+      "coverage_fraction",
+      "intervals",
+      "phase_seconds"
+    ],
+    "rows": [
+      [
+        "driver",
+        "trainer",
+        "training",
+        "engine-A",
+        "",
+        "generation_tokens_total",
+        10.0,
+        0.6,
+        2.0,
+        10.0
+      ],
+      [
+        "driver",
+        "trainer",
+        "training",
+        "engine-B",
+        "",
+        "generation_tokens_total",
+        20.0,
+        0.4,
+        1.0,
+        10.0
+      ],
+      [
+        "driver",
+        "trainer",
+        "weight_sync",
+        "engine-A",
+        "",
+        "generation_tokens_total",
+        null,
+        0.0,
+        0.0,
+        4.0
+      ],
+      [
+        "driver",
+        "trainer",
+        "weight_sync",
+        "engine-B",
+        "",
+        "generation_tokens_total",
+        null,
+        0.0,
+        0.0,
+        4.0
+      ]
+    ]
+  },
+  "43": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460071,
+        "core GPU-hours · driver",
+        0.044444444444444446
+      ]
+    ]
+  },
+  "47": {
+    "columns": [
+      "status",
+      "execution",
+      "staleness",
+      "updates",
+      "mean_response_tokens",
+      "token_weighted_mslr",
+      "minimum_ess_fraction",
+      "mean_update_raw_reward"
+    ],
+    "rows": [
+      [
+        "No qualifying uniform-staleness batches",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ]
+    ]
+  },
+  "48": {
+    "columns": [
+      "uniform_staleness_token_fraction",
+      "observed_loss_tokens",
+      "represented_loss_tokens",
+      "mixed_staleness_loss_tokens",
+      "uniform_updates",
+      "excluded_updates"
+    ],
+    "rows": [
+      [
+        null,
+        null,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "49": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460046,
+        "eval/all/response_tokens_mean · driver",
+        150.0
+      ],
+      [
+        1788566460047,
+        "eval/all/response_tokens_max · driver",
+        300.0
+      ],
+      [
+        1788566460048,
+        "eval/all/length_stop_fraction · driver",
+        0.5
+      ],
+      [
+        1788566460049,
+        "eval/all/completed_stop_fraction · driver",
+        0.5
+      ],
+      [
+        1788566460050,
+        "eval/all/stop_reason_coverage · driver",
+        1.0
+      ]
+    ]
+  },
+  "50": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460045,
+        "eval/all/avg_score · driver",
+        0.25
+      ],
+      [
+        1788566460051,
+        "eval/all/length_stop_score_contribution · driver",
+        0.2
+      ],
+      [
+        1788566460052,
+        "eval/all/completed_stop_score_contribution · driver",
+        0.05
+      ]
+    ]
+  },
+  "51": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460029,
+        "staleness 0 · driver",
+        1
+      ],
+      [
+        1788566460029,
+        "staleness 1 · driver",
+        1
+      ],
+      [
+        1788566460029,
+        "staleness 9 · driver",
+        1
+      ],
+      [
+        1788566460088,
+        "staleness 0 · driver",
+        1
+      ],
+      [
+        1788566460088,
+        "staleness 1 · driver",
+        2
+      ],
+      [
+        1788566460092,
+        "staleness 0 · driver",
+        1
+      ],
+      [
+        1788566460092,
+        "staleness 1 · driver",
+        1
+      ]
+    ]
+  },
+  "52": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460089,
+        "staleness 0 · driver",
+        10.0
+      ],
+      [
+        1788566460089,
+        "staleness 1 · driver",
+        80.0
+      ],
+      [
+        1788566460093,
+        "staleness 0 · driver",
+        20.0
+      ],
+      [
+        1788566460093,
+        "staleness 1 · driver",
+        70.0
+      ]
+    ]
+  },
+  "53": {
+    "columns": [
+      "start",
+      "finish",
+      "execution",
+      "state"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        1788566470000,
+        "driver",
+        "training"
+      ],
+      [
+        1788566460003,
+        1788566460004,
+        "driver",
+        "weights synced"
+      ],
+      [
+        1788566470000,
+        1788566474000,
+        "driver",
+        "weight sync"
+      ]
+    ]
+  },
+  "54": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460094,
+        "policy/mismatch/staleness0/log_ratio_abs_mean · driver",
+        0.1
+      ],
+      [
+        1788566460096,
+        "policy/mismatch/staleness0/log_ratio_abs_p999 · driver",
+        0.7
+      ],
+      [
+        1788566460097,
+        "policy/mismatch/staleness0/ess_fraction · driver",
+        0.8
+      ],
+      [
+        1788566460108,
+        "policy/mismatch/staleness0/log_ratio_abs_mean · driver",
+        0.2
+      ],
+      [
+        1788566460110,
+        "policy/mismatch/staleness0/log_ratio_abs_p999 · driver",
+        1.4
+      ],
+      [
+        1788566460111,
+        "policy/mismatch/staleness0/ess_fraction · driver",
+        1.6
+      ]
+    ]
+  },
+  "55": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460094,
+        "policy/mismatch/staleness0/log_ratio_abs_mean · driver",
+        0.1
+      ],
+      [
+        1788566460095,
+        "policy/mismatch/staleness1/log_ratio_abs_mean · driver",
+        0.3
+      ],
+      [
+        1788566460108,
+        "policy/mismatch/staleness0/log_ratio_abs_mean · driver",
+        0.2
+      ],
+      [
+        1788566460109,
+        "policy/mismatch/staleness1/log_ratio_abs_mean · driver",
+        0.6
+      ]
+    ]
+  },
+  "56": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460098,
+        "policy/log_ratio_abs_mean · driver",
+        0.05
+      ],
+      [
+        1788566460099,
+        "policy/log_ratio_ess_fraction · driver",
+        0.9
+      ],
+      [
+        1788566460112,
+        "policy/log_ratio_abs_mean · driver",
+        0.1
+      ],
+      [
+        1788566460113,
+        "policy/log_ratio_ess_fraction · driver",
+        1.8
+      ]
+    ]
+  },
+  "57": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460100,
+        "policy/mismatch/pooled/pos_first256/log_ratio_abs_mean · driver",
+        0.12
+      ],
+      [
+        1788566460101,
+        "policy/mismatch/pooled/pos_last256/log_ratio_abs_mean · driver",
+        0.23
+      ],
+      [
+        1788566460102,
+        "policy/log_ratio_pos_first256/log_ratio_abs_mean · driver",
+        0.01
+      ],
+      [
+        1788566460103,
+        "policy/log_ratio_pos_last256/log_ratio_abs_mean · driver",
+        0.04
+      ],
+      [
+        1788566460114,
+        "policy/mismatch/pooled/pos_first256/log_ratio_abs_mean · driver",
+        0.24
+      ],
+      [
+        1788566460115,
+        "policy/mismatch/pooled/pos_last256/log_ratio_abs_mean · driver",
+        0.46
+      ],
+      [
+        1788566460116,
+        "policy/log_ratio_pos_first256/log_ratio_abs_mean · driver",
+        0.02
+      ],
+      [
+        1788566460117,
+        "policy/log_ratio_pos_last256/log_ratio_abs_mean · driver",
+        0.08
+      ]
+    ]
+  },
+  "59": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460105,
+        "policy/correction/masked_fraction · driver",
+        0.05
+      ],
+      [
+        1788566460106,
+        "policy/correction/truncated_fraction · driver",
+        0.12
+      ],
+      [
+        1788566460107,
+        "policy/ppo_clip_ratio · driver",
+        0.08
+      ],
+      [
+        1788566460119,
+        "policy/correction/masked_fraction · driver",
+        0.1
+      ],
+      [
+        1788566460120,
+        "policy/correction/truncated_fraction · driver",
+        0.24
+      ],
+      [
+        1788566460121,
+        "policy/ppo_clip_ratio · driver",
+        0.16
+      ]
+    ]
+  },
+  "104": {
+    "columns": [
+      "t",
+      "rollouts",
+      "samples"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        64,
+        512
+      ]
+    ]
+  },
+  "120": {
+    "columns": [
+      "role",
+      "clock_domain",
+      "steps",
+      "failed_steps"
+    ],
+    "rows": [
+      [
+        "trainer",
+        null,
+        2,
+        0
+      ],
+      [
+        "trainer",
+        "inclusive_wall",
+        1,
+        null
+      ]
+    ]
+  },
+  "121": {
+    "columns": [
+      "t",
+      "series",
+      "value"
+    ],
+    "rows": [
+      [
+        1788566460000,
+        "step · driver",
+        2
+      ]
+    ]
+  }
+}

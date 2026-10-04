@@ -2,15 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import duckdb
 import pytest
-from conftest import install_finelog_dialect_macros, queried_namespace
+from config import ClusterTarget
+from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
+from server import create_app
+from starlette.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parent.parent
 DASHBOARDS = ROOT / "dashboards"
@@ -198,19 +204,30 @@ def _run_rows() -> list[tuple]:
                 },
             )
         )
-        # The Iris node agent: node_name only. No run_id, no job_id, ever.
         for node in NODES:
-            rows.append(
-                _row(
-                    service="iris-node-agent",
-                    name="gpu_utilization_percent",
-                    value=71.0 + bucket,
-                    moment=moment,
-                    seq=bucket,
-                    node_name=node,
-                    attributes={"gpu_uuid": f"GPU-{node}-0"},
-                )
-            )
+            for gpu in range(2):
+                gauges = {
+                    "gpu_utilization_percent": 71.0 + bucket,
+                    "gpu_sm_active_ratio": 0.5 + gpu * 0.2,
+                    "gpu_tensor_active_ratio": 0.2 + gpu * 0.2,
+                    "gpu_memory_used_bytes": 40e9 + gpu * 20e9,
+                    "gpu_nvlink_receive_bytes_per_second": 100,
+                    "gpu_pcie_receive_bytes_per_second": 10,
+                    "gpu_power_watts": 620 + gpu * 10,
+                    "gpu_pcie_replay_errors": (10, 13, 1, 1, 2, 2)[bucket] if (node, gpu) == (NODES[0], 0) else 4,
+                }
+                for name, value in gauges.items():
+                    rows.append(
+                        _row(
+                            service="iris-node-agent",
+                            name=name,
+                            value=value,
+                            moment=moment,
+                            seq=bucket,
+                            node_name=node,
+                            attributes={"gpu_uuid": f"GPU-{node}-{gpu}"},
+                        )
+                    )
         # Each engine actor publishes its own vLLM registry under `service='vllm'`, carrying the
         # run id it inherited from the task environment. The forwarder strips the `vllm:` prefix
         # and prometheus counters keep `_total`, so these are the names that land. The counters are
@@ -334,30 +351,45 @@ def _in_window(sql: str) -> str:
     return sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
 
 
-def _view_sql(view: str) -> str:
-    dataset = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
+def _view_sql(view: str, endpoint: str) -> str:
+    build = {"/v1/rl/overview": rl_overview_dataset, "/v1/rl/gpu": rl_gpu_dataset}[endpoint]
+    dataset = build((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
     sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
     return f"WITH {sources}\n{dataset.views[view]}"
 
 
 def _panel_sql(title: str) -> str:
-    (panel,) = [panel for panel in _dashboard()["panels"] if panel.get("title") == title]
-    (target,) = [target for target in panel["targets"] if target.get("url") == "/v1/rl/overview"]
+    (panel,) = [panel for panel in dashboard_panels(_dashboard()["panels"]) if panel.get("title") == title]
+    (target,) = [target for target in panel["targets"] if target.get("url") in ("/v1/rl/overview", "/v1/rl/gpu")]
     (view,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "view"]
-    return _view_sql(view)
+    return _view_sql(view, target["url"])
 
 
-def test_the_run_variable_offers_a_run_the_trainer_reported(store) -> None:
-    dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
-    (variable,) = [v for v in dashboard["templating"]["list"] if v["name"] == "run"]
-    (parameter,) = [
-        param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
-    ]
-    sql = parameter["value"]
-    sql = _in_window(sql)
-    sql = sql.replace("${cluster:sqlstring}", f"'{CLUSTER}'")
+def _request_rows(store, path, params):
+    def query_source(sql, *, max_rows):
+        return store.execute(sql).fetch_arrow_table()
 
-    assert store.execute(sql).fetchall() == [(RUN_ID,)]
+    source = SimpleNamespace(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    with TestClient(app) as client:
+        response = client.get(f"/finelog/marin{path}", params=params)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+
+def _overview_rows(store, view, endpoint="/v1/rl/overview"):
+    return _request_rows(
+        store,
+        endpoint,
+        {
+            "clusters": CLUSTER,
+            "run": RUN_ID,
+            "from": _WINDOW_START_MS,
+            "to": _NOW_MS,
+            "bucket_ms": 300000,
+            "view": view,
+        },
+    )
 
 
 def test_the_trainer_panels_render_for_that_run(store) -> None:
@@ -369,66 +401,188 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
     assert by_series["train_step · success"] == pytest.approx(6.0)
     assert by_series["train_step · failure"] == pytest.approx(0.5)
 
-    work = store.execute(_panel_sql("Rollouts, samples and tokens completed")).fetchall()
-    assert [row[1] for row in work] == [64.0] * 6
-
     # Occupancy is a ratio, so two nodes reporting 3 GB used of 4 GB still reads 0.75 rather
     # than doubling. 6e9 used over 8e9 total.
-    occupancy = store.execute(_panel_sql("Ray object store occupancy · needs the Ray collector")).fetchall()
+    occupancy = store.execute(_panel_sql("Ray object store occupancy")).fetchall()
     assert [row[1] for row in occupancy] == [pytest.approx(0.75)] * 6
 
 
 def test_percentile_panels_compute_over_all_executions_in_each_bucket(store) -> None:
-    moment = WINDOW_START
-    timestamp_ms = _millis(moment)
     store.execute(
-        "DELETE FROM \"telemetry_v1.marinskyrl\" WHERE timestamp_ms = ? AND name = 'phase_duration_seconds'",
-        [timestamp_ms],
+        "DELETE FROM \"telemetry_v1.marinskyrl\" WHERE name='phase_duration_seconds' "
+        "AND json_get(attributes_json, 'phase')='rollout_or_inference_wait'"
     )
     rows = []
-    grouped_values = (("attempt-a", (0.0, 100.0)), ("attempt-b", (10.0, 10.0, 10.0, 10.0, 10.0)))
-    for execution_uid, values in grouped_values:
-        for seq, value in enumerate(values):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="phase_duration_seconds",
-                    value=value,
-                    moment=moment,
-                    seq=seq,
-                    run_id=RUN_ID,
-                    execution_uid=execution_uid,
-                    attributes={
-                        "phase": "rollout_or_inference_wait",
-                        "clock_domain": "critical_path",
-                        "outcome": "success",
-                    },
-                )
+    for seq, (minutes, execution, value) in enumerate(
+        [
+            (0, "attempt-a", 0),
+            (5, "attempt-a", 100),
+            (10, "attempt-b", 10),
+            (15, "attempt-b", 10),
+            (20, "attempt-b", 10),
+            (25, "attempt-b", 10),
+            (29, "attempt-b", 10),
+            (35, "attempt-a", 20),
+            (40, "attempt-b", 40),
+        ]
+    ):
+        rows.append(
+            _row(
+                service="marinskyrl",
+                name="phase_duration_seconds",
+                value=value,
+                moment=WINDOW_START + timedelta(minutes=minutes),
+                seq=seq,
+                run_id=RUN_ID,
+                execution_uid=execution,
+                attributes={"phase": "rollout_or_inference_wait", "clock_domain": "critical_path", "outcome": "success"},
             )
+        )
     store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', rows)
-    expected_p50, expected_p99 = store.execute(
-        "SELECT quantile_cont(value, 0.5), quantile_cont(value, 0.99) "
-        'FROM "telemetry_v1.marinskyrl" '
-        "WHERE timestamp_ms = ? AND name = 'phase_duration_seconds'",
-        [timestamp_ms],
-    ).fetchone()
-
-    straggler = store.execute(_panel_sql("Straggler proxy: rollout wait p99 ÷ p50")).fetchall()
-    first_bucket = min(row[0] for row in straggler)
-    first_straggler = next(row[2] for row in straggler if row[0] == first_bucket)
-
-    assert first_straggler == pytest.approx(expected_p99 / expected_p50)
+    assert _overview_rows(store, "straggler") == [
+        {"section": "straggler", "t": _WINDOW_START_MS, "series": "p99 / p50", "value": pytest.approx(94.6 / 10)},
+        {
+            "section": "straggler",
+            "t": _WINDOW_START_MS + 1800000,
+            "series": "p99 / p50",
+            "value": pytest.approx(39.8 / 30),
+        },
+    ]
 
 
-def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
-    # The node agent stamps no run identity at all, so the run's own rows have to name
-    # its nodes. This is the join that breaks first if MarinSkyRL stops stamping
-    # node_name, and it breaks silently.
-    rows = store.execute(_panel_sql("GPU utilization on this run's nodes")).fetchall()
+@pytest.mark.parametrize("contended", [False, True])
+def test_the_node_agent_joins_through_node_name_without_a_run_id(store, contended) -> None:
+    distractors = [
+        _row(
+            service="iris-node-agent",
+            name=name,
+            value=value,
+            moment=moment,
+            seq=0,
+            node_name=node,
+            attributes={"gpu_uuid": gpu},
+        )
+        for node, gpu, moment, name, value in [
+            (NODES[0], f"GPU-{NODES[0]}-0", WINDOW_START - timedelta(seconds=1), "gpu_pcie_replay_errors", 10000),
+            ("other-node", "other-gpu", WINDOW_START, "gpu_sm_active_ratio", 1000),
+            ("other-node", "other-gpu", WINDOW_START, "gpu_pcie_replay_errors", 1000),
+        ]
+    ]
+    store.executemany(f'INSERT INTO "telemetry_v1.node_agent" VALUES ({", ".join("?" for _ in _COLUMNS)})', distractors)
+    if contended:
+        competing = [
+            _row(
+                service="marinskyrl",
+                name="process_cpu_percent",
+                value=1,
+                moment=WINDOW_START + timedelta(minutes=5 * bucket),
+                seq=seq,
+                run_id="another-run",
+                node_name=NODES[0],
+            )
+            for bucket in (1, 2)
+            for seq in range(100)
+        ]
+        store.executemany(
+            f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', competing
+        )
+    times = [_WINDOW_START_MS + bucket * 300000 for bucket in range(6)]
+    expected = {
+        "gpu_utilization": [{"t": t, "series": RUN_ID, "value": 71 + bucket} for bucket, t in enumerate(times)],
+        "sm_activity": [
+            {"t": t, "series": series, "value": pytest.approx(value)}
+            for t in times
+            for series, value in (("SM active", 60), ("tensor pipe active", 30))
+        ],
+        "gpu_memory": [{"t": t, "mean_used_bytes": 50e9, "peak_used_bytes": 60e9} for t in times],
+        "fabric_receive": [
+            {"t": t, "series": series, "value": value}
+            for bucket, t in enumerate(times)
+            for series, value in (
+                ("NVLink receive", 200 if contended and bucket in (1, 2) else 400),
+                ("PCIe receive", 20 if contended and bucket in (1, 2) else 40),
+            )
+        ],
+        "pcie_faults": [
+            {
+                "node": NODES[0],
+                "gpu": f"GPU-{NODES[0]}-0",
+                "peak_power_watts": 620,
+                "pcie_replay_increase": 1 if contended else 5,
+            }
+        ],
+    }
+    params = {"clusters": CLUSTER, "run": RUN_ID, "from": _WINDOW_START_MS, "to": _NOW_MS, "bucket_ms": 300000}
+    panels = [
+        panel
+        for panel in dashboard_panels(_dashboard()["panels"])
+        if any(target["url"] == "/v1/rl/gpu" for target in panel.get("targets", []))
+    ]
+    for view, wanted in expected.items():
+        for row in wanted:
+            row["section"] = view
 
-    assert rows, "no accelerator series joined to the run"
-    assert {row[1] for row in rows} == {RUN_ID}
-    assert rows[0][2] == pytest.approx(71.0)
+    def query(sql, *, max_rows):
+        return store.execute(sql).fetch_arrow_table()
+
+    source = SimpleNamespace(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query)
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    with TestClient(app) as client:
+        for end in (_NOW_MS, _WINDOW_START_MS + 7 * 60 * 60 * 1000):
+            for panel in panels:
+                (target,) = panel["targets"]
+                target_params = {
+                    param["key"]: str(params[param["key"]]) if param["key"] in params else param["value"]
+                    for param in target["url_options"]["params"]
+                }
+                target_params["to"] = str(end)
+                response = client.get(f"/finelog/marin{target['url']}", params=target_params)
+                assert response.status_code == 200, response.text
+                wanted = expected[target_params["view"]]
+                assert sorted(response.json(), key=lambda row: (row.get("t", 0), row.get("series", ""))) == sorted(
+                    wanted, key=lambda row: (row.get("t", 0), row.get("series", ""))
+                )
+
+    overview = _request_rows(store, "/v1/rl/overview", params)
+    assert overview
+    store.execute('UPDATE "telemetry_v1.marinskyrl" SET node_name = NULL')
+    for view in expected:
+        assert _overview_rows(store, view, "/v1/rl/gpu") == []
+    store.execute('DROP TABLE "telemetry_v1.node_agent"')
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    message = "Zoom to 7h or less for GPU detail."
+    capped = {
+        view: {
+            "section": view,
+            "status": "range_limit",
+            "message": message,
+            **(
+                {"t": _WINDOW_START_MS, "mean_used_bytes": None, "peak_used_bytes": None}
+                if view == "gpu_memory"
+                else (
+                    {"node": message, "gpu": None, "peak_power_watts": None, "pcie_replay_increase": None}
+                    if view == "pcie_faults"
+                    else {"t": _WINDOW_START_MS, "series": message, "value": None}
+                )
+            ),
+        }
+        for view in expected
+    }
+    with TestClient(app, raise_server_exceptions=False) as client:
+        failed = client.get("/finelog/marin/v1/rl/gpu", params=params)
+        assert failed.status_code == 500
+        healthy = client.get("/finelog/marin/v1/rl/overview", params=params)
+        assert healthy.status_code == 200, healthy.text
+        assert sorted(healthy.json(), key=lambda row: json.dumps(row, sort_keys=True)) == sorted(
+            overview, key=lambda row: json.dumps(row, sort_keys=True)
+        )
+        for end in (_WINDOW_START_MS + 7 * 60 * 60 * 1000 + 1, _WINDOW_START_MS + 7 * 24 * 60 * 60 * 1000):
+            for panel in panels:
+                (target,) = panel["targets"]
+                view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
+                response = client.get(f"/finelog/marin{target['url']}", params={**params, "to": end, "view": view})
+                assert response.status_code == 200, response.text
+                assert response.json() == [capped[view]]
 
 
 def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
@@ -451,13 +605,6 @@ def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
         "request_queue_time_seconds",
         "request_decode_time_seconds",
     }
-
-
-def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panel(store) -> None:
-    # An identity regression in the producer reads as an idle run.
-    store.execute('UPDATE "telemetry_v1.marinskyrl" SET node_name = NULL')
-
-    assert store.execute(_panel_sql("GPU utilization on this run's nodes")).fetchall() == []
 
 
 def _census(database, present: frozenset[str]) -> list[dict[str, object]]:
@@ -511,10 +658,12 @@ def test_every_timeseries_panel_declares_the_columns_its_projection_returns(stor
     """A panel is read through its declared columns, so executing its SQL cannot see a mistake there."""
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
 
-    for panel in dashboard["panels"]:
+    for panel in dashboard_panels(dashboard["panels"]):
         if panel.get("type") != "timeseries":
             continue
         for target in panel["targets"]:
+            if target["url"] not in ("/v1/rl/overview", "/v1/rl/gpu"):
+                continue
             declared = {column["selector"]: column["type"] for column in target["columns"]}
             store.execute(_panel_sql(panel["title"]))
             selected = {column[0] for column in store.description}
@@ -529,21 +678,22 @@ def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
     # A duplicated panel renders twice and shares an id, and a test that looks panels up by
     # title cannot see it: the lookup keeps one and the dashboard keeps both.
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
-    panels = dashboard["panels"]
+    panels = list(dashboard_panels(dashboard["panels"]))
 
     titles = [panel["title"] for panel in panels]
     assert len(titles) == len(set(titles)), titles
     ids = [panel["id"] for panel in panels]
     assert len(ids) == len(set(ids)), ids
-    slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in panels]
-    assert len(slots) == len(set(slots)), slots
+    for group in (dashboard["panels"], *(panel["panels"] for panel in panels if panel.get("panels"))):
+        slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in group]
+        assert len(slots) == len(set(slots)), slots
 
 
 def test_ray_panels_exclude_cumulative_snapshots_and_never_mix_states(store) -> None:
     # A forwarded snapshot's `kind` column is always "gauge"; source_temporality carries the real
     # semantics. The Ray allowlist includes cumulative counters, and averaging one in is silently
     # wrong. The spill states are distinct quantities and stay distinct series.
-    rows = store.execute(_panel_sql("Ray spill manager bytes by state · needs the Ray collector")).fetchall()
+    rows = store.execute(_panel_sql("Ray spill bytes")).fetchall()
 
     by_state = {row[1]: row[2] for row in rows}
     assert by_state == {"Spilled": pytest.approx(2.0e9), "Restored": pytest.approx(5.0e8)}
@@ -612,7 +762,7 @@ def _dashboard() -> dict:
 
 
 def test_every_labelled_series_panel_names_the_series_without_its_column() -> None:
-    for panel in _dashboard()["panels"]:
+    for panel in dashboard_panels(_dashboard()["panels"]):
         if panel.get("type") != "timeseries":
             continue
         if "series" not in {column["selector"] for target in panel.get("targets", []) for column in target["columns"]}:
@@ -631,7 +781,62 @@ def _recent_runs_panel() -> dict:
     return panel
 
 
-def test_a_listed_run_opens_the_view_framed_on_that_run() -> None:
+@pytest.mark.parametrize("home_minutes", [60, 7 * 24 * 60])
+def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store, home_minutes) -> None:
+    home_end_ms = _WINDOW_START_MS + home_minutes * 60000
+    rows = []
+    for run, kind, minutes, step, name in [
+        (ASYNC_RUN_ID, "async", 0, 0, "policy_step"),
+        (ASYNC_RUN_ID, "async", 5, 1, "policy_step"),
+        (UNSTAMPED_RUN_ID, None, 0, 0, "policy_step"),
+        (UNSTAMPED_RUN_ID, "async", -1, 0, "lifecycle"),
+        ("mixed-run", None, 0, 0, "policy_step"),
+        ("mixed-run", "async", 1, 0, "lifecycle"),
+        ("early-stamp-run", "async", 1, 0, "lifecycle"),
+        ("early-stamp-run", None, 5, 0, "policy_step"),
+        ("end-boundary-run", None, 0, 0, "lifecycle"),
+        ("end-boundary-run", None, home_minutes - 0.5, 0, "policy_step"),
+        ("end-boundary-run", "async", home_minutes, 0, "lifecycle"),
+        (ASYNC_RUN_ID, None, 2, 0, "rollout_call"),
+    ]:
+        rows.append(
+            _row(
+                service="marinskyrl",
+                name=name,
+                value=step,
+                moment=WINDOW_START + timedelta(minutes=minutes),
+                seq=minutes,
+                run_id=run,
+                job_id=JOB_ID,
+                node_name=NODES[0],
+                role="trainer",
+                training_type=kind,
+            )
+        )
+    store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', rows)
+    expected = [
+        {
+            "section": "recent",
+            "run": run,
+            "cluster": CLUSTER,
+            "step": step,
+            "attempts": 1,
+            "window_from_ms": _WINDOW_START_MS + first * 60000,
+            "window_to_ms": _WINDOW_START_MS + last * 60000,
+            "last seen": _WINDOW_START_MS + minutes * 60000,
+            "type": kind,
+        }
+        for run, step, minutes, first, last, kind in [
+            (RUN_ID, 5, 25, 0, 26, "sync"),
+            (ASYNC_RUN_ID, 1, 5, 0, 6, "async"),
+            (UNSTAMPED_RUN_ID, 0, 0, 0, 1, "sync"),
+            ("mixed-run", 0, 0, 0, 2, "async"),
+            ("early-stamp-run", 0, 5, 0, 6, "async"),
+            ("end-boundary-run", 0, home_minutes - 0.5, 0, home_minutes, "sync"),
+        ]
+    ]
+    actual = _request_rows(store, "/v1/rl/recent", {"from": _WINDOW_START_MS, "to": home_end_ms, "view": "recent"})
+    assert sorted(actual, key=lambda row: row["run"]) == sorted(expected, key=lambda row: row["run"])
     (links,) = [
         prop["value"]
         for override in _recent_runs_panel()["fieldConfig"]["overrides"]
@@ -639,76 +844,75 @@ def test_a_listed_run_opens_the_view_framed_on_that_run() -> None:
         for prop in override["properties"]
         if prop["id"] == "links"
     ]
-    (url,) = [link["url"] for link in links]
-
-    # The list spans both training loops and each has its own dashboard, so the row carries the
-    # uid of the one whose run picker can select it.
-    assert url.startswith("/d/${__data.fields.dashboard}?")
-    # Without all four the link lands on an empty dashboard: no run selected, or a window that
-    # predates the run.
-    for parameter in ("var-run=", "var-cluster=", "from=", "to="):
-        assert parameter in url, parameter
-
-
-def _run_picker_sql(uid: str) -> str:
-    """The run picker of the dashboard published under this uid, resolved to this window."""
-    (dashboard,) = [board for board in stitch_all(DASHBOARDS, DASHBOARDS / "panels").values() if board.get("uid") == uid]
-    (variable,) = [item for item in dashboard["templating"]["list"] if item["name"] == "run"]
-    (parameter,) = [
-        param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
-    ]
-    return _in_window(parameter["value"]).replace("${cluster:sqlstring}", f"'{CLUSTER}'")
-
-
-def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
-    # Home's list is loop-blind and each dashboard's run picker takes only its own loop, so an
-    # async row routed to the sync dashboard would land on a picker that cannot select it.
-    for bucket in range(2):
-        store.execute(
-            f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
-            list(
-                _row(
-                    service="marinskyrl",
-                    name="policy_step",
-                    value=float(bucket),
-                    moment=WINDOW_START + timedelta(minutes=5 * bucket),
-                    seq=bucket,
-                    run_id=ASYNC_RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    training_type="async",
-                )
-            ),
-        )
-
-    # A run logged before the trainer stamped its training type carries no training_type attribute.
-    store.execute(
-        f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
-        list(
-            _row(
-                service="marinskyrl",
-                name="policy_step",
-                value=0.0,
-                moment=WINDOW_START,
-                seq=0,
-                run_id=UNSTAMPED_RUN_ID,
-                job_id=JOB_ID,
-                node_name=NODES[0],
-                role="trainer",
-                training_type=None,
+    template = links[0]["url"]
+    run_variable = next(v for v in _dashboard()["templating"]["list"] if v["name"] == "run")
+    query = run_variable["query"]["infinityQuery"]
+    linked_options = {
+        RUN_ID: [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"],
+        ASYNC_RUN_ID: [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
+        UNSTAMPED_RUN_ID: [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run", "mixed-run"],
+        "mixed-run": [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
+        "early-stamp-run": [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"],
+        "end-boundary-run": [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"],
+    }
+    for row in actual:
+        concrete = re.sub(r"\$\{__data.fields.([^}]+)\}", lambda match, row=row: str(row[match[1]]), template)
+        url = urlparse(concrete)
+        assert url.path == "/d/marin-rl-runs"
+        assert parse_qs(url.query) == {
+            "var-training_type": [row["type"]],
+            "var-run": [row["run"]],
+            "var-cluster": [CLUSTER],
+            "from": [str(row["window_from_ms"])],
+            "to": [str(row["window_to_ms"])],
+        }
+        linked = parse_qs(url.query)
+        params = {
+            param["key"]: (
+                param["value"]
+                .replace("${cluster:sqlstring}", f"'{linked['var-cluster'][0]}'")
+                .replace("${training_type:sqlstring}", f"'{linked['var-training_type'][0]}'")
+                .replace("${__from}", linked["from"][0])
+                .replace("${__to}", linked["to"][0])
             )
-        ),
-    )
-
-    result = store.execute(_recent_runs_sql())
-    columns = [description[0] for description in result.description]
-    routed = {row["run"]: row["dashboard"] for row in (dict(zip(columns, r, strict=True)) for r in result.fetchall())}
-
-    assert routed == {RUN_ID: "marin-rl-runs", ASYNC_RUN_ID: "marin-async-rl", UNSTAMPED_RUN_ID: "marin-rl-runs"}
-    for uid in set(routed.values()):
-        offered = {run for (run,) in store.execute(_run_picker_sql(uid)).fetchall()}
-        assert offered == {run for run, target in routed.items() if target == uid}, uid
+            for param in query["url_options"]["params"]
+        }
+        offered = _request_rows(store, query["url"], params)
+        assert sorted(offered, key=lambda item: item["value"]) == [
+            {"value": run} for run in sorted(linked_options[row["run"]])
+        ]
+        if row["run"] == "end-boundary-run":
+            assert (
+                _request_rows(
+                    store,
+                    "/v1/rl/overview",
+                    {
+                        "clusters": CLUSTER,
+                        "run": linked["var-run"][0],
+                        "from": linked["from"][0],
+                        "to": linked["to"][0],
+                        "bucket_ms": 60000,
+                        "view": "critical_path",
+                    },
+                )
+                == []
+            )
+    for kind, wanted in (
+        ("sync", [RUN_ID, UNSTAMPED_RUN_ID, "end-boundary-run"]),
+        ("async", [ASYNC_RUN_ID, "early-stamp-run", "mixed-run"]),
+    ):
+        params = {
+            param["key"]: (
+                param["value"]
+                .replace("${cluster:sqlstring}", f"'{CLUSTER}'")
+                .replace("${training_type:sqlstring}", f"'{kind}'")
+                .replace("${__from}", str(_WINDOW_START_MS))
+                .replace("${__to}", str(home_end_ms))
+            )
+            for param in query["url_options"]["params"]
+        }
+        offered = _request_rows(store, query["url"], params)
+        assert sorted(offered, key=lambda row: row["value"]) == [{"value": run} for run in sorted(wanted)]
 
 
 def test_the_recent_runs_query_returns_a_row_per_run_and_cluster(store) -> None:
