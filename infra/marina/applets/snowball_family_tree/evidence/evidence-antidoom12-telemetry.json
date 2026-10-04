@@ -1,0 +1,125 @@
+{
+  "method": "deduplicate train rows by optimizer step, retain final record for each; exact complete contiguous range checked",
+  "records": [
+    {
+      "step": 1,
+      "timestamp_utc": "2026-10-02 13:48:06.343",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 99579979.0,
+        "async/performance/consumed_loss_tokens": 97777968.0,
+        "generate/avg_num_tokens": 12155.759155273438,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 2,
+      "timestamp_utc": "2026-10-02 14:25:20.142",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 123606945.0,
+        "async/performance/consumed_loss_tokens": 119801896.0,
+        "generate/avg_num_tokens": 15088.738403320312,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 3,
+      "timestamp_utc": "2026-10-02 14:55:37.840",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 112111316.0,
+        "async/performance/consumed_loss_tokens": 108078312.0,
+        "generate/avg_num_tokens": 13685.46337890625,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 4,
+      "timestamp_utc": "2026-10-02 15:51:35.620",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 99406942.0,
+        "async/performance/consumed_loss_tokens": 95769816.0,
+        "generate/avg_num_tokens": 12134.636474609375,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 5,
+      "timestamp_utc": "2026-10-02 16:15:51.992",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 88658083.0,
+        "async/performance/consumed_loss_tokens": 86840672.0,
+        "generate/avg_num_tokens": 10822.519897460938,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 6,
+      "timestamp_utc": "2026-10-02 16:43:02.466",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 114460540.0,
+        "async/performance/consumed_loss_tokens": 110704392.0,
+        "generate/avg_num_tokens": 13972.23388671875,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 7,
+      "timestamp_utc": "2026-10-02 17:06:20.897",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 69749681.0,
+        "async/performance/consumed_loss_tokens": 66910000.0,
+        "generate/avg_num_tokens": 8514.365356445312,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 8,
+      "timestamp_utc": "2026-10-02 17:35:29.249",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 75457913.0,
+        "async/performance/consumed_loss_tokens": 72756360.0,
+        "generate/avg_num_tokens": 9211.171020507812,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 9,
+      "timestamp_utc": "2026-10-02 17:57:15.435",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 66598521.0,
+        "async/performance/consumed_loss_tokens": 64093180.0,
+        "generate/avg_num_tokens": 8129.7022705078125,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 10,
+      "timestamp_utc": "2026-10-02 18:17:25.829",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 58627303.0,
+        "async/performance/consumed_loss_tokens": 56817964.0,
+        "generate/avg_num_tokens": 7156.6531982421875,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 11,
+      "timestamp_utc": "2026-10-02 18:37:23.410",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 57691593.0,
+        "async/performance/consumed_loss_tokens": 56557764.0,
+        "generate/avg_num_tokens": 7042.4307861328125,
+        "consumed/sequences": 8192.0
+      }
+    },
+    {
+      "step": 12,
+      "timestamp_utc": "2026-10-02 19:02:14.121",
+      "metrics": {
+        "async/performance/consumed_response_tokens": 51633856.0,
+        "async/performance/consumed_loss_tokens": 50300044.0,
+        "generate/avg_num_tokens": 6302.9609375,
+        "consumed/sequences": 8192.0
+      }
+    }
+  ]
+}

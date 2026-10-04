@@ -1,0 +1,3 @@
+title = "Snowball model family tree"
+description = "Explore Snowball 67B A2B checkpoint lineage, experiment evidence, compute estimates and cooldown-family timelines."
+build_command = "uv run --no-project python build.py"
