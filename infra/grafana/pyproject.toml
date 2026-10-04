@@ -53,3 +53,4 @@ log_level = "INFO"
 [tool.black]
 line-length = 121
 target-version = ["py312"]
+preview = true

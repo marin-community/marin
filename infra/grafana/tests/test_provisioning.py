@@ -1001,8 +1001,10 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
 
     dataset = training_overview_dataset("hero-run", fixed_now_ms - 90 * 60_000, fixed_now_ms, 60_000)
     sql_by_ref = {
-        "A": f"WITH attempts AS ({dataset.sources[1].sql.replace('FIRST_VALUE(', 'FIRST(')}) "
-        f"{dataset.views['execution_attempt']}",
+        "A": (
+            f"WITH attempts AS ({dataset.sources[1].sql.replace('FIRST_VALUE(', 'FIRST(')}) "
+            f"{dataset.views['execution_attempt']}"
+        ),
         "B": dataset.sources[2].sql,
         "C": dataset.sources[3].sql,
     }
