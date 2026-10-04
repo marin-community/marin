@@ -233,5 +233,4 @@ class ExternalVerifierSpec(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: str = Field(min_length=1)
     parameters: dict[str, JsonValue]
