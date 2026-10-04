@@ -84,7 +84,7 @@ def render_marin_chat(
     *,
     bos_token: str = MARIN_BOS_TOKEN,
     tools: Sequence[dict] = (),
-    enable_thinking: bool | None = None,
+    enable_thinking: bool | str | None = None,
     custom_instructions: str = "",
     add_generation_prompt: bool = False,
 ) -> str:

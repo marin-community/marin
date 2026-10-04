@@ -273,9 +273,11 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(raw_kwargs, dict):
         raise ValueError("chat_template_kwargs must be a JSON object")
     kwargs = dict(raw_kwargs)
-    kwargs["enable_thinking"] = any(
-        message.author.role == Role.ASSISTANT and message.channel == ChatChannel.ANALYSIS for message in messages
-    )
+    # Boolean source flags follow observed analysis; explicit model modes are retained.
+    if not isinstance(kwargs.get("enable_thinking"), str):
+        kwargs["enable_thinking"] = any(
+            message.author.role == Role.ASSISTANT and message.channel == ChatChannel.ANALYSIS for message in messages
+        )
     tools = kwargs.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")

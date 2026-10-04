@@ -51,6 +51,71 @@ def test_legacy_function_call_becomes_harmony_recipient_and_arguments():
     }
 
 
+def test_text_content_blocks_preserve_native_instructions_and_tool_history():
+    source = [
+        {"role": "system", "content": "First instruction.\nSecond instruction."},
+        {"role": "user", "content": "Inspect the file."},
+        {
+            "role": "assistant",
+            "content": "Checking.",
+            "tool_calls": [{"id": "one", "function": {"name": "read", "arguments": {"path": "a.py"}}}],
+        },
+        {"role": "tool", "tool_call_id": "one", "content": "File contents."},
+        {"role": "assistant", "content": "<think>Checked.</think>Done."},
+    ]
+    blocks = [
+        {**message, "content": [{"type": "text", "text": word} for word in message["content"].splitlines(True)]}
+        for message in source
+    ]
+    assert [message.to_dict() for message in openai_chat_messages(blocks)] == [
+        message.to_dict() for message in openai_chat_messages(source)
+    ]
+
+
+def test_nontext_content_block_is_rejected_without_discarding_context():
+    with pytest.raises(ValueError, match="text content blocks"):
+        openai_chat_messages(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Inspect this image."},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                    ],
+                }
+            ]
+        )
+
+
+def test_response_text_item_before_tool_observation_stays_in_same_assistant_turn():
+    messages = openai_chat_messages(
+        [
+            {"role": "user", "content": "Workspace instructions."},
+            {"role": "user", "content": "Inspect the file."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "one", "function": {"name": "read", "arguments": {"path": "a.py"}}}],
+            },
+            {"role": "assistant", "content": "Check the file.</think>Reading now."},
+            {"role": "tool", "tool_call_id": "one", "content": "File contents."},
+            {"role": "assistant", "content": "Done."},
+        ],
+        assistant_prefill="<think>\n",
+    )
+    assert [(message.channel, message.recipient) for message in messages] == [
+        (None, None),
+        ("analysis", None),
+        ("commentary", None),
+        ("commentary", "functions.read"),
+        ("commentary", "assistant"),
+        ("final", None),
+    ]
+    assert messages[0].content[0].to_dict()["text"] == "Workspace instructions.\n\nInspect the file."
+    assert messages[1].content[0].to_dict()["text"] == "Check the file."
+    assert messages[2].content[0].to_dict()["text"] == "Reading now."
+
+
 @pytest.mark.parametrize("content", ["<think>unfinished", "<think>a</think>answer<think>b</think>", "a</think>answer"])
 def test_source_adapter_rejects_malformed_reasoning(content):
     with pytest.raises(ValueError):

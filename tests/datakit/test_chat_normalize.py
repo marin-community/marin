@@ -64,6 +64,21 @@ def test_normalization_derives_conversation_mode_from_analysis(analysis, expecte
     assert expected_instruction in render_chat_record(normalized)["text"]
 
 
+def test_normalization_preserves_explicit_student_mode_without_analysis():
+    messages = [
+        Message.from_role_and_content(Role.USER, "Write the result."),
+        Message.from_role_and_content(Role.ASSISTANT, "Done.").with_channel(ChatChannel.FINAL),
+    ]
+    record = {
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": {"enable_thinking": "/think"},
+    }
+    normalized = _normalize_chat_record(record, "messages", "id")
+    rendered = render_chat_record(normalized)["text"]
+    assert "Reasoning: /think" in rendered
+    assert _normalize_chat_record(normalized, "messages", "id")["id"] == normalized["id"]
+
+
 def test_normalization_rejects_legacy_source_turns():
     with pytest.raises(ValueError, match="Source adapters must emit Harmony"):
         _normalize_chat_record(

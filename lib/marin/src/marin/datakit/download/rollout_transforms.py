@@ -15,7 +15,7 @@ from openai_harmony import Author, Message, Role
 from rigging.filesystem.factory import open_url
 from zephyr import counters
 
-from marin.datakit.chat_normalize import ChatChannel
+from marin.datakit.chat_normalize import ChatChannel, message_text
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,13 @@ def openai_chat_messages(messages: list[dict], *, assistant_prefill: str = "") -
             raise ValueError(f"Chat messages require a string 'role' or 'from' field, got {role_value!r}")
         role = Role(CHAT_ROLE_ALIASES.get(role_value.lower(), role_value.lower()))
         content = message.get("content", message.get("value"))
+        if isinstance(content, list):
+            if any(
+                not isinstance(part, dict) or part.get("type") != "text" or not isinstance(part.get("text"), str)
+                for part in content
+            ):
+                raise ValueError("Source messages require text content blocks")
+            content = "".join(part["text"] for part in content)
         if content is not None and not isinstance(content, str):
             raise ValueError(f"Source message content must be a string or null, got {content!r}")
         name = message.get("name")
@@ -234,13 +241,16 @@ def openai_chat_messages(messages: list[dict], *, assistant_prefill: str = "") -
                         )
                     pending.clear()
                     observations.clear()
-            case _ if pending:
+            case _ if pending and (role != Role.ASSISTANT or observations):
                 raise ValueError("Every source tool call must receive an observation before another turn")
             case Role.SYSTEM | Role.DEVELOPER | Role.USER:
                 if content is None:
                     raise ValueError("Only assistant reasoning or tool-call messages may have null content")
                 _check_source_markup(content)
-                output.append(Message.from_author_and_content(author, content))
+                if role == Role.USER and output and output[-1].author.role == Role.USER:
+                    output[-1] = Message.from_author_and_content(author, message_text(output[-1]) + "\n\n" + content)
+                else:
+                    output.append(Message.from_author_and_content(author, content))
             case Role.ASSISTANT:
                 assistant_messages, calls = _assistant_messages(
                     message, author, content, reasoning, index, assistant_prefill
@@ -248,6 +258,14 @@ def openai_chat_messages(messages: list[dict], *, assistant_prefill: str = "") -
                 if seen_call_ids.intersection(calls):
                     raise ValueError("Source tool-call IDs must be unique strings")
                 seen_call_ids.update(calls)
+                if pending:
+                    # Responses can serialize text after calls within the same assistant turn.
+                    text_messages = assistant_messages[: -len(calls)] if calls else assistant_messages
+                    for text_message in text_messages:
+                        if text_message.channel == ChatChannel.FINAL:
+                            text_message.with_channel(ChatChannel.COMMENTARY)
+                    output[len(output) - len(pending) : len(output) - len(pending)] = text_messages
+                    assistant_messages = assistant_messages[-len(calls) :] if calls else []
                 pending.update(calls)
                 output.extend(assistant_messages)
     if observations:
