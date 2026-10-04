@@ -83,15 +83,17 @@ def _execute_callback(
         },
         "prior_bank_sha256": compact_json_sha256({"tasks": [asdict(task) for task in tasks]}),
         "response_cap": 24,
-        "bank": None
-        if bank_missing
-        else {
-            "name": "documents/reviewed-bank",
-            "version": "2026.10.04",
-            "uri": str(bank_uri),
-            "identity_config": {},
-            "bank_sha256": bank_sha,
-        },
+        "bank": (
+            None
+            if bank_missing
+            else {
+                "name": "documents/reviewed-bank",
+                "version": "2026.10.04",
+                "uri": str(bank_uri),
+                "identity_config": {},
+                "bank_sha256": bank_sha,
+            }
+        ),
     }
     config = {
         "seed_bank": {"name": "documents/seed", "version": "2026.10.04", "uri": str(bank_uri), "identity_config": {}},
