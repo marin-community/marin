@@ -429,7 +429,7 @@ class ZephyrContext:
             raise
 
     def start(self) -> "ZephyrContext":
-        """Start a shared pool and retain idle workers."""
+        """Use the execution-scope pool, or start a shared pool that retains idle workers."""
         if self._execution_pool is not None:
             return self
         with self._state_lock:
