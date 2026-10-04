@@ -25,6 +25,7 @@ def test_preflight_requires_real_shell_execution_even_when_the_answer_passes(tmp
                 await client.post("https://model.test/v1/completions", json={"prompt": list(request.prefix_token_ids)})
                 calls += 1
                 if calls == 1 and uses_tool:
+                    assert "48213" not in request.messages[0]["content"]
                     message = {
                         "role": "assistant",
                         "content": "",
@@ -32,15 +33,19 @@ def test_preflight_requires_real_shell_execution_even_when_the_answer_passes(tmp
                             {
                                 "id": "shell-1",
                                 "type": "function",
-                                "function": {"name": "shell", "arguments": '{"command":"printf 12"}'},
+                                "function": {
+                                    "name": "shell",
+                                    "arguments": '{"command":"cat /workspace/preflight-value.txt"}',
+                                },
                             }
                         ],
                     }
                     return ModelTurn(message, (1,), (2,), None, "stop")
                 if uses_tool:
-                    assert any(message.get("role") == "tool" for message in request.messages)
+                    observations = [message for message in request.messages if message.get("role") == "tool"]
+                    assert "48213" in observations[0]["content"]
                 prompt = (1, 2, 3) if uses_tool else (1,)
-                return ModelTurn({"role": "assistant", "content": "12"}, prompt, (4,), None, "stop")
+                return ModelTurn({"role": "assistant", "content": "48213"}, prompt, (4,), None, "stop")
 
             await run_token_preflight(turn, client, str(tmp_path))
 

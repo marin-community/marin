@@ -13,7 +13,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.environment import EnvironmentKind, EnvironmentSpec
+from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec
 from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
@@ -60,15 +60,18 @@ async def run_token_preflight(
             events=(
                 TextMessage(
                     role="user",
-                    content="Run printf 12 with the shell tool, then reply with only its output.",
+                    content="Read /workspace/preflight-value.txt with the shell tool, then reply with only its content.",
                 ),
             )
         ),
-        environment=EnvironmentSpec(kind=EnvironmentKind.SHELLSIM),
+        environment=EnvironmentSpec(
+            kind=EnvironmentKind.SHELLSIM,
+            files=(EnvironmentFile(path="/workspace/preflight-value.txt", content=b"48213\n"),),
+        ),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=numeric_answer(12, tolerance_abs=0, tolerance_rel=0),
-        source=Source(dataset="russell-token-preflight", revision="1", row="0", importer_revision="1"),
+        verifier=numeric_answer(48213, tolerance_abs=0, tolerance_rel=0),
+        source=Source(dataset="russell-token-preflight", revision="2", row="0", importer_revision="1"),
     )
     engine = ShellboxRolloutEngine(
         record_turn,
@@ -77,7 +80,12 @@ async def run_token_preflight(
         command_timeout=10,
         convention=SubmissionConvention(id="russell-dev", answer_format=AnswerFormat.PLAIN),
     )
-    evidence: dict = {"requests": requests, "turns": turns, "status": "failed"}
+    evidence: dict = {
+        "requests": requests,
+        "turns": turns,
+        "status": "failed",
+        "fixture": task.model_dump(mode="json"),
+    }
     client.event_hooks["response"].append(save_response)
     try:
         evidence["rollout"] = asdict(await engine.run(task))
