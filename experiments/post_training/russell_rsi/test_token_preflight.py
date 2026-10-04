@@ -7,25 +7,43 @@ from contextlib import nullcontext
 
 import httpx
 import pytest
-from rolloutengine.contracts import ModelTurn
+from rolloutengine.contracts import ModelTurn, RolloutContractError
 
 from experiments.post_training.russell_rsi.token_preflight import run_token_preflight
 
 
-@pytest.mark.parametrize("uses_tool", [False, True])
-def test_preflight_requires_real_shell_execution_even_when_the_answer_passes(tmp_path, uses_tool):
+@pytest.mark.parametrize(
+    "modes,expected_error",
+    [
+        (("direct", "tool"), None),
+        (("tool", "direct"), None),
+        (("direct", "direct"), ValueError),
+        (("prefix", "tool"), RolloutContractError),
+        (("adapter", "tool"), RolloutContractError),
+        (("tool", "prefix"), RolloutContractError),
+    ],
+)
+def test_preflight_suite_gate(tmp_path, modes, expected_error):
     async def run():
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"tokens": [1]}))
         ) as client:
-            calls = 0
+            probe = -1
 
             async def turn(request):
-                nonlocal calls
+                nonlocal probe
+                manifest = json.loads((tmp_path / "token-preflight-suite.json").read_text())
+                assert len(manifest["fixtures"]) == 2
+                first_turn = not request.prefix_token_ids
+                if first_turn:
+                    probe += 1
+                value = ("48213", "73961")[probe]
+                mode = modes[probe]
                 await client.post("https://model.test/v1/completions", json={"prompt": list(request.prefix_token_ids)})
-                calls += 1
-                if calls == 1 and uses_tool:
-                    assert "48213" not in request.messages[0]["content"]
+                if mode == "adapter":
+                    raise RolloutContractError("Renderer cannot retain the sampled prefix")
+                if first_turn and mode != "direct":
+                    assert all(value not in message["content"] for message in request.messages)
                     message = {
                         "role": "assistant",
                         "content": "",
@@ -41,18 +59,24 @@ def test_preflight_requires_real_shell_execution_even_when_the_answer_passes(tmp
                         ],
                     }
                     return ModelTurn(message, (1,), (2,), None, "stop")
-                if uses_tool:
+                if not first_turn:
                     observations = [message for message in request.messages if message.get("role") == "tool"]
-                    assert "48213" in observations[0]["content"]
-                prompt = (1, 2, 3) if uses_tool else (1,)
-                return ModelTurn({"role": "assistant", "content": "48213"}, prompt, (4,), None, "stop")
+                    assert value in observations[0]["content"]
+                prompt = (1,) if first_turn else (1, 2, 3)
+                if mode == "prefix":
+                    prompt = (9, 3)
+                return ModelTurn({"role": "assistant", "content": value}, prompt, (4,), None, "stop")
 
             await run_token_preflight(turn, client, str(tmp_path))
 
-    with nullcontext() if uses_tool else pytest.raises(ValueError, match="two-turn shell tool exchange"):
+    error_message = "contract failure" if expected_error is RolloutContractError else "Neither preflight probe"
+    with pytest.raises(expected_error, match=error_message) if expected_error else nullcontext():
         asyncio.run(run())
     evidence = json.loads((tmp_path / "token-preflight.json").read_text())
-    assert evidence["status"] == ("passed" if uses_tool else "failed")
-    assert len(evidence["requests"]) == (2 if uses_tool else 1)
-    assert len(evidence["turns"]) == (2 if uses_tool else 1)
-    assert evidence["rollout"]["grade"]["reward"] == 1
+    assert evidence["status"] == ("failed" if expected_error else "passed")
+    assert len(evidence["attempts"]) == 2
+    for index, mode in enumerate(modes, 1):
+        attempt = json.loads((tmp_path / f"token-preflight-probe-{index}.json").read_text())
+        assert attempt == evidence["attempts"][index - 1]
+        assert attempt["status"] == ("passed" if mode == "tool" else "failed")
+        assert len(attempt["requests"]) == (2 if mode in ("tool", "prefix") else 1)
