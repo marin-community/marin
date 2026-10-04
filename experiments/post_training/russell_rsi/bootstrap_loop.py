@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
@@ -14,6 +15,7 @@ from experiments.post_training.russell_rsi.repair_tasks import canonical_sha256,
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 ATTEMPTS_PER_TASK = 8
+CALIBRATION_TEMPERATURE = 1.0
 MINIMUM_TASKS = 16
 MAX_PILOTS = 3
 MAX_GLM_RESPONSES = 24
@@ -62,6 +64,29 @@ class Measurement:
         if successes >= 2:
             return Difficulty.INTERMEDIATE
         return Difficulty.HARD
+
+
+def calibration_measurements(
+    summary: dict, bank: tuple[QualifiedTask, ...], model_identity: str, bank_identity: str
+) -> tuple[Measurement, ...]:
+    """Require complete calibration evidence from the selected checkpoint and task bank."""
+    if summary["model_identity"] != model_identity or summary["tasks_identity"] != bank_identity:
+        raise ValueError("Calibration checkpoint or task-bank identity changed")
+    rewards = summary["task_rewards"]
+    if (
+        summary["count"] != len(bank)
+        or summary["samples_per_task"] != ATTEMPTS_PER_TASK
+        or set(rewards) != {task.task_id for task in bank}
+        or any(
+            len(group) != ATTEMPTS_PER_TASK
+            or any(
+                type(reward) not in (int, float) or not math.isfinite(reward) or not 0 <= reward <= 1 for reward in group
+            )
+            for group in rewards.values()
+        )
+    ):
+        raise ValueError("Calibration requires eight finite grades per qualified task")
+    return tuple(Measurement(model_identity, task.task_sha256, tuple(rewards[task.task_id])) for task in bank)
 
 
 @dataclass(frozen=True)

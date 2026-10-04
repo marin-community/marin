@@ -42,14 +42,15 @@ from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.post_training.russell_rsi.adaptive_tasks import AdaptiveTasksConfig, run_adaptive_tasks_in_project
 from experiments.post_training.russell_rsi.bootstrap_loop import (
+    CALIBRATION_TEMPERATURE,
     CheckpointScore,
     FrozenRoundConfig,
     LoopState,
-    Measurement,
     QualifiedTask,
     RoundResult,
     StopReason,
     advance,
+    calibration_measurements,
     freeze_round_dataset,
     load_round,
     qualified_bank,
@@ -819,6 +820,7 @@ def run_bootstrap_loop(
     relay_job: str,
     manifest_directory: StoragePath,
     build_next_bank: Callable[[ArtifactStep[Artifact], LoopState, int], ArtifactStep[Artifact] | None],
+    initial_calibration: ArtifactStep[Artifact] | None = None,
 ) -> LoopState:
     """Execute bounded artifact rounds with an explicit independent source builder."""
     heldout_manifest = json.loads(pinned_bytes(heldout_manifest_uri, heldout_manifest_sha256))
@@ -887,17 +889,21 @@ def run_bootstrap_loop(
         ):
             state = replace(state, stop_reason=StopReason.TASK_SUPPLY)
             break
-        difficulty = development_step(
-            bank_handle,
-            current,
-            version,
-            runtime_bundle,
-            f"bootstrap-round-{number}-bank-difficulty",
-            relative_path="train.parquet",
-            samples_per_task=8,
-            temperature=1.0,
-            require_reward_variation=True,
-            limit=len(bank),
+        difficulty = (
+            initial_calibration
+            if number == 1 and initial_calibration is not None
+            else development_step(
+                bank_handle,
+                current,
+                version,
+                runtime_bundle,
+                f"bootstrap-round-{number}-bank-difficulty",
+                relative_path="train.parquet",
+                samples_per_task=8,
+                temperature=CALIBRATION_TEMPERATURE,
+                require_reward_variation=True,
+                limit=len(bank),
+            )
         )
         inputs = round_inputs(
             state,
@@ -918,9 +924,8 @@ def run_bootstrap_loop(
         else:
             measured = resolve(difficulty)
             summary = json.loads(StoragePath(prefix_join(measured.path, "failure_summary.json")).read_text())
-            measurements = tuple(
-                Measurement(artifact_identity(current), task.task_sha256, tuple(summary["task_rewards"][task.task_id]))
-                for task in bank
+            measurements = calibration_measurements(
+                summary, bank, artifact_identity(current), artifact_identity(bank_handle)
             )
             plan = round_plan(
                 state,

@@ -21,8 +21,9 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 
 from experiments.post_training.russell_rsi.bootstrap_loop import LoopState
+from experiments.post_training.russell_rsi.calibration_recovery import calibration_recovery_step
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
-from experiments.post_training.russell_rsi.launch import run_bootstrap_loop
+from experiments.post_training.russell_rsi.launch import MODEL, MODEL_REVISION, run_bootstrap_loop
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV, IRIS_TASK_ID_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
@@ -41,6 +42,14 @@ def execute_loop(config: dict) -> None:
     retention = adopted(config["retention"])
     panel_value = json.loads(pinned_bytes(config["panel_uri"], config["panel_sha256"]))
     panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
+    recovery = config.get("initial_calibration_recovery")
+    initial_calibration = (
+        calibration_recovery_step(
+            recovery, config["version"], seed, parent, RuntimeBundle(**config["runtime_bundle"]), MODEL, MODEL_REVISION
+        )
+        if recovery is not None
+        else None
+    )
 
     def next_bank(
         feedback: ArtifactStep[Artifact], state: LoopState, response_cap: int
@@ -90,6 +99,7 @@ def execute_loop(config: dict) -> None:
         config["relay_job"],
         StoragePath(config["manifest_prefix"]),
         next_bank,
+        initial_calibration=initial_calibration,
     )
 
 

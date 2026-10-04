@@ -3,13 +3,14 @@
 
 import hashlib
 import json
+from contextlib import nullcontext
 from dataclasses import asdict
 
 import pytest
 import yaml
 from click.testing import CliRunner
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, artifact_identity
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.experiment import cli as experiment_cli
 from marin.experiment.cli import graph_handles
 from marin.external_dependencies import MARIN_SKYRL
@@ -456,8 +457,19 @@ def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_c
     assert list(manifests.glob("*pilot*.json")) == []
 
 
-@pytest.mark.parametrize("next_bank_supplied", [True, False])
-def test_driver_restores_sealed_round_before_any_calibration(tmp_path, monkeypatch, next_bank_supplied):
+@pytest.mark.parametrize(
+    "next_bank_supplied,calibration_source",
+    [
+        (True, "normal"),
+        (False, "normal"),
+        (False, "changed_recovery"),
+        (False, "fresh_recovery"),
+        (False, "incomplete_recovery"),
+    ],
+)
+def test_driver_validates_calibration_before_training_or_resume(
+    tmp_path, monkeypatch, next_bank_supplied, calibration_source
+):
     bank_path = tmp_path / "bank"
     bank_path.mkdir()
     bank = tuple(
@@ -516,11 +528,14 @@ def test_driver_restores_sealed_round_before_any_calibration(tmp_path, monkeypat
     trained = ArtifactStep.adopt("checkpoints/trained", "2026.10.04", "/tmp/trained")
     outputs = {"rl": trained, "reload": reload, "capabilities": capabilities}
     monkeypatch.setattr(russell_launch, "development_step", lambda *args, **kwargs: difficulty)
-    monkeypatch.setattr(russell_launch, "bootstrap_round_workflow", lambda *args, **kwargs: outputs)
+    if calibration_source not in ("fresh_recovery", "incomplete_recovery"):
+        monkeypatch.setattr(russell_launch, "bootstrap_round_workflow", lambda *args, **kwargs: outputs)
     monkeypatch.setattr(russell_launch, "run", lambda *args: pytest.fail("Resume started GPU work"))
 
     def resolver(handle):
         if handle is difficulty:
+            if calibration_source in ("fresh_recovery", "incomplete_recovery"):
+                return Artifact(path=str(tmp_path / "recovery"))
             pytest.fail("Resume repeated calibration")
         if handle is seed:
             return Artifact(path=str(bank_path))
@@ -572,34 +587,90 @@ def test_driver_restores_sealed_round_before_any_calibration(tmp_path, monkeypat
             "parent_retention_sha256": hashes[2],
         }
     )
-    seal_round(directory, state, plan, result, previous)
-    russell_launch.write_once(
-        directory / "smoke.json",
-        {
-            "rl": artifact_identity(trained),
-            "reload": artifact_identity(reload),
-            "coding_baseline_sha256": hashes[1],
-            "retention_baseline_sha256": hashes[2],
-        },
+    allocation_plans = []
+    if calibration_source in ("fresh_recovery", "incomplete_recovery"):
+        recovery_path = tmp_path / "recovery"
+        recovery_path.mkdir()
+        rewards = {task.task_id: [1, 0] * 4 for task in bank}
+        if calibration_source == "incomplete_recovery":
+            rewards[bank[0].task_id].pop()
+        (recovery_path / "failure_summary.json").write_text(
+            json.dumps(
+                {
+                    "model_identity": artifact_identity(parent),
+                    "tasks_identity": artifact_identity(seed),
+                    "count": len(bank),
+                    "samples_per_task": 8,
+                    "task_rewards": rewards,
+                }
+            )
+        )
+
+        def allocation_boundary(*handles):
+            for handle in graph_handles(list(handles)):
+                if handle.name == "documents/russell-rsi-bootstrap-round-1-train":
+                    frozen_config = handle.build_config(StepContext.for_fingerprint(deps=handle.deps))
+                    allocation_plans.append(frozen_config.plan)
+            raise RuntimeError("Training allocation intercepted")
+
+        monkeypatch.setattr(russell_launch, "run", allocation_boundary)
+    else:
+        seal_round(directory, state, plan, result, previous)
+        russell_launch.write_once(
+            directory / "smoke.json",
+            {
+                "rl": artifact_identity(trained),
+                "reload": artifact_identity(reload),
+                "coding_baseline_sha256": hashes[1],
+                "retention_baseline_sha256": hashes[2],
+            },
+        )
+    initial_calibration = None if calibration_source == "normal" else difficulty
+    if calibration_source == "changed_recovery":
+        initial_calibration = ArtifactStep.adopt(
+            "evals/difficulty", "2026.10.04", "/tmp/difficulty", config={"review": "changed"}
+        )
+    expected = (
+        pytest.raises(ValueError, match="Round resume input mismatch")
+        if calibration_source == "changed_recovery"
+        else nullcontext()
     )
-    restored = russell_launch.run_bootstrap_loop(
-        seed,
-        parent,
-        retention,
-        panel,
-        str(holdout),
-        hashes[0],
-        str(coding),
-        hashes[1],
-        str(retained),
-        hashes[2],
-        "2026.10.04",
-        runtime,
-        {"backend": "qemu"},
-        "relay",
-        directory,
-        lambda *args: seed if next_bank_supplied else None,
-    )
+    if calibration_source == "fresh_recovery":
+        expected = pytest.raises(RuntimeError, match="Training allocation intercepted")
+    elif calibration_source == "incomplete_recovery":
+        expected = pytest.raises(ValueError, match="eight finite grades")
+    with expected:
+        restored = russell_launch.run_bootstrap_loop(
+            seed,
+            parent,
+            retention,
+            panel,
+            str(holdout),
+            hashes[0],
+            str(coding),
+            hashes[1],
+            str(retained),
+            hashes[2],
+            "2026.10.04",
+            runtime,
+            {"backend": "qemu"},
+            "relay",
+            directory,
+            lambda *args: seed if next_bank_supplied else None,
+            initial_calibration=initial_calibration,
+        )
+    if calibration_source == "changed_recovery":
+        assert not (directory / "terminal-state.json").exists()
+        return
+    if calibration_source in ("fresh_recovery", "incomplete_recovery"):
+        assert not (directory / "smoke.json").exists()
+        if calibration_source == "fresh_recovery":
+            assert len(allocation_plans) == 1
+            assert allocation_plans[0].calibration_identity == artifact_identity(difficulty)
+            assert len(allocation_plans[0].selected_tasks) == 16
+        else:
+            assert allocation_plans == []
+        return
     assert restored.completed_pilots == 1
     assert restored.stop_reason == (StopReason.TASK_SUPPLY if next_bank_supplied else None)
     assert (directory / "terminal-state.json").exists() == next_bank_supplied
