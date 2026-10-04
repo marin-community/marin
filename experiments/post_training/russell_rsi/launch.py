@@ -325,7 +325,6 @@ def spike_workflow(
     snapshots_sha256: str,
 ) -> dict[str, ArtifactStep]:
     baseline = development_step(seed, model, version, runtime_bundle, "parent")
-    parent_benchmarks = parent_public_step(model, version)
     adaptive = ArtifactStep(
         name="documents/russell-rsi-adaptive-round-1",
         version=version,
@@ -367,7 +366,6 @@ def spike_workflow(
     )
     # Calibration must show reward variation before Iris allocates policy workers.
     trained = replace(trained, deps=(*trained.deps, calibration))
-    candidate = development_step(seed, trained, version, runtime_bundle, "candidate")
     selected_model = evaluation_model(f"russell-rsi-{scale}", SKYRL_POLICY_LOCATION, None)
     reload = eval_step(
         selected_model,
@@ -380,6 +378,11 @@ def spike_workflow(
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
+    if scale == "smoke":
+        return {"reload": reload}
+    candidate = development_step(seed, trained, version, runtime_bundle, f"candidate-{scale}")
+    candidate = replace(candidate, deps=(*candidate.deps, reload))
+    parent_benchmarks = parent_public_step(model, version)
     benchmarks = eval_step(
         selected_model,
         "humanevalplus,mbppplus",

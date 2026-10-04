@@ -75,6 +75,56 @@ def test_spike_run_rejects_missing_generation_token_before_building(monkeypatch)
     assert "requires GLM_API_TOKEN before any GPU work" in result.output
 
 
+def test_smoke_and_pilot_share_admission_without_evaluation_collisions():
+    seed = ArtifactStep.adopt("documents/frozen-seed", "2026.10.04.2", "/tmp/seed")
+    parent = ArtifactStep.adopt("checkpoints/pinned-parent", "2026.09.21", "/tmp/model", kind=LevanterCheckpoint)
+    wheels = ArtifactStep.adopt("documents/wheels", "2026.10.04.2", "/tmp/wheels")
+    sources = ArtifactStep.adopt("documents/sources", "2026.10.04.2", "/tmp/sources")
+    terminals = {
+        scale: spike_workflow(
+            seed,
+            parent,
+            scale,
+            "2026.10.04.2",
+            "test-relay",
+            "test-image",
+            RuntimeBundle("/tmp/manifest.json", "0" * 64, "/tmp/runtime.tar.gz", "0" * 64),
+            {"backend": "qemu", "qemu": {}},
+            wheels,
+            sources,
+            "0" * 64,
+        )
+        for scale in ("smoke", "pilot")
+    }
+    handles = {
+        scale: {handle.name: handle for handle in graph_handles(list(outputs.values()))}
+        for scale, outputs in terminals.items()
+    }
+    smoke = handles["smoke"]
+    pilot = handles["pilot"]
+    assert {name for name in smoke if name.startswith("evals/")} == {
+        "evals/russell-rsi-parent-development",
+        "evals/russell-rsi-train-calibration-development",
+        terminals["smoke"]["reload"].name,
+    }
+    for name in (
+        "evals/russell-rsi-parent-development",
+        "documents/russell-rsi-adaptive-round-1",
+        "evals/russell-rsi-train-calibration-development",
+    ):
+        assert artifact_identity(smoke[name]) == artifact_identity(pilot[name])
+    assert terminals["pilot"]["development"].name == "evals/russell-rsi-candidate-pilot-development"
+    assert artifact_identity(smoke["checkpoints/russell-rsi-smoke"]) != artifact_identity(
+        pilot["checkpoints/russell-rsi-pilot"]
+    )
+    assert terminals["smoke"]["reload"].name not in pilot
+    assert all(handle.name not in smoke for handle in terminals["pilot"].values())
+    candidate = terminals["pilot"]["development"]
+    candidate_public = terminals["pilot"]["candidate-coding-subset"]
+    pilot_reload = next(handle for handle in candidate_public.deps if "mmlu-smoke" in handle.name)
+    assert pilot_reload in candidate.deps
+
+
 def test_parent_development_plan_reuses_spike_baseline_without_training(monkeypatch):
     captured = []
     monkeypatch.setattr(experiment_cli, "_print_plan", captured.extend)
