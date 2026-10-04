@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import logging
 import math
 import struct
 from bisect import bisect_right
@@ -55,7 +56,10 @@ from experiments.grug.fast_track.ranked_pool import (
     take_token_prefix,
 )
 
-CACHE_BATCH_ROWS = 128
+logger = logging.getLogger(__name__)
+
+QUALITY_CACHE_MAX_PENDING_BYTES = 64 * 1024 * 1024
+QUALITY_CACHE_MAX_PENDING_DOCUMENTS = 16_384
 TOKEN_CACHE_NAME = "tokens"
 QUALITY_FRACTION = 0.1
 SCORER_BATCH_ROWS = 128
@@ -693,27 +697,10 @@ def prepare_quality_data(config: QualityConfig, *, ctx: ZephyrContext) -> Qualit
         output_path=prefix_join(config.output_path, "training_order"),
     )
     cache_dir = prefix_join(config.output_path, TOKEN_CACHE_NAME)
-    exemplar = {"input_ids": np.zeros(0, dtype=np.int32)}
     cache_metadata = CacheMetadata(
         TextLmDatasetFormat().build_preprocessor(load_tokenizer(config.scored_pool.tokenizer)).metadata
     )
-    with SerialCacheWriter(cache_dir, exemplar, metadata=cache_metadata) as writer:
-        pending = []
-        for path in training_shards:
-            with StoragePath(path).open("rb") as stream:
-                for batch in pq.ParquetFile(stream).iter_batches(batch_size=CACHE_BATCH_ROWS):
-                    for row in batch.to_pylist():
-                        tokens = np.asarray(row["input_ids"], dtype="<i4")
-                        if len(tokens) != row["token_count"]:
-                            raise ValueError(f"selected token count differs for {row['source']}/{row['id']}")
-                        if hashlib.sha256(tokens.tobytes()).hexdigest() != row["token_sha256"]:
-                            raise ValueError(f"selected token checksum differs for {row['source']}/{row['id']}")
-                        pending.append({"input_ids": tokens})
-                        if len(pending) == CACHE_BATCH_ROWS:
-                            writer.write_batch(pending)
-                            pending.clear()
-        if pending:
-            writer.write_batch(pending)
+    _write_quality_token_cache(training_shards, cache_dir, metadata=cache_metadata)
     return QualityData(
         tokenizer=config.scored_pool.tokenizer,
         tokenizer_hash=config.scored_pool.tokenizer_hash,
@@ -722,6 +709,62 @@ def prepare_quality_data(config: QualityConfig, *, ctx: ZephyrContext) -> Qualit
         actual_tokens=selected.selected_tokens,
         report_path=selected.report_path,
     )
+
+
+def _write_quality_token_cache(training_shards: Sequence[str], cache_dir: str, *, metadata: CacheMetadata) -> None:
+    exemplar = {"input_ids": np.zeros(0, dtype=np.int32)}
+    with SerialCacheWriter(cache_dir, exemplar, metadata=metadata) as writer:
+        pending: list[dict[str, np.ndarray]] = []
+        pending_bytes = 0
+        pending_tokens = 0
+        written_documents = 0
+        written_tokens = 0
+
+        def flush_pending() -> None:
+            nonlocal pending_bytes, pending_tokens, written_documents, written_tokens
+            if not pending:
+                return
+            writer.write_batch(pending)
+            written_documents += len(pending)
+            written_tokens += pending_tokens
+            pending.clear()
+            pending_bytes = 0
+            pending_tokens = 0
+            logger.info(
+                "Quality token cache progress: %d documents, %d tokens",
+                written_documents,
+                written_tokens,
+            )
+
+        for path in training_shards:
+            with StoragePath(path).open("rb") as stream:
+                for batch in pq.ParquetFile(stream).iter_batches(
+                    batch_size=1,
+                    columns=["input_ids", "token_count", "token_sha256", "source", "id"],
+                ):
+                    input_ids = batch.column("input_ids")[0].values
+                    tokens = np.array(input_ids.to_numpy(zero_copy_only=False), dtype="<i4", copy=True)
+                    token_count = batch.column("token_count")[0].as_py()
+                    source = batch.column("source")[0].as_py()
+                    document_id = batch.column("id")[0].as_py()
+                    token_sha256 = batch.column("token_sha256")[0].as_py()
+                    if len(tokens) != token_count:
+                        raise ValueError(f"selected token count differs for {source}/{document_id}")
+                    if hashlib.sha256(tokens.tobytes()).hexdigest() != token_sha256:
+                        raise ValueError(f"selected token checksum differs for {source}/{document_id}")
+
+                    token_bytes = tokens.nbytes
+                    if pending and pending_bytes + token_bytes > QUALITY_CACHE_MAX_PENDING_BYTES:
+                        flush_pending()
+                    pending.append({"input_ids": tokens})
+                    pending_bytes += token_bytes
+                    pending_tokens += len(tokens)
+                    if (
+                        pending_bytes >= QUALITY_CACHE_MAX_PENDING_BYTES
+                        or len(pending) >= QUALITY_CACHE_MAX_PENDING_DOCUMENTS
+                    ):
+                        flush_pending()
+        flush_pending()
 
 
 @dataclass(frozen=True)
