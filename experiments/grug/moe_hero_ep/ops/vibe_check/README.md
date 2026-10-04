@@ -37,9 +37,11 @@ completed results, active jobs, and requests that exhausted their retries. The
 checkpoint selection comes from [`hero_checkpoint_paths()`](../../checkpoints.py),
 which reads the current hero run and its ancestors.
 
-The workflow runs hourly. With its default, `submission=next`, it submits no new
-request while jobs for the current sampling specification are active. Otherwise,
-it submits at most one unfinished request. Priorities are `batch`, `interactive`,
+The workflow runs hourly. With its default, `submission=next`, it keeps at most two
+jobs for the current sampling specification active. It submits unfinished requests
+only into free slots. One sample set takes about 40 hours with the queue wait, and
+the hero writes a permanent checkpoint about every 28 hours. One active job falls
+behind, and the newest-first order then never samples the older checkpoints. Priorities are `batch`, `interactive`,
 or `production`. A manual invocation saves its selected priority for subsequent
 attempts of all discovered requests. Active jobs retain their assigned priority.
 Future checkpoints use batch priority unless a manual invocation sets a different
