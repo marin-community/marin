@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Harbor task packages through Parquet, machine creation, and private grading."""
+"""Harbor task packages through machine creation and private grading."""
 
 import asyncio
 import json
