@@ -164,6 +164,8 @@ def plan_large_clusters(
         with StoragePath(result.path).open("rb") as handle:
             table = pq.ParquetFile(handle).read(columns=["dup_cluster_id", "n"])
         sampled_rows += table.num_rows
+        # The aggregated sum is nullable while count files are not, so align before concat.
+        table = table.cast(merged.schema)
         merged = pa.concat_tables([merged, table]).group_by("dup_cluster_id").aggregate([("n", "sum")])
         merged = merged.rename_columns(["dup_cluster_id", "n"])
     logger.info("Aggregated %d sampled count rows", sampled_rows)
@@ -207,10 +209,12 @@ def large_clusters_step(
     max_workers: int = 48,
     worker_resources: ResourceConfig | None = None,
     task_resources: ResourceConfig | None = None,
+    output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Create a cluster-size plan with candidate lineage and sample identity."""
     return StepSpec(
         name=name,
+        output_path_prefix=output_path_prefix,
         deps=[candidates],
         hash_attrs={"version": 1, "params": params.model_dump(mode="json")},
         fn=lambda output_path: plan_large_clusters(

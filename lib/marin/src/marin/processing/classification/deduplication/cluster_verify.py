@@ -353,10 +353,12 @@ def cluster_verify_step(
     files_per_task: int = DEFAULT_FILES_PER_TASK,
     reduce_shards: int = DEFAULT_REDUCE_SHARDS,
     max_shard_failures: int = DEFAULT_MAX_SHARD_FAILURES,
+    output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Create verification with the duplicate rule and text limits in its identity."""
     return StepSpec(
         name=name,
+        output_path_prefix=output_path_prefix,
         deps=[cluster_text],
         hash_attrs={
             "version": 1,
