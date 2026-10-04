@@ -844,10 +844,8 @@ def admission_exception(stage: dict, error: BaseException) -> dict:
     }
 
 
-def admission_identity(
-    directory: Path, *, dependency_sha256: str, image: str, runtime: str, record: CommitRecord, task: TaskSpec | None
-) -> dict:
-    generation = directory / "generation.json"
+def admission_code_sha256() -> str:
+    """Hash the code that determines patch admission."""
     code_files = {
         Path(__file__),
         Path(__file__).with_name("adaptive_tasks.py"),
@@ -858,6 +856,13 @@ def admission_identity(
         Path(inspect.getfile(SourceSnapshot)),
     }
     code_hashes = sorted(hashlib.sha256(path.read_bytes()).hexdigest() for path in code_files)
+    return hashlib.sha256(json.dumps(code_hashes).encode()).hexdigest()
+
+
+def admission_identity(
+    directory: Path, *, dependency_sha256: str, image: str, runtime: str, record: CommitRecord, task: TaskSpec | None
+) -> dict:
+    generation = directory / "generation.json"
     inputs = {
         "snapshot_sha256": hashlib.sha256((directory / "snapshot.json").read_bytes()).hexdigest(),
         "repair_sha256": hashlib.sha256((directory / "repair.json").read_bytes()).hexdigest(),
@@ -865,7 +870,7 @@ def admission_identity(
         "image": image,
         "task_spec_sha256": hashlib.sha256(task.model_dump_json().encode()).hexdigest() if task else None,
         "prepared_runtime": runtime,
-        "admission_code_sha256": hashlib.sha256(json.dumps(code_hashes).encode()).hexdigest(),
+        "admission_code_sha256": admission_code_sha256(),
         "source_commit": record.sha,
         "source_family": record.family,
         "source_split": record.split,
