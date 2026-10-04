@@ -94,6 +94,14 @@ class _JoinedLabels:
     duplicate_rows: list[dict]
 
 
+@dataclass(frozen=True)
+class _EmbeddingDifference:
+    max_abs_delta: int
+    l2_delta: float
+    cosine: float
+    identical: bool
+
+
 def _label(row: dict, *, prefix: str = "") -> _Label:
     if row[prefix + "label_batch"] != LABEL_BATCH:
         raise ValueError(f"unexpected label batch for {row['id']}")
@@ -115,7 +123,7 @@ def _read_input(path: str, hashes: dict[str, str]) -> pq.ParquetFile:
     return pq.ParquetFile(io.BytesIO(contents))
 
 
-def _embedding_difference(retained: np.ndarray, duplicate: np.ndarray) -> tuple[int, float, float, bool]:
+def _embedding_difference(retained: np.ndarray, duplicate: np.ndarray) -> _EmbeddingDifference:
     delta = retained.astype(np.int16) - duplicate.astype(np.int16)
     max_abs_delta = int(np.abs(delta).max())
     l2_delta = float(np.linalg.norm(delta.astype(np.float64)))
@@ -130,7 +138,7 @@ def _embedding_difference(retained: np.ndarray, duplicate: np.ndarray) -> tuple[
         cosine = 0.0
     else:
         cosine = float(np.clip(np.dot(retained_float, duplicate_float) / (retained_norm * duplicate_norm), -1.0, 1.0))
-    return max_abs_delta, l2_delta, cosine, identical
+    return _EmbeddingDifference(max_abs_delta, l2_delta, cosine, bool(identical))
 
 
 def _read_original_labels(path: str, hashes: dict[str, str]) -> tuple[dict[tuple[str, str], _Label], dict[str, float]]:
@@ -204,7 +212,7 @@ def _read_joined_labels(
                         raise ValueError(f"conflicting joined text for {label.document_id}")
                     if retained["label"] != label.score:
                         raise ValueError(f"conflicting joined quality targets for {label.document_id}")
-                    max_abs_delta, l2_delta, cosine, identical = _embedding_difference(retained["embedding"], embedding)
+                    difference = _embedding_difference(retained["embedding"], embedding)
                     duplicate_rows.append(
                         {
                             "id": label.document_id,
@@ -214,10 +222,10 @@ def _read_joined_labels(
                             "duplicate_source": label.source,
                             "duplicate_path": path,
                             "duplicate_row": joined_row,
-                            "embedding_identical": identical,
-                            "embedding_max_abs_delta_int8": max_abs_delta,
-                            "embedding_l2_delta_int8": l2_delta,
-                            "embedding_cosine_similarity_int8": cosine,
+                            "embedding_identical": difference.identical,
+                            "embedding_max_abs_delta_int8": difference.max_abs_delta,
+                            "embedding_l2_delta_int8": difference.l2_delta,
+                            "embedding_cosine_similarity_int8": difference.cosine,
                         }
                     )
                 joined_row += 1
