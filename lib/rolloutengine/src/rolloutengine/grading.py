@@ -146,11 +146,17 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
     finally:
         try:
             removed = await machine.run(Command(argv=("rm", "-f", remote_archive), timeout=timeout, user="0"))
-            if removed.exit_code != 0 and primary_error is None:
-                raise RuntimeError(f"Cannot remove grading artifact archive: exit={removed.exit_code}")
-        except BaseException:
+            if removed.exit_code != 0:
+                raise RuntimeError(
+                    f"Cannot remove grading artifact archive: exit={removed.exit_code}: "
+                    f"{removed.stderr.decode(errors='replace')}"
+                )
+        except Exception as cleanup_error:
             if primary_error is None:
                 raise
+            primary_error.add_note(
+                f"Grading archive cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
+            )
     return True
 
 

@@ -72,16 +72,19 @@ class TarMachine:
 
 
 @pytest.mark.parametrize(
-    "separate,selected_artifacts,expected,reward,passed",
+    "separate,selected_artifacts,expected,reward,passed,artifact_failure",
     [
-        (False, False, "answer", 0.75, True),
-        (False, False, "wrong", 0.0, False),
-        (True, False, "answer", 0.75, True),
-        (True, True, "answer", 0.75, True),
+        (False, False, "answer", 0.75, True, None),
+        (False, False, "wrong", 0.0, False, None),
+        (True, False, "answer", 0.75, True, None),
+        (True, True, "answer", 0.75, True, None),
+        (True, True, "answer", None, None, "download_and_cleanup"),
+        (True, True, "answer", None, None, "cleanup"),
+        (True, True, "answer", None, None, "download_and_cancel"),
     ],
 )
 async def test_harbor_package_grades_private_files_after_parquet_reload(
-    tmp_path, monkeypatch, separate, selected_artifacts, expected, reward, passed
+    tmp_path, monkeypatch, separate, selected_artifacts, expected, reward, passed, artifact_failure
 ):
     directory = tmp_path / "source"
     for name in ("environment", "tests", "setup_files"):
@@ -126,6 +129,19 @@ async def test_harbor_package_grades_private_files_after_parquet_reload(
     machines = []
     build_directories = []
 
+    class ArchiveFailureMachine(TarMachine):
+        async def run(self, command):
+            if command.argv[:2] == ("rm", "-f") and command.argv[2].startswith("/tmp/"):
+                if artifact_failure == "download_and_cancel":
+                    raise asyncio.CancelledError()
+                return Result(23, b"", b"Read-only filesystem", False, False, ExitReason.EXITED)
+            return await super().run(command)
+
+        async def download(self, source, target):
+            if artifact_failure in {"download_and_cleanup", "download_and_cancel"} and source.startswith("/tmp/"):
+                raise OSError("Archive download failed")
+            await super().download(source, target)
+
     class ImageFactory:
         """Replace container creation with a fixed ShellSim image at the machine boundary."""
 
@@ -145,7 +161,7 @@ async def test_harbor_package_grades_private_files_after_parquet_reload(
                 script.write_bytes(grader)
                 await machine.upload(script, "/tests/test.sh")
             machines.append(machine)
-            return TarMachine(machine)
+            return ArchiveFailureMachine(machine) if artifact_failure else TarMachine(machine)
 
     model = ReplayModel(
         [
@@ -178,7 +194,28 @@ async def test_harbor_package_grades_private_files_after_parquet_reload(
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await run_task(engine(model, {EnvironmentKind.DOCKER: ImageFactory()}), next(read_tasks(parquet)))
+    runner = engine(model, {EnvironmentKind.DOCKER: ImageFactory()})
+    if artifact_failure == "download_and_cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await run_task(runner, next(read_tasks(parquet)))
+        return
+    if artifact_failure:
+        with pytest.raises(RolloutInterrupted) as caught:
+            await run_task(runner, next(read_tasks(parquet)))
+        assert caught.value.operation == RolloutOperation.GRADE
+        assert caught.value.rollout.grade.reward is None
+        cause = caught.value.__cause__
+        if artifact_failure == "download_and_cleanup":
+            assert isinstance(cause, OSError)
+            assert str(cause) == "Archive download failed"
+            assert "Cannot remove grading artifact archive: exit=23" in "\n".join(cause.__notes__)
+            assert "Read-only filesystem" in "\n".join(cause.__notes__)
+        else:
+            assert isinstance(cause, RuntimeError)
+            assert "Cannot remove grading artifact archive: exit=23" in str(cause)
+            assert "Read-only filesystem" in str(cause)
+        return
+    result = await run_task(runner, next(read_tasks(parquet)))
     assert (result.grade.status, result.grade.reward, result.grade.passed) == (Outcome.GRADED, reward, passed)
     assert result.grade.diagnostics["exit_code"] == 7
     assert result.response_token_ids == (20, 90, 91, 21)
