@@ -147,7 +147,7 @@ class ShellboxRolloutEngine:
                 )
                 break
             last_graded_step = len(record.steps) - 1
-            rewards = grade.diagnostics.get("rewards", {"reward": grade.reward})
+            rewards = grade.rewards or {"reward": grade.reward}
             if any(rewards.get(key, -math.inf) < minimum for key, minimum in stage.minimum_rewards.items()):
                 break
             if interruption is not None:
@@ -172,7 +172,7 @@ class ShellboxRolloutEngine:
                             "reward": grade.reward,
                             "passed": grade.passed,
                             "error": grade.error,
-                            "rewards": grade.diagnostics.get("rewards", {}),
+                            "rewards": grade.rewards,
                         }
                         for name, grade in zip(stage_names, grades, strict=True)
                     ],
