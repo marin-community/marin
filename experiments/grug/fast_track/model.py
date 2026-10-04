@@ -149,6 +149,8 @@ _ROUTED_INPUT = "routed_input"
 # Per-layer moe_compress / moe_shadow_width loss and metrics, stacked over layers like the router stats.
 _COMPRESS_LOSS = "compress_loss"
 _COMPRESS_PREFIX = "compress/"
+# Per-layer branch-output max |x| and RMS (``layer_output_stats``), stacked over layers like the router stats.
+_OUTSTAT_PREFIX = "outstat/"
 _SHADOW_SALT = 0x5AD0
 _SHARED_PRE = "shared_pre"
 ROUTED_INPUT_KEY = "routed_input_per_layer"
@@ -254,6 +256,9 @@ class MoeCompress(StrEnum):
     TRANSFER = "transfer"
     """``||s - sg(s + r)||^2 / sg(mean ||y||^2)``: pushes the shared expert along the routed output until the
     routed side holds nothing the shared expert can express; the LM loss then sheds the overshoot from ``r``."""
+    TRANSFER_NORMED = "transfer_normed"
+    """``||s / |s| - sg(y / |y|)||^2`` per token, i.e. ``2 - 2 cos(s, y)``: the transfer direction without its
+    unbounded stretch. The plain transfer gradient ``-2 r`` pushes ``s`` along ``r`` at any length of ``s``."""
     GAP = "gap"
     """``||s - sg(r)||^2 / sg(mean ||y||^2)``: pulls the shared expert toward the routed output. It is zero at
     ``s = r``, where the two paths duplicate each other."""
@@ -1060,6 +1065,12 @@ class GrugModelConfig:
     moe_compress: MoeCompress = MoeCompress.NONE
     moe_compress_weight: float = 0.0
     """Per-MoE-layer weight of the ``moe_compress`` term (summed over layers)."""
+    moe_compress_norm_weight: float = 0.0
+    """With ``moe_compress=transfer``: also add ``weight * mean_t (|s_t|^2 / sg(mean |y|^2))^(power / 2)``, a counter
+    force on the shared output's length (``moe_compress_norm_power`` 2 for a smooth pull, 4+ for a soft cap)."""
+    moe_compress_norm_power: int = 2
+    layer_output_stats: bool = False
+    """Log each layer's attention and MLP branch output max |x| and RMS (``train/aux/outstat/*``); AttnRes only."""
     moe_expert_waves: int = 1
     """Static dispatch waves in the pooled-wave EP backend. Waves are independent, so the scheduler can overlap
     one wave's all-to-all with another's expert compute (the all-to-all was ~13% exposed at d512)."""
@@ -1524,6 +1535,8 @@ class GrugModelConfig:
             raise ValueError("moe_shadow_width / moe_compress need a MoE with shared experts and no moe_shared_overlap")
         if (self.moe_compress != MoeCompress.NONE) != (self.moe_compress_weight > 0):
             raise ValueError("moe_compress and moe_compress_weight > 0 go together")
+        if self.moe_compress_norm_weight > 0 and self.moe_compress != MoeCompress.TRANSFER:
+            raise ValueError("moe_compress_norm_weight is the counter force for moe_compress=transfer")
         if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
             raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
 
@@ -3841,6 +3854,15 @@ def _compress_terms(
         detached = shared_detached.astype(jnp.float32)
         loss = -2.0 * jnp.mean(jnp.sum(detached * jax.lax.stop_gradient(r32), axis=-1)) / y_energy
         loss = cfg.moe_compress_weight * loss
+        if cfg.moe_compress_norm_weight > 0:
+            length = jnp.sum(detached**2, axis=-1) / y_energy
+            loss = loss + cfg.moe_compress_norm_weight * jnp.mean(length ** (cfg.moe_compress_norm_power / 2))
+    elif cfg.moe_compress == MoeCompress.TRANSFER_NORMED:
+        detached = shared_detached.astype(jnp.float32)
+        s_hat = detached / jnp.sqrt(jnp.maximum(jnp.sum(detached**2, axis=-1, keepdims=True), 1e-12))
+        y = jax.lax.stop_gradient(s32 + r32)
+        y_hat = y / jnp.sqrt(jnp.maximum(jnp.sum(y**2, axis=-1, keepdims=True), 1e-12))
+        loss = cfg.moe_compress_weight * jnp.mean(jnp.sum((s_hat - y_hat) ** 2, axis=-1))
     elif cfg.moe_compress == MoeCompress.GAP:
         gap = shared_detached.astype(jnp.float32) - jax.lax.stop_gradient(r32)
         loss = cfg.moe_compress_weight * jnp.mean(jnp.sum(gap**2, axis=-1)) / y_energy
@@ -3850,6 +3872,9 @@ def _compress_terms(
         _COMPRESS_LOSS: loss,
         "r_share": jax.lax.stop_gradient(r_energy / y_energy),
         "cos_sr": jax.lax.stop_gradient(sr / jnp.sqrt(jnp.maximum(s_energy * r_energy, 1e-30))),
+        # Absolute per-token RMS lengths: a shrinking r_share alone cannot tell a growing s from a silent r.
+        "s_rms": jax.lax.stop_gradient(jnp.sqrt(s_energy)),
+        "r_rms": jax.lax.stop_gradient(jnp.sqrt(r_energy)),
     }
     if shadow is not None:
         x_flat = rearrange(jax.lax.stop_gradient(shared_in), "b s d -> (b s) d")
@@ -3861,6 +3886,16 @@ def _compress_terms(
         terms[_COMPRESS_LOSS] = loss + shadow_loss
         terms["shadow_r2"] = 1.0 - jax.lax.stop_gradient(shadow_loss)
     return {f"{_COMPRESS_PREFIX}{k}" if k != _COMPRESS_LOSS else k: v for k, v in terms.items()}
+
+
+def _branch_output_stats(attn_out: jax.Array, mlp_out: jax.Array) -> dict[str, jax.Array]:
+    """Largest |element| and element RMS of one layer's attention and MLP branch outputs (``layer_output_stats``)."""
+    out = {}
+    for name, x in (("attn", attn_out), ("mlp", mlp_out)):
+        x = jax.lax.stop_gradient(x).astype(jnp.float32)
+        out[f"{_OUTSTAT_PREFIX}{name}_max"] = jnp.max(jnp.abs(x))
+        out[f"{_OUTSTAT_PREFIX}{name}_rms"] = jnp.sqrt(jnp.mean(x * x))
+    return out
 
 
 def _sconv_segment_ids(mask: AttentionMask | jax.Array) -> jax.Array | None:
@@ -5316,6 +5351,8 @@ def _attn_res_layer(
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
+    if cfg.layer_output_stats:
+        router_stats = {**router_stats, **_branch_output_stats(attn_out, mlp_out)}
     spot = _probe_spot()
     if spot is not None:
         router_stats = {
@@ -6473,7 +6510,11 @@ class Transformer(eqx.Module):
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
             router_metrics.update(
-                {k: v for k, v in stacked_router_stats.items() if k == _COMPRESS_LOSS or k.startswith(_COMPRESS_PREFIX)}
+                {
+                    k: v
+                    for k, v in stacked_router_stats.items()
+                    if k == _COMPRESS_LOSS or k.startswith((_COMPRESS_PREFIX, _OUTSTAT_PREFIX))
+                }
             )
             if return_routing:
                 if cfg.loop_passes != 1:
@@ -7070,7 +7111,9 @@ class Transformer(eqx.Module):
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
         mtp_embed = router_metrics.pop(_MTP_EMBED, None)
         compress_loss = router_metrics.pop(_COMPRESS_LOSS, None)
-        compress_stats = {k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith(_COMPRESS_PREFIX)}
+        compress_stats = {
+            k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith((_COMPRESS_PREFIX, _OUTSTAT_PREFIX))
+        }
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
         if head_replay is not None and self.output_bigram_w is not None:
@@ -7241,9 +7284,9 @@ class Transformer(eqx.Module):
                 summarized_metrics.update(erc_ratios)
             if compress_loss is not None:
                 summarized_metrics["train/aux/compress/loss"] = jnp.sum(compress_loss)
-                for name, per_layer in compress_stats.items():
-                    for i in range(per_layer.shape[0]):
-                        summarized_metrics[f"train/aux/{name}_L{i}"] = per_layer[i]
+            for name, per_layer in compress_stats.items():
+                for i in range(per_layer.shape[0]):
+                    summarized_metrics[f"train/aux/{name}_L{i}"] = per_layer[i]
             if nitp_loss is not None:
                 summarized_metrics["train/aux/nitp_loss"] = nitp_loss
                 summarized_metrics["train/aux/nitp_cos"] = nitp_cos

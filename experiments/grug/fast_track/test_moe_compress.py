@@ -44,9 +44,17 @@ def test_shadow_probe_trains_only_itself():
     assert float(jnp.abs(grads.kda_blocks.stacked.shadow.w_up).max()) > 0
 
 
-@pytest.mark.parametrize("mode", [MoeCompress.TRANSFER, MoeCompress.GAP])
-def test_shared_side_terms_move_the_shared_expert_but_not_the_routed_experts(mode):
-    diff, _ = _grads(moe_compress=mode, moe_compress_weight=0.1)
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"moe_compress": MoeCompress.TRANSFER},
+        {"moe_compress": MoeCompress.GAP},
+        {"moe_compress": MoeCompress.TRANSFER_NORMED},
+        {"moe_compress": MoeCompress.TRANSFER, "moe_compress_norm_weight": 0.05, "moe_compress_norm_power": 4},
+    ],
+)
+def test_shared_side_terms_move_the_shared_expert_but_not_the_routed_experts(overrides):
+    diff, _ = _grads(moe_compress_weight=0.1, **overrides)
     assert _moved(diff, ".shared[0].w_up") and _moved(diff, ".shared[0].w_down")
     assert not _moved(diff, ".mlp.")
     assert not _moved(diff, "attn")
@@ -57,6 +65,14 @@ def test_routed_penalty_reaches_the_routed_experts():
     assert _moved(diff, ".mlp.expert_mlp.")
     # The last layer's penalty reaches only its own routed path and the layers below it.
     assert not _moved(diff, ".stacked_blocks.stacked.shared[0].")
+
+
+def test_norm_counter_force_needs_the_transfer_loss():
+    try:
+        t._config(moe_compress=MoeCompress.GAP, moe_compress_weight=0.1, moe_compress_norm_weight=0.1)
+    except ValueError:
+        return
+    raise AssertionError("moe_compress_norm_weight without moe_compress=transfer must fail")
 
 
 def test_compress_needs_a_weight():
@@ -77,3 +93,4 @@ def test_shadow_r2_is_logged_per_layer():
     r2 = [float(metrics[f"train/aux/compress/shadow_r2_L{i}"]) for i in range(2)]
     assert all(np.isfinite(r2)) and all(v < 1.0 for v in r2)
     assert 0.0 < float(metrics["train/aux/compress/r_share_L0"]) < 10.0
+    assert float(metrics["train/aux/compress/s_rms_L0"]) > 0 and float(metrics["train/aux/compress/r_rms_L0"]) > 0

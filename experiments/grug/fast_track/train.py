@@ -99,7 +99,9 @@ from experiments.grug.fast_track.model import (
     GrugModelConfig,
     HeadReplay,
     MtpMode,
+    RMSNorm,
     Transformer,
+    ZeroCenteredRMSNorm,
     forward_probe,
     ngram_stat_table_add,
     tie_routers,
@@ -110,6 +112,7 @@ from experiments.grug.fast_track.optimizer import expert_consistency_metrics, ma
 from experiments.grug.fast_track.snr_probe import SnrProbe
 from experiments.grug.fast_track.stiefel import _msign
 from experiments.grug.fast_track.weight_attribution import AttributionWriter, leaf_name, per_layer_sum, rails_by_name
+from experiments.grug.fast_track.weight_diagnostics import gain_stats, matrix_stats
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -340,6 +343,9 @@ class GrugTrainerConfig:
     flip_detector_every: int = 10
     flip_detector_k: int = 4
     flip_detector_beta: float = 0.98
+    # Weight diagnostics (``weight_diagnostics.py``): every this many steps, log each projection matrix's stable rank
+    # and output-channel norm ratio and each RMSNorm gain's distance from 1 under ``weights/``. 0 disables.
+    weight_diagnostics_every: int = 0
     flip_detector_dir: str | None = None
     weight_attribution_exclude: str = r"token_embed2"
     fact_probe_every: int = 1
@@ -1335,6 +1341,51 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
             )
             if count == end:
                 writer.flush()
+
+    return hook
+
+
+# Matrix leaves that are lookup tables, not projections (rows are read, never multiplied through).
+_NOT_PROJECTION = re.compile(r"embed|ngram_stat_table|router_bias|expert_visit_bias|null_const")
+
+
+def _weight_diagnostics_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[..., None]:
+    """The ``weight_diagnostics_every`` hook (see ``weight_diagnostics.py``)."""
+    every = config.trainer.weight_diagnostics_every
+    is_norm = lambda x: isinstance(x, (RMSNorm, ZeroCenteredRMSNorm))  # noqa: E731
+
+    def collect(model) -> tuple[dict[str, jax.Array], dict[str, jax.Array]]:
+        matrices = {}
+        for path, leaf in jax.tree_util.tree_leaves_with_path(eqx.filter(model, eqx.is_inexact_array)):
+            name = leaf_name(path)
+            if not isinstance(leaf, jax.Array) or leaf.ndim < 2 or _NOT_PROJECTION.search(name):
+                continue
+            # Expert banks stay sharded over their expert axis (a batch axis here); the rest are small enough to
+            # replicate, which keeps every contraction on unsharded axes.
+            matrices[name] = leaf if "expert_mlp" in name else reshard(leaf, P(*(None,) * leaf.ndim))
+        gains = {}
+        for path, norm in jax.tree_util.tree_leaves_with_path(model, is_leaf=is_norm):
+            if isinstance(norm, RMSNorm):
+                gains[leaf_name(path)] = reshard(norm.weight, P(*(None,) * norm.weight.ndim))
+            elif isinstance(norm, ZeroCenteredRMSNorm):
+                gains[leaf_name(path)] = 1.0 + reshard(norm.gamma, P(*(None,) * norm.gamma.ndim))
+        return matrices, gains
+
+    @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
+    def compute(matrices, gains):
+        key = jax.random.PRNGKey(0)
+        out = {f"weights/{name}/{k}": v for name, w in matrices.items() for k, v in matrix_stats(w, key).items()}
+        out.update({f"weights/{name}/{k}": v for name, g in gains.items() for k, v in gain_stats(g).items()})
+        return out
+
+    def hook(info, force: bool = False) -> None:
+        if info.model is None or info.step % every:
+            return
+        with set_mesh(mesh), _pgle_disabled():
+            stats = compute(*collect(info.model))
+        host = jax.tree.map(np.asarray, multihost_utils.process_allgather(stats))
+        if jax.process_index() == 0:
+            levanter.tracker.log({k: float(v) for k, v in host.items()}, step=info.step)
 
     return hook
 
@@ -2356,6 +2407,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(log_device_memory, every=1)
         if config.trainer.flip_detector_patterns:
             state_callbacks.add_hook(_flip_detector_hook(config, mesh), every=1)
+        if config.trainer.weight_diagnostics_every:
+            state_callbacks.add_hook(_weight_diagnostics_hook(config, mesh), every=1)
         if config.trainer.weight_attribution_window:
             state_callbacks.add_hook(_weight_attribution_hook(config, mesh, trainer.mp), every=1)
         if config.trainer.fact_probe_input is not None and not config.trainer.weight_attribution_window:
