@@ -98,9 +98,11 @@ The phase heartbeat is read over a day rather than the hour the other metrics us
 is measured from the last heartbeat however long ago it was. Levanter enrollment runs an hour, so a
 silent run stays watched while the rule counts out its threshold and pending period.
 
-Every other check needs fresh phase telemetry reporting the training phase, so an initializing,
-finished, or silent attempt announces nothing. `iris_state_stale` additionally needs a row that went
-stale rather than one that never existed: the GCE controllers publish no `iris.task_state` rollup at
+The signal-based health checks need fresh phase telemetry reporting the training phase. A controller
+retry can announce while the replacement attempt is initializing or before it publishes a phase, so
+the five-minute pending period can finish during a long restore. The retry event remains visible for
+15 minutes. `iris_state_stale` additionally needs a row that went stale rather than one that never
+existed: the GCE controllers publish no `iris.task_state` rollup at
 all, and a broken rollup leaves its last row readable for an hour. A longer outage stops being
 visible, which is the limit of this check.
 
@@ -124,8 +126,8 @@ Quiet runs emit zero-valued `healthy` rows and an empty fleet emits one `fleet` 
    the distance from the limit.
 6. `iris_state_stale`: the hero alerting path is degraded — `TrainingProgressStalled` and
    `TrainingLossSpike` no longer enroll this run. Check the controller and its state telemetry.
-7. `task_retried` is information, not a fault. It explains a W&B gap while the new attempt redoes
-   steps below the high-water mark.
+7. `task_retried` is information, not a fault. It can fire during restore, before the new attempt
+   reports training. It explains a W&B gap while that attempt redoes steps below the high-water mark.
 
 Verify what a rule saw with a bounded Finelog query:
 
