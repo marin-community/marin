@@ -8,6 +8,7 @@ This page includes only experiments that have at least one run or report.
 ## Curated experiment series
 
 - [Agent MoE experiment digest](./agent-moe-experiments.md) — outcomes from small-scale modeling, optimizer, routing, systems, and data tests.
+- [Snowball RLVR reference/KL reward by domain](./snowball-rlvr-reference-kl-domain-reward.md) — verifier-level trends through optimizer step 30.
 
 ## Published analysis sites
 
