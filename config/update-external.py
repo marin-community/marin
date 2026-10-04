@@ -581,7 +581,7 @@ def recipe_schema_source(dependency: LockedDependency, source: Path | None) -> P
 
 
 def synchronize_recipe_schema(dependency: LockedDependency, *, check: bool, source: Path | None = None) -> bool:
-    """Copy or verify the flat author schema against the pinned Git objects."""
+    """Return copy equality in check mode, or synchronize the copy and return True."""
     source = recipe_schema_source(dependency, source)
     environment = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
     inventory = subprocess.check_output(

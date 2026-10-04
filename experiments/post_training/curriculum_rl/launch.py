@@ -343,6 +343,26 @@ FULL = ScalePreset(
     ),
 )
 
+SNOWBALL_RESOURCES = RecipePatch(
+    trainer=Trainer(
+        placement=Placement(
+            colocate_all=False,
+            colocate_policy_ref=False,
+            policy_num_nodes=4,
+            policy_num_gpus_per_node=GPUS_PER_NODE,
+            ref_num_nodes=2,
+            ref_num_gpus_per_node=GPUS_PER_NODE,
+        )
+    ),
+    generator=Generator(
+        inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
+    ),
+)
+
+
 # The 67B-A2B smoke: four policy nodes, two reference nodes, and one
 # node-sized expert-parallel engine.
 # NCCL rank-drop failures on this stack appeared only at 32k contexts; this
@@ -351,26 +371,15 @@ SNOWBALL_SMOKE = ScalePreset(
     label="snowball-smoke",
     evals="gsm8k-smoke",
     recipe=SkyRLRecipe.combine(
+        resources=SNOWBALL_RESOURCES,
         geometry=RecipePatch(
             trainer=Trainer(
-                placement=Placement(
-                    colocate_all=False,
-                    colocate_policy_ref=False,
-                    policy_num_nodes=4,
-                    policy_num_gpus_per_node=GPUS_PER_NODE,
-                    ref_num_nodes=2,
-                    ref_num_gpus_per_node=GPUS_PER_NODE,
-                ),
                 train_batch_size=32,
                 policy_mini_batch_size=32,
                 micro_train_batch_size_per_gpu=4,
             ),
             generator=Generator(
                 num_inference_engines=1,
-                inference_engine_tensor_parallel_size=1,
-                inference_engine_pipeline_parallel_size=1,
-                inference_engine_data_parallel_size=GPUS_PER_NODE,
-                inference_engine_expert_parallel_size=GPUS_PER_NODE,
                 n_samples_per_prompt=4,
             ),
         ),
@@ -391,26 +400,15 @@ SNOWBALL_FULL = ScalePreset(
     label="snowball-full",
     evals="math500,gsm8k-0shot",
     recipe=SkyRLRecipe.combine(
+        resources=SNOWBALL_RESOURCES,
         geometry=RecipePatch(
             trainer=Trainer(
-                placement=Placement(
-                    colocate_all=False,
-                    colocate_policy_ref=False,
-                    policy_num_nodes=4,
-                    policy_num_gpus_per_node=GPUS_PER_NODE,
-                    ref_num_nodes=2,
-                    ref_num_gpus_per_node=GPUS_PER_NODE,
-                ),
                 train_batch_size=128,
                 policy_mini_batch_size=64,
                 micro_train_batch_size_per_gpu=4,
             ),
             generator=Generator(
                 num_inference_engines=4,
-                inference_engine_tensor_parallel_size=1,
-                inference_engine_pipeline_parallel_size=1,
-                inference_engine_data_parallel_size=GPUS_PER_NODE,
-                inference_engine_expert_parallel_size=GPUS_PER_NODE,
                 n_samples_per_prompt=8,
             ),
         ),
@@ -450,26 +448,15 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
     label="snowball-smoke-r4",
     evals="gsm8k-smoke",
     recipe=SkyRLRecipe.combine(
+        resources=SNOWBALL_RESOURCES,
         geometry=RecipePatch(
             trainer=Trainer(
-                placement=Placement(
-                    colocate_all=False,
-                    colocate_policy_ref=False,
-                    policy_num_nodes=4,
-                    policy_num_gpus_per_node=GPUS_PER_NODE,
-                    ref_num_nodes=2,
-                    ref_num_gpus_per_node=GPUS_PER_NODE,
-                ),
                 train_batch_size=64,
                 policy_mini_batch_size=64,
                 micro_train_batch_size_per_gpu=1,
             ),
             generator=Generator(
                 num_inference_engines=1,
-                inference_engine_tensor_parallel_size=1,
-                inference_engine_pipeline_parallel_size=1,
-                inference_engine_data_parallel_size=GPUS_PER_NODE,
-                inference_engine_expert_parallel_size=GPUS_PER_NODE,
                 n_samples_per_prompt=8,
             ),
         ),
@@ -485,26 +472,15 @@ SNOWBALL_FULL_R4 = ScalePreset(
     label="snowball-full-r4",
     evals="math500,gsm8k-0shot",
     recipe=SkyRLRecipe.combine(
+        resources=SNOWBALL_RESOURCES,
         geometry=RecipePatch(
             trainer=Trainer(
-                placement=Placement(
-                    colocate_all=False,
-                    colocate_policy_ref=False,
-                    policy_num_nodes=4,
-                    policy_num_gpus_per_node=GPUS_PER_NODE,
-                    ref_num_nodes=2,
-                    ref_num_gpus_per_node=GPUS_PER_NODE,
-                ),
                 train_batch_size=64,
                 policy_mini_batch_size=64,
                 micro_train_batch_size_per_gpu=1,
             ),
             generator=Generator(
                 num_inference_engines=4,
-                inference_engine_tensor_parallel_size=1,
-                inference_engine_pipeline_parallel_size=1,
-                inference_engine_data_parallel_size=GPUS_PER_NODE,
-                inference_engine_expert_parallel_size=GPUS_PER_NODE,
                 n_samples_per_prompt=8,
             ),
         ),
@@ -525,26 +501,15 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
     label="snowball-smoke-r5",
     evals="gsm8k-smoke",
     recipe=SkyRLRecipe.combine(
+        resources=SNOWBALL_RESOURCES,
         geometry=RecipePatch(
             trainer=Trainer(
-                placement=Placement(
-                    colocate_all=False,
-                    colocate_policy_ref=False,
-                    policy_num_nodes=4,
-                    policy_num_gpus_per_node=GPUS_PER_NODE,
-                    ref_num_nodes=2,
-                    ref_num_gpus_per_node=GPUS_PER_NODE,
-                ),
                 train_batch_size=64,
                 policy_mini_batch_size=64,
                 micro_train_batch_size_per_gpu=1,
             ),
             generator=Generator(
                 num_inference_engines=1,
-                inference_engine_tensor_parallel_size=1,
-                inference_engine_pipeline_parallel_size=1,
-                inference_engine_data_parallel_size=GPUS_PER_NODE,
-                inference_engine_expert_parallel_size=GPUS_PER_NODE,
                 n_samples_per_prompt=8,
             ),
         ),
@@ -560,26 +525,15 @@ SNOWBALL_FULL_R5 = ScalePreset(
     label="snowball-full-r5",
     evals="math500,gsm8k-0shot",
     recipe=SkyRLRecipe.combine(
+        resources=SNOWBALL_RESOURCES,
         geometry=RecipePatch(
             trainer=Trainer(
-                placement=Placement(
-                    colocate_all=False,
-                    colocate_policy_ref=False,
-                    policy_num_nodes=4,
-                    policy_num_gpus_per_node=GPUS_PER_NODE,
-                    ref_num_nodes=2,
-                    ref_num_gpus_per_node=GPUS_PER_NODE,
-                ),
                 train_batch_size=64,
                 policy_mini_batch_size=64,
                 micro_train_batch_size_per_gpu=1,
             ),
             generator=Generator(
                 num_inference_engines=4,
-                inference_engine_tensor_parallel_size=1,
-                inference_engine_pipeline_parallel_size=1,
-                inference_engine_data_parallel_size=GPUS_PER_NODE,
-                inference_engine_expert_parallel_size=GPUS_PER_NODE,
                 n_samples_per_prompt=8,
             ),
         ),

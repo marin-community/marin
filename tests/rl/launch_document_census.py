@@ -77,7 +77,9 @@ def _tasktrove_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
     return tasktrove.smoke_step(release)
 
 
-def _probe_step(artifact_root: Path, settings: dict[str, Any]) -> ArtifactStep[SkyRLRun]:
+def _probe_step(
+    artifact_root: Path, settings: dict[str, int | float | str | tuple[str, ...] | None]
+) -> ArtifactStep[SkyRLRun]:
     # The build-options wrapper displays/runs a graph. Its wrapped Click build body returns that graph.
     builder = inspect.unwrap(mismatch.main.callback)
     return builder(
@@ -135,7 +137,7 @@ def launch_builders(
     for cache, replay, updates, resume, reuse in product(
         ("off", "on", "both"), replay_choices, (0, 2), (False, True), (False, True)
     ):
-        settings = dict(
+        settings: dict[str, int | float | str | tuple[str, ...] | None] = dict(
             seed=17,
             prompt_count=2,
             samples_per_prompt=2,
