@@ -325,10 +325,17 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     resolver = fake_bin / "uv"
+    cache = tmp_path / "uv-cache"
+    cached_source = cache / "git-v1/checkouts/marinskyrl/pinned"
+    cached_source.parent.mkdir(parents=True)
+    subprocess.run(["git", "clone", str(upstream), str(cached_source)], check=True, capture_output=True)
     resolver.write_text(
         f"#!{sys.executable}\n"
         "import sys, tomllib\n"
         "from pathlib import Path\n"
+        "if sys.argv[1:] == ['cache', 'dir']:\n"
+        f"    print({str(cache)!r})\n"
+        "    sys.exit(0)\n"
         "directory = Path(sys.argv[sys.argv.index('--project') + 1])\n"
         "distribution = sys.argv[sys.argv.index('--upgrade-package') + 1]\n"
         "path = directory / 'uv.lock'\n"
@@ -401,8 +408,6 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
                 project.value,
                 "--summary-file",
                 str(summary),
-                "--schema-source",
-                str(upstream),
             ],
             cwd=repository,
             env=environment,
@@ -446,7 +451,7 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
             provenance = copied.with_suffix(".provenance.json")
             original_copy = {path: path.read_bytes() for path in copied.iterdir()}
             original_provenance = provenance.read_bytes()
-            check_command = [sys.executable, "config/update-external.py", "--check", "--schema-source", str(upstream)]
+            check_command = [sys.executable, "config/update-external.py", "--check"]
             clean = subprocess.run(
                 check_command, cwd=repository, env=environment, capture_output=True, text=True, timeout=30
             )

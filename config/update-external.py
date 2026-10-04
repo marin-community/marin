@@ -568,7 +568,7 @@ def recipe_schema_source(dependency: LockedDependency, source: Path | None) -> P
         candidates = (source,)
     else:
         cache = Path(subprocess.check_output(["uv", "cache", "dir"], text=True).strip())
-        candidates = tuple((cache / "git-v0/checkouts").glob("*/*"))
+        candidates = tuple(cache.glob("git-v*/checkouts/*/*"))
     for candidate in candidates:
         result = subprocess.run(
             ["git", "-C", str(candidate), "cat-file", "-e", f"{dependency.commit}^{{commit}}"],
