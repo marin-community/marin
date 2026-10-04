@@ -4,13 +4,15 @@
 import hashlib
 import json
 
+import pytest
 from click.testing import CliRunner
 from marin.experiment import cli as experiment_cli
 
 from experiments.post_training.russell_rsi import launch_contract_tasks as contract_launch
 
 
-def test_contract_cpu_entrypoint_binds_pinned_inputs_without_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("method,response_cap", [("teacher-statement-v1", 6), ("frozen-obligations-v1", 0)])
+def test_contract_cpu_entrypoint_binds_pinned_inputs_without_execution(tmp_path, monkeypatch, method, response_cap):
     config = tmp_path / "contracts.json"
     config.write_text(
         json.dumps(
@@ -22,12 +24,18 @@ def test_contract_cpu_entrypoint_binds_pinned_inputs_without_execution(tmp_path,
                 "stage": "prepare",
                 "capabilities_uri": "",
                 "capabilities_sha256": "",
-                "response_cap": 6,
+                "response_cap": response_cap,
                 "admission_concurrency": 2,
                 "statement_review_uri": "",
                 "statement_review_sha256": "",
                 "prepared_manifest_uri": "",
                 "prepared_manifest_sha256": "",
+                "method": method,
+                "max_contracts": 6,
+                "observation_manifest_uri": "/tmp/observations.json",
+                "observation_manifest_sha256": "b" * 64,
+                "observation_source_manifest_uri": "/tmp/original-source.json",
+                "observation_source_manifest_sha256": "c" * 64,
             }
         )
     )
@@ -48,7 +56,22 @@ def test_contract_cpu_entrypoint_binds_pinned_inputs_without_execution(tmp_path,
     payload = json.loads(captured[0].fingerprint_payload())
     assert payload["manifest_sha256"] == "a" * 64
     assert payload["stage"] == "prepare"
-    assert payload["response_cap"] == 6
+    assert payload["response_cap"] == response_cap
+    assert payload["method"] == method
+    if method == "frozen-obligations-v1":
+        monkeypatch.delenv(contract_launch.GLM_TOKEN_ENV, raising=False)
+        invocations = []
+
+        def remote_boundary(function, **options):
+            def submit(value):
+                invocations.append((options, value))
+
+            return submit
+
+        monkeypatch.setattr(contract_launch, "remote", remote_boundary)
+        contract_launch.run_contract_tasks(contract_launch.ContractTasksConfig(**json.loads(config.read_text())))
+        assert invocations[0][0]["env_vars"] == {}
+        assert invocations[0][1].method == method
 
 
 def test_contract_cpu_run_requires_iris_before_any_worker(tmp_path, monkeypatch):

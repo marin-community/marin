@@ -4,7 +4,8 @@
 """Build statements for fixed source-backed contracts and admit reviewed versions.
 
 The pinned manifest owns source, probes, obligations, runtime, and dependencies.
-The prepare stage freezes reference observations and one provider response. The
+The prepare stage captures observations and a teacher statement, or imports
+verified observations and renders frozen obligations with zero provider calls. The
 admit stage requires a separate review of the unchanged statement hash.
 """
 
@@ -34,6 +35,10 @@ MAX_REQUIREMENTS_BYTES = 8192
 MAX_SOURCE_BYTES = 32768
 MAX_RESPONSES = 24
 MAX_ATTEMPTS = 2
+TEACHER_METHOD = "teacher-statement-v1"
+RENDERED_METHOD = "frozen-obligations-v1"
+RENDERER_PREFIX = "Implement the following behavior in the repository:\n\n"
+RENDERER_SPEC = {"prefix": RENDERER_PREFIX, "item_format": "- {item}", "separator": "\n"}
 
 
 @dataclass(frozen=True)
@@ -64,6 +69,76 @@ class TeacherStatement(BaseModel):
 
 def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
+def rendered_statement(contract: FixedContract) -> TeacherStatement:
+    return TeacherStatement(
+        problem_statement=RENDERER_SPEC["prefix"]
+        + RENDERER_SPEC["separator"].join(
+            RENDERER_SPEC["item_format"].format(item=item) for item in contract.obligations
+        )
+    )
+
+
+def imported_observations(directory: Path, manifest: dict, contract: FixedContract, snapshot: SourceSnapshot) -> dict:
+    """Validate captured observations without copying the previous attempt journal."""
+    from experiments.post_training.russell_rsi.tasks import VerifierReport  # noqa: PLC0415
+
+    candidate = directory / "contracts" / contract.contract_id
+    identity = json.loads((candidate / "identity.json").read_text())
+    cohort = json.loads((directory / "cohort-identity.json").read_text())
+    if cohort["manifest_sha256"] != manifest["manifest_sha256"]:
+        raise ValueError("Original observation cohort used a different source manifest")
+    source = SourceSnapshot.model_validate_json((candidate / "snapshot.json").read_bytes())
+    if source != snapshot or identity["source_sha256"] != digest(snapshot.model_dump(mode="json")):
+        raise ValueError("Imported snapshot differs from the frozen source")
+    if identity["probes_sha256"] != digest(contract.probes) or identity["cohort_sha256"] != digest(cohort):
+        raise ValueError("Imported probes or identity changed")
+    attempts = sorted((candidate / "attempts").glob("*"))
+    captures = [
+        [attempt / f"capture-{label}-{number}.json" for label in ("parent", "reference") for number in (1, 2)]
+        for attempt in attempts
+    ]
+    captures = [paths for paths in captures if all(path.exists() for path in paths)]
+    if len(captures) != 1:
+        raise ValueError("Observation import requires one complete capture set")
+    reports = [
+        VerifierReport.model_validate_json(json.dumps(json.loads(path.read_text())["report"])) for path in captures[0]
+    ]
+    if any(
+        report.errors
+        or any(error is not None for error in report.case_errors)
+        or report.tests != len(contract.probes)
+        or len(report.observations) != len(contract.probes)
+        for report in reports
+    ):
+        raise ValueError("Imported captures have errors or incomplete observations")
+    parent, parent_repeat, reference, reference_repeat = reports
+    if parent.observations != parent_repeat.observations or reference.observations != reference_repeat.observations:
+        raise ValueError("Imported observations are unstable")
+    if parent.observations == reference.observations:
+        raise ValueError("Imported observations have no substantive difference")
+    expected = json.loads((candidate / "expected.json").read_text())["observations"]
+    if digest(expected) != digest(reference.observations):
+        raise ValueError("Imported expected values differ from the reference")
+    selected = [
+        candidate / "snapshot.json",
+        candidate / "identity.json",
+        directory / "cohort-identity.json",
+        candidate / "expected.json",
+        *captures[0],
+    ]
+    hashes = {path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in selected}
+    if any(manifest["files"].get(path) != sha for path, sha in hashes.items()):
+        raise ValueError("Imported capture hash changed")
+    return {
+        "observations": expected,
+        "original_identity": identity,
+        "original_cohort": cohort,
+        "imported_files": hashes,
+        "original_capture_attempts": len(attempts),
+        "original_capture_reports": sum(len(list(attempt.glob("capture-*.json"))) for attempt in attempts),
+    }
 
 
 def statement_request(contract: FixedContract, capabilities: dict) -> dict:
@@ -172,7 +247,7 @@ async def contract_attempt(
     identity: dict,
     stage: str,
     review: dict,
-    request: dict,
+    request: dict | None,
     relay_job: str,
     build,
     factory,
@@ -319,6 +394,8 @@ async def contract_attempt(
                 expected = reports["capture-reference-1"]["observations"]
                 await save_admission_record(expected_path, {"observations": expected}, persist)
             if not statement_path.exists():
+                if request is None:
+                    raise ValueError("Rendered construction cannot call a provider")
                 statement = await saved_statement(
                     request, identity=digest(identity), relay_job=relay_job, directory=directory, persist=persist
                 )
@@ -436,6 +513,12 @@ class ContractTasksConfig:
     statement_review_sha256: str
     prepared_manifest_uri: str
     prepared_manifest_sha256: str
+    method: str
+    max_contracts: int
+    observation_manifest_uri: str
+    observation_manifest_sha256: str
+    observation_source_manifest_uri: str
+    observation_source_manifest_sha256: str
 
 
 def run_contract_tasks_in_project(config: ContractTasksConfig) -> None:
@@ -464,10 +547,27 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
         admission_code_sha256,
         build_task,
         repository_wheels,
+        save_admission_record,
     )
 
-    if not 1 <= config.response_cap <= MAX_RESPONSES or config.admission_concurrency < 1:
-        raise ValueError("Invalid bounded construction capacity")
+    if config.method not in {TEACHER_METHOD, RENDERED_METHOD}:
+        raise ValueError("Unknown construction method")
+    rendered = config.method == RENDERED_METHOD
+    if rendered and not all(
+        (
+            config.observation_manifest_uri,
+            config.observation_manifest_sha256,
+            config.observation_source_manifest_uri,
+            config.observation_source_manifest_sha256,
+        )
+    ):
+        raise ValueError("Rendered construction requires pinned observation inputs")
+    if not 1 <= config.max_contracts <= MAX_RESPONSES:
+        raise ValueError("Invalid contract count bound")
+    if config.admission_concurrency < 1:
+        raise ValueError("Invalid admission concurrency")
+    if (rendered and config.response_cap != 0) or (not rendered and not 1 <= config.response_cap <= MAX_RESPONSES):
+        raise ValueError("Invalid provider response bound")
     capabilities = json.loads(pinned_bytes(config.capabilities_uri, config.capabilities_sha256))
     review = (
         json.loads(pinned_bytes(config.statement_review_uri, config.statement_review_sha256))
@@ -484,8 +584,10 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
             labels = {CodingSkill(label).value for label in row["capability_labels"]}
             if not labels or (feedback_labels and not labels.intersection(feedback_labels)):
                 raise ValueError("Contract does not target the frozen capability labels")
-        if len(contracts) > config.response_cap:
-            raise ValueError("Fixed source pool exceeds the response cap")
+        if len(contracts) > config.max_contracts:
+            raise ValueError("Fixed source pool exceeds the contract count bound")
+        if not rendered and len(contracts) > config.response_cap:
+            raise ValueError("Fixed source pool exceeds the provider response bound")
         if len({row["contract_id"] for row in contracts}) != len(contracts):
             raise ValueError("Repeated semantic contract identity")
         bank = json.loads((evidence / "bank.json").read_text())
@@ -521,7 +623,37 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
         }
         if any(s.split != "train" for s in snapshots.values()):
             raise ValueError("Construction includes a non-training source")
-        requests = {row["contract_id"]: statement_request(fixed_contract(row), capabilities) for row in contracts}
+        requests = (
+            {}
+            if rendered
+            else {row["contract_id"]: statement_request(fixed_contract(row), capabilities) for row in contracts}
+        )
+        imports = {}
+        if rendered:
+            imported_directory = root / "observation-import"
+            imported_manifest = download_evidence(
+                config.observation_manifest_uri, config.observation_manifest_sha256, imported_directory
+            )
+            original_source = download_evidence(
+                config.observation_source_manifest_uri,
+                config.observation_source_manifest_sha256,
+                root / "original-source",
+            )
+            if (
+                imported_manifest["manifest_sha256"] != config.observation_source_manifest_sha256
+                or imported_manifest["status"] != "complete"
+                or imported_manifest["stage"] != "prepare"
+            ):
+                raise ValueError("Observation artifact does not match completed original preparation")
+            for key in ("contracts", "runtime_bundle", "image", "dependency_manifest", "dependency_wheels_uri"):
+                if original_source[key] != manifest[key]:
+                    raise ValueError(f"Observation input differs from frozen {key}")
+            imports = {
+                row["contract_id"]: imported_observations(
+                    imported_directory, imported_manifest, fixed_contract(row), snapshots[row["source_id"]]
+                )
+                for row in contracts
+            }
         runtime_config = RuntimeBundle(**manifest["runtime_bundle"])
         runtime = install_runtime_bundle(runtime_config)
         factory = QemuMachineFactory(
@@ -545,13 +677,26 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                 raise ValueError("Preparation used a different frozen source manifest")
         download_tree(config.output_path, work)
         shutil.copytree(evidence / "evidence", work / "evidence", dirs_exist_ok=True)
-        scientific_identity = {
+        scientific_identity: dict = {
             "manifest_sha256": config.manifest_sha256,
-            "requests_sha256": {identifier: digest(request) for identifier, request in requests.items()},
+            "method": config.method,
             "capabilities_sha256": config.capabilities_sha256,
             "code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "admission_code_sha256": admission_code_sha256(),
         }
+        if rendered:
+            scientific_identity.update(
+                {
+                    "renderer_sha256": digest(RENDERER_SPEC),
+                    "observation_manifest_sha256": config.observation_manifest_sha256,
+                    "observation_source_manifest_sha256": config.observation_source_manifest_sha256,
+                    "derivations_sha256": digest(imports),
+                }
+            )
+        else:
+            scientific_identity["requests_sha256"] = {
+                identifier: digest(request) for identifier, request in requests.items()
+            }
         remote_cohort = StoragePath(prefix_join(config.output_path, "cohort-identity.json"))
         if remote_cohort.exists() and json.loads(remote_cohort.read_text()) != scientific_identity:
             raise ValueError("Remote construction namespace has a different scientific identity")
@@ -571,7 +716,7 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
             async with semaphore:
                 snapshot = snapshots[row["source_id"]]
                 contract = fixed_contract(row)
-                request = requests[contract.contract_id]
+                request = requests.get(contract.contract_id)
                 dependency = repository_wheels(wheels, snapshot.repository)
 
                 def build(repair):
@@ -586,11 +731,36 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
 
                 identity = {
                     "cohort_sha256": digest(scientific_identity),
-                    "request_sha256": digest(request),
                     "source_sha256": digest(snapshot.model_dump(mode="json")),
                     "probes_sha256": digest(contract.probes),
                 }
+                if rendered:
+                    identity["statement_sha256"] = digest(rendered_statement(contract).model_dump())
+                else:
+                    identity["request_sha256"] = digest(request)
                 directory = work / "contracts" / contract.contract_id
+                if rendered:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    derivation = {
+                        "method": config.method,
+                        "obligations_sha256": digest(contract.obligations),
+                        "observation_manifest_sha256": config.observation_manifest_sha256,
+                        **imports[contract.contract_id],
+                    }
+                    for name, record in (
+                        ("derivation.json", derivation),
+                        ("expected.json", {"observations": derivation["observations"]}),
+                        ("statement.json", rendered_statement(contract).model_dump()),
+                    ):
+                        path = directory / name
+                        if path.exists() and json.loads(path.read_text()) != record:
+                            raise ValueError(f"Rendered evidence changed: {name}")
+                        await save_admission_record(path, record, persist)
+                    for relative in derivation["imported_files"]:
+                        target = directory / "imported" / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(imported_directory / relative, target)
+                        await persist(target)
                 result = await contract_attempt(
                     contract,
                     snapshot,
@@ -673,6 +843,7 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                 "version": 1,
                 "manifest_sha256": config.manifest_sha256,
                 "stage": config.stage,
+                "method": config.method,
                 "status": "failed" if errors else "complete",
             },
         )

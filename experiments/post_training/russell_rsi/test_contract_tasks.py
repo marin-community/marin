@@ -9,6 +9,7 @@ import json
 import threading
 from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 import rigging.runtime_bundle
@@ -288,8 +289,9 @@ def test_retry_cannot_replace_frozen_reference_values(tmp_path, monkeypatch, sou
     assert len(list((tmp_path / "attempts").iterdir())) == 2
 
 
+@pytest.mark.parametrize("rendered", [False, True])
 def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs(
-    tmp_path, monkeypatch, provider, source, contract
+    tmp_path, monkeypatch, provider, source, contract, rendered
 ):
     artifact = tmp_path / "input"
     artifact.mkdir()
@@ -383,9 +385,52 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
         statement_review_sha256="",
         prepared_manifest_uri="",
         prepared_manifest_sha256="",
+        method=contract_tasks.TEACHER_METHOD,
+        max_contracts=1,
+        observation_manifest_uri="",
+        observation_manifest_sha256="",
+        observation_source_manifest_uri="",
+        observation_source_manifest_sha256="",
     )
     contract_tasks.prepare_contract_tasks(config)
-    prepared = tmp_path / "prepare" / "contracts" / contract.contract_id / "prepared.json"
+    if rendered:
+        original_handoff = tmp_path / "prepare" / "repair-manifest.json"
+        config = replace(
+            config,
+            method=contract_tasks.RENDERED_METHOD,
+            response_cap=0,
+            max_contracts=1,
+            output_path=str(tmp_path / "rendered-prepare"),
+            observation_manifest_uri=str(original_handoff),
+            observation_manifest_sha256=hashlib.sha256(original_handoff.read_bytes()).hexdigest(),
+            observation_source_manifest_uri=str(manifest_file),
+            observation_source_manifest_sha256=config.manifest_sha256,
+        )
+        changed_manifest = dict(manifest)
+        changed_manifest["contracts"] = [{**manifest["contracts"][0], "obligations": ["Add an unsupported obligation."]}]
+        changed_path = tmp_path / "changed-manifest.json"
+        changed_path.write_text(json.dumps(changed_manifest))
+        with pytest.raises(ValueError, match="frozen contracts"):
+            contract_tasks.prepare_contract_tasks(
+                replace(
+                    config,
+                    manifest_uri=str(changed_path),
+                    manifest_sha256=hashlib.sha256(changed_path.read_bytes()).hexdigest(),
+                )
+            )
+        contract_tasks.prepare_contract_tasks(config)
+        directory = tmp_path / "rendered-prepare" / "contracts" / contract.contract_id
+        assert not (directory / "generation.json").exists()
+        assert not (directory / "request-start.json").exists()
+        assert json.loads((directory / "derivation.json").read_text())["original_capture_reports"] == 4
+        assert json.loads((directory / "statement.json").read_text()) == {
+            "problem_statement": (
+                "Implement the following behavior in the repository:\n\n"
+                "- Add two integers; preserve negative operands."
+            )
+        }
+    preparation = Path(config.output_path)
+    prepared = preparation / "contracts" / contract.contract_id / "prepared.json"
     prepared_record = json.loads(prepared.read_text())
     review_file = tmp_path / "review.json"
     review_file.write_text(
@@ -393,7 +438,7 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
             {contract.contract_id: {"statement_sha256": prepared_record["statement_sha256"], "decision": "approve"}}
         )
     )
-    handoff = tmp_path / "prepare" / "repair-manifest.json"
+    handoff = preparation / "repair-manifest.json"
     admitted = replace(
         config,
         stage="admit",
@@ -403,6 +448,20 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
         prepared_manifest_uri=str(handoff),
         prepared_manifest_sha256=hashlib.sha256(handoff.read_bytes()).hexdigest(),
     )
+    if rendered:
+        wrong_review = tmp_path / "wrong-review.json"
+        wrong_review.write_text(
+            json.dumps({contract.contract_id: {"statement_sha256": "changed", "decision": "approve"}})
+        )
+        with pytest.raises(ExceptionGroup, match="construction failures"):
+            contract_tasks.prepare_contract_tasks(
+                replace(
+                    admitted,
+                    output_path=str(tmp_path / "wrong-admit"),
+                    statement_review_uri=str(wrong_review),
+                    statement_review_sha256=hashlib.sha256(wrong_review.read_bytes()).hexdigest(),
+                )
+            )
     contract_tasks.prepare_contract_tasks(admitted)
     result_bank = json.loads((tmp_path / "admit" / "bank.json").read_text())
     assert len(result_bank["tasks"]) == 2
@@ -438,3 +497,65 @@ def test_cancelled_prepared_attempts_consume_the_shared_budget(tmp_path, monkeyp
     assert execute(contract, source, tmp_path, "admit", review)["stage"] == "infrastructure_exhausted"
     assert len(calls) == 2
     assert len(list((tmp_path / "attempts").iterdir())) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation,message",
+    [
+        ("expected", "expected values differ"),
+        ("probe", "probes or identity changed"),
+        ("snapshot", "snapshot differs"),
+        ("report", "captures have errors"),
+        ("file_hash", "capture hash changed"),
+    ],
+)
+def test_import_rejects_changed_capture_evidence(tmp_path, source, contract, mutation, message):
+    directory = tmp_path / "contracts" / contract.contract_id
+    attempt = directory / "attempts" / "0001"
+    attempt.mkdir(parents=True)
+    cohort = {"manifest_sha256": "original-source"}
+    (tmp_path / "cohort-identity.json").write_text(json.dumps(cohort))
+    identity = {
+        "cohort_sha256": digest(cohort),
+        "source_sha256": digest(source.model_dump(mode="json")),
+        "probes_sha256": digest(contract.probes),
+    }
+    (directory / "identity.json").write_text(json.dumps(identity))
+    (directory / "snapshot.json").write_text(source.model_dump_json())
+    (directory / "expected.json").write_text(json.dumps({"observations": [5, 2]}))
+    for label in ("parent", "reference"):
+        for number in (1, 2):
+            report = tasks.VerifierReport(
+                tests=2,
+                failures=2,
+                errors=0,
+                observations=(-1, -6) if label == "parent" else (5, 2),
+                case_errors=(None, None),
+                case_diagnostics=("", ""),
+            )
+            (attempt / f"capture-{label}-{number}.json").write_text(
+                json.dumps({"report": report.model_dump(mode="json")})
+            )
+    files = {
+        path.relative_to(tmp_path).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    manifest = {"manifest_sha256": "original-source", "files": files}
+    imported = contract_tasks.imported_observations(tmp_path, manifest, contract, source)
+    assert imported["observations"] == [5, 2]
+    if mutation == "expected":
+        (directory / "expected.json").write_text(json.dumps({"observations": [6, 2]}))
+    elif mutation == "probe":
+        contract = replace(contract, probes=("print(100)", contract.probes[1]))
+    elif mutation == "snapshot":
+        source = source.model_copy(update={"commit_sha": "c" * 40})
+    elif mutation == "report":
+        path = attempt / "capture-reference-2.json"
+        record = json.loads(path.read_text())
+        record["report"]["errors"] = 1
+        path.write_text(json.dumps(record))
+    else:
+        manifest["files"]["cohort-identity.json"] = "changed"
+    with pytest.raises(ValueError, match=message):
+        contract_tasks.imported_observations(tmp_path, manifest, contract, source)
