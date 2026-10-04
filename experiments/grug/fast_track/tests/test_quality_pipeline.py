@@ -1,334 +1,231 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import hashlib
-import json
-import os
-import subprocess
-import sys
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
+from typing import cast
 
+import jax
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from levanter.store.cache import SerialCacheWriter, TreeCache
-from marin.execution.artifact import write_artifact
-from marin.execution.lazy import StepContext
-from marin.execution.lazy import run as run_artifacts
-from numpy.typing import NDArray
+from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
+from haliax import Axis
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.schedule import BatchSchedule
+from levanter.store.cache import CacheMetadata, SerialCacheWriter, TreeCache
+from marin.execution.lazy import ArtifactStep
+from zephyr.context import ZephyrContext
 
 from experiments.grug.fast_track.contracts import ResolvedTrainingBudget
-from experiments.grug.fast_track.quality import (
-    LabelledEmbedding,
-    LabelSplit,
-    PoolRequirements,
-    QualityScorer,
-    RidgeHeadConfig,
-    label_split,
-)
-from experiments.grug.fast_track.quality_cli import main as quality_cli
+from experiments.grug.fast_track.corpus_sample import RawCorpusPool
+from experiments.grug.fast_track.label_exclusion import LabelExclusion
+from experiments.grug.fast_track.quality_cli import main as quality_main
 from experiments.grug.fast_track.quality_pipeline import (
-    PinnedFile,
-    QualityBundle,
     QualityConfig,
     QualityData,
-    QualitySpec,
     QualityTrainingSource,
     SelectionMethod,
-    build_quality_data,
     prepare_quality_data,
+    score_raw_pool,
 )
+from experiments.grug.fast_track.ranked_pool import RangeTokenTotal
 
 
-@dataclass(frozen=True)
-class _NegativeScorer:
-    def scores(self, embeddings: NDArray) -> NDArray[np.float64]:
-        return -np.asarray(embeddings, dtype=np.float64)[:, 0]
+class _Scorer:
+    def scores(self, batch):
+        return np.asarray([float(text.rsplit("-", 1)[1]) for text in batch.texts])
+
+    def __call__(self):
+        return _Scorer()
 
 
-class _NegativeHeadConfig:
-    def __init__(self, revision: str = "test-v1", split_seed: int = 7):
-        self.revision = revision
-        self.split_seed = split_seed
-        self.runtime_state = object()
+class _SmallTokenizer:
+    name_or_path = "quality-test-tokenizer"
+    vocab_size = 32
+    bos_token_id = None
+    eos_token_id = None
+    eos_token = "EOS"
 
-    @property
-    def identity(self) -> Mapping[str, str]:
-        return {"implementation": "test-negative", "revision": self.revision}
-
-    def fit(self, rows: Sequence[LabelledEmbedding]) -> QualityScorer:
-        assert rows
-        assert all(label_split(row.duplicate_group, self.split_seed) is LabelSplit.TRAIN for row in rows)
-        return _NegativeScorer()
+    def encode(self, text: str) -> list[int]:
+        return [len(text)]
 
 
-@dataclass(frozen=True)
-class _WrongShapeScorer:
-    def scores(self, embeddings: NDArray) -> NDArray[np.float64]:
-        return np.zeros((len(embeddings), 1), dtype=np.float64)
+class _FingerprintContext:
+    is_fingerprint = True
 
+    def __init__(self, cache_dir: str):
+        self.cache_dir = cache_dir
 
-@dataclass(frozen=True)
-class _WrongShapeHeadConfig:
-    @property
-    def identity(self) -> Mapping[str, str]:
-        return {"implementation": "test-wrong-shape", "revision": "test-v1"}
-
-    def fit(self, rows: Sequence[LabelledEmbedding]) -> QualityScorer:
-        return _WrongShapeScorer()
-
-
-def _pin(path) -> PinnedFile:
-    return PinnedFile(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    def artifact_path(self, _selection):
+        return self.cache_dir
 
 
 @pytest.fixture
-def quality_config(tmp_path) -> QualityConfig:
-    labels_path = tmp_path / "labels.parquet"
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {
-                    "source": "labels",
-                    "id": str(i),
-                    "duplicate_group": f"label-{i}",
-                    "embedding": [float(i)],
-                    "label": float(i),
-                }
-                for i in range(100)
-            ]
-        ),
-        labels_path,
+def zephyr_context(tmp_path):
+    client = LocalClient()
+    context = ZephyrContext(
+        client=client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="quality-pipeline-test",
     )
-    cache_path = tmp_path / "source-cache"
-    tokens = [np.full(length, i + 1, dtype="<i4") for i, length in enumerate((10, 30, 20, 40))]
-    with SerialCacheWriter(str(cache_path), {"input_ids": np.zeros(0, dtype=np.int32)}) as writer:
-        writer.write_batch([{"input_ids": values} for values in tokens])
-    pool_path = tmp_path / "pool.parquet"
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {
-                    "source": "pool",
-                    "id": str(i),
-                    "duplicate_group": f"pool-{i}",
-                    "embedding": [float(i)],
-                    "token_count": len(values),
-                    "content_type": "text",
-                    "language": "en",
-                    "cache_path": str(cache_path),
-                    "cache_row": i,
-                    "token_sha256": hashlib.sha256(values.tobytes()).hexdigest(),
-                    "incumbent_score": float(3 - i),
-                }
-                for i, values in enumerate(tokens)
-            ]
+    yield context
+    context.shutdown()
+    client.shutdown(wait=True)
+
+
+def test_quality_pipeline_writes_exact_budget_tokens_from_selected_parquet(tmp_path, zephyr_context, monkeypatch):
+    monkeypatch.setattr("experiments.grug.fast_track.quality_pipeline.load_tokenizer", lambda _name: _SmallTokenizer())
+    rows = []
+    for index in range(12):
+        token_values = [index + 1] * 5
+        rows.append(
+            {
+                "source": "source",
+                "id": str(index),
+                "sample_rank": hashlib.sha256(f"seed:{index}".encode()).hexdigest(),
+                "duplicate_group": hashlib.sha256(f"text-{index}".encode()).hexdigest(),
+                "text": f"text-{index}",
+                "input_ids": token_values,
+                "token_count": len(token_values),
+            }
+        )
+    rows.sort(key=lambda row: (row["sample_rank"], row["source"], row["id"]))
+    path_a, path_b = tmp_path / "raw-a.parquet", tmp_path / "raw-b.parquet"
+    pq.write_table(pa.Table.from_pylist(rows[:6]), path_a)
+    pq.write_table(pa.Table.from_pylist(rows[6:]), path_b)
+    raw = RawCorpusPool(
+        tokenizer="test-tokenizer",
+        tokenizer_hash="a" * 64,
+        sources=(),
+        seed=17,
+        requested_tokens=60,
+        actual_tokens=60,
+        documents=12,
+        shards=(str(path_a), str(path_b)),
+        range_totals=(
+            RangeTokenTotal(0, str(path_a), 6, 30),
+            RangeTokenTotal(1, str(path_b), 6, 30),
         ),
-        pool_path,
+        source_tokens={"source": 60},
+        manifest_path=str(tmp_path / "raw.json"),
     )
-    bundle = QualityBundle(
-        tokenizer="passthrough",
-        embedding_revision="embedding-v1",
-        embedding_scale=1.0,
-        label_revision="glm-v1",
-        incumbent_revision="incumbent-v1",
-        baseline_recipe="baseline-v1",
-        sampling_method="production-weighted-hash",
-        pool_seed=3,
-        split_seed=7,
-        labels=(_pin(labels_path),),
-        pool=(_pin(pool_path),),
-        quality_bin_edges=(0.0, 1.5, 3.0),
-        requirements=PoolRequirements(
-            {"pool": 1.0},
-            0.01,
-            ("low", "high"),
-            2,
-            4,
-            0.5,
-        ),
+    with pytest.raises(ValueError, match="below the 60 scoring budget"):
+        score_raw_pool(
+            raw.model_copy(update={"requested_tokens": 55}),
+            ctx=zephyr_context,
+            output_path=str(tmp_path / "overshoot-only-capacity"),
+            scorer_factory=_Scorer(),
+            classifier_identity={"implementation": "text-test", "revision": "v1"},
+            label_exclusion=LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
+            token_budget=60,
+        )
+    scored = score_raw_pool(
+        raw,
+        ctx=zephyr_context,
+        output_path=str(tmp_path / "scored"),
+        scorer_factory=_Scorer(),
+        classifier_identity={"implementation": "text-test", "revision": "v1"},
+        label_exclusion=LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
+        token_budget=40,
     )
-    bundle_path = tmp_path / "bundle.json"
-    bundle_path.write_text(bundle.model_dump_json())
-    return QualityConfig(
-        QualitySpec(_pin(bundle_path), SelectionMethod.CANDIDATE, RidgeHeadConfig(0.01), fraction=0.4, tie_seed=0),
+    config = QualityConfig(
+        4,
+        SelectionMethod.CANDIDATE,
+        7,
+        scored,
         str(tmp_path / "selection"),
     )
 
-
-def test_quality_preparation_scores_selects_and_reloads_exact_token_documents(quality_config):
-    result = prepare_quality_data(quality_config)
+    result = prepare_quality_data(config, ctx=zephyr_context)
     cache = TreeCache.load(result.cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)})
-    rows = cache.get_batch_sync([0])
+    selected = cache.get_batch_sync([0])
+    expected_id = max((row["id"] for row in rows[:8]), key=int)
 
-    np.testing.assert_array_equal(rows[0]["input_ids"], np.full(40, 4))
-    with open(result.report_path) as stream:
-        report = json.load(stream)
-    assert report["pool"]["quality_bin_documents"] == {"low": 2, "high": 2}
-    assert report["selection"]["requested_tokens"] == 40
-    assert report["selection"]["selected_tokens"] == 40
-    assert report["selected_documents"] == 1
-    assert report["token_overlap"] == 0
+    assert result.tokenizer_hash == raw.tokenizer_hash
+    assert result.requested_tokens == 4
+    assert result.actual_tokens == 5
+    assert len(selected) == 1
+    np.testing.assert_array_equal(selected[0]["input_ids"], np.full(5, int(expected_id) + 1, dtype=np.int32))
 
 
-@pytest.mark.parametrize("method", [SelectionMethod.INCUMBENT, SelectionMethod.RANDOM])
-def test_quality_controls_materialize_their_selection(quality_config, method):
-    result = prepare_quality_data(replace(quality_config, spec=replace(quality_config.spec, selection_method=method)))
-    cache = TreeCache.load(result.cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)})
-    rows = cache.get_batch_sync(range(len(cache)))
-
-    assert {int(row["input_ids"][0]) for row in rows} == {1, 2}
-    assert sum(len(row["input_ids"]) for row in rows) == 40
-    with open(result.report_path) as stream:
-        report = json.load(stream)
-    assert report["selection_method"] == method.value
-    assert report["token_overlap"] == 1.0
-
-
-def test_quality_cache_shuffles_documents_before_block_shuffle(quality_config):
-    result = prepare_quality_data(replace(quality_config, spec=replace(quality_config.spec, fraction=1.0)))
-    cache = TreeCache.load(result.cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)})
-    rows = cache.get_batch_sync(range(len(cache)))
-
-    assert [int(row["input_ids"][0]) for row in rows] == [3, 1, 2, 4]
-    with open(result.report_path) as stream:
-        report = json.load(stream)
-    with open(report["selected_ids_path"]) as stream:
-        assert [json.loads(line)["id"] for line in stream] == ["2", "0", "1", "3"]
-
-
-def test_quality_training_rejects_cutoff_overshoot_as_pool_capacity(quality_config, tmp_path):
-    spec = replace(quality_config.spec, fraction=0.1)
-    result = prepare_quality_data(replace(quality_config, spec=spec))
-    artifact_path = str(tmp_path / "artifact")
-    write_artifact(result, artifact_path)
-    step = build_quality_data(spec, version="test-dev")
-    step = replace(step, override_path=artifact_path)
-
-    with pytest.raises(ValueError, match="too small"):
-        QualityTrainingSource(step).data_config(
-            ctx=StepContext.for_run(output_path="unused", prefix=str(tmp_path), deps=(step,)),
-            validation=(),
-            tokenizer="passthrough",
-            budget=ResolvedTrainingBudget(1, 20, 1),
+def test_quality_pipeline_fails_when_pool_capacity_does_not_meet_rung_budget(tmp_path, zephyr_context):
+    rows = [
+        {
+            "source": "source",
+            "id": str(index),
+            "sample_rank": f"{index:064x}",
+            "duplicate_group": str(index),
+            "text": f"text-{index}",
+            "input_ids": [index + 1] * 5,
+            "token_count": 5,
+        }
+        for index in range(12)
+    ]
+    path = tmp_path / "raw.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    raw = RawCorpusPool(
+        tokenizer="test-tokenizer",
+        tokenizer_hash="a" * 64,
+        sources=(),
+        seed=17,
+        requested_tokens=60,
+        actual_tokens=60,
+        documents=12,
+        shards=(str(path),),
+        range_totals=(RangeTokenTotal(0, str(path), 12, 60),),
+        source_tokens={"source": 60},
+        manifest_path=str(tmp_path / "raw.json"),
+    )
+    with pytest.raises(ValueError, match="below the 70 scoring budget"):
+        score_raw_pool(
+            raw,
+            ctx=zephyr_context,
+            output_path=str(tmp_path / "undersized-score"),
+            scorer_factory=_Scorer(),
+            classifier_identity={"implementation": "text-test", "revision": "v1"},
+            label_exclusion=LabelExclusion(label_revision="no-labels-v1", duplicate_groups=frozenset()),
+            token_budget=70,
         )
 
 
-def test_quality_preparation_rejects_changed_token_join(quality_config, tmp_path):
-    cache_path = tmp_path / "source-cache"
-    with SerialCacheWriter(str(cache_path), {"input_ids": np.zeros(0, dtype=np.int32)}) as writer:
-        writer.write_batch([{"input_ids": np.full(length, 99, dtype=np.int32)} for length in (10, 30, 20, 40)])
-
-    with pytest.raises(ValueError, match="token reference differs"):
-        prepare_quality_data(quality_config)
-    assert not (tmp_path / "selection" / "tokens" / "shard_ledger.json").exists()
-
-
-def test_quality_candidate_identity_changes_artifact_path(quality_config):
-    baseline = build_quality_data(quality_config.spec, version="test-dev")
-    candidate = build_quality_data(replace(quality_config.spec, head=RidgeHeadConfig(0.5)), version="test-dev")
-    incumbent = build_quality_data(
-        replace(quality_config.spec, selection_method=SelectionMethod.INCUMBENT), version="test-dev"
+def test_training_loader_reads_only_complete_mixture_blocks(tmp_path, monkeypatch):
+    monkeypatch.setattr("levanter.data.text.datasets.load_marin_tokenizer", lambda _name: _SmallTokenizer())
+    artifact_dir = str(tmp_path / "artifact")
+    cache_dir = f"{artifact_dir}/tokens"
+    metadata = CacheMetadata(TextLmDatasetFormat().build_preprocessor(_SmallTokenizer()).metadata)
+    with SerialCacheWriter(cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)}, metadata=metadata) as writer:
+        writer.write_batch([{"input_ids": np.asarray([value], dtype=np.int32)} for value in (31, 32, 33)])
+    selection = cast(ArtifactStep[QualityData], object())
+    source = QualityTrainingSource(selection, training_tokens=3)
+    training_data = source.data_config(
+        ctx=_FingerprintContext(artifact_dir),
+        validation=(),
+        tokenizer="small-test-tokenizer",
+        budget=ResolvedTrainingBudget(batch_size=1, num_steps=3, sequence_length=1),
     )
-    custom_head = build_quality_data(
-        replace(quality_config.spec, head=_NegativeHeadConfig(revision="test-v1")), version="test-dev"
-    )
-    revised_custom_head = build_quality_data(
-        replace(quality_config.spec, head=_NegativeHeadConfig(revision="test-v2")), version="test-dev"
-    )
+    training_data = replace(training_data, shuffle=False)
 
-    assert len({baseline.name, candidate.name, incumbent.name, custom_head.name, revised_custom_head.name}) == 5
-    assert baseline.fingerprint() != candidate.fingerprint()
-    assert custom_head.fingerprint() != revised_custom_head.fingerprint()
+    assert training_data.mixture_block_size == 1
+    dataset = training_data.train_set(Axis("position", 1), BatchSchedule(1), key=jax.random.PRNGKey(5))
+    examples = asyncio.run(dataset.get_batch([0, 1, 2]))
+    token_values = [int(example.tokens.array[0]) for example in examples]
+
+    assert sorted(token_values) == [31, 32, 33]
 
 
-def test_quality_custom_head_uses_fixed_training_split_and_changes_selection(quality_config, tmp_path, monkeypatch):
-    spec = replace(quality_config.spec, head=_NegativeHeadConfig(split_seed=7))
-    step = build_quality_data(spec, version="test-dev")
-    prefix = str(tmp_path / "artifacts")
-    monkeypatch.setenv("MARIN_PREFIX", prefix)
-    (result,) = run_artifacts(step, max_concurrent=1)
-    cache = TreeCache.load(result.cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)})
-    rows = cache.get_batch_sync(range(len(cache)))
-    with open(result.report_path) as stream:
-        report = json.load(stream)
-    with open(report["selected_ids_path"]) as stream:
-        selected_ids = {json.loads(line)["id"] for line in stream}
-
-    assert selected_ids == {"0", "1"}
-    assert {int(row["input_ids"][0]) for row in rows} == {1, 2}
-    assert report["head"] == spec.head.identity
-    assert report["development"]["documents"] > 0
-
-    spec.head.revision = "mutated-after-build"
-    run_config = step.build_config(StepContext.for_run(output_path=step.path(prefix), prefix=prefix, deps=step.deps))
-    with pytest.raises(ValueError, match="identity changed after artifact construction"):
-        step.run(run_config)
-
-
-def test_quality_custom_head_must_return_one_score_per_embedding(quality_config):
-    spec = replace(quality_config.spec, head=_WrongShapeHeadConfig())
-
-    with pytest.raises(ValueError, match="one finite score per embedding"):
-        prepare_quality_data(replace(quality_config, spec=spec))
-
-
-def test_quality_cli_artifact_loads_through_python_api(quality_config, tmp_path):
-    ridge_head = RidgeHeadConfig(0.01)
-    spec = replace(quality_config.spec, head=ridge_head)
-    prefix = str(tmp_path / "artifacts")
-    version = "2026.10.03"
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "experiments.grug.fast_track.quality_cli",
-            "--bundle",
-            spec.bundle.path,
-            "--bundle-sha256",
-            spec.bundle.sha256,
-            "--fraction",
-            str(spec.fraction),
-            "--regularization",
-            str(ridge_head.regularization),
-            "--tie-seed",
-            str(spec.tie_seed),
-            "--version",
-            version,
-            "--prepare-only",
-            "--run",
-        ],
-        env={**os.environ, "MARIN_PREFIX": prefix, "MARIN_FINGERPRINT_STRICT": "1"},
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=45,
-    )
-    step = build_quality_data(spec, version=version)
-    result = QualityData.raw_load(step.path(prefix))
-    cache = TreeCache.load(result.cache_dir, {"input_ids": np.zeros(0, dtype=np.int32)})
-
-    assert result.requested_tokens == 40
-    np.testing.assert_array_equal(cache.get_batch_sync([0])[0]["input_ids"], np.full(40, 4))
-
-
-def test_quality_training_cli_requires_run_id(quality_config):
-    spec = quality_config.spec
+def test_quality_cli_adopts_raw_pool_with_valid_graph_version():
     result = CliRunner().invoke(
-        quality_cli,
-        [
-            "--bundle",
-            spec.bundle.path,
-            "--bundle-sha256",
-            spec.bundle.sha256,
-            "--version",
-            "2026.10.03",
-            "--run",
-        ],
+        quality_main,
+        ["--raw-pool", "s3://marin-test/raw-pool", "--features-only", "--version", "2026.10.04"],
     )
 
-    assert result.exit_code == 2
-    assert "--run-id is required when training" in result.output
+    assert result.exit_code == 0, result.output
+    assert "fast-track/raw-pool" in result.output
+    assert "s3://marin-test/raw-pool" in result.output

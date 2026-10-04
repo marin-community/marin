@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fixed-split embedding heads and token-mass selection for quality experiments."""
+"""Fixed-split embedding heads and text scorer interfaces for quality experiments."""
 
 import hashlib
 import json
 import math
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -33,7 +33,7 @@ class LabelledEmbedding:
     source: str
     document_id: str
     duplicate_group: str
-    embedding: tuple[float, ...]
+    embedding: Sequence[float] | NDArray[np.float32]
     label: float
 
 
@@ -41,6 +41,33 @@ class QualityScorer(Protocol):
     """Score a batch of embeddings after head fitting."""
 
     def scores(self, embeddings: NDArray) -> NDArray[np.float64]: ...
+
+
+@dataclass(frozen=True)
+class QualityScoringBatch:
+    """Document inputs with optional normalized Harrier vectors."""
+
+    texts: Sequence[str]
+    document_ids: Sequence[str]
+    embeddings: NDArray[np.float32] | None = None
+
+    def __post_init__(self) -> None:
+        if len(self.texts) != len(self.document_ids):
+            raise ValueError("quality texts and document IDs must have equal length")
+        if any(not isinstance(text, str) for text in self.texts):
+            raise ValueError("quality scoring texts must be strings")
+        if any(not isinstance(document_id, str) for document_id in self.document_ids):
+            raise ValueError("quality scoring document IDs must be strings")
+        if self.embeddings is not None:
+            embeddings = np.asarray(self.embeddings)
+            if embeddings.ndim != 2 or len(embeddings) != len(self.texts) or not np.isfinite(embeddings).all():
+                raise ValueError("quality embeddings must be a finite matrix with one row per document")
+
+
+class DocumentQualityScorer(Protocol):
+    """Score a batch of documents from text, optional embeddings, or both."""
+
+    def scores(self, batch: QualityScoringBatch) -> NDArray[np.float64]: ...
 
 
 class QualityHeadConfig(Protocol):
@@ -84,10 +111,37 @@ class RidgeHeadConfig:
             raise ValueError("training embeddings and labels must be finite")
         mean_x, mean_y = x.mean(axis=0), float(y.mean())
         centered_x, centered_y = x - mean_x, y - mean_y
-        gram = centered_x.T @ centered_x / len(rows)
-        gram.flat[:: len(mean_x) + 1] += self.regularization
-        coefficients = np.linalg.solve(gram, centered_x.T @ centered_y / len(rows))
+        if len(rows) < x.shape[1]:
+            dual_gram = centered_x @ centered_x.T
+            dual_gram.flat[:: len(rows) + 1] += len(rows) * self.regularization
+            coefficients = centered_x.T @ np.linalg.solve(dual_gram, centered_y)
+        else:
+            gram = centered_x.T @ centered_x / len(rows)
+            gram.flat[:: len(mean_x) + 1] += self.regularization
+            coefficients = np.linalg.solve(gram, centered_x.T @ centered_y / len(rows))
         return RidgeHead(tuple(coefficients.tolist()), mean_y - float(mean_x @ coefficients), self.regularization)
+
+
+@dataclass(frozen=True)
+class FittedQualityHead:
+    """A fitted head and its development-only fit report."""
+
+    scorer: QualityScorer
+    identity: dict[str, str | int | float | bool]
+    training_documents: int
+    development: "LabelMetrics"
+
+
+@dataclass(frozen=True)
+class EmbeddingHeadScorer:
+    """Adapt a fitted embedding head to the document scorer API."""
+
+    scorer: QualityScorer
+
+    def scores(self, batch: QualityScoringBatch) -> NDArray[np.float64]:
+        if batch.embeddings is None:
+            raise ValueError("embedding head requires prepared Harrier embeddings")
+        return score_embeddings(self.scorer, batch.embeddings)
 
 
 @dataclass(frozen=True)
@@ -95,6 +149,23 @@ class LabelMetrics:
     documents: int
     mean_squared_error: float
     source_mean_squared_error: dict[str, float]
+
+
+def fit_quality_head(
+    rows: Sequence[LabelledEmbedding], *, head: QualityHeadConfig, split_seed: int
+) -> FittedQualityHead:
+    """Fit on frozen training embeddings and report development metrics, without audit labels."""
+    training, development = split_labelled_embeddings(rows, split_seed=split_seed)
+    scorer = head.fit(training)
+    metrics = development_metrics(scorer, development)
+    return FittedQualityHead(scorer, quality_head_identity(head), len(training), metrics)
+
+
+def frozen_label_duplicate_groups(rows: Sequence[LabelledEmbedding]) -> frozenset[str]:
+    """Return all label duplicate groups for exclusion from every scored pool."""
+    if any(not row.duplicate_group for row in rows):
+        raise ValueError("frozen labels require duplicate groups")
+    return frozenset(row.duplicate_group for row in rows)
 
 
 def split_labelled_embeddings(
@@ -165,151 +236,3 @@ def score_embeddings(scorer: QualityScorer, embeddings: NDArray) -> NDArray[np.f
     if scores.shape != (len(values),) or not np.isfinite(scores).all():
         raise ValueError("quality scorer must return one finite score per embedding")
     return scores
-
-
-@dataclass(frozen=True)
-class PoolDocument:
-    source: str
-    document_id: str
-    duplicate_group: str
-    token_count: int
-    quality_bin: str
-    content_type: str
-    language: str
-
-
-@dataclass(frozen=True)
-class PoolRequirements:
-    """Predeclared coverage limits for a production-weighted pool."""
-
-    source_token_shares: dict[str, float]
-    source_share_tolerance: float
-    quality_bins: tuple[str, ...]
-    min_documents_per_quality_bin: int
-    min_duplicate_groups: int
-    max_duplicate_token_share: float
-
-
-@dataclass(frozen=True)
-class PoolAudit:
-    documents: int
-    tokens: int
-    duplicate_groups: int
-    effective_token_documents: float
-    largest_duplicate_token_share: float
-    source_token_shares: dict[str, float]
-    quality_bin_documents: dict[str, int]
-    content_type_tokens: dict[str, int]
-    language_tokens: dict[str, int]
-
-
-def audit_pool(
-    documents: Sequence[PoolDocument], *, requirements: PoolRequirements, labelled_groups: set[str]
-) -> PoolAudit:
-    """Reject label leakage, insufficient coverage, and concentrated duplicate groups."""
-    if not documents:
-        raise ValueError("quality pool is empty")
-    keys = [(row.source, row.document_id) for row in documents]
-    if len(set(keys)) != len(keys):
-        raise ValueError("quality pool contains repeated source/document keys")
-    if any(row.token_count <= 0 or not row.duplicate_group for row in documents):
-        raise ValueError("quality pool requires positive token counts and duplicate groups")
-    if labelled_groups & {row.duplicate_group for row in documents}:
-        raise ValueError("quality pool overlaps the labelled duplicate groups")
-    weights = requirements.source_token_shares
-    if not weights or any(not math.isfinite(w) or w <= 0 for w in weights.values()):
-        raise ValueError("pool source shares must be finite and positive")
-    if not math.isclose(sum(weights.values()), 1.0):
-        raise ValueError("pool source shares must sum to one")
-    if (
-        len(requirements.quality_bins) < 2
-        or len(set(requirements.quality_bins)) != len(requirements.quality_bins)
-        or requirements.min_documents_per_quality_bin < 1
-    ):
-        raise ValueError("quality coverage requires at least two distinct populated bins")
-    if not 0 <= requirements.source_share_tolerance < 1 or not 0 < requirements.max_duplicate_token_share <= 1:
-        raise ValueError("pool coverage tolerances are invalid")
-    source_tokens: Counter[str] = Counter()
-    group_tokens: Counter[str] = Counter()
-    content_tokens: Counter[str] = Counter()
-    language_tokens: Counter[str] = Counter()
-    quality_counts: Counter[str] = Counter()
-    for row in documents:
-        source_tokens[row.source] += row.token_count
-        group_tokens[row.duplicate_group] += row.token_count
-        content_tokens[row.content_type] += row.token_count
-        language_tokens[row.language] += row.token_count
-        quality_counts[row.quality_bin] += 1
-    tokens = sum(source_tokens.values())
-    shares = {source: count / tokens for source, count in source_tokens.items()}
-    if set(shares) != set(weights) or any(
-        abs(shares[source] - weights[source]) > requirements.source_share_tolerance for source in weights
-    ):
-        raise ValueError(f"pool source shares differ from the frozen recipe: {shares}")
-    if any(quality_counts[name] < requirements.min_documents_per_quality_bin for name in requirements.quality_bins):
-        raise ValueError(f"quality pool lacks the declared score coverage: {dict(quality_counts)}")
-    largest_share = max(group_tokens.values()) / tokens
-    if len(group_tokens) < requirements.min_duplicate_groups or largest_share > requirements.max_duplicate_token_share:
-        raise ValueError("quality pool contains insufficient independent duplicate groups")
-    return PoolAudit(
-        len(documents),
-        tokens,
-        len(group_tokens),
-        tokens**2 / sum(count**2 for count in group_tokens.values()),
-        largest_share,
-        shares,
-        dict(quality_counts),
-        dict(content_tokens),
-        dict(language_tokens),
-    )
-
-
-@dataclass(frozen=True)
-class QualitySelection:
-    indices: tuple[int, ...]
-    requested_tokens: int
-    selected_tokens: int
-    cutoff: float
-    cutoff_ties: int
-    source_token_shares: dict[str, float]
-
-
-def select_top_tokens(
-    documents: Sequence[PoolDocument], scores: Sequence[float], *, fraction: float, tie_seed: int
-) -> QualitySelection:
-    """Select whole documents by score until the requested token fraction is reached."""
-    if not documents or len(documents) != len(scores) or not np.isfinite(scores).all():
-        raise ValueError("selection requires one finite score per pool document")
-    if not 0 < fraction <= 1:
-        raise ValueError("selection fraction must be greater than zero and at most one")
-    target = math.ceil(sum(row.token_count for row in documents) * fraction)
-    tie_keys = [hashlib.sha256(f"{tie_seed}:{row.source}:{row.document_id}".encode()).digest() for row in documents]
-    order = sorted(range(len(documents)), key=lambda i: (-scores[i], tie_keys[i]))
-    selected: list[int] = []
-    selected_tokens = 0
-    source_tokens: Counter[str] = Counter()
-    for index in order:
-        selected.append(index)
-        selected_tokens += documents[index].token_count
-        source_tokens[documents[index].source] += documents[index].token_count
-        if selected_tokens >= target:
-            break
-    cutoff = float(scores[selected[-1]])
-    return QualitySelection(
-        tuple(selected),
-        target,
-        selected_tokens,
-        cutoff,
-        sum(score == cutoff for score in scores),
-        {source: count / selected_tokens for source, count in source_tokens.items()},
-    )
-
-
-def selection_token_overlap(
-    documents: Sequence[PoolDocument], candidate: QualitySelection, incumbent: QualitySelection
-) -> float:
-    """Return token intersection divided by token union on one frozen pool."""
-    left, right = set(candidate.indices), set(incumbent.indices)
-    shared = sum(documents[i].token_count for i in left & right)
-    union = sum(documents[i].token_count for i in left | right)
-    return shared / union
