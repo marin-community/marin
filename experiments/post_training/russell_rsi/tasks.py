@@ -687,6 +687,10 @@ async def generate_repair(
             )
             + "\n"
         )
+    return parsed_repair(raw_response)
+
+
+def parsed_repair(raw_response: dict) -> GeneratedRepair:
     choices = raw_response.get("choices", [])
     content = choices[0]["message"].get("content") if choices else None
     if content is None:

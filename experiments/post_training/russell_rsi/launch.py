@@ -39,6 +39,13 @@ from rigging.runtime_bundle import RuntimeBundle
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import eval_step
 from experiments.post_training.russell_rsi.adaptive_tasks import AdaptiveTasksConfig, run_adaptive_tasks_in_project
+from experiments.post_training.russell_rsi.repair_tasks import (
+    QualifiedUnionConfig,
+    RepairTasksConfig,
+    pinned_bytes,
+    run_qualified_union_in_project,
+    run_repair_tasks_in_project,
+)
 from experiments.post_training.russell_rsi.rollout_eval import DevelopmentEvaluationConfig, run_development_evaluation
 from experiments.post_training.russell_rsi.settings import (
     CHAT_TEMPLATE_KWARGS,
@@ -172,11 +179,13 @@ def train_step(
     version: str,
     development: ArtifactStep[Artifact] | None = None,
     machine_config: dict | None = None,
+    name_component: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     selected = SCALES[scale]
+    label = f"{name_component}-{scale}" if name_component else scale
     return skyrl_step(
         SkyRLSpec(
-            name=f"checkpoints/russell-rsi-{scale}",
+            name=f"checkpoints/russell-rsi-{label}",
             version=version,
             config_yaml=recipe(selected, machine_config),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
@@ -293,6 +302,14 @@ def run_adaptive_tasks(config: AdaptiveTasksConfig) -> None:
     )(config)
 
 
+def run_repair_tasks(config: RepairTasksConfig) -> None:
+    remote(
+        run_repair_tasks_in_project,
+        resources=ResourceConfig.with_cpu(cpu=32, ram="128GB", disk="64GB"),
+        env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
+    )(config)
+
+
 def parent_public_step(model: ArtifactStep[LevanterCheckpoint], version: str) -> ArtifactStep:
     """Score the frozen parent on the same bounded public cohort as its candidate."""
     parent_model = evaluation_model("russell-rsi-parent", MODEL, None)
@@ -308,6 +325,69 @@ def parent_public_step(model: ArtifactStep[LevanterCheckpoint], version: str) ->
         accelerator="H100x8",
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
+    )
+
+
+def repair_spike_workflow(
+    seed: ArtifactStep[Artifact],
+    model: ArtifactStep[LevanterCheckpoint],
+    scale: str,
+    version: str,
+    *,
+    relay_job: str,
+    image: str,
+    runtime_bundle: RuntimeBundle,
+    machine_config: dict,
+    wheels: ArtifactStep[Artifact],
+    manifest_uri: str,
+    manifest_sha256: str,
+) -> dict[str, ArtifactStep]:
+    """Repair sealed round-one candidates and qualify their union before training."""
+    evidence = ArtifactStep.adopt(
+        "documents/russell-rsi-round-1-evidence",
+        version,
+        manifest_uri,
+        config={"manifest_sha256": manifest_sha256},
+    )
+    baseline = development_step(seed, model, version, runtime_bundle, "parent")
+    repaired = ArtifactStep(
+        name="documents/russell-rsi-repair-1",
+        version=version,
+        artifact_type=Artifact,
+        deps=(evidence, baseline, wheels),
+        build_config=lambda ctx: RepairTasksConfig(
+            manifest_uri=ctx.artifact_path(evidence),
+            manifest_sha256=manifest_sha256,
+            output_path=ctx.output_path,
+            relay_job=relay_job,
+            image=image,
+            runtime_bundle=runtime_bundle,
+            dependency_wheels_uri=ctx.artifact_path(wheels),
+            admission_concurrency=8,
+            parent_development_identity=artifact_identity(baseline),
+        ),
+        run=run_repair_tasks,
+    )
+    qualified = ArtifactStep(
+        name="documents/russell-rsi-qualified-union-1",
+        version=version,
+        artifact_type=Artifact,
+        deps=(evidence, repaired),
+        build_config=lambda ctx: QualifiedUnionConfig(
+            original_manifest_uri=ctx.artifact_path(evidence),
+            original_manifest_sha256=manifest_sha256,
+            repair_output_uri=ctx.artifact_path(repaired),
+            output_path=ctx.output_path,
+            minimum_train_rows=ROLE_PLAN.train_batch_size,
+            parent_development_identity=artifact_identity(baseline),
+        ),
+        run=remote(
+            run_qualified_union_in_project,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16GB", disk="64GB"),
+        ),
+    )
+    return post_admission_workflow(
+        qualified, seed, model, scale, version, runtime_bundle, machine_config, name_component="repair-1"
     )
 
 
@@ -352,21 +432,38 @@ def spike_workflow(
         ),
         run=run_adaptive_tasks,
     )
-    trained = train_step(adaptive, model, scale, version, development=seed, machine_config=machine_config)
+    return post_admission_workflow(adaptive, seed, model, scale, version, runtime_bundle, machine_config)
+
+
+def post_admission_workflow(
+    training: ArtifactStep[Artifact],
+    seed: ArtifactStep[Artifact],
+    model: ArtifactStep[LevanterCheckpoint],
+    scale: str,
+    version: str,
+    runtime_bundle: RuntimeBundle,
+    machine_config: dict,
+    name_component: str | None = None,
+) -> dict[str, ArtifactStep]:
+    """Calibrate qualified tasks before policy allocation, then export and reload."""
+    label = f"{name_component}-{scale}" if name_component else scale
+    calibration_label = f"{name_component}-train-calibration" if name_component else "train-calibration"
+    trained = train_step(
+        training, model, scale, version, development=seed, machine_config=machine_config, name_component=name_component
+    )
     calibration = development_step(
-        adaptive,
+        training,
         model,
         version,
         runtime_bundle,
-        "train-calibration",
+        calibration_label,
         relative_path="train.parquet",
         samples_per_task=4,
         temperature=1.0,
         require_reward_variation=True,
     )
-    # Calibration must show reward variation before Iris allocates policy workers.
     trained = replace(trained, deps=(*trained.deps, calibration))
-    selected_model = evaluation_model(f"russell-rsi-{scale}", SKYRL_POLICY_LOCATION, None)
+    selected_model = evaluation_model(f"russell-rsi-{label}", SKYRL_POLICY_LOCATION, None)
     reload = eval_step(
         selected_model,
         "mmlu-smoke",
@@ -380,7 +477,7 @@ def spike_workflow(
     )
     if scale == "smoke":
         return {"reload": reload}
-    candidate = development_step(seed, trained, version, runtime_bundle, f"candidate-{scale}")
+    candidate = development_step(seed, trained, version, runtime_bundle, f"candidate-{label}")
     candidate = replace(candidate, deps=(*candidate.deps, reload))
     parent_benchmarks = parent_public_step(model, version)
     benchmarks = eval_step(
@@ -398,7 +495,11 @@ def spike_workflow(
 
 
 @click.command(help=__doc__)
-@click.option("--stage", type=click.Choice(("rl", "reload", "evaluation", "spike", "parent-development")), required=True)
+@click.option(
+    "--stage",
+    type=click.Choice(("rl", "reload", "evaluation", "spike", "repair-spike", "parent-development")),
+    required=True,
+)
 @click.option("--scale", type=click.Choice(tuple(SCALES)), required=True)
 @click.option("--data-name", required=True)
 @click.option("--data-version", required=True)
@@ -411,6 +512,8 @@ def spike_workflow(
 @click.option("--dependency-wheels-uri", help="Pinned wheel artifact for offline task environments.")
 @click.option("--training-sources-uri", help="Frozen training-source artifact, separate from the development seed.")
 @click.option("--training-snapshots-sha256", help="SHA256 of the frozen training snapshots.jsonl file.")
+@click.option("--repair-manifest-uri", help="Sealed original round-one evidence and repair eligibility manifest.")
+@click.option("--repair-manifest-sha256", help="SHA256 of the sealed repair manifest.")
 @rl_build_options
 def main(
     stage: str,
@@ -426,9 +529,15 @@ def main(
     dependency_wheels_uri: str | None,
     training_sources_uri: str | None,
     training_snapshots_sha256: str | None,
+    repair_manifest_uri: str | None,
+    repair_manifest_sha256: str | None,
 ) -> ArtifactStep | dict[str, ArtifactStep]:
     if stage == "evaluation" and evals is None:
         raise click.UsageError("--evals is required for --stage evaluation")
+    if stage == "spike" and (repair_manifest_uri is not None or repair_manifest_sha256 is not None):
+        raise click.UsageError("Repair manifest options require --stage repair-spike")
+    if stage == "repair-spike" and (training_sources_uri is not None or training_snapshots_sha256 is not None):
+        raise click.UsageError("Training source options require --stage spike")
     version = resolve_version("russell-rsi", None)
     data = ArtifactStep.adopt(data_name, data_version, data_uri)
     model = ArtifactStep.adopt(
@@ -438,16 +547,19 @@ def main(
         kind=LevanterCheckpoint,
         config={"repository": MODEL, "revision": MODEL_REVISION},
     )
-    if stage == "spike":
+    if stage in ("spike", "repair-spike"):
         if click.get_current_context().params.get("do_run") and not os.environ.get(GLM_TOKEN_ENV):
-            raise click.UsageError(f"--stage spike --run requires {GLM_TOKEN_ENV} before any GPU work")
+            raise click.UsageError(f"--stage {stage} --run requires {GLM_TOKEN_ENV} before any GPU work")
         if relay_job is None or task_image is None or machine_config_json is None or dependency_wheels_uri is None:
             raise click.UsageError(
-                "--stage spike requires --relay-job, --task-image, " "--machine-config-json, and --dependency-wheels-uri"
+                f"--stage {stage} requires --relay-job, --task-image, --machine-config-json, and --dependency-wheels-uri"
             )
+    if stage == "repair-spike" and (repair_manifest_uri is None or repair_manifest_sha256 is None):
+        raise click.UsageError("--stage repair-spike requires --repair-manifest-uri and --repair-manifest-sha256")
+    if stage == "spike":
         if training_sources_uri is None or training_snapshots_sha256 is None:
             raise click.UsageError("--stage spike requires --training-sources-uri and --training-snapshots-sha256")
-    if stage in ("spike", "parent-development"):
+    if stage in ("spike", "repair-spike", "parent-development"):
         if machine_config_json is None:
             raise click.UsageError(f"--stage {stage} requires --machine-config-json")
         machine_config = json.loads(machine_config_json)
@@ -457,8 +569,27 @@ def main(
         if stage == "parent-development":
             return development_step(data, model, version, runtime_bundle, "parent")
         assert relay_job is not None and task_image is not None and dependency_wheels_uri is not None
-        assert training_sources_uri is not None and training_snapshots_sha256 is not None
         wheels = ArtifactStep.adopt("documents/russell-rsi-dependency-wheels", version, dependency_wheels_uri)
+        if stage == "repair-spike":
+            assert repair_manifest_uri is not None and repair_manifest_sha256 is not None
+            manifest = json.loads(pinned_bytes(repair_manifest_uri, repair_manifest_sha256))
+            baseline = development_step(data, model, version, runtime_bundle, "parent")
+            if manifest["inputs"]["parent_development_identity"] != artifact_identity(baseline):
+                raise click.UsageError("Sealed evidence parent-development identity does not match this launch")
+            return repair_spike_workflow(
+                data,
+                model,
+                scale,
+                version,
+                relay_job=relay_job,
+                image=task_image,
+                runtime_bundle=runtime_bundle,
+                machine_config=machine_config,
+                wheels=wheels,
+                manifest_uri=repair_manifest_uri,
+                manifest_sha256=repair_manifest_sha256,
+            )
+        assert training_sources_uri is not None and training_snapshots_sha256 is not None
         training_sources = ArtifactStep.adopt(
             "documents/russell-rsi-training-sources",
             version,
