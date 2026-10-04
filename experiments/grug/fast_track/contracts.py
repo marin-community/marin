@@ -64,6 +64,7 @@ class DatasetPrefix(BaseModel):
     split: str
     text_field: str
     tokenizer: str
+    tokenizer_hash: str
     sampling_policy: AddDatasetSamplingPolicy
     max_rows: int
     max_overshoot_tokens: int
@@ -73,8 +74,8 @@ class DatasetPrefix(BaseModel):
     def validate_prefix(self) -> "DatasetPrefix":
         if len(self.revision) not in {40, 64} or any(char not in "0123456789abcdef" for char in self.revision):
             raise ValueError("revision must be an immutable Hugging Face commit hash")
-        if not self.repo or not self.split or not self.text_field or not self.tokenizer:
-            raise ValueError("repo, split, text field, and tokenizer must be non-empty")
+        if not self.repo or not self.split or not self.text_field or not self.tokenizer or not self.tokenizer_hash:
+            raise ValueError("repo, split, text field, tokenizer, and tokenizer hash must be non-empty")
         if self.max_rows < 1 or self.max_overshoot_tokens < 0 or self.requested_token_cap < 1:
             raise ValueError("prefix row and token limits are invalid")
         return self
@@ -136,18 +137,20 @@ def unique_token_sample_cap(
     fast_track_budget: int,
     available_unique_tokens: int,
     fraction: float,
-    loader_unit: int,
+    sequence_length: int,
 ) -> int:
     """Return the loader-aligned unique-token cap for a prepared dataset sample.
 
-    Both formula limits round down to tokens. The result rounds down to a whole
-    loader unit and never exceeds either formula limit.
+    Both formula limits round down to tokens. The result rounds down to whole
+    sequences and never exceeds either formula limit.
     """
-    if target_production_tokens < 1 or fast_track_budget < 1 or available_unique_tokens < 1 or loader_unit < 1:
-        raise ValueError("token counts and loader unit must be positive")
+    if target_production_tokens < 1 or fast_track_budget < 1 or available_unique_tokens < 1 or sequence_length < 1:
+        raise ValueError("token counts and sequence length must be positive")
+    if fast_track_budget > target_production_tokens:
+        raise ValueError("fast-track token budget must not exceed the target production token budget")
     if not 0 < fraction < 1:
         raise ValueError("add-dataset fraction must be greater than 0 and less than 1")
     share_limit = math.floor(fraction * fast_track_budget)
     scaled_availability_limit = available_unique_tokens * fast_track_budget // target_production_tokens
-    raw_cap = min(share_limit, scaled_availability_limit, available_unique_tokens)
-    return raw_cap // loader_unit * loader_unit
+    raw_cap = min(share_limit, scaled_availability_limit)
+    return raw_cap // sequence_length * sequence_length

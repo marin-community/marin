@@ -402,6 +402,17 @@ def resolve_h100_ladder_budget(
     )
 
 
+def maximum_h100_ladder_tokens() -> int:
+    """Return the largest default data-match budget across the training ladder."""
+    return max(
+        resolve_h100_ladder_budget(
+            size=size, dense=dense, match=MatchMode.DATA, num_steps=None, batch_size=None
+        ).token_count
+        for size in H100_LADDER_SIZES
+        for dense in (False, True)
+    )
+
+
 def build_h100_ladder_run(
     *,
     run_id: str,

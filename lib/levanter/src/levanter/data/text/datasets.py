@@ -776,7 +776,7 @@ class LmDataConfig:
     target_budget: int | None = None
     experiment_budget: int | None = None
     mixture_block_size: int = 2048
-    max_train_batches: dict[str, int] | None = None
+    max_train_sequences: dict[str, int] | None = None
     num_validation_sequences: dict[str, int] | None = None
     shuffle_before_trainval_split: bool = True
     """Whether to shuffle the dataset before splitting off validation sequences.
@@ -813,19 +813,28 @@ class LmDataConfig:
             else:
                 raise ValueError(f"Invalid train_weights type: {type(weights)}")
 
-        if self.max_train_batches is not None or self.num_validation_sequences is not None:
+        if self.max_train_sequences is not None:
+            if not all(name in self.components for name in self.max_train_sequences):
+                raise ValueError("Max train sequence keys must be subset of component keys.")
+            if any(
+                not isinstance(count, int) or isinstance(count, bool) or count < 1
+                for count in self.max_train_sequences.values()
+            ):
+                raise ValueError("Max train sequence counts must be positive integers.")
+
+        if self.max_train_sequences is not None or self.num_validation_sequences is not None:
             assert (
                 self.experiment_budget is None and self.target_budget is None
-            ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
+            ), "max_train_sequences/num_validation_sequences and simulated data budget cannot all be set"
 
         if self.prior_context_phases:
             if not isinstance(self.shuffle, BlockShuffleConfig):
                 raise ValueError("prior_context_phases require a block shuffle")
             if self.stop_strategy != StopStrategy.RESTART_STRATEGY:
                 raise ValueError("prior_context_phases require the restart stop strategy")
-            if self.max_train_batches is not None or self.num_validation_sequences is not None:
+            if self.max_train_sequences is not None or self.num_validation_sequences is not None:
                 raise ValueError(
-                    "prior_context_phases cannot be combined with max_train_batches or num_validation_sequences"
+                    "prior_context_phases cannot be combined with max_train_sequences or num_validation_sequences"
                 )
             if self.experiment_budget != self.target_budget:
                 raise ValueError("prior_context_phases cannot be combined with simulated epoching")
@@ -930,8 +939,7 @@ class LmDataConfig:
         weights = self.train_weights
         if isinstance(weights, list):
             weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
-        initial_batch_size = batch_schedule.batch_size_at_step(0)
-        datasets, doc_caches = self._train_sets_and_caches(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+        datasets, doc_caches = self._train_sets_and_caches(Pos, key=shuffle_key)
         start_offsets = (
             self._prior_context_phase_offsets(datasets, doc_caches, Pos.size, batch_schedule, weights, mix_key)
             if self.prior_context_phases
@@ -1016,21 +1024,19 @@ class LmDataConfig:
         self,
         Pos: Axis,
         *,
-        initial_batch_size: int | None = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
         if self.prior_context_phases:
             raise ValueError(
                 "prior_context_phases need per-source start offsets; build training data with train_mixture"
             )
-        datasets, _ = self._train_sets_and_caches(Pos, initial_batch_size=initial_batch_size, key=key)
+        datasets, _ = self._train_sets_and_caches(Pos, key=key)
         return datasets
 
     def _train_sets_and_caches(
         self,
         Pos: Axis,
         *,
-        initial_batch_size: int | None = None,
         key: PRNGKeyArray,
     ) -> tuple[dict[str, AsyncDataset[GrugLmExample]], dict[str, TreeCache[dict]]]:
         doc_caches = self.build_caches("train")
@@ -1081,17 +1087,14 @@ class LmDataConfig:
                 sliced_datasets[name] = ds.slice_dataset(end_index=simulated_length_of_dataset)
             datasets = sliced_datasets
 
-        if self.max_train_batches is not None:
-            assert (
-                initial_batch_size is not None
-            ), "initial_batch_size must be provided if max_train_batches is provided"
+        if self.max_train_sequences is not None:
             for name, ds in datasets.items():
-                if name in self.max_train_batches:
-                    num_sequences = self.max_train_batches[name] * initial_batch_size
+                if name in self.max_train_sequences:
+                    num_sequences = self.max_train_sequences[name]
                     len_dataset = len(ds.as_sync_dataset())
                     assert (
                         num_sequences <= len_dataset
-                    ), f"Max sequences for {name} ({num_sequences}) is greater than the dataset size ({len_dataset})"
+                    ), f"Max sequences for {name} ({num_sequences}) exceed dataset size ({len_dataset})"
                     datasets[name] = ds.slice_dataset(end_index=num_sequences)
 
         return datasets, doc_caches
