@@ -3509,7 +3509,7 @@
           "min": 0,
           "unit": "percent",
           "max": 100,
-          "noValue": "Zoom to 7h or less for GPU detail.",
+          "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “GPUs idle”.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -3584,7 +3584,7 @@
           "unit": "percent",
           "min": 0,
           "max": 100,
-          "noValue": "Zoom to 7h or less for GPU detail.",
+          "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -3658,7 +3658,7 @@
           },
           "unit": "bytes",
           "min": 0,
-          "noValue": "Zoom to 7h or less for GPU detail."
+          "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster."
         },
         "overrides": []
       },
@@ -3731,7 +3731,7 @@
           },
           "unit": "Bps",
           "min": 0,
-          "noValue": "Zoom to 7h or less for GPU detail.",
+          "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. Or no NVLink or PCIe counters from this cluster's node agent.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
