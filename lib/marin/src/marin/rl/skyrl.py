@@ -545,6 +545,10 @@ def _validate_skyrl_backend_constraints(
     if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
 
+    for key in ("use_conversation_multi_turn", "require_exact_chat_transport"):
+        if _declared_config_value(config, f"generator.{key}") is not _MISSING_CONFIG_VALUE:
+            raise ValueError(f"SkyRL task sessions do not support generator.{key}. Remove this setting.")
+
     use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
     if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")

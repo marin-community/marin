@@ -165,8 +165,6 @@ PROTECTED_SETTINGS = (
             "generator.run_engines_locally",
             "generator.enable_http_endpoint",
             "generator.backend",
-            "generator.use_conversation_multi_turn",
-            "generator.require_exact_chat_transport",
             "environment.env_class",
             "data.kind",
         }
@@ -300,8 +298,6 @@ def training_config(
             "run_engines_locally": True,
             "enable_http_endpoint": False,
             "weight_sync_backend": "nccl",
-            "use_conversation_multi_turn": False,
-            "require_exact_chat_transport": False,
             "gpu_memory_utilization": 0.7,
             "enforce_eager": False,
             "chat_template": {"source": "name", "name_or_path": choice.chat_template},

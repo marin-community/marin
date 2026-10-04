@@ -98,7 +98,6 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
         "trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",
         "trainer.seed=23",
         "trainer.max_ckpts_to_keep=2",
-        "generator.require_exact_chat_transport=false",
     ),
 )
 def test_owned_settings_reject_parent_and_canonical_overrides(setting):
