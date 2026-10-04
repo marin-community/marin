@@ -4,7 +4,7 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-TaskCompendium exports direct-chat Harbor tasks for text, number, and native-action results. The separate [rolloutengine library](../rolloutengine/README.md) executes tasks through Shellbox. See the [task rollout reference](../../docs/references/task-rollouts.md) for the Parquet format, engine interfaces, and SkyRL integration.
+TaskCompendium exports direct-chat Harbor tasks for text, number, and native-action results. The separate [rolloutengine library](../rolloutengine/README.md) executes tasks through Shellbox. See the [task rollout reference](../../docs/references/task-rollouts.md) for the task format, engine interfaces, and SkyRL integration.
 
 ## What does it contain?
 

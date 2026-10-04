@@ -4,7 +4,7 @@
 """Smoke-train Qwen3-0.6B from a packed TaskTrove Clean release.
 
 The run uses a packed release as the input to the shared rollout engine.
-MarinSkyRL converts the selected tasks to TaskCompendium Parquet before training.
+MarinSkyRL converts the selected tasks to task Parquet before training.
 
 Plan or run::
 
