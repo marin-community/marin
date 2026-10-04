@@ -1,5 +1,5 @@
-# Harbor adopts a model's native context window when it is below the campaign's
-# 65,536-token agent limit. These values are policy inputs, not launcher defaults.
+# Harbor adopts a model's native context window when it is below the benchmark
+# limit. These values are policy inputs, not launcher defaults.
 harbor_model_info:
   inclusionAI-Ling-lite-1.5:
     max_input_tokens: 32768
@@ -23,14 +23,64 @@ harbor_harness_profiles:
         compaction_reserve_tokens: 16384
       open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
         compaction_reserve_tokens: 16384
+  tau3-pi-131k-32k:
+    agent: acp
+    model_kwargs:
+      inclusionAI-Ling-lite-1.5:
+        model_info:
+          max_input_tokens: 32768
+          max_output_tokens: 16384
+      open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
+        model_info:
+          max_input_tokens: 32768
+          max_output_tokens: 16384
 
 harbor_eval_harness_profiles:
   bixbench-pi: pi-65k-16k
+  tau3-pi: tau3-pi-131k-32k
   swebench-verified: mini-swe-k2-tool-history
 
 # This model's Terminal-Bench serving arm was validated at the exact agent
 # context/output limits. Selection is benchmark-specific; neither launcher nor
 # refill manager changes the serving settings in these canonical YAML files.
 model_config_overrides:
+  Aleph-Alpha-Kolibri-1:
+    tau3-pi: model-configs/tau3/Aleph-Alpha-Kolibri-1.yaml
+  IFM-K2-Horizon-MoVA-36B-A4B:
+    tau3-pi: model-configs/tau3/IFM-K2-Horizon-MoVA-36B-A4B.yaml
+  Qwen-Qwen3-Coder-30B-A3B-Instruct:
+    tau3-pi: model-configs/tau3/Qwen-Qwen3-Coder-30B-A3B-Instruct.yaml
+  Qwen-Qwen3-Next-80B-A3B-Instruct:
+    tau3-pi: model-configs/tau3/Qwen-Qwen3-Next-80B-A3B-Instruct.yaml
+  Qwen-Qwen3.6-35B-A3B:
+    tau3-pi: model-configs/tau3/Qwen-Qwen3.6-35B-A3B.yaml
+  arcee-ai-Trinity-Mini:
+    tau3-pi: model-configs/tau3/arcee-ai-Trinity-Mini.yaml
+  google-gemma-4-26B-A4B-it:
+    tau3-pi: model-configs/tau3/google-gemma-4-26B-A4B-it.yaml
+  laion-snowball-67b-a2b-relay-sft-acont-step999:
+    tau3-pi: model-configs/tau3/laion-snowball-67b-a2b-relay-sft-acont-step999.yaml
+  laion-snowball-67b-a2b-relay-sft-allkimi-step1203:
+    tau3-pi: model-configs/tau3/laion-snowball-67b-a2b-relay-sft-allkimi-step1203.yaml
+  moonshotai-Kimi-Linear-48B-A3B-Instruct:
+    tau3-pi: model-configs/tau3/moonshotai-Kimi-Linear-48B-A3B-Instruct.yaml
+  nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16:
+    tau3-pi: model-configs/tau3/nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.yaml
+  nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16:
+    tau3-pi: model-configs/tau3/nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.yaml
+  open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04.yaml
+  open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.yaml
+  open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom.yaml
+  open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21:
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21.yaml
+  open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92:
+    tau3-pi: model-configs/tau3/open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92.yaml
+  openai-gpt-oss-20b:
+    tau3-pi: model-configs/tau3/openai-gpt-oss-20b.yaml
+  zai-org-GLM-4.7-Flash:
+    tau3-pi: model-configs/tau3/zai-org-GLM-4.7-Flash.yaml
   IFM-K2-Horizon-MoVA-36B-A4B:
     tb2-recovery: ablations/k2/model-recommended-tb2.yaml
