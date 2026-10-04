@@ -92,9 +92,6 @@ Text, numeric, multiple-choice, and final-action tasks use the shared verifier r
 A final-action task submits a function call as its answer. A null environment
 records that call without execution.
 An incorrect answer has a numeric grade. A verifier failure has no grade.
-`GradeResult.score_min` and `score_max` retain the verifier's native score range.
-SkyRL uses those bounds for normalized score metrics. Score normalization leaves
-optimization rewards and reward shaping unchanged.
 
 Grading starts when the session reports completion, the model reaches its token
 limit, or the engine reaches `max_turns`. Execution failures raise

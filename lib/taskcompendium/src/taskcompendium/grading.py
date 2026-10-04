@@ -58,8 +58,6 @@ class GradeResult:
     passed: bool | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
     failure: GradingFailure | None = None
-    score_min: float = 0.0
-    score_max: float = 1.0
 
 
 def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
