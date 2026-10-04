@@ -40,17 +40,23 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 
 
-def recovered_model(recovery_version: str) -> ArtifactHfModel:
+def recovered_model(recovery_version: str, policy_export_version: str | None) -> ArtifactHfModel:
     """Bind the recovery artifact's latest HF export, failing if none exists."""
     name = user_owned_name("inputs/bfcl-rl-recovered-policy")
-    recovery_name = user_owned_name("models/bfcl-rl-recovery-dpo-full")
+    producer = "bfcl-rl-recovery-dpo-full" if policy_export_version is None else "bfcl-rl-recovery-policy-export"
+    producer_name = user_owned_name(f"models/{producer}")
+    producer_version = recovery_version if policy_export_version is None else policy_export_version
     source = MODELS["student"]
     step = ArtifactStep.adopt(
         name,
-        recovery_version,
-        f"{recovery_name}/{recovery_version}",
+        producer_version,
+        f"{producer_name}/{producer_version}",
         kind=LevanterCheckpoint,
-        config={"starting_model": source.model, "starting_revision": source.revision},
+        config={
+            "starting_model": source.model,
+            "starting_revision": source.revision,
+            "recovery_version": recovery_version,
+        },
     )
     return ArtifactHfModel(step, source.model, source.revision)
 
@@ -120,7 +126,11 @@ def rl_recipe(base_config: Path, images: tuple[str, str, str], num_train_steps: 
 
 
 def rl_step(
-    base_config: Path, recovery_version: str, num_train_steps: int, images: tuple[str, str, str]
+    base_config: Path,
+    recovery_version: str,
+    policy_export_version: str | None,
+    num_train_steps: int,
+    images: tuple[str, str, str],
 ) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name("models/bfcl-rl-multi-harness")
     spec = replace(
@@ -128,7 +138,7 @@ def rl_step(
         name=name,
         version=resolve_version(name, None),
         config_yaml=rl_recipe(base_config, images, num_train_steps),
-        model=recovered_model(recovery_version),
+        model=recovered_model(recovery_version, policy_export_version),
         topology=SkyRLTopology(num_nodes=10, gpus_per_node=8, gpu_variant="H100", role_plan=ROLE_PLAN),
     )
     return skyrl_step(spec, COLLECTION_EXECUTION, export_hf=True)
@@ -137,6 +147,7 @@ def rl_step(
 @click.command(help=__doc__)
 @click.option("--base-config", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
 @click.option("--recovery-version", required=True)
+@click.option("--policy-export-version", default=None, help="Use an explicit saved-policy CPU export producer.")
 @click.option("--num-train-steps", type=click.IntRange(min=2), required=True)
 @click.option("--python-image", required=True)
 @click.option("--java-image", required=True)
@@ -145,12 +156,19 @@ def rl_step(
 def main(
     base_config: Path,
     recovery_version: str,
+    policy_export_version: str | None,
     num_train_steps: int,
     python_image: str,
     java_image: str,
     javascript_image: str,
 ) -> ArtifactStep[SkyRLRun]:
-    return rl_step(base_config, recovery_version, num_train_steps, (python_image, java_image, javascript_image))
+    return rl_step(
+        base_config,
+        recovery_version,
+        policy_export_version,
+        num_train_steps,
+        (python_image, java_image, javascript_image),
+    )
 
 
 if __name__ == "__main__":

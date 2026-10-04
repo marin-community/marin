@@ -9,16 +9,17 @@ from marin.execution.lazy import StepContext
 from experiments.post_training.bfcl_rl.launch import recovered_model
 
 
-def test_recovery_handoff_requires_export_and_resolves_saved_policy(tmp_path):
+@pytest.mark.parametrize("policy_export_version", [None, "2026.10.04.26"])
+def test_recovery_handoff_requires_export_and_resolves_saved_policy(tmp_path, policy_export_version):
     # The first live DPO update saved a native checkpoint but skipped its HF hook.
     # The RL learner must fail rather than silently reverting to the starting model.
-    model = recovered_model("2026.10.04.17")
+    model = recovered_model("2026.10.04.21", policy_export_version)
     root = model.step.path(str(tmp_path))
     ctx = StepContext.for_run(str(tmp_path / "rl"), str(tmp_path), deps=model.deps())
     with pytest.raises(ValueError, match="has no HF export"):
         model.resolve(ctx)
 
-    export = Path(root) / "hf" / "step-1"
+    export = Path(root) / "hf" / "step-57"
     export.mkdir(parents=True)
     (export / "config.json").write_text("{}")
     (export / "tokenizer_config.json").write_text("{}")
