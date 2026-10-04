@@ -22,9 +22,11 @@ import jax.numpy as jnp
 POWER_ITERATIONS = 30
 
 
-def spectral_norm(w: jnp.ndarray, key: jax.Array) -> jnp.ndarray:
+def spectral_norm(w: jnp.ndarray) -> jnp.ndarray:
     """Largest singular value of each [..., a, b] matrix by power iteration."""
-    v = jax.random.normal(key, (*w.shape[:-2], w.shape[-1]), w.dtype)
+    # Start from a fixed non-degenerate vector built from w, so it carries w's sharding over the batch axes
+    # (expert banks are sharded over theirs).
+    v = jnp.ones_like(w[..., 0, :]) * (1.0 + 0.5 * jnp.sin(jnp.arange(w.shape[-1], dtype=w.dtype)))
 
     def body(_, v):
         u = jnp.einsum("...ab,...b->...a", w, v)
@@ -35,11 +37,11 @@ def spectral_norm(w: jnp.ndarray, key: jax.Array) -> jnp.ndarray:
     return jnp.linalg.norm(jnp.einsum("...ab,...b->...a", w, v), axis=-1)
 
 
-def matrix_stats(w: jnp.ndarray, key: jax.Array) -> dict[str, jnp.ndarray]:
+def matrix_stats(w: jnp.ndarray) -> dict[str, jnp.ndarray]:
     """Mean and worst-case stable rank and output-channel norm ratio over the leading axes of [..., in, out]."""
     w = w.astype(jnp.float32)
     fro2 = jnp.sum(w * w, axis=(-2, -1))
-    stable_rank = fro2 / jnp.maximum(spectral_norm(w, key) ** 2, 1e-30)
+    stable_rank = fro2 / jnp.maximum(spectral_norm(w) ** 2, 1e-30)
     channel = jnp.linalg.norm(w, axis=-2)
     ratio = jnp.max(channel, axis=-1) / jnp.maximum(jnp.mean(channel, axis=-1), 1e-30)
     return {

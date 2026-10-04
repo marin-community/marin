@@ -1373,8 +1373,7 @@ def _weight_diagnostics_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[...,
 
     @functools.partial(jax.jit, compiler_options=_FACT_PROBE_COMPILER_OPTIONS)
     def compute(matrices, gains):
-        key = jax.random.PRNGKey(0)
-        out = {f"weights/{name}/{k}": v for name, w in matrices.items() for k, v in matrix_stats(w, key).items()}
+        out = {f"weights/{name}/{k}": v for name, w in matrices.items() for k, v in matrix_stats(w).items()}
         out.update({f"weights/{name}/{k}": v for name, g in gains.items() for k, v in gain_stats(g).items()})
         return out
 

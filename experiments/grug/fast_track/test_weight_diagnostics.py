@@ -15,8 +15,8 @@ def test_stable_rank_counts_equal_singular_values_and_one_spike():
     q, _ = jnp.linalg.qr(jax.random.normal(key, (64, 64)))
     flat = q[:, :16] @ jnp.eye(16, 32)  # 16 equal singular values
     spiked = flat.at[:, 0].multiply(4.0)  # one direction 4x larger
-    stats_flat = matrix_stats(flat, key)
-    stats_spiked = matrix_stats(spiked, key)
+    stats_flat = matrix_stats(flat)
+    stats_spiked = matrix_stats(spiked)
     np.testing.assert_allclose(float(stats_flat["stable_rank_mean"]), 16.0, rtol=1e-3)
     # (15 + 16) / 16: one singular value of 4, fifteen of 1.
     np.testing.assert_allclose(float(stats_spiked["stable_rank_mean"]), 31 / 16, rtol=1e-3)
@@ -24,7 +24,7 @@ def test_stable_rank_counts_equal_singular_values_and_one_spike():
 
 def test_channel_ratio_flags_one_outsized_output_channel_per_matrix():
     w = jnp.ones((2, 8, 4)).at[1, :, 2].multiply(5.0)  # two stacked matrices; the second has channel 2 at 5x
-    stats = matrix_stats(w, jax.random.PRNGKey(1))
+    stats = matrix_stats(w)
     np.testing.assert_allclose(float(stats["channel_ratio_max"]), 5.0 / 2.0, rtol=1e-5)  # max 5 over mean 8/4
     np.testing.assert_allclose(float(stats["channel_ratio_mean"]), (1.0 + 2.5) / 2, rtol=1e-5)
 
