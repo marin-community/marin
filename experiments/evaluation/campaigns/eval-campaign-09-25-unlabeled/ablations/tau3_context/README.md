@@ -15,6 +15,14 @@ diagnostics, not release-policy results.
 | New arm: 65k/32k | 65,536 | 65,536 | 32,768 | pending |
 | New arm: 131k/32k | 131,072 | 131,072 | 32,768 | pending |
 
+The first launch of all three arms failed because Harbor resolved the pinned
+ACP registry shorthand during each trial setup. Its registry cache was written
+but not read, and repeated GitHub requests returned HTTP 403 rate limits. The
+replacement configs embed the exact `pi-acp@0.0.33` registry record from
+`agentclientprotocol/registry@993fab130b3475e9c1c745ca6820185219698f33`.
+This keeps the installed agent version fixed and removes registry network
+requests from trial setup. The failed attempts are not benchmark scores.
+
 The old score used Harbor `6543ab6cf5562e690203ddffb40efac74ef4f45b`;
 the current score used `2666d6526477ae3e46030a8dc4f3f2c68fd7a84f`.
 The new arms use the current campaign pin. Their model and Harbor YAMLs are
