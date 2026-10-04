@@ -1,37 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validate datakit smoke ferry outputs.
+"""Validate the outputs of the tier-1 datakit ferry.
 
-Run after the iris job for the datakit smoke ferry has completed.
-``MARIN_PREFIX`` must be set to the GCS prefix the ferry wrote to
-(read from ``ferry_run_status.json`` by the workflow).
+Run after the Iris job for the tier-1 ferry has completed, in the ferry's region.
+``FERRY_OUTPUT_PREFIX`` must be set to the output prefix the ferry logged (also the
+``marin_prefix`` of its run status). Leave ``MARIN_PREFIX`` as the regional bucket:
+artifact paths are stored relative to it.
 
 Checks the persisted output invariants:
   download (14 files, ~9.7M rows)
   → normalize (106 files under outputs/main, ~9.3M rows)
-  → fuzzy_dups (106 cluster-member attr files per source)
-  → verify_fuzzy_dups (106 sparse verified-duplicate attr files per source)
-  → consolidate (106 files, normalize - verified duplicate rows)
-  → tokenize (cache ledger rows == consolidate rows)
+  → store (every normalized record enters the store; the store keeps fewer
+    records than it reads, and its buckets hold exactly the records it keeps)
 
-Successful ferry completion covers the minhash step, which has no additional
-invariant in this validator.
+Successful ferry completion covers the reference stages between normalize and
+the store, which each write their own report under ``datakit/report``.
 """
 
 import logging
 import os
 import sys
 
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from levanter.store.cache import CacheLedger
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
-from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
-from marin.processing.classification.deduplication.verify_fuzzy_dups import VerifiedFuzzyDupsAttrData
-from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+
+from experiments.datakit.store.datakit_store import ClusteredStoreData
 
 logger = logging.getLogger(__name__)
 
@@ -44,34 +41,8 @@ NORMALIZE_EXPECTED_FILES = 106
 NORMALIZE_MIN_ROWS = 8_000_000  # observed: 9,268,156
 NORMALIZE_REQUIRED_COLUMNS = frozenset({"id", "text", "url", "source_id", "token_count"})
 
-# --- Fuzzy dups: one cluster-member attr file per normalize shard per source ---
-# The smoke ferry runs fuzzy dedup over a single source (fineweb-edu sample/10BT).
-FUZZY_DUPS_EXPECTED_SOURCES = 1
-FUZZY_DUPS_EXPECTED_FILES_PER_SOURCE = 106
-FUZZY_DUPS_REQUIRED_COLUMNS = frozenset({"id", "dup_cluster_id", "is_cluster_canonical"})
-
-# --- Verified fuzzy dups: one typed attr file per normalize shard per source ---
-VERIFIED_DUPS_REQUIRED_COLUMNS = frozenset(
-    {
-        "id",
-        "dup_doc",
-        "dup_cluster_id",
-        "dup_representative_id",
-        "dup_representative_source_key",
-        "dup_representative_kind",
-        "dup_shared_lsh_buckets",
-        "dup_comparisons",
-        "dup_member_containment",
-        "dup_jaccard",
-        "dup_under_tokenized",
-        "dup_char_jaccard",
-        "dup_local_line_count_ratio",
-    }
-)
-VERIFIED_DUPS_DROP_MAX_FRACTION = 0.50
-
-# --- Consolidate: same file count, strictly fewer rows than normalize ---
-CONSOLIDATE_REQUIRED_COLUMNS = NORMALIZE_REQUIRED_COLUMNS
+# --- Store: duplicate and contamination filters drop some records, never most ---
+STORE_DROP_MAX_FRACTION = 0.50
 
 
 def _list_parquet(path: str) -> list[str]:
@@ -141,172 +112,49 @@ def _validate_normalize(base: str, download_rows: int) -> int:
     return rows
 
 
-def _count_canonicals(files: list[str]) -> int:
-    """Sum is_cluster_canonical=True rows across fuzzy-dups attr files."""
-    total = 0
-    for path in files:
-        with StoragePath(path).open("rb") as f:
-            tbl = pq.ParquetFile(f).read(columns=["is_cluster_canonical"])
-        if tbl.num_rows == 0:
-            continue
-        canonical = tbl.column("is_cluster_canonical")
-        total += int(pc.sum(canonical).as_py() or 0)
-    return total
+def _validate_store(base: str, normalize_rows: int) -> int:
+    store_dirs = [str(m) for m in StoragePath(f"{base}/datakit/store_*").glob()]
+    if len(store_dirs) != 1:
+        raise SystemExit(f"Store: expected one store under {base}/datakit, got {store_dirs}")
+    store = read_artifact(store_dirs[0], ClusteredStoreData)
 
+    records_in = int(store.counters["datakit_store/records_in"])
+    records_out = int(store.counters["datakit_store/records_out"])
+    if records_in != normalize_rows:
+        raise SystemExit(f"Store: read {records_in} records, normalize wrote {normalize_rows}")
+    if not 0 < records_out < records_in:
+        raise SystemExit(f"Store: kept {records_out} of {records_in} records; expected some but not all")
+    dropped_fraction = 1 - records_out / records_in
+    if dropped_fraction > STORE_DROP_MAX_FRACTION:
+        raise SystemExit(f"Store: dropped {dropped_fraction:.1%} of records (max {STORE_DROP_MAX_FRACTION:.0%})")
 
-def _validate_fuzzy_dups(base: str) -> int:
-    """Validate candidate cluster attributes and return the comparison count.
-
-    Fuzzy dedup writes one cluster-member parquet per normalize shard, per source,
-    under ``<attr_dir>/*.parquet`` with schema
-    ``{id, dup_cluster_id, is_cluster_canonical}``. Singletons are omitted.
-    """
-    dedup = read_artifact(f"{base}/fuzzy_dups", FuzzyDupsAttrData)
-    if len(dedup.sources) != FUZZY_DUPS_EXPECTED_SOURCES:
-        raise SystemExit(f"Fuzzy dups: expected exactly {FUZZY_DUPS_EXPECTED_SOURCES} source, got {len(dedup.sources)}")
-    (per_source,) = dedup.sources.values()
-    files = _list_parquet(per_source.attr_dir)
-    if len(files) != FUZZY_DUPS_EXPECTED_FILES_PER_SOURCE:
-        raise SystemExit(f"Fuzzy dups: expected {FUZZY_DUPS_EXPECTED_FILES_PER_SOURCE} files, got {len(files)}")
-
-    _check_schema(files[0], FUZZY_DUPS_REQUIRED_COLUMNS)
-
-    cluster_members = _count_parquet_rows(files)
-    canonicals = _count_canonicals(files)
-    if canonicals > cluster_members:
-        raise SystemExit(
-            f"Fuzzy dups: {canonicals} canonicals > {cluster_members} cluster members — "
-            "at most one canonical per cluster must hold"
-        )
-    comparisons = cluster_members - canonicals
+    bucket_records = sum(bucket.total_elements for bucket in store.buckets)
+    if bucket_records != records_out:
+        raise SystemExit(f"Store: buckets hold {bucket_records} records, store kept {records_out}")
+    if not all(bucket.total_tokens > 0 for bucket in store.buckets):
+        raise SystemExit("Store: a bucket has no tokens")
 
     logger.info(
-        "Fuzzy candidates OK: %d files, %d cluster members, %d representatives, %d comparisons",
-        len(files),
-        cluster_members,
-        canonicals,
-        comparisons,
+        "Store OK: %d records in %d buckets (%.2f%% dropped: %d fuzzy, %d exact, %d contaminated)",
+        records_out,
+        len(store.buckets),
+        100 * dropped_fraction,
+        store.counters["datakit_store/fuzzy_duplicate_dropped"],
+        store.counters["datakit_store/exact_duplicate_dropped"],
+        store.counters["datakit_store/contaminated_dropped"],
     )
-    return comparisons
-
-
-def _validate_verified_fuzzy_dups(base: str, normalize_rows: int, candidate_comparisons: int) -> int:
-    """Validate full-text duplicate markers and return the row count."""
-    verified = read_artifact(prefix_join(base, "verify_fuzzy_dups"), VerifiedFuzzyDupsAttrData)
-    if len(verified.sources) != FUZZY_DUPS_EXPECTED_SOURCES:
-        raise SystemExit(
-            f"Verified fuzzy dups: expected exactly {FUZZY_DUPS_EXPECTED_SOURCES} source, "
-            f"got {len(verified.sources)}"
-        )
-    (per_source,) = verified.sources.values()
-    files = _list_parquet(per_source.attr_dir)
-    if len(files) != FUZZY_DUPS_EXPECTED_FILES_PER_SOURCE:
-        raise SystemExit(f"Verified fuzzy dups: expected {FUZZY_DUPS_EXPECTED_FILES_PER_SOURCE} files, got {len(files)}")
-
-    for path in files:
-        _check_schema(path, VERIFIED_DUPS_REQUIRED_COLUMNS)
-        with StoragePath(path).open("rb") as stream:
-            table = pq.ParquetFile(stream).read(columns=["dup_doc"])
-        if table.num_rows and not pc.all(table.column("dup_doc")).as_py():
-            raise SystemExit(f"Verified fuzzy dups: {path} contains dup_doc=False")
-
-    dropped = _count_parquet_rows(files)
-    if dropped <= 0:
-        raise SystemExit("Verified fuzzy dups: expected at least one verified duplicate")
-    if dropped > candidate_comparisons:
-        raise SystemExit(f"Verified fuzzy dups: {dropped} rows > {candidate_comparisons} direct candidate comparisons")
-    fraction = dropped / normalize_rows if normalize_rows else 0
-    if fraction > VERIFIED_DUPS_DROP_MAX_FRACTION:
-        raise SystemExit(
-            f"Verified fuzzy dups: {dropped} rows ({fraction:.1%} of {normalize_rows}) — "
-            f"expected <= {VERIFIED_DUPS_DROP_MAX_FRACTION:.0%}"
-        )
-
-    logger.info(
-        "Verified fuzzy dups OK: %d files, %d duplicates (%.1f%% of %d docs, %.1f%% of candidates)",
-        len(files),
-        dropped,
-        100 * fraction,
-        normalize_rows,
-        100 * dropped / candidate_comparisons if candidate_comparisons else 0,
-    )
-    return dropped
-
-
-def _validate_consolidate(base: str, normalize_rows: int, dropped_rows: int) -> int:
-    files = _list_parquet(f"{base}/consolidate")
-
-    _check_schema(files[0], CONSOLIDATE_REQUIRED_COLUMNS)
-
-    rows = _count_parquet_rows(files)
-
-    # Core invariant: consolidate must have strictly fewer rows than normalize
-    if rows >= normalize_rows:
-        raise SystemExit(
-            f"Consolidate: {rows} rows >= normalize {normalize_rows} rows — dedup removal did not reduce row count"
-        )
-
-    # Consolidate removes each sparse verified duplicate marker.
-    expected = normalize_rows - dropped_rows
-    if rows != expected:
-        raise SystemExit(
-            f"Consolidate: {rows} rows, expected exactly {expected} "
-            f"(normalize {normalize_rows} - verified duplicates {dropped_rows})"
-        )
-
-    logger.info(
-        "Consolidate OK: %d files, %d rows (removed %d, %.1f%%)",
-        len(files),
-        rows,
-        dropped_rows,
-        100 * dropped_rows / normalize_rows,
-    )
-    return rows
-
-
-def _validate_tokens(base: str, consolidate_rows: int) -> int:
-    train_dir = f"{base}/tokens/train"
-    ledger = CacheLedger.load(train_dir)
-    if not ledger.is_finished:
-        raise SystemExit(f"Tokenizer cache ledger not finished: {train_dir}")
-    if ledger.total_num_rows <= 0:
-        raise SystemExit(f"Tokenizer cache ledger has 0 rows: {train_dir}")
-
-    # Token rows should match consolidate rows exactly
-    if ledger.total_num_rows != consolidate_rows:
-        raise SystemExit(
-            f"Tokens: {ledger.total_num_rows} rows != consolidate {consolidate_rows} rows — "
-            "tokenizer should process every consolidated document"
-        )
-
-    logger.info("Tokens OK: %d rows (matches consolidate)", ledger.total_num_rows)
-    return ledger.total_num_rows
+    return records_out
 
 
 def main() -> None:
     configure_logging()
-    prefix = os.environ.get("MARIN_PREFIX")
-    if not prefix:
-        raise SystemExit("MARIN_PREFIX must be set to the GCS prefix the ferry wrote to")
-    run_id = os.environ["SMOKE_RUN_ID"]
-    prefix = prefix.rstrip("/")
-    base = f"{prefix}/datakit-smoke/{run_id}"
+    base = os.environ["FERRY_OUTPUT_PREFIX"].rstrip("/")
 
     download_rows = _validate_download(base)
     normalize_rows = _validate_normalize(base, download_rows)
-    candidate_comparisons = _validate_fuzzy_dups(base)
-    dropped_rows = _validate_verified_fuzzy_dups(base, normalize_rows, candidate_comparisons)
-    consolidate_rows = _validate_consolidate(base, normalize_rows, dropped_rows)
-    token_rows = _validate_tokens(base, consolidate_rows)
+    store_rows = _validate_store(base, normalize_rows)
 
-    logger.info(
-        "All checks passed: download=%d → normalize=%d → verified_duplicates=%d → consolidate=%d → tokens=%d",
-        download_rows,
-        normalize_rows,
-        dropped_rows,
-        consolidate_rows,
-        token_rows,
-    )
+    logger.info("All checks passed: download=%d → normalize=%d → store=%d", download_rows, normalize_rows, store_rows)
 
 
 if __name__ == "__main__":
