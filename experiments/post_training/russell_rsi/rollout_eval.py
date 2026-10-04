@@ -119,7 +119,8 @@ async def evaluate_development(
                 "max_tokens": RESPONSE_TOKENS,
                 "temperature": temperature,
                 "return_token_ids": True,
-                "skip_special_tokens": True,
+                # Preserve the special <tool_call> markers for the Hermes parser.
+                "skip_special_tokens": False,
                 "stop_token_ids": list(STOP_TOKEN_IDS),
                 "include_stop_str_in_output": False,
             }
