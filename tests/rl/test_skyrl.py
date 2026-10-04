@@ -22,11 +22,9 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLHardware,
     SkyRLRetentionPolicy,
-    SkyRLRolePlan,
-    SkyRLRuntime,
     SkyRLSpec,
-    SkyRLTopology,
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
@@ -35,6 +33,18 @@ from marin.rl.skyrl import (
     skyrl_temporary_run_path,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
+from marin.skyrl_recipe import (
+    Algorithm,
+    ContextBudget,
+    Generator,
+    Model,
+    Placement,
+    RecipePatch,
+    SkyRLRecipe,
+    SpeculativeDecoding,
+    Trainer,
+    Training,
+)
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.tasktrove.rl_smoke import smoke_step
@@ -79,42 +89,43 @@ class _FakeLauncherProcess:
         return None
 
 
-def _role_plan() -> SkyRLRolePlan:
-    return SkyRLRolePlan(
-        colocate_all=True,
-        policy_num_nodes=1,
-        policy_num_gpus_per_node=4,
-        num_inference_engines=4,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=1,
-        inference_engine_expert_parallel_size=1,
-        train_batch_size=16,
-        policy_mini_batch_size=16,
-        micro_train_batch_size_per_gpu=1,
-        n_samples_per_prompt=4,
+def _recipe() -> SkyRLRecipe:
+    return SkyRLRecipe(
+        context_budget=ContextBudget(request_window_tokens=512, max_new_tokens_per_turn=256, max_turns=1),
+        trainer=Trainer(
+            strategy="megatron",
+            max_steps=8,
+            placement=Placement(
+                colocate_all=True,
+                colocate_policy_ref=True,
+                policy_num_nodes=1,
+                policy_num_gpus_per_node=4,
+                ref_num_nodes=1,
+                ref_num_gpus_per_node=4,
+            ),
+            train_batch_size=16,
+            policy_mini_batch_size=16,
+            micro_train_batch_size_per_gpu=1,
+            algorithm=Algorithm(use_kl_loss=False),
+        ),
+        generator=Generator(
+            backend="vllm",
+            run_engines_locally=True,
+            num_inference_engines=4,
+            inference_engine_tensor_parallel_size=1,
+            inference_engine_pipeline_parallel_size=1,
+            inference_engine_data_parallel_size=1,
+            inference_engine_expert_parallel_size=1,
+            n_samples_per_prompt=4,
+        ),
     )
-
-
-def _config_yaml(*, strategy: str | None = None) -> str:
-    strategy_line = f"  strategy: {strategy}\n" if strategy is not None else ""
-    return f"""\
-trainer:
-{strategy_line}  max_steps: 8
-  algorithm:
-    use_kl_loss: false
-generator:
-  backend: vllm
-  run_engines_locally: true
-"""
 
 
 def _spec() -> SkyRLSpec:
     return SkyRLSpec(
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
-        config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(),
+        recipe=_recipe(),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -123,12 +134,7 @@ def _spec() -> SkyRLSpec:
         ),
         train_data=(ArtifactDataSource(_data_step(), relative_path="train.parquet"),),
         validation_data=(),
-        topology=SkyRLTopology(
-            num_nodes=1,
-            gpus_per_node=4,
-            gpu_variant="GB200",
-            role_plan=_role_plan(),
-        ),
+        hardware=SkyRLHardware(gpus_per_node=4, gpu_variant="GB200"),
         retention=SkyRLRetentionPolicy(),
         seed=17,
     )
@@ -158,99 +164,31 @@ def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
         SkyRLRetentionPolicy(resume_checkpoint_count=6)
 
 
-def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> None:
-    plan = dataclasses.replace(
-        _role_plan(),
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=8,
-        num_inference_engines=1,
-        inference_engine_data_parallel_size=8,
-        inference_engine_expert_parallel_size=8,
-    )
-    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
-    recipe["generator"]["speculative_decoding"] = {
-        "method": "eagle3",
-        "model": {
-            "source_uri": "hf://test/draft",
-            "source_identity": "0" * 40,
-        },
-        "num_speculative_tokens": 3,
-        "training": {},
-    }
+def test_skyrl_launch_preserves_online_draft_checkpoint_root() -> None:
     spec = dataclasses.replace(
         _spec(),
-        config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(),
-        topology=SkyRLTopology(
-            num_nodes=6,
-            gpus_per_node=8,
-            gpu_variant="H100",
-            role_plan=plan,
+        recipe=_recipe().merge(
+            RecipePatch(
+                generator=Generator(
+                    speculative_decoding=SpeculativeDecoding(
+                        method="eagle3",
+                        model=Model(source_uri="hf://test/draft", source_identity="0" * 40),
+                        num_speculative_tokens=3,
+                        training=Training(),
+                    )
+                )
+            )
         ),
     )
     step = skyrl_step(spec, _execution())
-    launch_config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    launch = yaml.safe_load(launch_config.launch_config_yaml)
-
-    assert launch["iris"]["allocation"]["num_nodes"] == 6
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
     assert launch["skyrl"]["generator"]["speculative_decoding"]["training"] == {}
+    assert config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
     assert launch["run"]["export_hf"] is False
-    assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
 
 
-def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
-    plan = dataclasses.replace(
-        _role_plan(),
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=8,
-        num_inference_engines=4,
-        inference_engine_data_parallel_size=8,
-        inference_engine_expert_parallel_size=8,
-    )
-
-    SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
-
-    separate_reference = dataclasses.replace(plan, reference_num_nodes=2)
-    SkyRLTopology(num_nodes=10, gpus_per_node=8, gpu_variant="H100", role_plan=separate_reference)
-    with pytest.raises(ValueError, match="exceeds the allocated topology"):
-        SkyRLTopology(num_nodes=9, gpus_per_node=8, gpu_variant="H100", role_plan=separate_reference)
-
-
-def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
-    plan = dataclasses.replace(
-        _role_plan(),
-        policy_num_gpus_per_node=8,
-        num_inference_engines=2,
-        inference_engine_tensor_parallel_size=3,
-    )
-
-    with pytest.raises(ValueError, match=r"TP\*PP slice must divide gpus_per_node"):
-        SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
-
-
-def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
-    plan = dataclasses.replace(
-        _role_plan(),
-        policy_num_gpus_per_node=8,
-        num_inference_engines=3,
-        inference_engine_tensor_parallel_size=2,
-    )
-
-    with pytest.raises(ValueError, match="colocated SkyRL roles must use the same GPUs: policy=8, rollout=6"):
-        SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
-
-
-def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
-    with pytest.raises(ValueError, match=r"trainer\.train_batch_size=32"):
-        dataclasses.replace(
-            _spec(),
-            config_yaml=_config_yaml().replace("  max_steps: 8", "  max_steps: 8\n  train_batch_size: 32"),
-        )
-
-
-def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
+def test_skyrl_step_fingerprint_includes_recipe_and_runtime_identity_and_excludes_placement(monkeypatch) -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
     moved = skyrl_step(spec, _execution("cw-us-east-02a"))
@@ -258,23 +196,17 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
         spec,
         dataclasses.replace(_execution(), cpu=64, memory="400GB", disk="2TB"),
     )
-    repinned_runtime = dataclasses.replace(spec.runtime)
-    object.__setattr__(repinned_runtime, "commit", "a" * 40)
-    changed_runtime = skyrl_step(dataclasses.replace(spec, runtime=repinned_runtime), _execution())
-    changed_plan = dataclasses.replace(spec.topology.role_plan, train_batch_size=32)
     changed_roles = skyrl_step(
-        dataclasses.replace(
-            spec,
-            config_yaml=_config_yaml(),
-            topology=dataclasses.replace(spec.topology, role_plan=changed_plan),
-        ),
+        dataclasses.replace(spec, recipe=spec.recipe.merge(RecipePatch(trainer=Trainer(train_batch_size=32)))),
         _execution(),
     )
-
-    assert base.fingerprint() == moved.fingerprint()
-    assert base.fingerprint() == resized.fingerprint()
-    assert base.fingerprint() != changed_runtime.fingerprint()
-    assert base.fingerprint() != changed_roles.fingerprint()
+    original = base.fingerprint()
+    assert original == moved.fingerprint()
+    assert original == resized.fingerprint()
+    assert original != changed_roles.fingerprint()
+    monkeypatch.setattr("marin.rl.skyrl.MARIN_SKYRL", dataclasses.replace(MARIN_SKYRL, commit="a" * 40))
+    changed_runtime = skyrl_step(spec, _execution())
+    assert original != changed_runtime.fingerprint()
 
 
 def test_skyrl_step_declares_model_and_data_dependencies() -> None:
@@ -348,6 +280,8 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
         "state": "succeeded",
         "iris_job_id": "01KTEST",
         "iris_job_state": "succeeded",
+        "launcher_commit": MARIN_SKYRL.commit,
+        "runtime_profile": "megatron",
         "failure": None,
         "model": {
             "policy_export_uri": "s3://test/run/exports/global_step_8/policy",
@@ -381,7 +315,6 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert launch["run"]["export_hf"] is True
     assert launch["runtime"]["launcher_commit"] == MARIN_SKYRL.commit
     assert launch["iris"]["allocation"] == {
-        "num_nodes": 1,
         "gpus_per_node": 4,
         "gpu_variant": "GB200",
         "cpu": 128,
@@ -425,6 +358,8 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
         "state": "succeeded",
         "iris_job_id": "01KNOEXPORT",
         "iris_job_state": "succeeded",
+        "launcher_commit": MARIN_SKYRL.commit,
+        "runtime_profile": "megatron",
         "failure": None,
         "model": None,
     }

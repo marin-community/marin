@@ -23,17 +23,45 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLHardware,
     SkyRLRetentionPolicy,
-    SkyRLRolePlan,
     SkyRLRun,
     SkyRLRunConfig,
-    SkyRLRuntime,
     SkyRLSpec,
-    SkyRLTopology,
-    _materialize_role_plan_config,
-    _role_plan_config_values,
     run_skyrl,
     skyrl_step,
+)
+from marin.skyrl_recipe import (
+    DERIVED_PATHS,
+    LAUNCH_PATHS,
+    Algorithm,
+    Callback,
+    ChatTemplate,
+    CheckpointCallback,
+    ContextBudget,
+    Data,
+    DatabaseRegistrationCallback,
+    DynamicSampling,
+    Environment,
+    EvalSamplingParams,
+    EvaluationCallback,
+    EvaluationMinimum,
+    EvaluationSampling,
+    Generator,
+    HFModelSaveCallback,
+    InferenceStatsCallback,
+    Placement,
+    Policy,
+    PolicyMegatronConfig,
+    PolicyOptimizerConfig,
+    RecipePatch,
+    Ref,
+    RefMegatronConfig,
+    RLEntrypoint,
+    RolloutBuffer,
+    SamplingParams,
+    SkyRLRecipe,
+    Trainer,
 )
 from rigging.filesystem.storage_path import StoragePath
 
@@ -107,55 +135,56 @@ PRESETS = MappingProxyType(
 )
 
 
-def role_plan(
+def resource_recipe(
     *,
     batch_size: int = TRAIN_BATCH_SIZE,
     group_size: int = GROUP_SIZE,
     micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
-) -> SkyRLRolePlan:
-    return SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=1,
-        policy_num_gpus_per_node=GPUS_PER_NODE,
-        num_inference_engines=GPUS_PER_NODE,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=1,
-        inference_engine_expert_parallel_size=1,
-        train_batch_size=batch_size,
-        policy_mini_batch_size=batch_size,
-        micro_train_batch_size_per_gpu=micro_train_batch_size,
-        n_samples_per_prompt=group_size,
+) -> RecipePatch:
+    return RecipePatch(
+        trainer=Trainer(
+            placement=Placement(
+                colocate_all=False,
+                colocate_policy_ref=True,
+                policy_num_nodes=1,
+                policy_num_gpus_per_node=GPUS_PER_NODE,
+                ref_num_nodes=1,
+                ref_num_gpus_per_node=GPUS_PER_NODE,
+            ),
+            train_batch_size=batch_size,
+            policy_mini_batch_size=batch_size,
+            micro_train_batch_size_per_gpu=micro_train_batch_size,
+        ),
+        generator=Generator(
+            num_inference_engines=GPUS_PER_NODE,
+            inference_engine_tensor_parallel_size=1,
+            inference_engine_pipeline_parallel_size=1,
+            inference_engine_data_parallel_size=1,
+            inference_engine_expert_parallel_size=1,
+            n_samples_per_prompt=group_size,
+        ),
     )
 
 
-ROLE_SETTINGS = frozenset(_role_plan_config_values(role_plan()))
-DERIVED_SETTINGS = frozenset(
+_RESOURCES = resource_recipe()
+ROLE_SETTINGS = frozenset(
     {
-        "generator.max_input_length",
-        "trainer.max_prompt_length",
-        "generator.max_turns",
-        "generator.sampling_params.max_generate_length",
-        "generator.eval_sampling_params.max_generate_length",
-        "generator.engine_init_kwargs.max_model_len",
-        "generator.trajectory_reward_shaping.overlong.l_max",
-        "generator.trajectory_reward_shaping.overlong.l_cache",
+        *(f"trainer.{key}" for key in _RESOURCES.trainer.model_fields_set if key != "placement"),
+        *(f"trainer.placement.{key}" for key in _RESOURCES.trainer.placement.model_fields_set),
+        *(f"generator.{key}" for key in _RESOURCES.generator.model_fields_set),
     }
 )
 PROTECTED_SETTINGS = (
     ROLE_SETTINGS
-    | DERIVED_SETTINGS
+    | DERIVED_PATHS
+    | LAUNCH_PATHS
     | frozenset(
         {
             "entrypoint",
             "trainer.strategy",
-            "trainer.policy.model.path",
             "trainer.policy.megatron_config",
             "trainer.ref.megatron_config",
-            "trainer.ref.model.path",
             "trainer.resume_mode",
-            "trainer.seed",
-            "trainer.max_ckpts_to_keep",
             "trainer.eval_before_train",
             "trainer.ckpt_interval",
             "trainer.callbacks",
@@ -173,8 +202,8 @@ PROTECTED_SETTINGS = (
 )
 
 
-def apply_setting(config: dict, text: str) -> None:
-    key, separator, raw = text.partition("=")
+def validate_setting(text: str) -> None:
+    key, separator, _raw = text.partition("=")
     if not separator or not key:
         raise click.BadParameter(f"expected dotted.key=value, got {text!r}")
     if any(
@@ -184,24 +213,9 @@ def apply_setting(config: dict, text: str) -> None:
         raise click.BadParameter(f"{key!r} is owned by the launcher; use a typed option")
     if not key.startswith(("trainer.", "generator.", "context_budget.")):
         raise click.BadParameter(f"{key!r} is outside the configurable recipe")
-    parts = key.split(".")
-    node = config
-    for part in parts[:-1]:
-        node = node.get(part)
-        if not isinstance(node, dict):
-            raise click.BadParameter(f"unknown setting {key!r}")
-    if parts[-1] not in node:
-        raise click.BadParameter(f"unknown setting {key!r}")
-    value = yaml.safe_load(raw)
-    if isinstance(node[parts[-1]], float) and isinstance(value, str):
-        try:
-            value = float(value)
-        except ValueError as error:
-            raise click.BadParameter(f"{key!r} requires a numeric value") from error
-    node[parts[-1]] = value
 
 
-def training_config(
+def training_recipe(
     *,
     preset: str = "gate",
     lane: str = "async",
@@ -211,11 +225,10 @@ def training_config(
     micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
     eval_minimum_score: float | None = None,
     train_ns: tuple[int, ...] = DEFAULT_TRAIN_NS,
-    seed: int = SEED,
     checkpoint: bool = False,
     export: bool = False,
     settings: tuple[str, ...] = (),
-) -> dict:
+) -> SkyRLRecipe:
     if preset not in PRESETS:
         raise ValueError(f"unknown preset {preset!r}")
     if lane not in ("async", "sync"):
@@ -224,142 +237,152 @@ def training_config(
         raise ValueError("batch, group and micro-batch sizes must be positive")
     checkpoint = checkpoint or export
     choice = MODELS[model]
-    plan = role_plan(batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size)
     preset_config = PRESETS[preset]
     max_steps = preset_config.max_steps
     if eval_minimum_score is None:
         eval_minimum_score = preset_config.minimum_score
-    geometry = {
-        "tensor_model_parallel_size": 1,
-        "pipeline_model_parallel_size": 1,
-        "context_parallel_size": 1,
-        "expert_model_parallel_size": 1,
-        "expert_tensor_parallel_size": 1,
-    }
-    config = {
-        "entrypoint": "standard",
-        "context_budget": {
-            "request_window_tokens": 128,
-            "max_new_tokens_per_turn": 64,
-            "max_turns": 1,
-        },
-        "environment": {"env_class": ENV_CLASS},
-        "trainer": {
-            "strategy": "megatron",
-            "flash_attn": False,
-            "use_sample_packing": False,
-            "gradient_checkpointing": False,
-            "epochs": 1,
-            "max_steps": max_steps,
-            "update_epochs_per_batch": 2,
-            "eval_batch_size": len(cat_count_eval_ns(train_ns)),
-            "eval_interval": 1 if preset == "dry" else 5,
-            "hf_save_interval": max_steps,
-            "resume_mode": "latest" if checkpoint else "none",
-            "max_ckpts_to_keep": 1,
-            "seed": seed,
-            "logger": "wandb",
-            "project_name": "marin-cat-count-canary",
-            "tracker_commit_each_step": True,
-            "training_metrics": True,
-            "policy_train_spans": True,
-            "rollout_spans": True,
-            "algorithm": {
-                "advantage_estimator": "grpo",
-                "policy_loss_type": "behavior_clip" if lane == "async" else "regular",
-                "eps_clip_low": 0.2,
-                "eps_clip_high": 0.2,
-                "use_kl_loss": False,
-                "use_kl_in_reward": False,
-                "off_policy_correction": "tis" if lane == "sync" else "none",
-                "dynamic_sampling": {"type": None},
-            },
-            "policy": {
-                "optimizer_config": {
-                    "optimizer": "AdamW",
-                    "lr": 2.0e-6,
-                    "weight_decay": 0.01,
-                    "max_grad_norm": 1.0,
-                },
-                "megatron_config": {**geometry, "check_dp_weight_consistency": True},
-            },
-            "ref": {"megatron_config": geometry},
-            "rollout_buffer": {
-                "max_staleness_steps": 0 if lane == "sync" else 2,
-                "batch_policy": "full_batch",
-                "max_in_flight": batch_size,
-                "object_store_root": None,
-            },
-        },
-        "generator": {
-            "backend": "vllm",
-            "model_dtype": "bfloat16",
-            "vllm_attention_backend": "FLASH_ATTN",
-            "run_engines_locally": True,
-            "enable_http_endpoint": False,
-            "weight_sync_backend": "nccl",
-            "use_conversation_multi_turn": False,
-            "require_exact_chat_transport": False,
-            "gpu_memory_utilization": 0.7,
-            "enforce_eager": False,
-            "chat_template": {"source": "name", "name_or_path": choice.chat_template},
-            "sampling_params": {"temperature": 1.0, "top_p": 1.0, "logprobs": 0},
-            "eval_sampling_params": {"temperature": 0.0},
-            "eval_n_samples_per_prompt": 1,
-            "inference_stats_interval": 1,
-        },
-        "data": {"kind": "parquet", "shuffle": False, "train_data": [], "val_data": []},
-    }
-    _materialize_role_plan_config(config, plan)
+    recipe = SkyRLRecipe.combine(
+        base=SkyRLRecipe(
+            entrypoint=RLEntrypoint.STANDARD,
+            context_budget=ContextBudget(request_window_tokens=128, max_new_tokens_per_turn=64, max_turns=1),
+            environment=Environment(env_class=ENV_CLASS),
+            trainer=Trainer(
+                strategy="megatron",
+                flash_attn=False,
+                use_sample_packing=False,
+                gradient_checkpointing=False,
+                epochs=1,
+                max_steps=max_steps,
+                update_epochs_per_batch=2,
+                eval_batch_size=len(cat_count_eval_ns(train_ns)),
+                eval_interval=1 if preset == "dry" else 5,
+                hf_save_interval=max_steps,
+                resume_mode="latest" if checkpoint else "none",
+                logger="wandb",
+                project_name="marin-cat-count-canary",
+                tracker_commit_each_step=True,
+                training_metrics=True,
+                policy_train_spans=True,
+                rollout_spans=True,
+                algorithm=Algorithm(
+                    advantage_estimator="grpo",
+                    policy_loss_type="behavior_clip" if lane == "async" else "regular",
+                    eps_clip_low=0.2,
+                    eps_clip_high=0.2,
+                    use_kl_loss=False,
+                    use_kl_in_reward=False,
+                    off_policy_correction="tis" if lane == "sync" else "none",
+                    dynamic_sampling=DynamicSampling(type=None),
+                ),
+                policy=Policy(
+                    optimizer_config=PolicyOptimizerConfig(
+                        optimizer="AdamW", lr=2e-06, weight_decay=0.01, max_grad_norm=1.0
+                    ),
+                    megatron_config=PolicyMegatronConfig(
+                        tensor_model_parallel_size=1,
+                        pipeline_model_parallel_size=1,
+                        context_parallel_size=1,
+                        expert_model_parallel_size=1,
+                        expert_tensor_parallel_size=1,
+                        check_dp_weight_consistency=True,
+                    ),
+                ),
+                ref=Ref(
+                    megatron_config=RefMegatronConfig(
+                        tensor_model_parallel_size=1,
+                        pipeline_model_parallel_size=1,
+                        context_parallel_size=1,
+                        expert_model_parallel_size=1,
+                        expert_tensor_parallel_size=1,
+                    )
+                ),
+                rollout_buffer=RolloutBuffer(
+                    max_staleness_steps=0 if lane == "sync" else 2,
+                    batch_policy="full_batch",
+                    max_in_flight=batch_size,
+                    object_store_root=None,
+                ),
+            ),
+            generator=Generator(
+                backend="vllm",
+                model_dtype="bfloat16",
+                vllm_attention_backend="FLASH_ATTN",
+                run_engines_locally=True,
+                enable_http_endpoint=False,
+                weight_sync_backend="nccl",
+                use_conversation_multi_turn=False,
+                require_exact_chat_transport=False,
+                gpu_memory_utilization=0.7,
+                enforce_eager=False,
+                chat_template=ChatTemplate(source="name", name_or_path=choice.chat_template),
+                sampling_params=SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
+                eval_sampling_params=EvalSamplingParams(temperature=0.0),
+                eval_n_samples_per_prompt=1,
+                inference_stats_interval=1,
+            ),
+            data=Data(kind="parquet", shuffle=False, train_data=(), val_data=()),
+        ),
+        geometry=resource_recipe(
+            batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size
+        ),
+    )
     if choice.chat_template_kwargs is not None:
-        config["generator"]["chat_template_kwargs"] = dict(choice.chat_template_kwargs)
+        recipe = recipe.merge(RecipePatch(generator=Generator(chat_template_kwargs=choice.chat_template_kwargs)))
     for setting in settings:
-        apply_setting(config, setting)
-    trainer = config["trainer"]
-    trainer["eval_before_train"] = trainer["eval_interval"] > 0
-    trainer["ckpt_interval"] = max(1, trainer["eval_interval"]) if checkpoint else -1
+        validate_setting(setting)
+    recipe = recipe.with_settings(settings)
+    trainer = recipe.trainer
+    eval_before_train = trainer.eval_interval > 0
+    ckpt_interval = max(1, trainer.eval_interval) if checkpoint else -1
     metric_groups = {}
     for profile in ("eval", "eval/sampled"):
         for split, counts in (("train", train_ns), ("heldout", HELDOUT_NS), ("extrapolation", EXTRAPOLATION_NS)):
             for metric in ("avg_score", "environment/exact"):
                 source_metric = "environment/cat_count/exact" if metric == "environment/exact" else metric
-                metric_groups[f"{profile}/{split}/{metric}"] = [
+                metric_groups[f"{profile}/{split}/{metric}"] = tuple(
                     f"{profile}/{cat_count_data_source(n)}/{source_metric}" for n in counts
-                ]
+                )
     if eval_minimum_score is not None and (
-        not math.isfinite(eval_minimum_score) or eval_minimum_score <= 0 or trainer["eval_interval"] <= 0
+        not math.isfinite(eval_minimum_score) or eval_minimum_score <= 0 or trainer.eval_interval <= 0
     ):
         raise ValueError("evaluation stopping requires a finite positive minimum score and periodic evaluation")
-    trainer["callbacks"] = [
-        {
-            "type": "evaluation",
-            "eval_steps": trainer["eval_interval"],
-            "eval_before_train": trainer["eval_before_train"],
-            "additional_evaluations": {
-                "sampled": {"sampling_params": {"temperature": 1.0}, "n_samples_per_prompt": SAMPLED_EVAL_SAMPLES}
+    callbacks: list[Callback] = [
+        EvaluationCallback(
+            type="evaluation",
+            eval_steps=trainer.eval_interval,
+            eval_before_train=eval_before_train,
+            additional_evaluations={
+                "sampled": EvaluationSampling(
+                    sampling_params=EvalSamplingParams(temperature=1.0), n_samples_per_prompt=SAMPLED_EVAL_SAMPLES
+                )
             },
-            "metric_groups": metric_groups,
-            "stop_when": (
-                {"eval/sampled/train/avg_score": {"minimum": eval_minimum_score}}
+            metric_groups=metric_groups,
+            stop_when=(
+                {"eval/sampled/train/avg_score": EvaluationMinimum(minimum=eval_minimum_score)}
                 if eval_minimum_score is not None
                 else {}
             ),
-        },
-        {"type": "database_registration"},
-        {
-            "type": "inference_stats",
-            "log_every_steps": config["generator"]["inference_stats_interval"],
-            "log_to_console": True,
-            "log_to_tracker": True,
-        },
+        ),
+        DatabaseRegistrationCallback(type="database_registration"),
+        InferenceStatsCallback(
+            type="inference_stats",
+            log_every_steps=recipe.generator.inference_stats_interval,
+            log_to_console=True,
+            log_to_tracker=True,
+        ),
     ]
     if checkpoint:
-        trainer["callbacks"].append({"type": "checkpoint", "save_steps": trainer["ckpt_interval"]})
+        callbacks.append(CheckpointCallback(type="checkpoint", save_steps=ckpt_interval))
     if export:
-        trainer["callbacks"].append({"type": "hf_model_save", "save_steps": trainer["hf_save_interval"]})
-    if lane == "sync" and trainer["rollout_buffer"]["max_staleness_steps"] != 0:
+        callbacks.append(HFModelSaveCallback(type="hf_model_save", save_steps=trainer.hf_save_interval))
+    if lane == "sync" and trainer.rollout_buffer.max_staleness_steps != 0:
         raise ValueError("the sync lane requires zero rollout staleness")
-    return config
+    return SkyRLRecipe.combine(
+        authored=recipe,
+        callbacks=RecipePatch(
+            trainer=Trainer(eval_before_train=eval_before_train, ckpt_interval=ckpt_interval, callbacks=tuple(callbacks))
+        ),
+    )
 
 
 def run_canary(config: SkyRLRunConfig) -> SkyRLRun:
@@ -388,7 +411,7 @@ def build_run(
 ) -> ArtifactStep[SkyRLRun]:
     if job_timeout_seconds <= 0:
         raise ValueError("job timeout must be positive")
-    config = training_config(
+    config = training_recipe(
         preset=preset,
         lane=lane,
         model=model,
@@ -397,15 +420,18 @@ def build_run(
         micro_train_batch_size=micro_train_batch_size,
         eval_minimum_score=eval_minimum_score,
         train_ns=train_ns,
-        seed=seed,
         checkpoint=checkpoint,
         export=export,
         settings=settings,
     )
-    max_steps = config["trainer"]["max_steps"]
-    prefetch_rows = config["trainer"]["rollout_buffer"]["max_staleness_steps"] * batch_size
+    max_steps = config.trainer.max_steps
+    if max_steps is None:
+        raise ValueError("CatCount requires trainer.max_steps to bound its training pool")
+    prefetch_rows = config.trainer.rollout_buffer.max_staleness_steps * batch_size
     train_rows = batch_size * max_steps + prefetch_rows
-    identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(config) + repr(train_ns))}"
+    identity_document = config.to_skyrl()
+    identity_document["trainer"].update(seed=seed, max_ckpts_to_keep=1)
+    identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(identity_document) + repr(train_ns))}"
     data_identity = fingerprint_hash(repr((train_ns, train_rows, seed)))
     data_name = f"documents/{EXPERIMENT_NAME}/{data_identity}"
     data = cat_count_data_step(
@@ -427,8 +453,7 @@ def build_run(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
-            config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(),
+            recipe=config,
             model=ArtifactHfModel(
                 step=model_step,
                 relative_path="" if model == DEFAULT_MODEL else None,
@@ -437,14 +462,7 @@ def build_run(
             ),
             train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
-            topology=SkyRLTopology(
-                num_nodes=2,
-                gpus_per_node=GPUS_PER_NODE,
-                gpu_variant=GPU_VARIANT,
-                role_plan=role_plan(
-                    batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size
-                ),
-            ),
+            hardware=SkyRLHardware(gpus_per_node=GPUS_PER_NODE, gpu_variant=GPU_VARIANT),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=seed,
         ),

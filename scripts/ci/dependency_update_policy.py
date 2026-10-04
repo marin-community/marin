@@ -27,6 +27,7 @@ class PullRequestPolicy:
     head_branch: str
     title: str
     allowed_files: frozenset[str]
+    copied_inventory: str | None = None
 
 
 EXTERNAL_RUNTIME_POLICIES = MappingProxyType(
@@ -40,6 +41,9 @@ EXTERNAL_RUNTIME_POLICIES = MappingProxyType(
                     f"config/external/{project.value}/uv.lock",
                     "lib/marin/src/marin/external_dependencies.py",
                 }
+            ),
+            copied_inventory=(
+                "lib/marin/src/marin/skyrl_recipe.provenance.json" if project is ExternalRuntime.MARIN_SKYRL else None
             ),
         )
         for project in ExternalRuntime

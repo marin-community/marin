@@ -53,13 +53,26 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLHardware,
     SkyRLRetentionPolicy,
-    SkyRLRolePlan,
     SkyRLRun,
-    SkyRLRuntime,
     SkyRLSpec,
-    SkyRLTopology,
     skyrl_step,
+)
+from marin.skyrl_recipe import (
+    Algorithm,
+    ContextBudget,
+    Data,
+    Environment,
+    Generator,
+    Placement,
+    Policy,
+    PolicyOptimizerConfig,
+    RecipePatch,
+    RLEntrypoint,
+    SamplingParams,
+    SkyRLRecipe,
+    Trainer,
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -122,19 +135,28 @@ ICEBALL_QWEN3_CONFIG = Qwen3Config(
 
 # Keep policy/reference and rollout workers on separate nodes so this integration run
 # exercises the multi-node handoff and mixed-role topology used by larger RL jobs.
-ICEBALL_RL_ROLE_PLAN = SkyRLRolePlan(
-    colocate_all=False,
-    policy_num_nodes=1,
-    policy_num_gpus_per_node=ICEBALL_RL_GPUS_PER_NODE,
-    num_inference_engines=ICEBALL_RL_GPUS_PER_NODE,
-    inference_engine_tensor_parallel_size=1,
-    inference_engine_pipeline_parallel_size=1,
-    inference_engine_data_parallel_size=1,
-    inference_engine_expert_parallel_size=1,
-    train_batch_size=16,
-    policy_mini_batch_size=16,
-    micro_train_batch_size_per_gpu=1,
-    n_samples_per_prompt=4,
+ICEBALL_RL_PART = RecipePatch(
+    trainer=Trainer(
+        placement=Placement(
+            colocate_all=False,
+            colocate_policy_ref=True,
+            policy_num_nodes=1,
+            policy_num_gpus_per_node=ICEBALL_RL_GPUS_PER_NODE,
+            ref_num_nodes=1,
+            ref_num_gpus_per_node=ICEBALL_RL_GPUS_PER_NODE,
+        ),
+        train_batch_size=16,
+        policy_mini_batch_size=16,
+        micro_train_batch_size_per_gpu=1,
+    ),
+    generator=Generator(
+        num_inference_engines=ICEBALL_RL_GPUS_PER_NODE,
+        inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
+        n_samples_per_prompt=4,
+    ),
 )
 
 QWEN3_CHAT_TEMPLATE = (
@@ -147,57 +169,45 @@ QWEN3_CHAT_TEMPLATE = (
     "{% endfor %}"
 )
 
-ICEBALL_RL_CONFIG = f"""\
-entrypoint: standard
-
-context_budget:
-  request_window_tokens: {ICEBALL_SEQUENCE_LENGTH}
-  max_new_tokens_per_turn: 256
-  max_turns: 1
-
-environment:
-  env_class: {SKYRL_GSM8K_ENVIRONMENT}
-
-trainer:
-  strategy: megatron
-  flash_attn: false
-  use_sample_packing: false
-  algorithm:
-    advantage_estimator: grpo
-    use_kl_loss: true
-  epochs: 1
-  max_steps: 8
-  update_epochs_per_batch: 1
-  eval_batch_size: 16
-  eval_before_train: false
-  eval_interval: -1
-  ckpt_interval: 2
-  resume_mode: latest
-  logger: wandb
-  project_name: {ICEBALL_WANDB_PROJECT}
-  hf_hub_repo_id: null
-  policy:
-    optimizer_config:
-      lr: 2.0e-6
-      max_grad_norm: 1.0
-generator:
-  backend: vllm
-  model_dtype: bfloat16
-  vllm_attention_backend: FLASH_ATTN
-  gpu_memory_utilization: 0.70
-  enforce_eager: false
-  run_engines_locally: true
-  weight_sync_backend: nccl
-  sampling_params:
-    logprobs: 0
-    temperature: 1.0
-    top_p: 1.0
-
-data:
-  kind: parquet
-  train_data: []
-  val_data: []
-"""
+ICEBALL_RL_RECIPE = SkyRLRecipe.combine(
+    base=SkyRLRecipe(
+        entrypoint=RLEntrypoint.STANDARD,
+        context_budget=ContextBudget(
+            request_window_tokens=ICEBALL_SEQUENCE_LENGTH, max_new_tokens_per_turn=256, max_turns=1
+        ),
+        environment=Environment(env_class=SKYRL_GSM8K_ENVIRONMENT),
+        trainer=Trainer(
+            strategy="megatron",
+            flash_attn=False,
+            use_sample_packing=False,
+            algorithm=Algorithm(advantage_estimator="grpo", use_kl_loss=True),
+            epochs=1,
+            max_steps=8,
+            update_epochs_per_batch=1,
+            eval_batch_size=16,
+            eval_before_train=False,
+            eval_interval=-1,
+            ckpt_interval=2,
+            resume_mode="latest",
+            logger="wandb",
+            project_name=ICEBALL_WANDB_PROJECT,
+            hf_hub_repo_id=None,
+            policy=Policy(optimizer_config=PolicyOptimizerConfig(lr=2e-06, max_grad_norm=1.0)),
+        ),
+        generator=Generator(
+            backend="vllm",
+            model_dtype="bfloat16",
+            vllm_attention_backend="FLASH_ATTN",
+            gpu_memory_utilization=0.7,
+            enforce_eager=False,
+            run_engines_locally=True,
+            weight_sync_backend="nccl",
+            sampling_params=SamplingParams(logprobs=0, temperature=1.0, top_p=1.0),
+        ),
+        data=Data(kind="parquet", train_data=(), val_data=()),
+    ),
+    geometry=ICEBALL_RL_PART,
+)
 
 
 @dataclass(frozen=True)
@@ -341,8 +351,7 @@ def iceball_rl_spec(
     return SkyRLSpec(
         name=rl_name,
         version=version or resolve_version(rl_base_name, None),
-        config_yaml=ICEBALL_RL_CONFIG,
-        runtime=SkyRLRuntime(),
+        recipe=ICEBALL_RL_RECIPE,
         model=ArtifactHfModel(
             step=sft,
             tokenizer_uri=QWEN_TOKENIZER,
@@ -350,12 +359,7 @@ def iceball_rl_spec(
         ),
         train_data=(ArtifactDataSource(gsm8k, relative_path=GSM8K_TRAIN_FILENAME),),
         validation_data=(ArtifactDataSource(gsm8k, relative_path=GSM8K_VALIDATION_FILENAME),),
-        topology=SkyRLTopology(
-            num_nodes=2,
-            gpus_per_node=ICEBALL_RL_GPUS_PER_NODE,
-            gpu_variant=ICEBALL_GPU_VARIANT,
-            role_plan=ICEBALL_RL_ROLE_PLAN,
-        ),
+        hardware=SkyRLHardware(gpus_per_node=ICEBALL_RL_GPUS_PER_NODE, gpu_variant=ICEBALL_GPU_VARIANT),
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
         seed=17,
     )

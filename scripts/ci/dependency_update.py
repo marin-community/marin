@@ -111,7 +111,7 @@ def validated_pull_request(
         raise ValueError(f"unexpected pull request title {pull_request.title!r}")
     if not pull_request.files:
         raise ValueError("pull request has no changed files")
-    unexpected_files = sorted(set(pull_request.files) - policy.allowed_files)
+    unexpected_files = sorted(set(pull_request.files) - allowed_update_files(policy))
     if unexpected_files:
         raise ValueError(f"pull request contains unexpected files: {unexpected_files}")
     return pull_request
@@ -120,10 +120,36 @@ def validated_pull_request(
 def validate_changed_files(files: Iterable[str], *, policy: PullRequestPolicy) -> tuple[str, ...]:
     """Return sorted changed files after enforcing the generator allowlist."""
     changed = tuple(sorted(set(files)))
-    unexpected = tuple(file for file in changed if file not in policy.allowed_files)
+    allowed = allowed_update_files(policy)
+    unexpected = tuple(file for file in changed if file not in allowed)
     if unexpected:
         raise ValueError(f"dependency update changed unexpected files: {list(unexpected)}")
     return changed
+
+
+def allowed_update_files(policy: PullRequestPolicy) -> frozenset[str]:
+    """Admit copied files declared by the current and committed source inventories."""
+    if policy.copied_inventory is None:
+        return policy.allowed_files
+    root = Path(__file__).resolve().parents[2]
+    path = root / policy.copied_inventory
+    documents = [json.loads(path.read_text())] if path.exists() else []
+    for ref in ("HEAD", "HEAD^"):
+        result = subprocess.run(
+            ["git", "-C", str(root), "show", f"{ref}:{policy.copied_inventory}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            documents.append(json.loads(result.stdout))
+    prefix = policy.copied_inventory.removesuffix(".provenance.json")
+    copied = {policy.copied_inventory}
+    for document in documents:
+        for name in document["files"]:
+            if Path(name).name != name or name in {".", ".."}:
+                raise ValueError(f"copied source inventory contains an invalid filename: {name!r}")
+            copied.add(f"{prefix}/{name}")
+    return policy.allowed_files | copied
 
 
 def evaluate_required_checks(rows: Iterable[CheckRow], *, required: tuple[str, ...]) -> RequiredCheckGate:
@@ -205,7 +231,13 @@ def changed_worktree_files() -> tuple[str, ...]:
         capture_output=True,
         text=True,
     )
-    return tuple(result.stdout.splitlines())
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return tuple(sorted(set(result.stdout.splitlines()) | set(untracked.stdout.splitlines())))
 
 
 def prepare_update_branch(*, policy: PullRequestPolicy, repository: str) -> UpdateBranch:

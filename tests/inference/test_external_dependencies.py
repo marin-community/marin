@@ -5,7 +5,10 @@
 
 import importlib.util
 import json
+import subprocess
 import tomllib
+import zipfile
+from email import message_from_bytes
 from pathlib import Path
 
 import pytest
@@ -133,3 +136,64 @@ def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validat
         update_external.promote_gpu_release(manifest_path)
     assert pin.read_text() == original
     assert not list(tmp_path.glob("gpu.*.toml.tmp"))
+
+
+@pytest.mark.timeout(180)
+def test_marin_wheel_authors_recipes_with_its_minimum_pydantic_dependency(tmp_path: Path) -> None:
+    root = _workspace_root()
+    built = subprocess.run(
+        ["uv", "build", str(root / "lib/marin"), "--wheel", "--out-dir", str(tmp_path / "dist")],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert built.returncode == 0, built.stderr
+    wheel = next((tmp_path / "dist").glob("*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        metadata = message_from_bytes(
+            archive.read(next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA")))
+        )
+    requirement = next(row for row in metadata.get_all("Requires-Dist") if row.startswith("pydantic"))
+    minimum = requirement.split(">=")[1].split(",")[0].split(";")[0].strip()
+    environment = tmp_path / "environment"
+    subprocess.run(
+        ["uv", "venv", "--python", "3.12", str(environment)], check=True, capture_output=True, text=True, timeout=30
+    )
+    python = environment / "bin/python"
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), "--no-deps", str(wheel)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), f"pydantic=={minimum}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    program = """
+import importlib.util, json, pickle
+from pathlib import Path
+import marin.skyrl_recipe as schema
+from marin.skyrl_recipe import Algorithm, ContextBudget, Generator, RecipePatch, SkyRLRecipe, Trainer
+assert 'site-packages' in Path(schema.__file__).parts, schema.__file__
+assert all(importlib.util.find_spec(name) is None for name in ('yaml','ray','torch','hydra','omegaconf'))
+recipe = SkyRLRecipe.combine(
+    budget=RecipePatch(context_budget=ContextBudget(
+        request_window_tokens=512,max_new_tokens_per_turn=128,max_turns=1)),
+    policy=RecipePatch(trainer=Trainer(algorithm=Algorithm(use_kl_loss=False)),
+                       generator=Generator(backend='vllm')),
+).with_settings(['context_budget.max_turns=4'])
+assert pickle.loads(pickle.dumps(recipe)) == recipe
+print(json.dumps(recipe.to_skyrl()))
+"""
+    result = subprocess.run([str(python), "-I", "-c", program], cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "context_budget": {"request_window_tokens": 512, "max_new_tokens_per_turn": 128, "max_turns": 4},
+        "trainer": {"algorithm": {"use_kl_loss": False}},
+        "generator": {"backend": "vllm"},
+    }

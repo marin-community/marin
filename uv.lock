@@ -6209,7 +6209,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0" },
     { name = "plotly" },
     { name = "pyarrow", specifier = ">=23.0.0" },
-    { name = "pydantic", specifier = "<3" },
+    { name = "pydantic", specifier = ">=2.12.2,<3" },
     { name = "regex" },
     { name = "requests", specifier = ">=2.33.0" },
     { name = "resiliparse", specifier = ">=0.17.2", index = "https://marin-community.github.io/chatnoir-resiliparse/simple" },

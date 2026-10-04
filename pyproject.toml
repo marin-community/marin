@@ -445,6 +445,7 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
+    "lib/marin/src/marin/skyrl_recipe/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",
