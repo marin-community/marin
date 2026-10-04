@@ -73,14 +73,21 @@ def test_gpu_release_pin_matches_its_descriptor():
     assert VLLM_GPU_RELEASE.version == descriptor.version
     assert VLLM_GPU_RELEASE.torch_backend == descriptor.torch_backend
     assert VLLM_GPU_RELEASE.torch_version == descriptor.torch_version
-    generated = {(w.architecture, w.sm_targets, w.url, w.sha256) for w in VLLM_GPU_RELEASE.wheels}
-    pinned = {(w.architecture, w.sm_targets, w.url, w.sha256) for w in descriptor.wheels}
+    generated = {(w.architecture, w.sm_targets, w.url, w.sha256, w.constraints_url) for w in VLLM_GPU_RELEASE.wheels}
+    pinned = {(w.architecture, w.sm_targets, w.url, w.sha256, w.constraints_url) for w in descriptor.wheels}
     assert generated == pinned
 
 
-def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_path):
+@pytest.mark.parametrize("with_constraints", [False, True])
+def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_path, with_constraints):
     update_external = _update_external()
-    rendered = update_external.render_gpu_release_toml(_promoted_manifest())
+    manifest = _promoted_manifest()
+    constraints_url = (
+        f"https://raw.githubusercontent.com/marin-community/vllm/{'a' * 40}/infra/release/gpu-constraints.txt"
+    )
+    if with_constraints:
+        manifest["platforms"][0]["constraints"] = {"url": constraints_url, "sha256": "c" * 64}
+    rendered = update_external.render_gpu_release_toml(manifest)
 
     # The manifest carries the raw '+' filename; the pin must percent-encode it so the
     # loader's quote(version, safe='') URL check passes.
@@ -95,6 +102,21 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
     assert release.torch_backend == "cu130"
     assert release.torch_version == "2.11.0+cu130"
     assert [wheel.architecture for wheel in release.wheels] == ["x86_64"]
+    assert release.wheels[0].constraints_url == (constraints_url if with_constraints else None)
+
+
+def test_gpu_release_rejects_constraints_from_another_source(tmp_path):
+    update_external = _update_external()
+    manifest = _promoted_manifest()
+    manifest["platforms"][0]["constraints"] = {
+        "url": f"https://raw.githubusercontent.com/marin-community/vllm/{'c' * 40}/infra/release/gpu-constraints.txt",
+        "sha256": "d" * 64,
+    }
+    path = tmp_path / "gpu.toml"
+    path.write_text(update_external.render_gpu_release_toml(manifest))
+
+    with pytest.raises(ValueError, match="constraints must use the wheel's source commit"):
+        update_external.load_vllm_gpu_release(path)
 
 
 @pytest.mark.parametrize(

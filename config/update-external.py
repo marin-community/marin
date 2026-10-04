@@ -85,6 +85,7 @@ class VllmGpuWheel:
     sm_targets: tuple[str, ...]
     url: str
     sha256: str
+    constraints_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
                 sm_targets=tuple(wheel["sm_targets"]),
                 url=wheel["url"],
                 sha256=wheel["sha256"],
+                constraints_url=wheel.get("constraints_url"),
             )
             for wheel in config["wheels"]
         ),
@@ -221,6 +223,14 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
             raise ValueError(f"{path}: {wheel.architecture} wheel URL does not match vLLM version {release.version}")
         if SHA256_PATTERN.fullmatch(wheel.sha256) is None:
             raise ValueError(f"{path}: {wheel.architecture} wheel has invalid SHA-256 {wheel.sha256!r}")
+        if wheel.constraints_url is not None:
+            filename = "gpu-constraints-aarch64.txt" if wheel.architecture == "aarch64" else "gpu-constraints.txt"
+            expected_url = (
+                f"https://raw.githubusercontent.com/{GPU_RELEASE_REPOSITORY}/"
+                f"{release.source_commit}/infra/release/{filename}"
+            )
+            if wheel.constraints_url != expected_url:
+                raise ValueError(f"{path}: {wheel.architecture} constraints must use the wheel's source commit")
     return release
 
 
@@ -262,6 +272,8 @@ def render_gpu_release_toml(manifest: dict) -> str:
             f'url = "{url}"',
             f'sha256 = "{platform["wheel"]["sha256"]}"',
         ]
+        if constraints := platform.get("constraints"):
+            lines.append(f'constraints_url = "{constraints["url"]}"')
     return "\n".join(lines) + "\n"
 
 
@@ -321,7 +333,12 @@ def render_pins(
         f"            sm_targets={tuple_literal(wheel.sm_targets)},\n"
         f"            url={wrapped_string_literal(wheel.url, indent='                ')},\n"
         f'            sha256="{wheel.sha256}",\n'
-        "        ),"
+        + (
+            f"            constraints_url={wrapped_string_literal(wheel.constraints_url, indent='                ')},\n"
+            if wheel.constraints_url is not None
+            else ""
+        )
+        + "        ),"
         for wheel in vllm_gpu_release.wheels
     )
     return f'''# Copyright The Marin Authors
@@ -366,6 +383,7 @@ class VllmGpuWheel:
     sm_targets: tuple[str, ...]
     url: str
     sha256: str
+    constraints_url: str | None = None
 
 
 @dataclass(frozen=True)
