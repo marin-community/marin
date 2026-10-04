@@ -8,9 +8,9 @@ Held-out and extrapolation results do not determine the learning verdict.
 
 The canary uses two Megatron data-parallel ranks on one H100 host and two
 vLLM engines on another. Each task requests two H100s and 65 CPUs; the CPU
-request places our tasks on separate 128-CPU hosts. Four Gym rollout workers
-on the policy host reserve 32 CPUs. Gym uses token requests; the HTTP
-endpoint serves Harbor and is off in this recipe. Training metrics and
+request places our tasks on separate 128-CPU hosts. Four task rollout workers
+on the policy host reserve 32 CPUs and use token requests. The HTTP endpoint
+serves Harbor and is off in this recipe. Training metrics and
 policy-training and rollout spans are enabled explicitly.
 
 `--lane async` uses behavior clipping, permits two steps of rollout staleness
@@ -174,7 +174,7 @@ learning. The async gate checks sampled reward and the required training
 metrics; synchronous runs are available for manual comparisons.
 
 A pass demonstrates task learning through Iris launch, model staging,
-Megatron DP=2, separate-host vLLM, NCCL weight synchronization, Gym rollout
+Megatron DP=2, separate-host vLLM, NCCL weight synchronization, task rollout
 workers, the policy objective, two-epoch reuse and evaluation. Parameter
 checksum comparisons detect reported differences between training ranks.
 The canary does not establish loss-scale parity, exported-output equivalence,
