@@ -147,11 +147,10 @@ def _normalized_row_locators(raw_prefix_shards: tuple[str, ...]) -> Dataset[dict
 
 
 def _embedding_path(source: QualityFeatureSource, normalized_shard: str) -> str:
-    normalized_root = source.normalized_path.rstrip("/")
-    if not normalized_shard.startswith(f"{normalized_root}/"):
+    shard = StoragePath(normalized_shard)
+    if not shard.relative_to(StoragePath(source.normalized_path)):
         raise ValueError(f"normalized shard {normalized_shard} is outside the pinned source {source.source}")
-    basename = normalized_shard.rsplit("/", maxsplit=1)[-1]
-    return prefix_join(source.harrier_path, basename)
+    return str(StoragePath(source.harrier_path) / shard.name)
 
 
 def _join_source_shard(
