@@ -605,6 +605,8 @@ def generation_request(snapshot: SourceSnapshot, *, failure_summary: str, max_to
         "specific supplied module. If a module is new and its package is absent in the parent, check the top-level "
         "package with importlib.util.find_spec before checking a nested module, then return a raw absence value. "
         "All dependencies must be actual installed packages. "
+        "For SQLite probes, create every column required by the supplied function and set its required row_factory. "
+        "Register a dynamically loaded module in sys.modules before calling exec_module. "
         "For new APIs, call them through the real module and record a named AttributeError if absent. "
         "Do not monkeypatch the scorer or result output. Keep 2 to 4 independent meaningful cases with bounded "
         "JSON output. Each probe is self-contained valid Python with at most 12000 characters. "

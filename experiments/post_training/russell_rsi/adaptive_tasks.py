@@ -98,7 +98,7 @@ def prepare_adaptive_tasks(config: AdaptiveTasksConfig) -> None:
                         token_env=GLM_TOKEN_ENV,
                         failure_summary=feedback,
                         max_candidates=config.max_candidates,
-                        max_tokens=8192,
+                        max_tokens=16384,
                     )
                 )
             )
