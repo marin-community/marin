@@ -8,6 +8,8 @@ TaskCompendium defines executable tasks. The `marin-rolloutengine` package owns 
 
 `TaskSpec.model_dump_json()` serializes a task.
 `TaskSpec.model_validate_json()` validates a serialized task.
+Schema `0.22` stores the session selector only in `environment.interaction`.
+Rebuild task files created with older schemas before launch.
 TaskCompendium and the rollout engine do not select a dataset file format.
 SkyRL converts source rows through Hugging Face `Dataset.map` without an
 intermediate Parquet file. The prepared dataset stays in memory.
@@ -211,7 +213,7 @@ Application-supplied sessions require an additional `sessions` mapping.
 
 ## Integrations
 
-TaskCompendium contains importers for Harbor, SWE, and SkyRL Gym tasks. The
+TaskCompendium contains importers for Harbor, SWE, and SkyRL source rows. The
 rollout engine does not own batching, group grading, retry policy, or training
 projection. Applications implement those policies around `ShellboxRolloutEngine`.
 See the MarinSkyRL rollout modules for the SkyRL integration.
