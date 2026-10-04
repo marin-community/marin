@@ -1373,7 +1373,7 @@ def _weight_diagnostics_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[...,
         gains = {}
         for path, norm in jax.tree_util.tree_leaves_with_path(model, is_leaf=is_norm):
             if isinstance(norm, RMSNorm):
-                gains[leaf_name(path)] = reshard(norm.weight, P(*(None,) * norm.weight.ndim))
+                gains[leaf_name(path)] = reshard(norm.gain(), P(*(None,) * norm.weight.ndim))
             elif isinstance(norm, ZeroCenteredRMSNorm):
                 gains[leaf_name(path)] = 1.0 + reshard(norm.gamma, P(*(None,) * norm.gamma.ndim))
         return matrices, gains

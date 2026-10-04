@@ -267,6 +267,40 @@ class MoeCompress(StrEnum):
     whatever it can express."""
 
 
+class NormGainFn(StrEnum):
+    """How a learned positive scale is read from its raw parameter ``w``. Every option is 1 at init."""
+
+    LINEAR = "linear"
+    """``w``, init 1: Adam moves the scale additively and it can cross zero."""
+    EXP = "exp"
+    """``e^w``, init 0: steps are relative (the same fraction at any size) and the scale stays positive."""
+    SOFTPLUS = "softplus"
+    """``softplus(w)``, init ``log(e - 1)``: positive, ~linear above 1, exponential-like near 0; 0.63x step at init."""
+    SIGMOID2 = "sigmoid2"
+    """``2 sigmoid(w)``, init 0: bounded in (0, 2); 0.5x step at init, slowing toward the bounds."""
+
+
+_GAIN_INIT = {
+    NormGainFn.LINEAR: 1.0,
+    NormGainFn.EXP: 0.0,
+    NormGainFn.SOFTPLUS: math.log(math.e - 1.0),
+    NormGainFn.SIGMOID2: 0.0,
+}
+
+
+def apply_gain_fn(fn: NormGainFn, w: jax.Array) -> jax.Array:
+    """The scale a ``NormGainFn`` reads from its raw parameter ``w``."""
+    if fn == NormGainFn.LINEAR:
+        return w
+    if fn == NormGainFn.EXP:
+        return jnp.exp(w)
+    if fn == NormGainFn.SOFTPLUS:
+        return jax.nn.softplus(w)
+    if fn == NormGainFn.SIGMOID2:
+        return 2.0 * jax.nn.sigmoid(w)
+    raise ValueError(f"unknown NormGainFn {fn!r}")
+
+
 class ExpertVisitBias(StrEnum):
     """Whether, and how, each routed expert a token visits writes its own learned vector into the residual."""
 
@@ -722,8 +756,12 @@ class GrugModelConfig:
     ``v = lambda1 * v + w * value_embed[token]`` (same modes as the MLA layers' ``value_embeds``)."""
     """Per-MLA-layer value-embedding table added to v (see ``ValueEmbeds``)."""
     sublayer_scales: bool = False
-    """A learnable scalar (init 1) on every attention and MLP sublayer output, before it enters the
+    """A learnable scalar (1 at init) on every attention and MLP sublayer output, before it enters the
     AttnRes history."""
+    sublayer_scale_fn: "NormGainFn" = dataclasses.field(default_factory=lambda: NormGainFn.LINEAR)
+    """How ``sublayer_scales`` reads each scalar from its parameter (``sigmoid2``: ``2 sigmoid(w)``, in (0, 2))."""
+    norm_gain_fn: "NormGainFn" = dataclasses.field(default_factory=lambda: NormGainFn.LINEAR)
+    """How every learned RMSNorm gain is read from its parameter (``exp``: ``e^w``, ...); 1 at init in every case."""
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     routing_renorm_sum: float = 2.5
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
@@ -2273,7 +2311,7 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         stats[f"attn_res_knob_expert_write_pr_L{i}"] = _participation_ratio([em.w_down], "eir,eis->rs")
     if isinstance(layer.mlp, MoEMLP) and layer.mlp.expert_read_norm is not None:
         norm = layer.mlp.expert_read_norm
-        gain = norm.weight if isinstance(norm, RMSNorm) else 1.0 + norm.gamma
+        gain = norm.gain() if isinstance(norm, RMSNorm) else 1.0 + norm.gamma
         gain = jnp.abs(jax.lax.stop_gradient(gain).astype(jnp.float32))
         for g in range(gain.shape[0]):
             stats[f"attn_res_knob_expert_read_gain_g{g}_L{i}"] = jnp.mean(gain[g])
@@ -2814,14 +2852,19 @@ class KimiDeltaAttention(eqx.Module):
 class RMSNorm(eqx.Module):
     weight: jax.Array
     eps: float = eqx.field(static=True)
+    gain_fn: NormGainFn = eqx.field(static=True, default=NormGainFn.LINEAR)
+    """How the gain is read from ``weight`` (``norm_gain_fn``)."""
 
     @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
-        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+    def init(dim: int, eps: float, gain_fn: NormGainFn = NormGainFn.LINEAR) -> "RMSNorm":
+        return RMSNorm(weight=jnp.full((dim,), _GAIN_INIT[gain_fn], dtype=jnp.float32), eps=eps, gain_fn=gain_fn)
+
+    def gain(self) -> jax.Array:
+        return apply_gain_fn(self.gain_fn, unshard(self.weight))
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        weight = unshard(self.weight)
+        weight = self.gain()
         dtype = x.dtype
         x = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
@@ -2854,7 +2897,11 @@ LearnedRMSNorm = RMSNorm | ZeroCenteredRMSNorm
 
 def _learned_rms_norm(cfg: GrugModelConfig, dim: int, eps: float) -> LearnedRMSNorm:
     """A learned-gain RMSNorm, zero-centered under ``cfg.zero_centered_gains``."""
-    return ZeroCenteredRMSNorm.init(dim, eps) if cfg.zero_centered_gains else RMSNorm.init(dim, eps)
+    if cfg.zero_centered_gains:
+        if cfg.norm_gain_fn != NormGainFn.LINEAR:
+            raise ValueError("zero_centered_gains already reparameterizes the gain (1 + gamma); use norm_gain_fn=linear")
+        return ZeroCenteredRMSNorm.init(dim, eps)
+    return RMSNorm.init(dim, eps, cfg.norm_gain_fn)
 
 
 def _zero_centered_gammas(module: eqx.Module | None) -> list[jax.Array]:
@@ -4327,8 +4374,8 @@ class Block(eqx.Module):
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
             attn_res_query_v=attn_res_query if cfg.attn_res_v_gate else None,
-            attn_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
-            mlp_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
+            attn_out_scale=jnp.full((), _GAIN_INIT[cfg.sublayer_scale_fn], jnp.float32) if cfg.sublayer_scales else None,
+            mlp_out_scale=jnp.full((), _GAIN_INIT[cfg.sublayer_scale_fn], jnp.float32) if cfg.sublayer_scales else None,
             out_norm_attn=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
             out_norm_mlp=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
             laurel_a_attn=_laurel_a(cfg, random.fold_in(key, 91)),
@@ -4415,7 +4462,7 @@ class Block(eqx.Module):
         if self.out_norm_attn is not None:
             out = self.out_norm_attn(out)
         if self.attn_out_scale is not None:
-            out = out * self.attn_out_scale.astype(out.dtype)
+            out = out * apply_gain_fn(self.attn.cfg.sublayer_scale_fn, self.attn_out_scale).astype(out.dtype)
         return out, stats
 
     def mlp_branch(
@@ -4477,7 +4524,7 @@ class Block(eqx.Module):
         if self.out_norm_mlp is not None:
             out = self.out_norm_mlp(out)
         if self.mlp_out_scale is not None:
-            out = out * self.mlp_out_scale.astype(out.dtype)
+            out = out * apply_gain_fn(self.attn.cfg.sublayer_scale_fn, self.mlp_out_scale).astype(out.dtype)
         return out, stats
 
     @named_call
@@ -6840,8 +6887,9 @@ class Transformer(eqx.Module):
                     final_stats[f"attn_res_qk_mult_min_L{i}"] = jnp.min(qk_mult)
                     final_stats[f"attn_res_qk_mult_max_L{i}"] = jnp.max(qk_mult)
             if layer.attn_out_scale is not None and layer.mlp_out_scale is not None:
-                final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(layer.attn_out_scale)
-                final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
+                fn = cfg.sublayer_scale_fn
+                final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(apply_gain_fn(fn, layer.attn_out_scale))
+                final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(apply_gain_fn(fn, layer.mlp_out_scale))
             final_stats.update(_learned_knob_stats(layer, i))
         final_stats.update(layer_logs)
         final_stats.update(probe_logs)
@@ -7313,7 +7361,7 @@ def _mtp_knob_stats(head: MtpHead) -> dict[str, jax.Array]:
     w_proj = jax.lax.stop_gradient(head.w_proj).astype(jnp.float32)
     d = w_proj.shape[1]
     norm = head.out_norm
-    gain = norm.weight if isinstance(norm, RMSNorm) else 1.0 + norm.gamma
+    gain = norm.gain() if isinstance(norm, RMSNorm) else 1.0 + norm.gamma
     return {
         "train/attn_res/knob_mtp_proj_h_norm": jnp.linalg.norm(w_proj[:d]),
         "train/attn_res/knob_mtp_proj_e_norm": jnp.linalg.norm(w_proj[d:]),

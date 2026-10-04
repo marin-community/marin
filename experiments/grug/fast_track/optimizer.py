@@ -479,6 +479,8 @@ _FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mas
 # The groups built by ``muonh_transform_at`` (the ones ``muonh_retraction`` applies to).
 _MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk", "muonh_qk"})
 _HYPERBALL_GROUPS = _MUONH_GROUPS | {"adamh", "sinkhornh"}
+# Learned RMSNorm gains (``RMSNorm.weight``): the pre-norms, and every ``*_norm`` inside the blocks and heads.
+_NORM_GAIN = re.compile(r"(?:^|\.)(rms_attn|rms_mlp|[a-z0-9_]*norm)\.weight$")
 _ROUTER_GROUPS = ("adam", "muonh")
 
 
@@ -1452,6 +1454,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Adam LR multiplier of the value-embedding tables (``value_embeds``); like the bigram table, a sparse
     token table may want a hotter LR than the dense Adam leaves."""
     rel_pos_lr_mult: float = 1.0
+    norm_gain_lr_mult: float = 1.0
+    """LR multiplier for every learned RMSNorm gain parameter (its own Adam group when != 1). With a
+    ``norm_gain_fn`` other than linear the gain moves ``f'(w)`` times the parameter step, so this compensates
+    (softplus starts at 0.63x, sigmoid2 at 0.5x)."""
     """Adam LR multiplier for the Inkling relative-position parameters (``.rel_pos.``: ``r_proj`` and the bias bank).
     The weight-attribution probe found their step-to-step updates bounce back and forth most of any tensor."""
     ple_lr_mult: float = 1.0
@@ -1786,6 +1792,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "ple": plain_adam_at(adam_lr * self.ple_lr_mult),
                 "value_embed": plain_adam_at(adam_lr * self.value_embed_lr_mult),
                 "rel_pos": plain_adam_at(adam_lr * self.rel_pos_lr_mult),
+                "norm_gain": plain_adam_at(adam_lr * self.norm_gain_lr_mult),
                 "memory": plain_adam_at(adam_lr * self.memory_lr_mult),
                 "output_bigram": plain_adam_at(adam_lr * self.output_bigram_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
@@ -1968,6 +1975,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.
             if path_lower.endswith(".value_embed") and self.value_embed_lr_mult != 1.0:
                 return "value_embed"
+            if self.norm_gain_lr_mult != 1.0 and _NORM_GAIN.search(path_lower):
+                return "norm_gain"
             if ".rel_pos." in path_lower and self.rel_pos_lr_mult != 1.0:
                 return "rel_pos"
             if ".rel_pos." in path_lower or re.search(
