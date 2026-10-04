@@ -29,7 +29,7 @@ from marin.training.training import LevanterCheckpoint
 from mergedeep import merge
 
 from experiments.post_training.async_rl import GPUS_PER_NODE, SNOWBALL_RECIPE
-from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY, SNOWBALL_SFT_EXPORT_URI
+from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY
 from experiments.post_training.mismatch_probe.launch import REPLAY_MODES, ProbeSettings, probe_block
 
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
@@ -171,7 +171,11 @@ def snowball_recipe(
             "gpu_memory_utilization": SLICE_GPU_MEMORY_UTILIZATION if model_slice else 0.75,
             "chat_template": {
                 "source": "file",
-                "name_or_path": f"{SNOWBALL_SFT_EXPORT_URI.rstrip('/')}/chat_template.jinja",
+                # The frozen SFT metadata is staged at this path on every node.
+                "name_or_path": (
+                    "/tmp/marinskyrl/model_metadata/"
+                    "2b00011dc69414c122ea8f25b63e9ecb7649a539922d5129e9b9c6510eecc3dd/chat_template.jinja"
+                ),
             },
             "engine_init_kwargs": dict(SNOWBALL_RECIPE.engine_init_kwargs),
             "trajectory_retention": {
