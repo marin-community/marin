@@ -9,8 +9,8 @@ package = false
 prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
 override-dependencies = [
-    "marin-rigging[prometheus,secrets] @ git+https://github.com/marin-community/marin.git@ea17b34d47fe4bc5405581635e94a3295f68729b#subdirectory=lib/rigging",
+    "marin-rigging[prometheus,secrets] @ git+https://github.com/marin-community/marin.git@545fcc20128cedbbd59d868b133d33e44fda6d06#subdirectory=lib/rigging",
 ]
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "b71e6c4c9d4819917b73a3bafe04a5523d94cf4a" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "b8e2f5292c89a22f79135beb3968b0f5f7eac668" }
