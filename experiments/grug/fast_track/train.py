@@ -1349,6 +1349,13 @@ def _weight_attribution_hook(config: GrugRunConfig, mesh: Mesh, mp: jmp.Policy) 
 _NOT_PROJECTION = re.compile(r"embed|ngram_stat_table|router_bias|expert_visit_bias|null_const")
 
 
+def _expert_axis_only(leaf: jax.Array) -> P:
+    """``leaf``'s partition spec with every mesh axis but ``expert`` dropped."""
+    spec = tuple(leaf.sharding.spec) + (None,) * (leaf.ndim - len(leaf.sharding.spec))
+    keep = lambda ax: "expert" if ax == "expert" or (isinstance(ax, tuple) and "expert" in ax) else None  # noqa: E731
+    return P(*(keep(ax) for ax in spec))
+
+
 def _weight_diagnostics_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[..., None]:
     """The ``weight_diagnostics_every`` hook (see ``weight_diagnostics.py``)."""
     every = config.trainer.weight_diagnostics_every
@@ -1360,9 +1367,9 @@ def _weight_diagnostics_hook(config: GrugRunConfig, mesh: Mesh) -> Callable[...,
             name = leaf_name(path)
             if not isinstance(leaf, jax.Array) or leaf.ndim < 2 or _NOT_PROJECTION.search(name):
                 continue
-            # Expert banks stay sharded over their expert axis (a batch axis here); the rest are small enough to
-            # replicate, which keeps every contraction on unsharded axes.
-            matrices[name] = leaf if "expert_mlp" in name else reshard(leaf, P(*(None,) * leaf.ndim))
+            # Expert banks keep only their expert-axis sharding (a batch axis here); the rest are small enough to
+            # replicate. Either way every contracted axis is unsharded.
+            matrices[name] = reshard(leaf, _expert_axis_only(leaf) if "expert_mlp" in name else P(*(None,) * leaf.ndim))
         gains = {}
         for path, norm in jax.tree_util.tree_leaves_with_path(model, is_leaf=is_norm):
             if isinstance(norm, RMSNorm):
