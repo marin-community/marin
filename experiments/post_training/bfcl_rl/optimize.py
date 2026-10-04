@@ -45,6 +45,7 @@ class RecoveryOptimization:
     num_nodes: int
     expert_axis: int
     context_axis: int
+    jax_memory_fraction: float
 
 
 def dispatch_recovery_training(config: TrainDpoOnPodConfig) -> None:
@@ -164,7 +165,13 @@ def recovery_optimizer_step(
             hf_save_steps=optimization.num_train_steps,
             hf_save_dtype="bfloat16",
         )
-        return TrainDpoOnPodConfig(train, resources, output_path=ctx.output_path, auto_build_caches=False)
+        return TrainDpoOnPodConfig(
+            train,
+            resources,
+            output_path=ctx.output_path,
+            auto_build_caches=False,
+            env_vars={"XLA_PYTHON_CLIENT_MEM_FRACTION": str(optimization.jax_memory_fraction)},
+        )
 
     return ArtifactStep(
         name=name,
@@ -189,6 +196,7 @@ def recovery_optimizer_step(
 @click.option("--num-nodes", type=click.IntRange(min=1, max=16), required=True)
 @click.option("--expert-axis", type=click.IntRange(min=1), required=True)
 @click.option("--context-axis", type=click.IntRange(min=1), required=True)
+@click.option("--jax-memory-fraction", type=click.FloatRange(min=0, max=1, min_open=True), required=True)
 @rl_build_options
 def main(
     task: str | None,
@@ -203,6 +211,7 @@ def main(
     num_nodes: int,
     expert_axis: int,
     context_axis: int,
+    jax_memory_fraction: float,
 ) -> ArtifactStep:
     selection = task or "full"
     if cache_version is not None and collection_version is not None:
@@ -231,7 +240,9 @@ def main(
         teacher = collection_step("teacher", task, images)
         student = collection_step("student", task, images)
         cache = recovery_cache_step(teacher, student, selection_name=selection, max_length=RECOVERY_CONTEXT)
-    optimization = RecoveryOptimization(num_train_steps, batch_size, beta, num_nodes, expert_axis, context_axis)
+    optimization = RecoveryOptimization(
+        num_train_steps, batch_size, beta, num_nodes, expert_axis, context_axis, jax_memory_fraction
+    )
     optimizer = recovery_optimizer_step(cache, selection_name=selection, optimization=optimization)
     return replace(optimizer, runtime_args={"execution": COLLECTION_EXECUTION})
 

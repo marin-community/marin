@@ -47,7 +47,7 @@ def test_recovery_train_only_cache_loads_without_complement_validation(tmp_path,
     cache = ArtifactStep.adopt("preferences", "2026.10.03", root, kind=RecoveryPreferenceCache)
     with build_context(BuildContext(VersionCodex("2026.10.03"))):
         step = recovery_optimizer_step(
-            cache, selection_name="full", optimization=RecoveryOptimization(1, 16, 0.1, 8, 8, 4)
+            cache, selection_name="full", optimization=RecoveryOptimization(1, 16, 0.1, 8, 8, 4, 0.75)
         )
     # The initial model is remote; this test exercises only local preference data.
     monkeypatch.setattr(LevanterCheckpoint, "raw_load", lambda path: LevanterCheckpoint(path=path))
@@ -78,7 +78,7 @@ def test_recovery_mesh_fits_eight_gpu_nodes_and_preserves_batch_parallelism():
     cache = ArtifactStep.adopt("preferences", "2026.10.03.16", "preferences", kind=RecoveryPreferenceCache)
     with build_context(BuildContext(VersionCodex("2026.10.03.18"))):
         step = recovery_optimizer_step(
-            cache, selection_name="full", optimization=RecoveryOptimization(1, 16, 0.1, 8, 8, 4)
+            cache, selection_name="full", optimization=RecoveryOptimization(1, 16, 0.1, 8, 8, 4, 0.75)
         )
     config = step.build_config(StepContext.for_fingerprint(deps=step.deps))
     mesh = config.train_config.trainer.mesh
@@ -94,5 +94,5 @@ def test_recovery_mesh_fits_eight_gpu_nodes_and_preserves_batch_parallelism():
     with build_context(BuildContext(VersionCodex("2026.10.03.18"))):
         with pytest.raises(ValueError, match="ICI product"):
             recovery_optimizer_step(
-                cache, selection_name="full", optimization=RecoveryOptimization(1, 16, 0.1, 8, 16, 4)
+                cache, selection_name="full", optimization=RecoveryOptimization(1, 16, 0.1, 8, 16, 4, 0.75)
             )
