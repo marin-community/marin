@@ -1,22 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import hashlib
 import json
 from dataclasses import asdict
+from types import SimpleNamespace
 
 import pytest
 
+from experiments.post_training.russell_rsi import coding_eval_feedback as feedback_module
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CODING_ANALYSIS_CONTEXT_PROTOCOL,
     CODING_SUITES,
+    CodingAnalysisConfig,
     CodingPanel,
     PanelItem,
+    analyze_coding_failures,
     coding_analysis_request,
     coding_evaluation_context,
     coding_evidence_rows,
     protocol_digest,
 )
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 
 def panel_fixture():
@@ -126,6 +132,64 @@ def test_record_mismatch_cannot_become_evaluation_context(record_field, value_fi
     records[0][record_field]["humanevalplus"][value_field] = value
     with pytest.raises(ValueError, match=error):
         coding_evaluation_context(records, rows)
+
+
+def test_ambiguous_provider_failure_never_issues_coding_request_again(tmp_path, monkeypatch):
+    records, archives, panel = panel_fixture()
+    rows = coding_evidence_rows(records, archives, "parent", panel)
+    evidence = {
+        "context_protocol": CODING_ANALYSIS_CONTEXT_PROTOCOL,
+        "evaluation_context": coding_evaluation_context(records, rows),
+        "rows": [asdict(row) for row in rows],
+    }
+    evidence_dir = tmp_path / "evidence"
+    output_dir = tmp_path / "analysis"
+    evidence_dir.mkdir()
+    output_dir.mkdir()
+    (evidence_dir / "coding-evidence.json").write_text(json.dumps(evidence))
+    config = CodingAnalysisConfig(str(evidence_dir), "evidence-v1", "relay", str(output_dir))
+    issued_path = output_dir / "private-analysis-issued.json"
+    calls = []
+    client_options = []
+
+    class FailedClient:
+        def __init__(self, **kwargs):
+            client_options.append(kwargs)
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def create(self, **request):
+            assert issued_path.exists()
+            calls.append(request)
+            raise ConnectionError("transport closed after request send")
+
+    monkeypatch.setattr(feedback_module, "AsyncOpenAI", FailedClient)
+    monkeypatch.setattr(feedback_module, "resolve_glm_base_url", lambda _job: "https://relay.test")
+    monkeypatch.setenv(feedback_module.GLM_TOKEN_ENV, "test-token")
+    expected_request = coding_analysis_request(evidence)
+
+    with pytest.raises(ConnectionError, match="after request send"):
+        asyncio.run(analyze_coding_failures(config))
+
+    issued_bytes = issued_path.read_bytes()
+    assert json.loads(issued_bytes) == {
+        "request_sha256": compact_json_sha256(expected_request),
+        "evidence_identity": config.evidence_identity,
+    }
+    with pytest.raises(ValueError, match="outcome is ambiguous"):
+        asyncio.run(analyze_coding_failures(config))
+
+    assert calls == [expected_request]
+    assert len(client_options) == 1
+    assert client_options[0]["max_retries"] == 0
+    assert issued_path.read_bytes() == issued_bytes
+    assert not (output_dir / "private-analysis.json").exists()
+    assert not (output_dir / "capabilities.json").exists()
 
 
 @pytest.mark.parametrize("change", ["prompt", "task", "missing", "duplicate", "model", "protocol", "metric"])

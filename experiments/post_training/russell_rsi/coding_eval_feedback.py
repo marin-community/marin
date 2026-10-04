@@ -281,12 +281,20 @@ async def analyze_coding_failures(config: CodingAnalysisConfig) -> None:
             raise ValueError("Stored coding analysis has different evidence")
         response = saved["response"]
     else:
+        issued_path = directory / "private-analysis-issued.json"
+        if issued_path.exists():
+            issued = json.loads(issued_path.read_text())
+            if issued["request_sha256"] != request_hash or issued["evidence_identity"] != config.evidence_identity:
+                raise ValueError("Issued coding analysis has different evidence")
+            raise ValueError("Coding analysis request outcome is ambiguous. Refuse to issue it again.")
         failures = json.loads(request["messages"][1]["content"])["failures"]
         response = None
         if failures:
-            async with AsyncOpenAI(
-                base_url=resolve_glm_base_url(config.relay_job), api_key=os.environ[GLM_TOKEN_ENV], max_retries=0
-            ) as client:
+            base_url = resolve_glm_base_url(config.relay_job)
+            async with AsyncOpenAI(base_url=base_url, api_key=os.environ[GLM_TOKEN_ENV], max_retries=0) as client:
+                issued_path.write_text(
+                    json.dumps({"request_sha256": request_hash, "evidence_identity": config.evidence_identity}) + "\n"
+                )
                 completion = await client.chat.completions.create(**request)
                 response = completion.model_dump(mode="json")
         response_path.write_text(
