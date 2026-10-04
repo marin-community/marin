@@ -30,6 +30,66 @@ class NativeTeacherTrace:
     native_trace_uri: str
     messages: list[dict]
     tools: list[dict]
+    assistant_prefill: str
+
+
+def native_teacher_trace(
+    *,
+    identity: CollectionIdentity,
+    seed: int,
+    retained_record: Mapping[str, Any],
+    retained_uri: str,
+    native_trace_uri: str,
+    trial_result: Mapping[str, Any],
+    literal_entries: Iterable[Mapping[str, Any]],
+    partition: BFCLPartition,
+    assistant_prefill: str,
+) -> NativeTeacherTrace | None:
+    """Join canonical native outcomes and parsed literal messages to exact teacher-token evidence."""
+    retained = retained_rollout(retained_record, identity=identity, partition=partition, trajectory_uri=retained_uri)
+    if retained.rollout.outcome is not RolloutOutcome.CORRECT:
+        return None
+    if trial_result["task_name"] != retained_record["trajectory"]["instance_id"]:
+        raise ValueError("Native trial and retained task differ")
+    if trial_result["exception_info"] is not None or trial_result["verifier_result"]["rewards"] != {"reward": 1.0}:
+        raise ValueError("Native trial does not confirm the retained correct outcome")
+    agent = trial_result["config"]["agent"]
+    if identity.harness != f"{agent['name']}@{agent['version']}":
+        raise ValueError("Native trial and collection harness differ")
+    correlation_id = trial_result["agent_result"]["metadata"]["rollout_correlation_id"]
+    if not correlation_id:
+        raise ValueError("Native trial lacks its literal correlation ID")
+    entries = sorted(
+        (
+            entry
+            for entry in literal_entries
+            if entry["trial_id"] == correlation_id
+            and entry["status_code"] == 200
+            and entry["literal"] is not None
+            and entry["literal"]["completion_token_ids"]
+        ),
+        key=lambda entry: entry["timestamp"],
+    )
+    captured = [token for entry in entries for token in entry["literal"]["completion_token_ids"]]
+    response = retained_record["response"]
+    trainable = [token for token, mask in zip(response["token_ids"], response["loss_mask"], strict=True) if mask]
+    if not entries or captured != trainable:
+        raise ValueError("Native literal completions differ from retained trainable teacher tokens")
+    final = entries[-1]
+    request = final["request"]
+    assistant = final["literal"]["assistant_message"]
+    if assistant is None or assistant["role"] != "assistant":
+        raise ValueError("Native capture lacks the parsed final assistant message")
+    return NativeTeacherTrace(
+        identity,
+        seed,
+        retained_record,
+        retained_uri,
+        native_trace_uri,
+        [*request["messages"], assistant],
+        request.get("tools") or [],
+        assistant_prefill,
+    )
 
 
 def verifier_selected_chat(trace: NativeTeacherTrace, partition: BFCLPartition) -> dict | None:
@@ -51,6 +111,7 @@ def verifier_selected_chat(trace: NativeTeacherTrace, partition: BFCLPartition) 
         trace.messages,
         f"bfcl-complement/{trace.identity.harness}",
         source_id=f"{trace.identity.run_id}/{retained.record_id}",
+        assistant_prefill=trace.assistant_prefill,
         chat_template_kwargs={"tools": trace.tools},
     )
 
@@ -100,6 +161,7 @@ def build_verified_sft_store(
                     "task": asdict(task),
                     "retained_uri": trace.retained_uri,
                     "native_trace_uri": trace.native_trace_uri,
+                    "assistant_prefill": trace.assistant_prefill,
                 }
             )
             dispositions["verifier_correct"] += 1

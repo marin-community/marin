@@ -108,11 +108,17 @@ def normalize_reasoning_tokens(text: str) -> str:
 
 
 def _assistant_messages(
-    message: dict, author: Author, content: str | None, reasoning: str, index: int
+    message: dict, author: Author, content: str | None, reasoning: str, index: int, assistant_prefill: str
 ) -> tuple[list[Message], dict[str, str]]:
     output: list[Message] = []
     pending: dict[str, str] = {}
     content = content or ""
+    if (
+        assistant_prefill
+        and re.search(r"</think>|<\|end_think\|>", content)
+        and not re.search(r"<think>|<\|start_think\|>", content)
+    ):
+        content = assistant_prefill + content
     content = normalize_reasoning_tokens(content)
     if REASONING_TOKEN.search(content):
         match = re.fullmatch(r"<\|start_think\|>(.*?)<\|end_think\|>(.*)", content, re.DOTALL)
@@ -170,12 +176,14 @@ def _assistant_messages(
     return output, pending
 
 
-def openai_chat_messages(messages: list[dict]) -> list[Message]:
+def openai_chat_messages(messages: list[dict], *, assistant_prefill: str = "") -> list[Message]:
     """Normalize OpenAI-style source turns directly into Harmony messages.
 
     Interpret source role aliases, reasoning tags, and function calls here.
     Source IDs link observations before being discarded; parallel observations
     are emitted in call order, including repeated calls to the same function.
+    An explicit template prefill restores a reasoning opener absent from the
+    sampled completion; malformed reasoning remains rejected.
     """
     output: list[Message] = []
     pending: dict[str, str] = {}
@@ -234,7 +242,9 @@ def openai_chat_messages(messages: list[dict]) -> list[Message]:
                 _check_source_markup(content)
                 output.append(Message.from_author_and_content(author, content))
             case Role.ASSISTANT:
-                assistant_messages, calls = _assistant_messages(message, author, content, reasoning, index)
+                assistant_messages, calls = _assistant_messages(
+                    message, author, content, reasoning, index, assistant_prefill
+                )
                 if seen_call_ids.intersection(calls):
                     raise ValueError("Source tool-call IDs must be unique strings")
                 seen_call_ids.update(calls)
@@ -257,10 +267,10 @@ def chat_document(messages: list[Message], source: str, **metadata: object) -> d
     return {"id": hashlib.sha256(encoded).hexdigest(), "messages": serialized, "source": source, **metadata}
 
 
-def openai_chat_document(messages: list[dict], source: str, **metadata: object) -> dict:
+def openai_chat_document(messages: list[dict], source: str, *, assistant_prefill: str = "", **metadata: object) -> dict:
     """Build a Harmony artifact from an OpenAI-style source conversation."""
     _check_source_markup(metadata)
-    return chat_document(openai_chat_messages(messages), source, **metadata)
+    return chat_document(openai_chat_messages(messages, assistant_prefill=assistant_prefill), source, **metadata)
 
 
 def checked_openai_chat_document(

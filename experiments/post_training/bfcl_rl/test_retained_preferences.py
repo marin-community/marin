@@ -25,6 +25,7 @@ from experiments.post_training.bfcl_rl.data import DATASET_COMMIT, BFCLPartition
 from experiments.post_training.bfcl_rl.offline_data import (
     NativeTeacherTrace,
     build_verified_sft_store,
+    native_teacher_trace,
     verifier_selected_chat,
 )
 from experiments.post_training.bfcl_rl.preferences import PairDisposition, select_pair
@@ -91,11 +92,11 @@ def _identity(model: str) -> CollectionIdentity:
 
 def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path: Path):
     messages = [
+        {"role": "system", "content": "SYSTEM_CONTEXT"},
         {"role": "user", "content": "USER_CONTEXT"},
         {
             "role": "assistant",
-            "content": "",
-            "reasoning_content": "ASSISTANT_REASONING",
+            "content": "ASSISTANT_REASONING\n</think>\n",
             "tool_calls": [
                 {"id": "a", "type": "function", "function": {"name": "lookup", "arguments": {"key": "TOOL_ARGUMENT"}}}
             ],
@@ -108,7 +109,37 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     teacher_record = _record("teacher", 1.0)
     teacher_record["response"]["token_ids"] = [248000, 248001, 248002, 248003]
     teacher_record["response"]["step_boundaries"][1]["prompt_token_ids"] = [1, 2, 248000, 248001, 99]
-    trace = NativeTeacherTrace(_identity("teacher"), 7, teacher_record, "retained", "native", messages, tools)
+    identity = replace(_identity("teacher"), harness="opencode@1.18.2")
+    trial = {
+        "task_name": TASK.name,
+        "exception_info": None,
+        "verifier_result": {"rewards": {"reward": 1.0}},
+        "config": {"agent": {"name": "opencode", "version": "1.18.2"}},
+        "agent_result": {"metadata": {"rollout_correlation_id": "native-trial"}},
+    }
+    entries = [
+        {
+            "trial_id": "native-trial",
+            "timestamp": index,
+            "status_code": 200,
+            "request": {"messages": messages[:2] if index == 0 else messages[:-1], "tools": tools},
+            "literal": {"completion_token_ids": tokens, "assistant_message": assistant},
+        }
+        for index, tokens, assistant in ((0, [248000, 248001], messages[2]), (1, [248003], messages[-1]))
+    ]
+    foreign = {**entries[0], "trial_id": "another-trial"}
+    trace = native_teacher_trace(
+        identity=identity,
+        seed=7,
+        retained_record=teacher_record,
+        retained_uri="retained",
+        native_trace_uri="literal",
+        trial_result=trial,
+        literal_entries=[foreign, *reversed(entries)],
+        partition=PARTITION,
+        assistant_prefill="<think>\n",
+    )
+    assert trace is not None
     duplicate = replace(
         trace,
         seed=8,
@@ -153,11 +184,13 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     assert "TOOL_ARGUMENT" in masked
     assert "VERIFIER_CORRECT" in masked
     assert "USER_CONTEXT" not in masked
+    assert "SYSTEM_CONTEXT" not in masked
     assert "TOOL_OBSERVATION" not in masked
     selection = json.loads((tmp_path / "curation/selection.json").read_text())
     assert {item["seed"] for item in selection["selected"]} == {7, 8}
     assert selection["dispositions"] == {"verifier_correct": 2, "incorrect_or_unscored": 1}
     assert all(item["task"]["digest"] == TASK.digest for item in selection["selected"])
+    assert all(item["assistant_prefill"] == "<think>\n" for item in selection["selected"])
     assert store.sources["bfcl-complement"].conversations == 1
 
 
@@ -170,6 +203,7 @@ def test_teacher_harmony_curation_rejects_parity_before_adapting_messages():
         "native",
         [{"role": "user", "content": "Holdout"}, {"role": "assistant", "content": "Answer"}],
         [],
+        "",
     )
     with pytest.raises(ValueError, match="outside the BFCL training complement"):
         verifier_selected_chat(trace, PARTITION)

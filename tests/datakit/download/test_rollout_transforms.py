@@ -51,10 +51,19 @@ def test_legacy_function_call_becomes_harmony_recipient_and_arguments():
     }
 
 
-@pytest.mark.parametrize("content", ["<think>unfinished", "<think>a</think>answer<think>b</think>"])
+@pytest.mark.parametrize("content", ["<think>unfinished", "<think>a</think>answer<think>b</think>", "a</think>answer"])
 def test_source_adapter_rejects_malformed_reasoning(content):
     with pytest.raises(ValueError):
         openai_chat_messages([{"role": "assistant", "content": content}])
+
+
+@pytest.mark.parametrize("content", ["reasoning</think>answer", "<think>reasoning</think>answer"])
+def test_explicit_reasoning_prefill_preserves_analysis_and_final_channels(content):
+    messages = openai_chat_messages([{"role": "assistant", "content": content}], assistant_prefill="<think>\n")
+    assert [(message.channel, message.content[0].to_dict()["text"]) for message in messages] == [
+        ("analysis", "reasoning"),
+        ("final", "answer"),
+    ]
 
 
 def test_source_adapter_rejects_repeated_call_ids_before_discarding_them():
