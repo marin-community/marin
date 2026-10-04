@@ -49,6 +49,7 @@ WHEEL_ROOT = "/opt/rsi-wheels"
 MAX_WHEEL_BYTES = 50_000_000
 MAX_WHEEL_FILES = 50
 MAX_GENERATION_BYTES = 256_000
+DEPENDENCY_SETUP_TIMEOUT = 300
 
 
 class InvalidRepair(ValueError):
@@ -296,7 +297,7 @@ def build_task(
                     WHEEL_ROOT,
                     *(wheel.path for wheel in wheels),
                 ),
-                timeout=timeout,
+                timeout=DEPENDENCY_SETUP_TIMEOUT,
             ),
         )
     )
