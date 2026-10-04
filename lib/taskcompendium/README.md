@@ -98,7 +98,7 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 Each spec selects a private verifier and stores its configuration in `VerifierSpec`. TaskCompendium uses the submission convention to extract a candidate answer; the selected verifier grades it. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
-`VerifierSpec.kind` is an open nonempty string. Its private typed `environment_requirements` defaults to empty and declares the capabilities, image, and workspace needed by the verifier. The harness owns these requirements. `parameters_json` is an opaque private JSON object owned by the shared verifier library (`verifyit`); the harness must not extract structural environment fields such as an image from it.
+`VerifierSpec.kind` is an open nonempty string. Its private typed `environment_requirements` defaults to empty and declares the capabilities, image, and workspace needed by the verifier. The harness owns these requirements. The selected grader defines the contract for private `parameters_json`. Pure graders use `verifyit` contracts. Shell grading uses `taskcompendium.environment.ShellVerifierSpec`. Application task sessions use `taskcompendium.environment.ExternalVerifierSpec`. Staged tasks use `taskcompendium.models.StageVerifierSpec`. The harness reads environment fields only through the selected typed contract.
 
 `verifier` grades one acquired answer. Comparative scoring across several attempts, cohort membership, and grading phase belong to the trainer. The ordinary per-attempt grader can score an already acquired answer regardless of worker workspace requirements.
 
