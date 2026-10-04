@@ -249,7 +249,7 @@ class QemuMachine:
             "-initrd",
             str(self.bundle / "initramfs.cpio.gz"),
             "-append",
-            "console=ttyS0 quiet rdinit=/init",
+            "console=ttyS0 rdinit=/init",
             *disk_args,
             "-nic",
             "none",
