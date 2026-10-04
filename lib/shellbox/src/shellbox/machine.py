@@ -131,6 +131,10 @@ class UnsupportedMachineSpec(ValueError):
     """The selected backend cannot create the requested machine."""
 
 
+class MachineStartupError(RuntimeError):
+    """The guest timed out or exited before its command service was ready."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 

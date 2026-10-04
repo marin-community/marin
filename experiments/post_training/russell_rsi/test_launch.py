@@ -18,6 +18,7 @@ def test_spike_retains_frozen_development_and_checks_rewards_before_policy_alloc
     seed = ArtifactStep.adopt("documents/test-russell-seed", "2026.10.04", "/tmp/seed")
     parent = ArtifactStep.adopt("checkpoints/test-russell-parent", "2026.09.21", "/tmp/model", kind=LevanterCheckpoint)
     wheels = ArtifactStep.adopt("documents/test-russell-wheels", "2026.10.04", "/tmp/wheels")
+    sources = ArtifactStep.adopt("documents/test-russell-sources", "2026.10.04", "/tmp/sources")
     terminals = spike_workflow(
         seed,
         parent,
@@ -28,6 +29,8 @@ def test_spike_retains_frozen_development_and_checks_rewards_before_policy_alloc
         RuntimeBundle("/tmp/manifest.json", "0" * 64, "/tmp/runtime.tar.gz", "0" * 64),
         {"backend": "qemu", "qemu": {}},
         wheels,
+        sources,
+        "0" * 64,
     )
     handles = {handle.name: handle for handle in graph_handles(list(terminals.values()))}
     baseline = handles["evals/russell-rsi-parent-development"]
@@ -35,6 +38,8 @@ def test_spike_retains_frozen_development_and_checks_rewards_before_policy_alloc
     calibration = handles["evals/russell-rsi-train-calibration-development"]
     trained = handles["checkpoints/russell-rsi-smoke"]
     assert baseline in adaptive.deps
+    assert sources in adaptive.deps
+    assert sources not in baseline.deps
     assert calibration in trained.deps
     launch = yaml.safe_load(json.loads(trained.fingerprint_payload())["launch_config_yaml"])
     assert launch["inputs"]["train_data"][0]["identity"] == artifact_identity(adaptive)
@@ -128,6 +133,8 @@ def test_parent_development_plan_reuses_spike_baseline_without_training(monkeypa
         RuntimeBundle("/tmp/manifest.json", "0" * 64, "/tmp/runtime.tar.gz", "0" * 64),
         {"backend": "qemu", "qemu": {}},
         ArtifactStep.adopt("documents/wheels", "2026.10.04.2", "/tmp/wheels"),
+        ArtifactStep.adopt("documents/sources", "2026.10.04.2", "/tmp/sources"),
+        "0" * 64,
     )
     baseline = next(
         handle

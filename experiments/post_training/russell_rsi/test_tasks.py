@@ -12,15 +12,18 @@ from argparse import Namespace
 from dataclasses import asdict
 
 import pytest
-from shellbox.machine import ExitReason, NetworkPolicy, Result
+from shellbox.machine import ExitReason, MachineStartupError, NetworkPolicy, Result
 from taskcompendium.environment import ShellVerifierSpec
+from taskcompendium.importers.swe import PATCH_PATH
 from taskcompendium.parquet import read_tasks
 
+from experiments.post_training.russell_rsi.adaptive_tasks import require_train_rows
 from experiments.post_training.russell_rsi.corpus import CommitRecord
 from experiments.post_training.russell_rsi.sources import SourceSnapshot, source_group_id
 from experiments.post_training.russell_rsi.tasks import (
     CONTROL_SOURCE,
     PROBE_RUNNER,
+    AdmissionPersistenceError,
     GeneratedRepair,
     InvalidRepair,
     ObservationCase,
@@ -452,3 +455,260 @@ def test_wheel_dependencies_are_immutable_assets_in_both_machine_environments(tm
     assert all(file.content != wheel.read_bytes() for file in task.environment.files)
     verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
     assert verifier.environment.assets == task.environment.assets
+
+
+class AdmissionMachine(ResultMachine):
+    def __init__(self, factory):
+        super().__init__({"tests": 2, "failures": 0, "errors": 0})
+        self.factory = factory
+
+    async def run(self, command):
+        if command.argv == ("python", "-I", "/tmp/taskcompendium/runner.py"):
+            correct = self.files["/workspace/maths.py"] == seed().reference_files["maths.py"].encode()
+            report = VerifierReport(
+                tests=2,
+                failures=0 if correct else 2,
+                errors=0,
+                observations=(5, 2) if correct else (-1, -1),
+                case_errors=(None, None),
+                case_diagnostics=("", ""),
+            )
+            return Result(
+                0 if correct else 1,
+                ("RSI_RESULT=" + report.model_dump_json()).encode(),
+                b"",
+                False,
+                False,
+                ExitReason.EXITED,
+            )
+        if "evaluate-patch" in command.argv:
+            patch = json.loads(self.files[PATCH_PATH])
+            reference = {f"/workspace/{path}": text for path, text in seed().reference_files.items()}
+            return Result(0 if patch == reference else 1, b"", b"", False, False, ExitReason.EXITED)
+        return await super().run(command)
+
+    async def download(self, source, target):
+        target.write_text(
+            json.dumps({path: text.decode() for path, text in self.files.items() if path.startswith("/workspace/")})
+        )
+
+    async def close(self):
+        await super().close()
+        self.factory.active -= 1
+
+
+class AdmissionFactory:
+    def __init__(self, failures=(), barrier_count=0):
+        self.failures = list(failures)
+        self.created = 0
+        self.active = 0
+        self.maximum_active = 0
+        self.barrier_count = barrier_count
+        self.barrier = asyncio.Event()
+
+    async def create(self, spec):
+        self.created += 1
+        if self.failures:
+            raise self.failures.pop(0)
+        self.active += 1
+        self.maximum_active = max(self.maximum_active, self.active)
+        if self.barrier_count:
+            if self.created >= self.barrier_count:
+                self.barrier.set()
+            await self.barrier.wait()
+        return AdmissionMachine(self)
+
+
+def admission_args(tmp_path, count=1):
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    records = []
+    for index in range(count):
+        snapshot = seed().model_copy(update={"commit_sha": f"{index + 1:040x}"})
+        directory = candidates / f"candidate-{index}"
+        directory.mkdir()
+        (directory / "snapshot.json").write_text(snapshot.model_dump_json())
+        (directory / "repair.json").write_text(repair().model_dump_json())
+        records.append(source_record(snapshot, snapshot.repository))
+    inventory = tmp_path / "inventory.jsonl"
+    inventory.write_text("".join(json.dumps(asdict(record)) + "\n" for record in records))
+    (tmp_path / "manifest.json").write_text(json.dumps({"repository_wheels": {seed().repository: None}}))
+    return Namespace(
+        candidates=candidates,
+        inventory=inventory,
+        output=tmp_path / "accepted",
+        backend="docker",
+        image="python-git",
+        timeout=10,
+        dependency_bundles=tmp_path,
+        max_candidates=count,
+    )
+
+
+def test_admission_startup_retry_preserves_attempts_and_reuses_completed_result(tmp_path):
+    args = admission_args(tmp_path)
+    factory = AdmissionFactory([MachineStartupError("boot output")])
+    persisted = {}
+
+    async def persist(path):
+        persisted[path.relative_to(tmp_path).as_posix()] = path.read_bytes()
+
+    asyncio.run(accept_candidates(args, factory=factory, persist=persist))
+    directory = args.candidates / "candidate-0"
+    failure = json.loads((directory / "attempts/0001/exception.json").read_text())
+    assert failure["exception_type"] == "MachineStartupError"
+    assert failure["stage"]["stage"] == "parent-1"
+    assert "boot output" in failure["traceback"]
+    result = json.loads((directory / "acceptance.json").read_text())
+    assert result["accepted"] and result["attempt"] == 2
+    assert len(list((directory / "attempts/0002/records").glob("*.json"))) == 14
+    assert persisted["candidates/candidate-0/acceptance.json"] == (directory / "acceptance.json").read_bytes()
+    assert "accepted/admission-summary.json" in persisted
+    resumed = AdmissionFactory([RuntimeError("must not execute completed task")])
+    asyncio.run(accept_candidates(args, factory=resumed, persist=persist))
+    assert resumed.created == 0
+    assert len(list(read_tasks(str(args.output / "train.parquet")))) == 1
+
+
+def test_admission_runtime_error_does_not_retry_or_cancel_other_candidate(tmp_path):
+    args = admission_args(tmp_path, count=2)
+    factory = AdmissionFactory([RuntimeError("command failure")])
+    with pytest.raises(ExceptionGroup) as error:
+        asyncio.run(accept_candidates(args, factory=factory))
+    assert isinstance(error.value.exceptions[0], RuntimeError)
+    failed = args.candidates / "candidate-0"
+    assert len(list((failed / "attempts").iterdir())) == 1
+    assert json.loads((failed / "acceptance.json").read_text())["stage"] == "unexpected_error"
+    assert json.loads((args.candidates / "candidate-1/acceptance.json").read_text())["accepted"]
+    assert len(list(read_tasks(str(args.output / "train.parquet")))) == 1
+    assert json.loads((args.output / "admission-summary.json").read_text())["accepted"] == 1
+
+
+def test_admission_interrupted_attempt_consumes_resume_budget_without_mixing_results(tmp_path):
+    args = admission_args(tmp_path)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(accept_candidates(args, factory=AdmissionFactory([asyncio.CancelledError()])))
+    interrupted = args.candidates / "candidate-0/attempts/0001/records/parent-1.json"
+    original = interrupted.read_bytes()
+    asyncio.run(accept_candidates(args, factory=AdmissionFactory([MachineStartupError("second boot failure")])))
+    result = json.loads((args.candidates / "candidate-0/acceptance.json").read_text())
+    assert result["stage"] == "infrastructure_exhausted"
+    assert interrupted.read_bytes() == original
+    resumed = AdmissionFactory([RuntimeError("exhausted task must not execute")])
+    asyncio.run(accept_candidates(args, factory=resumed))
+    assert resumed.created == 0
+    assert list(read_tasks(str(args.output / "train.parquet"))) == []
+
+
+@pytest.mark.parametrize("changed", ["repair", "timeout"])
+def test_admission_changed_identity_rejects_resume_and_keeps_original_evidence(tmp_path, changed):
+    args = admission_args(tmp_path)
+    asyncio.run(accept_candidates(args, factory=AdmissionFactory()))
+    directory = args.candidates / "candidate-0"
+    original = (directory / "acceptance.json").read_bytes()
+    if changed == "repair":
+        generated = json.loads((directory / "repair.json").read_text())
+        generated["cases"][0]["expected_json"] = 100
+        (directory / "repair.json").write_text(json.dumps(generated))
+    else:
+        args.timeout += 1
+    resumed = AdmissionFactory()
+    with pytest.raises(ExceptionGroup) as error:
+        asyncio.run(accept_candidates(args, factory=resumed))
+    assert isinstance(error.value.exceptions[0], ValueError)
+    assert resumed.created == 0
+    assert (directory / "acceptance.json").read_bytes() == original
+
+
+def test_admission_concurrency_and_partial_dataset_persist_before_minimum_gate(tmp_path):
+    args = admission_args(tmp_path, count=3)
+    factory = AdmissionFactory(barrier_count=2)
+    persisted = {}
+
+    async def persist(path):
+        persisted[path.relative_to(tmp_path).as_posix()] = path.read_bytes()
+
+    asyncio.run(accept_candidates(args, concurrency=2, factory=factory, persist=persist))
+    assert factory.maximum_active <= 4  # Two candidates can each hold a solver and fresh grader.
+    assert factory.maximum_active >= 2
+    assert factory.active == 0
+    tasks = list(read_tasks(str(args.output / "train.parquet")))
+    assert len(tasks) == 3
+    assert [task.id for task in tasks] == sorted(task.id for task in tasks)
+    with pytest.raises(ValueError, match="Admitted 3 train tasks"):
+        require_train_rows(args.output, 16)
+    assert persisted["accepted/train.parquet"] == (args.output / "train.parquet").read_bytes()
+    assert json.loads(persisted["accepted/admission-summary.json"])["train_rows"] == 3
+
+
+def test_admission_persistence_failure_stops_candidate_before_machine_execution(tmp_path):
+    args = admission_args(tmp_path)
+    factory = AdmissionFactory()
+
+    async def persist(path):
+        if path.name == "parent-1.json":
+            raise OSError("object storage failed")
+
+    with pytest.raises(ExceptionGroup) as error:
+        asyncio.run(accept_candidates(args, factory=factory, persist=persist))
+    assert isinstance(error.value.exceptions[0], AdmissionPersistenceError)
+    assert factory.created == 0
+    assert not (args.candidates / "candidate-0/acceptance.json").exists()
+
+
+def test_admission_recovers_final_attempt_after_candidate_result_upload_interruption(tmp_path):
+    args = admission_args(tmp_path)
+
+    async def persist(path):
+        if path.name == "acceptance.json":
+            raise OSError("final pointer upload failed")
+
+    with pytest.raises(ExceptionGroup):
+        asyncio.run(accept_candidates(args, factory=AdmissionFactory(), persist=persist))
+    directory = args.candidates / "candidate-0"
+    (directory / "acceptance.json").unlink()  # Only the successfully uploaded attempt is restored on a new worker.
+    resumed = AdmissionFactory([RuntimeError("qualified attempt must not execute again")])
+    asyncio.run(accept_candidates(args, factory=resumed))
+    assert resumed.created == 0
+    assert json.loads((directory / "acceptance.json").read_text())["accepted"]
+    assert len(list(read_tasks(str(args.output / "train.parquet")))) == 1
+
+
+class BlockingAdmissionFactory:
+    def __init__(self):
+        self.started = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def create(self, spec):
+        self.started += 1
+        if self.started == 2:
+            self.entered.set()
+        await self.release.wait()
+        raise RuntimeError("Cancelled startup must not continue")
+
+
+def test_admission_cancellation_persists_interruption_and_partial_dataset(tmp_path):
+    args = admission_args(tmp_path, count=2)
+    factory = BlockingAdmissionFactory()
+    persisted = {}
+
+    async def persist(path):
+        persisted[path.relative_to(tmp_path).as_posix()] = path.read_bytes()
+
+    async def cancel_started_workers():
+        coordinator = asyncio.create_task(accept_candidates(args, factory=factory, persist=persist))
+        await factory.entered.wait()
+        coordinator.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator
+
+    asyncio.run(cancel_started_workers())
+    summary = json.loads(persisted["accepted/admission-summary.json"])
+    assert summary["accepted"] == 0
+    assert {row["stage"] for row in summary["candidates"]} == {"interrupted"}
+    for index in range(2):
+        report = json.loads(persisted[f"candidates/candidate-{index}/attempts/0001/interrupted.json"])
+        assert report["exception_type"] == "CancelledError"
+        assert report["stage"]["stage"] == "parent-1"
+    assert "accepted/train.parquet" in persisted

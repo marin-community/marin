@@ -285,7 +285,7 @@ def development_step(
 def run_adaptive_tasks(config: AdaptiveTasksConfig) -> None:
     remote(
         run_adaptive_tasks_in_project,
-        resources=ResourceConfig.with_cpu(cpu=8, ram="32GB", disk="64GB", target_cluster=CLUSTER),
+        resources=ResourceConfig.with_cpu(cpu=32, ram="128GB", disk="64GB", target_cluster=CLUSTER),
         env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
     )(config)
 
@@ -318,6 +318,8 @@ def spike_workflow(
     runtime_bundle: RuntimeBundle,
     machine_config: dict,
     wheels: ArtifactStep[Artifact],
+    training_sources: ArtifactStep[Artifact],
+    snapshots_sha256: str,
 ) -> dict[str, ArtifactStep]:
     baseline = development_step(seed, model, version, runtime_bundle, "parent")
     parent_benchmarks = parent_public_step(model, version)
@@ -325,9 +327,10 @@ def spike_workflow(
         name="documents/russell-rsi-adaptive-round-1",
         version=version,
         artifact_type=Artifact,
-        deps=(seed, baseline, wheels),
+        deps=(seed, baseline, wheels, training_sources),
         build_config=lambda ctx: AdaptiveTasksConfig(
-            snapshots_uri=prefix_join(ctx.artifact_path(seed), "snapshots.jsonl"),
+            snapshots_uri=prefix_join(ctx.artifact_path(training_sources), "snapshots.jsonl"),
+            snapshots_sha256=snapshots_sha256,
             inventory_uri=prefix_join(ctx.artifact_path(seed), "inventory.jsonl"),
             traces_uri=prefix_join(ctx.artifact_path(baseline), "traces.jsonl"),
             output_path=ctx.output_path,
@@ -335,9 +338,15 @@ def spike_workflow(
             image=image,
             runtime_bundle=runtime_bundle,
             max_candidates=80,
+            admission_concurrency=8,
             minimum_train_rows=ROLE_PLAN.train_batch_size,
             dependency_wheels_uri=ctx.artifact_path(wheels),
-            source_identities=(artifact_identity(seed), artifact_identity(baseline), artifact_identity(wheels)),
+            source_identities=(
+                artifact_identity(seed),
+                artifact_identity(baseline),
+                artifact_identity(wheels),
+                artifact_identity(training_sources),
+            ),
         ),
         run=run_adaptive_tasks,
     )
@@ -394,6 +403,8 @@ def spike_workflow(
 @click.option("--task-image", help="Digest-addressed image used for task admission.")
 @click.option("--machine-config-json", help="Explicit SkyRL machine backend and QEMU asset settings.")
 @click.option("--dependency-wheels-uri", help="Pinned wheel artifact for offline task environments.")
+@click.option("--training-sources-uri", help="Frozen training-source artifact, separate from the development seed.")
+@click.option("--training-snapshots-sha256", help="SHA256 of the frozen training snapshots.jsonl file.")
 @rl_build_options
 def main(
     stage: str,
@@ -407,6 +418,8 @@ def main(
     task_image: str | None,
     machine_config_json: str | None,
     dependency_wheels_uri: str | None,
+    training_sources_uri: str | None,
+    training_snapshots_sha256: str | None,
 ) -> ArtifactStep | dict[str, ArtifactStep]:
     if stage == "evaluation" and evals is None:
         raise click.UsageError("--evals is required for --stage evaluation")
@@ -426,6 +439,8 @@ def main(
             raise click.UsageError(
                 "--stage spike requires --relay-job, --task-image, " "--machine-config-json, and --dependency-wheels-uri"
             )
+        if training_sources_uri is None or training_snapshots_sha256 is None:
+            raise click.UsageError("--stage spike requires --training-sources-uri and --training-snapshots-sha256")
     if stage in ("spike", "parent-development"):
         if machine_config_json is None:
             raise click.UsageError(f"--stage {stage} requires --machine-config-json")
@@ -436,7 +451,14 @@ def main(
         if stage == "parent-development":
             return development_step(data, model, version, runtime_bundle, "parent")
         assert relay_job is not None and task_image is not None and dependency_wheels_uri is not None
+        assert training_sources_uri is not None and training_snapshots_sha256 is not None
         wheels = ArtifactStep.adopt("documents/russell-rsi-dependency-wheels", version, dependency_wheels_uri)
+        training_sources = ArtifactStep.adopt(
+            "documents/russell-rsi-training-sources",
+            version,
+            training_sources_uri,
+            config={"snapshots_sha256": training_snapshots_sha256},
+        )
         return spike_workflow(
             data,
             model,
@@ -447,6 +469,8 @@ def main(
             runtime_bundle,
             machine_config,
             wheels,
+            training_sources,
+            training_snapshots_sha256,
         )
     trained = train_step(data, model, scale, version)
     if stage == "rl":

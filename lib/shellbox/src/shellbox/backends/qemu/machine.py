@@ -25,6 +25,7 @@ from shellbox.machine import (
     Command,
     ExitReason,
     MachineSpec,
+    MachineStartupError,
     NetworkPolicy,
     QemuBundle,
     Result,
@@ -265,7 +266,7 @@ class QemuMachine:
                 line = await asyncio.wait_for(self.process.stdout.readline(), timeout=60)
             except TimeoutError as error:
                 stdout, stderr = await _stopped_process_output(self.process)
-                raise RuntimeError(
+                raise MachineStartupError(
                     f"QEMU guest startup timed out: "
                     f"stdout={(bytes(boot_output) + stdout)[-BOOT_DIAGNOSTIC_BYTES:]!r}; "
                     f"stderr={stderr[-BOOT_DIAGNOSTIC_BYTES:]!r}"
@@ -276,7 +277,7 @@ class QemuMachine:
                 break
             if not line:
                 stdout, stderr = await _stopped_process_output(self.process)
-                raise RuntimeError(
+                raise MachineStartupError(
                     f"QEMU exited before guest startup: "
                     f"stdout={(bytes(boot_output) + stdout)[-BOOT_DIAGNOSTIC_BYTES:]!r}; "
                     f"stderr={stderr[-BOOT_DIAGNOSTIC_BYTES:]!r}"

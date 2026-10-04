@@ -8,9 +8,12 @@ import ast
 import asyncio
 import difflib
 import hashlib
+import inspect
 import json
 import os
 import tempfile
+import traceback
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -21,7 +24,7 @@ from rolloutengine.grading import _grade_rollout
 from rolloutengine.machines import _install_files, _task_machine
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
-from shellbox.machine import Command, ExitReason, MachineFactory
+from shellbox.machine import Command, ExitReason, MachineFactory, MachineStartupError
 from taskcompendium.environment import (
     EnvironmentAsset,
     EnvironmentCommand,
@@ -52,6 +55,10 @@ MAX_WHEEL_BYTES = 50_000_000
 MAX_WHEEL_FILES = 50
 MAX_GENERATION_BYTES = 256_000
 DEPENDENCY_SETUP_TIMEOUT = 300
+ADMISSION_ATTEMPTS = 2
+ADMISSION_CONCURRENCY = 2
+AdmissionProgress = Callable[[str, dict], Awaitable[None]]
+AdmissionPersistence = Callable[[Path], Awaitable[None]]
 
 
 class InvalidRepair(ValueError):
@@ -436,14 +443,26 @@ async def run_verifier(
         return report
 
 
-async def accept_candidate(task: TaskSpec, snapshot: SourceSnapshot, *, factory: MachineFactory) -> AcceptanceResult:
+async def accept_candidate(
+    task: TaskSpec, snapshot: SourceSnapshot, *, factory: MachineFactory, progress: AdmissionProgress | None = None
+) -> AcceptanceResult:
     """Accept a behavioral parent failure and a successful reference result."""
     verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
     outcomes = []
-    for files in (snapshot.parent_files, snapshot.reference_files):
-        outcomes.append(
-            [await run_verifier(files, verifier, environment=task.environment, factory=factory) for _ in range(2)]
-        )
+    for label, files in (("parent", snapshot.parent_files), ("reference", snapshot.reference_files)):
+        reports = []
+        for repetition in range(2):
+            name = f"{label}-{repetition + 1}"
+            if progress is not None:
+                await progress(name, {"stage": name, "completed": False})
+            report = await run_verifier(files, verifier, environment=task.environment, factory=factory)
+            reports.append(report)
+            if progress is not None:
+                await progress(
+                    name,
+                    {"stage": name, "completed": True, "report": report.model_dump(mode="json") if report else None},
+                )
+        outcomes.append(reports)
     parent, reference = outcomes[0][0], outcomes[1][0]
     stable = all(
         first is not None
@@ -533,11 +552,15 @@ def control_files(snapshot: SourceSnapshot, control: str) -> dict[str, str]:
     return files
 
 
-async def patch_controls(task: TaskSpec, snapshot: SourceSnapshot, *, factory: MachineFactory) -> dict[str, dict]:
+async def patch_controls(
+    task: TaskSpec, snapshot: SourceSnapshot, *, factory: MachineFactory, progress: AdmissionProgress | None = None
+) -> dict[str, dict]:
     """Replay repair and attack controls through patch collection and the fresh grader."""
     factories = {EnvironmentKind.DOCKER: factory}
     outcomes = {}
     for control in CONTROL_REWARDS:
+        if progress is not None:
+            await progress(f"control-{control}", {"stage": "patch_control", "control": control, "completed": False})
         async with _task_machine(task.environment, factories) as machine:
             assert machine is not None
             files = control_files(snapshot, control)
@@ -563,6 +586,11 @@ async def patch_controls(task: TaskSpec, snapshot: SourceSnapshot, *, factory: M
                 factories,
             )
             outcomes[control] = {"status": grade.status.value, "reward": grade.reward, "diagnostics": grade.diagnostics}
+            if progress is not None:
+                await progress(
+                    f"control-{control}",
+                    {"stage": "patch_control", "control": control, "completed": True, "result": outcomes[control]},
+                )
     return outcomes
 
 
@@ -592,8 +620,11 @@ def generation_request(snapshot: SourceSnapshot, *, failure_summary: str, max_to
         "or the reference implementation. A probe runs as an unprivileged fresh Python process and assigns a raw "
         "JSON-compatible result to observation. The trusted parent compares this result to expected_json. "
         "Only probe code and inputs enter the child. Never put expected values, assertions, pass/fail checks, "
-        "comparisons to expected results, or scorer calls in probe_python. Import and setup errors are not "
-        "behavioral observations. Catch only a named source exception when that exception is the broken behavior, "
+        "comparisons to expected results, or scorer calls in probe_python. "
+        "No comparison syntax is permitted, including is None, ==, !=, <, and membership comparisons. "
+        "Use hasattr, callable, or a named exception to observe an absent API. "
+        "Import and setup errors are not behavioral observations. "
+        "Catch only a named source exception when that exception is the broken behavior, "
         "and record its name as raw observation. Do not catch ImportError, Exception, or BaseException. "
         "Do not inspect source text, hashes, Git history, or exact code. Use only stdlib and the supplied source. "
         "Do not include tests, the commit SHA, reference code, or the patch in the problem statement. "
@@ -737,7 +768,7 @@ def write_partitions(
 ) -> None:
     """Write separate train and development tasks. Keep test sources sealed."""
     partitions = {"train": [], "dev": []}
-    for snapshot, task in tasks:
+    for snapshot, task in sorted(tasks, key=lambda item: item[1].id):
         record = inventory[snapshot.commit_sha]
         split = source_partition(snapshot, record)
         if split == "test":
@@ -766,9 +797,296 @@ def repository_wheels(bundles: Path, repository: str) -> DependencyWheels | None
     return DependencyWheels(wheels, prefix_join(manifest["base_uri"], relative))
 
 
-async def accept_candidates(args: argparse.Namespace) -> None:
+class AdmissionPersistenceError(RuntimeError):
+    """Admission evidence could not be persisted."""
+
+
+class RecordedAdmissionError(RuntimeError):
+    """A completed admission attempt recorded an unexpected failure."""
+
+
+async def save_admission_record(path: Path, record: dict, persist: AdmissionPersistence | None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".pending")
+    temporary.write_text(json.dumps(record, sort_keys=True) + "\n")
+    temporary.replace(path)
+    if persist is not None:
+        try:
+            await persist(path)
+        except Exception as error:
+            raise AdmissionPersistenceError(f"Cannot persist admission evidence {path}") from error
+
+
+def require_attempt_records(directory: Path, result: dict) -> None:
+    """Require every completed report from the same final attempt before reuse."""
+    records = directory / "attempts" / f"{result['attempt']:04d}" / "records"
+    names = [f"{label}-{number}" for label in ("parent", "reference") for number in (1, 2)]
+    if result["behavioral_acceptance"]:
+        names.extend(f"control-{control}" for control in CONTROL_REWARDS)
+    for name in names:
+        record = json.loads((records / f"{name}.json").read_text())
+        if not record["completed"]:
+            raise ValueError(f"Completed admission has an incomplete record {name}")
+        if name.startswith("control-") and record["result"] != result["patch_controls"][name.removeprefix("control-")]:
+            raise ValueError(f"Completed control differs from its attempt record {name}")
+
+
+def admission_exception(stage: dict, error: BaseException) -> dict:
+    return {
+        "stage": stage,
+        "exception_type": type(error).__name__,
+        "message": str(error),
+        "traceback": "".join(traceback.format_exception(error)),
+    }
+
+
+def admission_identity(
+    directory: Path, *, dependency_sha256: str, image: str, runtime: str, record: CommitRecord, task: TaskSpec | None
+) -> dict:
+    generation = directory / "generation.json"
+    code_files = {
+        Path(__file__),
+        Path(__file__).with_name("adaptive_tasks.py"),
+        Path(inspect.getfile(_grade_rollout)),
+        Path(inspect.getfile(inspect.unwrap(_task_machine))),
+        Path(inspect.getfile(QemuMachineFactory)),
+        Path(inspect.getfile(DockerMachineFactory)),
+        Path(inspect.getfile(SourceSnapshot)),
+    }
+    code_hashes = sorted(hashlib.sha256(path.read_bytes()).hexdigest() for path in code_files)
+    inputs = {
+        "snapshot_sha256": hashlib.sha256((directory / "snapshot.json").read_bytes()).hexdigest(),
+        "repair_sha256": hashlib.sha256((directory / "repair.json").read_bytes()).hexdigest(),
+        "dependency_manifest_sha256": dependency_sha256,
+        "image": image,
+        "task_spec_sha256": hashlib.sha256(task.model_dump_json().encode()).hexdigest() if task else None,
+        "prepared_runtime": runtime,
+        "admission_code_sha256": hashlib.sha256(json.dumps(code_hashes).encode()).hexdigest(),
+        "source_commit": record.sha,
+        "source_family": record.family,
+        "source_split": record.split,
+        "generation_request_sha256": (
+            json.loads(generation.read_text())["request_sha256"] if generation.exists() else None
+        ),
+    }
+    return {"sha256": hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest(), "inputs": inputs}
+
+
+async def admit_directory(
+    directory: Path,
+    *,
+    inventory: dict[str, CommitRecord],
+    dependency_bundles: Path,
+    image: str,
+    runtime: str,
+    timeout: float,
+    factory: MachineFactory,
+    persist: AdmissionPersistence | None,
+) -> tuple[SourceSnapshot, TaskSpec] | None:
+    """Resume one candidate or run at most two complete admission attempts."""
+    snapshot = SourceSnapshot.model_validate_json((directory / "snapshot.json").read_text())
+    record = inventory[snapshot.commit_sha]
+    split = source_partition(snapshot, record)
+    task = None
+    validation_error = None
+    if split != "test":
+        try:
+            repair = GeneratedRepair.model_validate_json((directory / "repair.json").read_text())
+            dependencies = repository_wheels(dependency_bundles, snapshot.repository)
+            task = build_task(
+                snapshot,
+                repair,
+                image=image,
+                timeout=timeout,
+                dependency_wheels=dependencies.path if dependencies else None,
+                dependency_wheels_uri=dependencies.uri if dependencies else None,
+            )
+        except (ValidationError, InvalidRepair) as error:
+            validation_error = str(error)
+    identity = admission_identity(
+        directory,
+        dependency_sha256=hashlib.sha256((dependency_bundles / "manifest.json").read_bytes()).hexdigest(),
+        image=image,
+        runtime=runtime,
+        record=record,
+        task=task,
+    )
+    identity_path = directory / "admission-identity.json"
+    if identity_path.exists() and json.loads(identity_path.read_text()) != identity:
+        raise ValueError(f"Admission identity changed for {directory.name}; use a new candidate namespace")
+    if not identity_path.exists():
+        await save_admission_record(identity_path, identity, persist)
+    acceptance = directory / "acceptance.json"
+    completed = json.loads(acceptance.read_text()) if acceptance.exists() else None
+    if completed is not None and completed.get("completed"):
+        if completed["identity"] != identity["sha256"]:
+            raise ValueError(f"Completed admission identity changed for {directory.name}")
+        if completed["stage"] == "unexpected_error":
+            raise RecordedAdmissionError(completed["exception"]["traceback"])
+        if completed["stage"] == "completed":
+            require_attempt_records(directory, completed)
+        if not completed["accepted"]:
+            return None
+    base = {
+        "accepted": False,
+        "completed": True,
+        "identity": identity["sha256"],
+        "split": split,
+        "family": record.family,
+        "image": image,
+    }
+    if split == "test":
+        await save_admission_record(acceptance, {**base, "stage": "sealed", "sealed": True}, persist)
+        return None
+    if validation_error is not None:
+        await save_admission_record(
+            acceptance, {**base, "stage": "task_validation", "reason": validation_error}, persist
+        )
+        return None
+    assert task is not None
+    if completed is not None and completed.get("completed"):
+        return snapshot, task
+    attempts = directory / "attempts"
+    attempts.mkdir(exist_ok=True)
+    previous = sorted(path for path in attempts.iterdir() if path.is_dir())
+    if [path.name for path in previous] != [f"{number:04d}" for number in range(1, len(previous) + 1)]:
+        raise ValueError(f"Invalid attempt directory in {attempts}")
+    if previous and (previous[-1] / "result.json").exists():
+        result = json.loads((previous[-1] / "result.json").read_text())
+        if result["identity"] != identity["sha256"]:
+            raise ValueError(f"Attempt identity changed for {directory.name}")
+        if result["stage"] == "completed":
+            require_attempt_records(directory, result)
+            await save_admission_record(acceptance, result, persist)
+            return (snapshot, task) if result["accepted"] else None
+        if result["stage"] == "unexpected_error":
+            await save_admission_record(acceptance, result, persist)
+            raise RecordedAdmissionError(result["exception"]["traceback"])
+    for number in range(len(previous) + 1, ADMISSION_ATTEMPTS + 1):
+        attempt = attempts / f"{number:04d}"
+        attempt.mkdir()
+        stage = {"stage": "started"}
+        await save_admission_record(
+            attempt / "attempt.json", {"attempt": number, "identity": identity["sha256"]}, persist
+        )
+
+        async def progress(name: str, outcome: dict, *, attempt_directory: Path = attempt) -> None:
+            nonlocal stage
+            stage = outcome
+            await save_admission_record(attempt_directory / "records" / f"{name}.json", outcome, persist)
+
+        try:
+            result = await accept_candidate(task, snapshot, factory=factory, progress=progress)
+            evidence = {
+                **base,
+                "attempt": number,
+                "stage": "behavioral_acceptance",
+                "completed": False,
+                "behavioral_acceptance": result.accepted,
+                "parent": result.parent.model_dump(mode="json") if result.parent else None,
+                "reference": result.reference.model_dump(mode="json") if result.reference else None,
+                "patch_controls": {},
+            }
+            await save_admission_record(attempt / "behavioral-acceptance.json", evidence, persist)
+            controls = (
+                await patch_controls(task, snapshot, factory=factory, progress=progress) if result.accepted else {}
+            )
+            evidence.update(
+                accepted=result.accepted and controls_pass(controls),
+                completed=True,
+                stage="completed",
+                patch_controls=controls,
+            )
+            await save_admission_record(attempt / "result.json", evidence, persist)
+            await save_admission_record(acceptance, evidence, persist)
+            return (snapshot, task) if evidence["accepted"] else None
+        except AdmissionPersistenceError:
+            raise
+        except asyncio.CancelledError as error:
+            await save_admission_record(attempt / "interrupted.json", admission_exception(stage, error), persist)
+            raise
+        except MachineStartupError as error:
+            failure = admission_exception(stage, error)
+            await save_admission_record(attempt / "exception.json", failure, persist)
+            await save_admission_record(
+                attempt / "result.json",
+                {**base, "attempt": number, "stage": "startup_failure", "exception": failure},
+                persist,
+            )
+        except Exception as error:
+            failure = admission_exception(stage, error)
+            await save_admission_record(attempt / "exception.json", failure, persist)
+            evidence = {**base, "attempt": number, "stage": "unexpected_error", "exception": failure}
+            await save_admission_record(attempt / "result.json", evidence, persist)
+            await save_admission_record(acceptance, evidence, persist)
+            raise
+    await save_admission_record(
+        acceptance, {**base, "stage": "infrastructure_exhausted", "attempts": ADMISSION_ATTEMPTS}, persist
+    )
+    return None
+
+
+async def save_admission_outputs(
+    output: Path,
+    candidates: list[Path],
+    outcomes: dict[str, tuple[SourceSnapshot, TaskSpec] | None | BaseException],
+    inventory: dict[str, CommitRecord],
+    persist: AdmissionPersistence | None,
+) -> None:
+    accepted = [outcome for outcome in outcomes.values() if isinstance(outcome, tuple)]
+    write_partitions(output, accepted, inventory)
+    if persist is not None:
+        for filename in ("train.parquet", "development.parquet"):
+            try:
+                await persist(output / filename)
+            except Exception as error:
+                raise AdmissionPersistenceError(f"Cannot persist admitted tasks {filename}") from error
+    rows = []
+    for directory in candidates:
+        outcome = outcomes.get(directory.name)
+        pointer = directory / "acceptance.json"
+        recorded_stage = json.loads(pointer.read_text())["stage"] if pointer.exists() else None
+        if directory.name not in outcomes:
+            stage = "not_started"
+        elif isinstance(outcome, asyncio.CancelledError):
+            stage = "interrupted"
+        elif isinstance(outcome, BaseException):
+            stage = "unexpected_error"
+        else:
+            stage = recorded_stage
+        rows.append(
+            {
+                "id": directory.name,
+                "accepted": isinstance(outcome, tuple),
+                "stage": stage,
+                "recorded_stage": recorded_stage,
+                "exception": (
+                    {"type": type(outcome).__name__, "traceback": "".join(traceback.format_exception(outcome))}
+                    if isinstance(outcome, BaseException)
+                    else None
+                ),
+            }
+        )
+    summary = {
+        "candidates": rows,
+        "accepted": len(accepted),
+        "train_rows": sum(snapshot.split == "train" for snapshot, _ in accepted),
+        "development_rows": sum(snapshot.split == "dev" for snapshot, _ in accepted),
+    }
+    await save_admission_record(output / "admission-summary.json", summary, persist)
+
+
+async def accept_candidates(
+    args: argparse.Namespace,
+    *,
+    concurrency: int = ADMISSION_CONCURRENCY,
+    persist: AdmissionPersistence | None = None,
+    factory: MachineFactory | None = None,
+) -> None:
+    """Admit a finite cohort and persist all outcomes before propagating errors."""
+    if concurrency < 1:
+        raise ValueError("Admission concurrency must be positive")
     args.output.mkdir(parents=True, exist_ok=True)
-    accepted = []
     with args.inventory.open() as stream:
         records = [CommitRecord(**json.loads(line)) for line in stream]
     inventory = {record.sha: record for record in records}
@@ -779,60 +1097,52 @@ async def accept_candidates(args: argparse.Namespace) -> None:
         if record.family in families and families[record.family] != record.split:
             raise ValueError("Inventory family occurs in different splits")
         families[record.family] = record.split
-    if args.backend == "docker":
-        factory = DockerMachineFactory(skopeo=args.skopeo, image_cache=args.image_cache)
-    else:
-        factory = QemuMachineFactory(Acceleration.TCG, prepared_registry_bundles={args.image: args.prepared_bundle})
+    runtime = args.image
+    if args.backend == "qemu":
+        runtime = (args.prepared_bundle / ".installed-sha256").read_text()
+    if factory is None:
+        factory = (
+            DockerMachineFactory(skopeo=args.skopeo, image_cache=args.image_cache)
+            if args.backend == "docker"
+            else QemuMachineFactory(Acceleration.TCG, prepared_registry_bundles={args.image: args.prepared_bundle})
+        )
     candidates = [
         directory
         for directory in sorted(args.candidates.iterdir())
         if directory.is_dir() and (directory / "repair.json").exists()
-    ]
-    for directory in candidates[: args.max_candidates]:
-        snapshot = SourceSnapshot.model_validate_json((directory / "snapshot.json").read_text())
-        split = source_partition(snapshot, inventory[snapshot.commit_sha])
-        if split == "test":
-            (directory / "acceptance.json").write_text(
-                json.dumps({"accepted": False, "sealed": True, "split": "test"}) + "\n"
-            )
-            continue
+    ][: args.max_candidates]
+    semaphore = asyncio.Semaphore(concurrency)
+
+    outcomes: dict[str, tuple[SourceSnapshot, TaskSpec] | None | BaseException] = {}
+
+    async def admit(directory: Path) -> None:
         try:
-            repair = GeneratedRepair.model_validate_json((directory / "repair.json").read_text())
-            dependencies = repository_wheels(args.dependency_bundles, snapshot.repository)
-            task = build_task(
-                snapshot,
-                repair,
-                image=args.image,
-                timeout=args.timeout,
-                dependency_wheels=dependencies.path if dependencies is not None else None,
-                dependency_wheels_uri=dependencies.uri if dependencies is not None else None,
-            )
-        except (ValidationError, InvalidRepair) as error:
-            (directory / "acceptance.json").write_text(
-                json.dumps({"accepted": False, "stage": "task_validation", "reason": str(error)}) + "\n"
-            )
-            continue
-        result = await accept_candidate(task, snapshot, factory=factory)
-        evidence = {
-            "accepted": False,
-            "stage": "behavioral_acceptance",
-            "behavioral_acceptance": result.accepted,
-            "split": split,
-            "family": inventory[snapshot.commit_sha].family,
-            "parent": result.parent.model_dump(mode="json") if result.parent is not None else None,
-            "reference": result.reference.model_dump(mode="json") if result.reference is not None else None,
-            "image": args.image,
-            "patch_controls": {},
-        }
-        acceptance = directory / "acceptance.json"
-        acceptance.write_text(json.dumps(evidence) + "\n")
-        controls = await patch_controls(task, snapshot, factory=factory) if result.accepted else {}
-        admitted = result.accepted and controls_pass(controls)
-        evidence.update(accepted=admitted, stage="completed", patch_controls=controls)
-        acceptance.write_text(json.dumps(evidence) + "\n")
-        if admitted:
-            accepted.append((snapshot, task))
-    write_partitions(args.output, accepted, inventory)
+            async with semaphore:
+                result = await admit_directory(
+                    directory,
+                    inventory=inventory,
+                    dependency_bundles=args.dependency_bundles,
+                    image=args.image,
+                    runtime=runtime,
+                    timeout=args.timeout,
+                    factory=factory,
+                    persist=persist,
+                )
+        except BaseException as error:
+            outcomes[directory.name] = error
+            raise
+        outcomes[directory.name] = result
+
+    try:
+        await asyncio.gather(*(admit(directory) for directory in candidates), return_exceptions=True)
+    finally:
+        await save_admission_outputs(args.output, candidates, outcomes, inventory, persist)
+    for outcome in outcomes.values():
+        if isinstance(outcome, asyncio.CancelledError):
+            raise outcome
+    errors = [outcome for outcome in outcomes.values() if isinstance(outcome, Exception)]
+    if errors:
+        raise ExceptionGroup("Unexpected candidate admission failures", errors)
 
 
 def main() -> None:
