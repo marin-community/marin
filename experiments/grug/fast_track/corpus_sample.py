@@ -33,6 +33,7 @@ from zephyr.dataset import Dataset
 
 from experiments.datakit import hero_data
 from experiments.datakit.reference_pipeline import TokenizerSpec
+from experiments.grug.fast_track.batching import bounded_batches
 from experiments.grug.fast_track.contracts import (
     TOKENIZATION_CHUNK_CHARS,
     TOKENIZATION_MAX_DOCUMENT_BYTES,
@@ -251,50 +252,48 @@ def _sample_records(
         _workaround_len=TOKENIZATION_CHUNK_CHARS,
         long_string_workaround=True,
     )
-    pending: list[dict] = []
-    pending_bytes = 0
-    with StoragePath(shard.path).open("rb") as stream:
-        parquet = pq.ParquetFile(stream)
-        for document_id, text, row_offset in _iter_normalized_rows(parquet, shard.path, intervals):
-            rank_value = (int(document_id, 16) + rank_salt) % _ID_SPACE
-            if rank_value >= cutoff:
-                continue
-            rank = f"{rank_value:032x}"
-            if document_id in excluded_document_ids:
-                continue
-            text_bytes_data = text.encode("utf-8")
-            text_bytes = len(text_bytes_data)
-            duplicate_group = hashlib.sha256(text_bytes_data).hexdigest()
-            if duplicate_group in excluded_groups:
-                continue
-            if text_bytes > TOKENIZATION_MAX_DOCUMENT_BYTES:
-                raise ValueError(
-                    f"document exceeds tokenization size limit: source={shard.source!r}, "
-                    f"id={document_id!r}, bytes={text_bytes}, "
-                    f"limit={TOKENIZATION_MAX_DOCUMENT_BYTES}"
+
+    def records() -> Iterator[tuple[dict, int]]:
+        with StoragePath(shard.path).open("rb") as stream:
+            parquet = pq.ParquetFile(stream)
+            for document_id, text, row_offset in _iter_normalized_rows(parquet, shard.path, intervals):
+                rank_value = (int(document_id, 16) + rank_salt) % _ID_SPACE
+                if rank_value >= cutoff:
+                    continue
+                rank = f"{rank_value:032x}"
+                if document_id in excluded_document_ids:
+                    continue
+                text_bytes_data = text.encode("utf-8")
+                text_bytes = len(text_bytes_data)
+                duplicate_group = hashlib.sha256(text_bytes_data).hexdigest()
+                if duplicate_group in excluded_groups:
+                    continue
+                if text_bytes > TOKENIZATION_MAX_DOCUMENT_BYTES:
+                    raise ValueError(
+                        f"document exceeds tokenization size limit: source={shard.source!r}, "
+                        f"id={document_id!r}, bytes={text_bytes}, "
+                        f"limit={TOKENIZATION_MAX_DOCUMENT_BYTES}"
+                    )
+                yield (
+                    {
+                        "source": shard.source,
+                        "id": document_id,
+                        "sample_rank": rank,
+                        "duplicate_group": duplicate_group,
+                        "normalized_shard": shard.path,
+                        "normalized_row": row_offset,
+                        "text": text,
+                    },
+                    text_bytes,
                 )
-            if pending and pending_bytes + text_bytes > TOKENIZE_BATCH_MAX_BYTES:
-                yield from _encode_records(pending, preprocessor)
-                pending.clear()
-                pending_bytes = 0
-            pending.append(
-                {
-                    "source": shard.source,
-                    "id": document_id,
-                    "sample_rank": rank,
-                    "duplicate_group": duplicate_group,
-                    "normalized_shard": shard.path,
-                    "normalized_row": row_offset,
-                    "text": text,
-                }
-            )
-            pending_bytes += text_bytes
-            if len(pending) >= TOKENIZE_BATCH_ROWS or pending_bytes >= TOKENIZE_BATCH_MAX_BYTES:
-                yield from _encode_records(pending, preprocessor)
-                pending.clear()
-                pending_bytes = 0
-        if pending:
-            yield from _encode_records(pending, preprocessor)
+
+    for batch in bounded_batches(
+        records(),
+        max_rows=TOKENIZE_BATCH_ROWS,
+        max_bytes=TOKENIZE_BATCH_MAX_BYTES,
+        byte_size=lambda record: record[1],
+    ):
+        yield from _encode_records([item[0] for item in batch], preprocessor)
 
 
 def _encode_records(records: list[dict], preprocessor: BatchProcessor[dict, dict]) -> Iterator[dict]:
