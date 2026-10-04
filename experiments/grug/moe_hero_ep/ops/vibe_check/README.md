@@ -30,9 +30,9 @@ Use the Actions summary for Iris job links, status, and errors.
 Each checkpoint job requests **64 GB200 GPUs** across 16 nodes, one NVL72 rack
 block. The sampler puts one prompt row on each GPU, so the batch equals the GPU
 count and the prompt bank fits in a single pass per sample. Three samples take
-approximately two hours, against a six-hour job timeout. With `submission=all`,
-two checkpoint jobs can run concurrently when 128 GPUs and the corresponding node
-resources are available. The backfill skips
+approximately two hours, against a six-hour job timeout. Two checkpoint jobs run
+concurrently when 128 GPUs and the corresponding node resources are available.
+With `submission=all`, the backfill submits every unfinished request. It skips
 completed results, active jobs, and requests that exhausted their retries. The
 checkpoint selection comes from [`hero_checkpoint_paths()`](../../checkpoints.py),
 which reads the current hero run and its ancestors.
