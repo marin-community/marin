@@ -7,7 +7,6 @@ import fcntl
 import hashlib
 import json
 import os
-import subprocess
 import tarfile
 import tempfile
 from dataclasses import dataclass
@@ -51,6 +50,8 @@ def install_runtime_bundle(config: RuntimeBundle) -> dict:
     manifest = json.loads(manifest_bytes)
     if manifest["archive_sha256"] != config.archive_sha256:
         raise ValueError("Runtime archive identity differs from the manifest")
+    if manifest["host_packages"]:
+        raise ValueError("Prepared runtimes cannot require host package installation")
     parent = Path(config.installation_parent)
     parent.mkdir(parents=True, exist_ok=True)
     name = manifest["directory_name"]
@@ -90,29 +91,6 @@ def install_runtime_bundle(config: RuntimeBundle) -> dict:
                 extracted.rename(target)
         else:
             _verify_files(target, manifest["files"])
-        packages = manifest["host_packages"]
-        if packages:
-            query = subprocess.run(
-                ["dpkg-query", "-W", "-f=${Package}=${Version}\n", *packages],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            installed = dict(line.split("=", 1) for line in query.stdout.splitlines())
-            if query.returncode != 0 or installed != packages:
-                debs = sorted((target / "debs").glob("*.deb"))
-                if not debs:
-                    raise ValueError("Runtime host packages differ and the bundle has no offline packages")
-                subprocess.run(["dpkg", "--install", *(str(path) for path in debs)], check=True)
-                query = subprocess.run(
-                    ["dpkg-query", "-W", "-f=${Package}=${Version}\n", *packages],
-                    text=True,
-                    capture_output=True,
-                    check=True,
-                )
-                installed = dict(line.split("=", 1) for line in query.stdout.splitlines())
-            if installed != packages:
-                raise ValueError(f"Runtime package versions differ: expected {packages}, found {installed}")
         tool_directories = []
         for name, value in manifest["tools"].items():
             path = Path(value)
