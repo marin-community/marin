@@ -4,6 +4,7 @@
 import hashlib
 import json
 from contextlib import nullcontext
+from contextvars import copy_context
 from dataclasses import asdict
 
 import pytest
@@ -68,7 +69,9 @@ def test_coordinator_submits_new_config_and_reuses_identical_config(tmp_path, mo
     for index, config in enumerate((initial, reviewed, reviewed)):
         source = tmp_path / f"config-{index}.json"
         source.write_text(json.dumps(config) + "\n")
-        result = CliRunner().invoke(
+        # Each coordinator process owns its cached Iris job metadata.
+        result = copy_context().run(
+            CliRunner().invoke,
             launch_bootstrap_loop.main,
             [
                 "--config-uri",
