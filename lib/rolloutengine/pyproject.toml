@@ -3,27 +3,33 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "taskcompendium"
+name = "marin-rolloutengine"
 version = "0.1.0"
-description = "Semantic answer tasks and Harbor direct-chat lowerings"
+description = "Task execution and exact-token rollout records"
 requires-python = ">=3.12,<3.14"
-dependencies = ["marin-rigging", "pyarrow>=17", "pydantic>=2.0", "verifyit"]
-
-[project.optional-dependencies]
-harbor = ["harbor"]
+dependencies = [
+    "taskcompendium",
+    "marin-shellbox",
+    "harbor-config @ git+https://github.com/marin-community/harbor@6b2e76e1dae5c084eed05edefefffcec8c0c1ad9#subdirectory=packages/harbor-config",
+]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[shellsim]"]
 
 [tool.uv.workspace]
 
+[tool.uv]
+prerelease = "allow"
+
 [tool.uv.sources]
-marin-rigging = { path = "../rigging", editable = true }
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" }
-verifyit = { path = "../verifyit", editable = true }
+taskcompendium = { path = "../taskcompendium", editable = true }
+marin-shellbox = { path = "../shellbox", editable = true }
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/taskcompendium"]
+packages = ["src/rolloutengine"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -43,10 +49,10 @@ markers = [
 extend = "../../pyproject.toml"
 
 [tool.ruff.lint.isort]
-known-first-party = ["taskcompendium"]
+known-first-party = ["rolloutengine"]
 
 [tool.pyrefly]
 disable-project-excludes-heuristics = true
 project-includes = ["src"]
-search-path = ["src", "../verifyit/src", "../rigging/src"]
+search-path = ["src"]
 python-interpreter = ".venv/bin/python"
