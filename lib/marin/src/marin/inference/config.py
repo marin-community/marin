@@ -398,6 +398,7 @@ class IrisConfig:
     worker_environment: EnvironmentConfig
     serving_geometry: ServingGeometry | None = None
     cache_ttl_days: int = 14
+    endpoint_placement_timeout_seconds: float = 4 * 3600.0
     endpoint_ready_timeout_seconds: float = 1800.0
     endpoint_health_timeout_seconds: float = 1800.0
     priority: int = 0
@@ -407,6 +408,8 @@ class IrisConfig:
     def __post_init__(self) -> None:
         if self.cache_ttl_days < 0:
             raise ValueError("cache_ttl_days must not be negative")
+        if self.endpoint_placement_timeout_seconds <= 0:
+            raise ValueError("endpoint_placement_timeout_seconds must be positive")
         if self.endpoint_ready_timeout_seconds <= 0:
             raise ValueError("endpoint_ready_timeout_seconds must be positive")
         if self.endpoint_health_timeout_seconds <= 0:

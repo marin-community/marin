@@ -69,10 +69,6 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
-# Bound on time spent queued (pending/building) before the server job is placed.
-# Distinct from the readiness timeout, which budgets server startup and only
-# counts while the job is actually running.
-_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 4 * 3600.0
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
@@ -577,7 +573,9 @@ def _task_is_placed(task: TaskStatus) -> bool:
     )
 
 
-def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
+def _wait_for_endpoint(
+    job: JobHandle, endpoint_name: str, timeout_seconds: float, placement_timeout_seconds: float
+) -> tuple[str, dict[str, str]]:
     """Wait for the serving job to register its endpoint.
 
     ``timeout_seconds`` budgets server startup after placement. Queue time is
@@ -585,7 +583,7 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
     """
     ctx = iris_ctx()
     job_name = JobName.from_string(str(job.job_id))
-    placement_deadline = Deadline.from_seconds(_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS)
+    placement_deadline = Deadline.from_seconds(placement_timeout_seconds)
     ready_deadline: Deadline | None = None
     while True:
         endpoints = ctx.client.list_endpoint_instances(endpoint_name)
@@ -608,7 +606,7 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
             if placement_deadline.expired():
                 raise TimeoutError(
                     f"Timed out waiting for inference job {job.job_id} to be placed "
-                    f"(queued for {_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS:.0f}s)"
+                    f"(queued for {placement_timeout_seconds:.0f}s)"
                 )
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
 
@@ -663,6 +661,7 @@ def _start_direct_inference(
                 job,
                 endpoint_name,
                 timeout_seconds=iris.endpoint_ready_timeout_seconds,
+                placement_timeout_seconds=iris.endpoint_placement_timeout_seconds,
             )
             tensor_parallel_size = int(metadata[_METADATA_TENSOR_PARALLEL_SIZE])
             backend_name = metadata[_METADATA_BACKEND]
