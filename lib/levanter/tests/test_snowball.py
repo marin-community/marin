@@ -507,7 +507,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
             )
             trainer_cfg = TrainerConfig(
                 id="local-snowball-sft", mesh=mesh, use_explicit_mesh_axes=True,
-                train_batch_size=8, num_train_steps=1, max_eval_batches=0,
+                train_batch_size=8, per_device_parallelism=1, num_train_steps=1, max_eval_batches=0,
                 tracker=JsonFileTrackerConfig(output_path=str(root)),
                 checkpointer=CheckpointerConfig(base_path=str(root / "ckpts")),
                 require_accelerator=False,
