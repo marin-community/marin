@@ -18,6 +18,8 @@ from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BF
 from experiments.post_training.bfcl_rl.preferences import RolloutOutcome
 from experiments.post_training.bfcl_rl.retained_preferences import CollectionIdentity, retained_rollout
 
+STUDENT_REASONING_MODE = "/think"
+
 
 @dataclass(frozen=True)
 class NativeTeacherTrace:
@@ -112,7 +114,7 @@ def verifier_selected_chat(trace: NativeTeacherTrace, partition: BFCLPartition) 
         f"bfcl-complement/{trace.identity.harness}",
         source_id=f"{trace.identity.run_id}/{retained.record_id}",
         assistant_prefill=trace.assistant_prefill,
-        chat_template_kwargs={"tools": trace.tools},
+        chat_template_kwargs={"tools": trace.tools, "enable_thinking": STUDENT_REASONING_MODE},
     )
 
 
@@ -169,6 +171,7 @@ def build_verified_sft_store(
         "dataset_commit": partition.dataset_commit,
         "partition_manifest_sha256": PARTITION_MANIFEST_SHA256,
         "student_tokenizer": student_tokenizer,
+        "student_reasoning_mode": STUDENT_REASONING_MODE,
         "max_length": max_length,
         "seed": seed,
         "dispositions": dict(dispositions),
