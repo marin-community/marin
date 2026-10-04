@@ -15,9 +15,6 @@ required-markers = [
 [options]
 prerelease-mode = "allow"
 
-[manifest]
-overrides = [{ name = "marin-rigging", extras = ["prometheus", "secrets"], git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frigging&rev=ea17b34d47fe4bc5405581635e94a3295f68729b" }]
-
 [[package]]
 name = "absl-py"
 version = "2.5.0"
@@ -1382,27 +1379,23 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=215654967364c9ae7fe6cbefec58cdcc19d23b97" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=7bd09cd321fb43933dcb2ce5eaf71e9db0b6c903" }]
 
 [[package]]
 name = "marin-finelog"
-version = "0.2.19.dev30724030287"
-source = { registry = "https://pypi.org/simple" }
+version = "0.2.11"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ffinelog&rev=08f20b50161c85541bb5e88fd5a159070944d0ed#08f20b50161c85541bb5e88fd5a159070944d0ed" }
 dependencies = [
     { name = "click" },
     { name = "connect-python" },
     { name = "duckdb" },
     { name = "fsspec" },
     { name = "gcsfs" },
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
+    { name = "marin-rigging" },
     { name = "protobuf" },
     { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "zstandard" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/29/8b/756b0b4a34f6efd6f3fe774fd5f5956d8442ca5c57098af217552e280c50/marin_finelog-0.2.19.dev30724030287.tar.gz", hash = "sha256:48cede11b7b875749c769dce94f03ce76c00722b032878c33c7712f42fc85b59", size = 93938, upload-time = "2026-08-02T00:20:06.672Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/ab/d2256bfb3744727ad79e7b136bf2da7de86b8c4e387c0c0606cc4e3a7864/marin_finelog-0.2.19.dev30724030287-py3-none-any.whl", hash = "sha256:5f5ca55819b9d94092bb4bb9baae5a562f590d70e30158afaf7b67fc74442c6c", size = 93401, upload-time = "2026-08-02T00:19:53.172Z" },
 ]
 
 [[package]]
@@ -1434,22 +1427,18 @@ wheels = [
 
 [[package]]
 name = "marin-finestore"
-version = "0.2.137.dev36938275180"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ffinestore&rev=08f20b50161c85541bb5e88fd5a159070944d0ed#08f20b50161c85541bb5e88fd5a159070944d0ed" }
 dependencies = [
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
+    { name = "marin-rigging" },
     { name = "pyarrow" },
     { name = "pydantic" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/57/3de6a3a42211babd419da9d79fe9d199d30d39211e7b73f2aee94d07cb1c/marin_finestore-0.2.137.dev36938275180.tar.gz", hash = "sha256:0266bed49c2dbddc785b075ab1ae65f6a0a5cca7c5d194ad27ce7dd5d731afcd", size = 55083, upload-time = "2026-10-01T23:03:12.297Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/c4/3057a7f21a93b94c85de925a27280e643919cce238b3d889e99009349625/marin_finestore-0.2.137.dev36938275180-py3-none-any.whl", hash = "sha256:15ef8c236fb32dc6ee70101060e72d1da6f641cf011b97d24dcac2733a33fd37", size = 45000, upload-time = "2026-10-01T23:02:56.052Z" },
 ]
 
 [[package]]
 name = "marin-iris"
-version = "0.2.137.dev36938275180"
-source = { registry = "https://pypi.org/simple" }
+version = "0.2.0"
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Firis&rev=08f20b50161c85541bb5e88fd5a159070944d0ed#08f20b50161c85541bb5e88fd5a159070944d0ed" }
 dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
@@ -1466,7 +1455,7 @@ dependencies = [
     { name = "marin-finelog-server", version = "0.2.55.dev35451177481", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "marin-finestore" },
     { name = "marin-iris-native" },
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
+    { name = "marin-rigging" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyqwest" },
@@ -1478,10 +1467,6 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "zstandard" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4f/fb/d7a1f9753eab4ce0115afa344f98b50fee2547bea3c0008a83b463dd9222/marin_iris-0.2.137.dev36938275180.tar.gz", hash = "sha256:81167dad7fb8180f9a762de7016a3c08a15013110a8c9e84f0385c1ce88a675e", size = 937390, upload-time = "2026-10-01T23:03:15.937Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/c3/dadf8ab27c4771779072ee611edc2a94be7161209757c76db7da2ec2fada/marin_iris-0.2.137.dev36938275180-py3-none-any.whl", hash = "sha256:658ac9c095e6647d284915fc710ca638311ae12391eebd74b381d79f176ea3fa", size = 1132502, upload-time = "2026-10-01T23:03:01.216Z" },
 ]
 
 [[package]]
@@ -1499,7 +1484,7 @@ wheels = [
 [[package]]
 name = "marin-rigging"
 version = "0.2.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frigging&rev=ea17b34d47fe4bc5405581635e94a3295f68729b#ea17b34d47fe4bc5405581635e94a3295f68729b" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frigging&rev=08f20b50161c85541bb5e88fd5a159070944d0ed#08f20b50161c85541bb5e88fd5a159070944d0ed" }
 dependencies = [
     { name = "aiobotocore" },
     { name = "aiohttp" },
@@ -1521,9 +1506,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-prometheus = [
-    { name = "prometheus-client" },
-]
 secrets = [
     { name = "google-cloud-secret-manager" },
 ]
@@ -1531,9 +1513,10 @@ secrets = [
 [[package]]
 name = "marin-rolloutengine"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=563aadd00f3a2afd766fb94aff3af77bd4d785d6#563aadd00f3a2afd766fb94aff3af77bd4d785d6" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=08f20b50161c85541bb5e88fd5a159070944d0ed#08f20b50161c85541bb5e88fd5a159070944d0ed" }
 dependencies = [
     { name = "harbor-config" },
+    { name = "marin-rigging" },
     { name = "marin-shellbox" },
     { name = "taskcompendium" },
 ]
@@ -1541,7 +1524,7 @@ dependencies = [
 [[package]]
 name = "marin-shellbox"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=563aadd00f3a2afd766fb94aff3af77bd4d785d6#563aadd00f3a2afd766fb94aff3af77bd4d785d6" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fshellbox&rev=08f20b50161c85541bb5e88fd5a159070944d0ed#08f20b50161c85541bb5e88fd5a159070944d0ed" }
 dependencies = [
     { name = "httpx" },
 ]
@@ -1549,17 +1532,17 @@ dependencies = [
 [package.optional-dependencies]
 daytona = [
     { name = "daytona" },
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
+    { name = "marin-rigging" },
 ]
 shellsim = [
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
+    { name = "marin-rigging" },
     { name = "shellsim" },
 ]
 
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=215654967364c9ae7fe6cbefec58cdcc19d23b97#215654967364c9ae7fe6cbefec58cdcc19d23b97" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=7bd09cd321fb43933dcb2ce5eaf71e9db0b6c903#7bd09cd321fb43933dcb2ce5eaf71e9db0b6c903" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -1582,7 +1565,7 @@ dependencies = [
     { name = "marin-finestore" },
     { name = "marin-iris" },
     { name = "marin-iris-native" },
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
+    { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "math-verify" },
@@ -2152,15 +2135,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/5a/2deb8eac70e9a2ac26d88a66ae7cf52612865026f4f4a5e7ab11ad9d52bf/polars_runtime_32-1.43.2-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:452b400e59e7f56e4c6437f435e796903272a9388feee12de2bea049ae87025e", size = 55204471, upload-time = "2026-08-01T06:27:33.886Z" },
     { url = "https://files.pythonhosted.org/packages/29/9e/647401ae8a607bc0cc40ed7b8592d5b1be90ded0dc9b9d6d3aeb03f9524b/polars_runtime_32-1.43.2-cp310-abi3-win_amd64.whl", hash = "sha256:00e33c28e321410c8d66e814a90043101e3bdd9ed2c6dabda07565aa8adbbdf1", size = 52572176, upload-time = "2026-08-01T06:27:37.048Z" },
     { url = "https://files.pythonhosted.org/packages/96/8d/60a50c3f36c85218a7ffcb48c6fe2ce1f7bec799152d68b8658ebed2179c/polars_runtime_32-1.43.2-cp310-abi3-win_arm64.whl", hash = "sha256:350a4868cae85bf8b3f81b33ba47927c15256bd9264dfc8c0753f1b927eac9d3", size = 46582513, upload-time = "2026-08-01T06:27:40.025Z" },
-]
-
-[[package]]
-name = "prometheus-client"
-version = "0.26.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/52/73/f1334c29c2af4cd9dba6c7817e61b611bd0215e2eb5565c6064a4de18802/prometheus_client-0.26.0.tar.gz", hash = "sha256:04a91bcf94e2cf74a44a1a874d651a2e853ed354b6e822f3b7487751465d5c2b", size = 92910, upload-time = "2026-07-24T19:36:41.893Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/a3/b69efbf4143b5b9859b977770bbbabcc2796b702fa69dc40271e45cd5a56/prometheus_client-0.26.0-py3-none-any.whl", hash = "sha256:fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6", size = 64494, upload-time = "2026-07-24T19:36:40.854Z" },
 ]
 
 [[package]]
@@ -2883,9 +2857,9 @@ wheels = [
 [[package]]
 name = "taskcompendium"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=563aadd00f3a2afd766fb94aff3af77bd4d785d6#563aadd00f3a2afd766fb94aff3af77bd4d785d6" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=08f20b50161c85541bb5e88fd5a159070944d0ed#08f20b50161c85541bb5e88fd5a159070944d0ed" }
 dependencies = [
-    { name = "marin-rigging", extra = ["prometheus", "secrets"] },
+    { name = "marin-rigging" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "verifyit" },
@@ -3125,7 +3099,7 @@ dependencies = [
 [[package]]
 name = "verifyit"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=563aadd00f3a2afd766fb94aff3af77bd4d785d6#563aadd00f3a2afd766fb94aff3af77bd4d785d6" }
+source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=08f20b50161c85541bb5e88fd5a159070944d0ed#08f20b50161c85541bb5e88fd5a159070944d0ed" }
 dependencies = [
     { name = "harbor-config" },
     { name = "tomlkit" },
