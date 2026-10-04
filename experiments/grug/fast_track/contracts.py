@@ -14,6 +14,9 @@ from marin.execution.lazy import ArtifactStep
 from pydantic import BaseModel, ConfigDict, model_validator
 
 TRAIN_SPLIT = "train"
+TOKENIZATION_POLICY = "fast-track-long-string-v1"
+TOKENIZATION_CHUNK_CHARS = 10_000
+TOKENIZATION_MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,7 @@ class PreparedAddDatasetCache(Artifact):
     prefix: DatasetPrefix
     actual_num_rows: int
     actual_num_tokens: int
+    tokenization_policy: str
 
 
 @dataclass(frozen=True)
