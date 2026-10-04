@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 import uuid
+from dataclasses import replace
 
 import equinox as eqx
 import fsspec
@@ -28,6 +29,7 @@ from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
+    RepoRef,
     _causal_lm_architecture_name,
     _convert_to_jnp,
 )
@@ -86,6 +88,40 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
             nano_model,
             loaded_model,
         )
+
+
+@pytest.mark.parametrize("attributes", [None, "*.blob filter=lfs diff=lfs merge=lfs -text\n"])
+def test_url_reference_export_copies_code_and_preserves_trained_weights(
+    tmp_path, local_gpt2_tokenizer_path, attributes
+):
+    # The live BFCL export wrote all weights, then sent its S3 reference URI to the Hub API.
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    reference = f"memory://hf-reference/{uuid.uuid4().hex}"
+    fs = fsspec.filesystem("memory")
+    fs.pipe(f"{reference}/configuration_custom.py", b"CUSTOM_ARCHITECTURE = True\n")
+    fs.pipe(f"{reference}/nested/modeling_custom.py", b"CUSTOM_MODEL = True\n")
+    fs.pipe(f"{reference}/.git/config", b"git metadata")
+    fs.pipe(f"{reference}/reference-weights.safetensors", b"stale weights")
+    fs.pipe(f"{reference}/weights.blob", b"LFS weights")
+    if attributes is not None:
+        fs.pipe(f"{reference}/.gitattributes", attributes.encode())
+
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(reference))
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        fs.pipe(f"{reference}/config.json", config.to_hf_config(model.Vocab.size).to_json_string().encode())
+        converter.save_pretrained(model, str(tmp_path), max_shard_size=4096, save_reference_code=True)
+        restored = converter.load_pretrained(Gpt2LMHeadModel, ref=str(tmp_path), config=config)
+        assert_trees_all_equal(model, restored)
+
+    assert (tmp_path / "configuration_custom.py").read_bytes() == b"CUSTOM_ARCHITECTURE = True\n"
+    assert (tmp_path / "nested/modeling_custom.py").read_bytes() == b"CUSTOM_MODEL = True\n"
+    assert not (tmp_path / ".git/config").exists()
+    assert not (tmp_path / "reference-weights.safetensors").exists()
+    if attributes is not None:
+        assert not (tmp_path / "weights.blob").exists()
 
 
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch):

@@ -55,7 +55,11 @@ def dispatch_recovery_training(config: TrainDpoOnPodConfig) -> None:
 
 
 def recovery_optimizer_step(
-    cache: ArtifactStep[RecoveryPreferenceCache], *, selection_name: str, optimization: RecoveryOptimization
+    cache: ArtifactStep[RecoveryPreferenceCache],
+    *,
+    selection_name: str,
+    optimization: RecoveryOptimization,
+    resume_checkpoint: ArtifactStep[LevanterCheckpoint] | None = None,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Bind the exact-token cache and initial student to the existing DPO trainer."""
     source = MODELS["student"]
@@ -133,6 +137,8 @@ def recovery_optimizer_step(
             train_batch_size=optimization.batch_size,
             per_device_parallelism=1,
             num_train_steps=optimization.num_train_steps,
+            load_checkpoint=True if resume_checkpoint is not None else None,
+            load_checkpoint_path=ctx.artifact_path(resume_checkpoint) if resume_checkpoint is not None else None,
             tracker=WandbConfig(project="bfcl-rl", group="verifier-selected-recovery", mode="online"),
             log_jaxprs=False,
             log_xla_hlo=False,
@@ -179,7 +185,7 @@ def recovery_optimizer_step(
         artifact_type=LevanterCheckpoint,
         run=dispatch_recovery_training,
         build_config=build_config,
-        deps=(cache, initial_student),
+        deps=(cache, initial_student) + ((resume_checkpoint,) if resume_checkpoint is not None else ()),
     )
 
 
@@ -187,6 +193,8 @@ def recovery_optimizer_step(
 @click.option("--task", type=click.Choice(SMOKE_TASKS), default=None)
 @click.option("--cache-version", default=None, help="Reuse a completed recovery cache without scheduling collection.")
 @click.option("--collection-version", default=None, help="Build preferences from completed paired collection artifacts.")
+@click.option("--resume-version", default=None, help="Resume a native checkpoint from an earlier recovery run.")
+@click.option("--resume-checkpoint-step", type=click.IntRange(min=0), default=None)
 @click.option("--python-image", required=True)
 @click.option("--java-image", required=True)
 @click.option("--javascript-image", required=True)
@@ -202,6 +210,8 @@ def main(
     task: str | None,
     cache_version: str | None,
     collection_version: str | None,
+    resume_version: str | None,
+    resume_checkpoint_step: int | None,
     python_image: str,
     java_image: str,
     javascript_image: str,
@@ -214,6 +224,17 @@ def main(
     jax_memory_fraction: float,
 ) -> ArtifactStep:
     selection = task or "full"
+    if (resume_version is None) != (resume_checkpoint_step is None):
+        raise ValueError("Specify both resume version and native checkpoint step")
+    resume_checkpoint = None
+    if resume_version is not None:
+        recovery_name = user_owned_name(f"models/bfcl-rl-recovery-dpo-{selection}")
+        resume_checkpoint = ArtifactStep.adopt(
+            f"{recovery_name}-native-input",
+            resume_version,
+            f"{recovery_name}/{resume_version}/checkpoints/step-{resume_checkpoint_step}",
+            kind=LevanterCheckpoint,
+        )
     if cache_version is not None and collection_version is not None:
         raise ValueError("Specify a cache version or a collection version, not both")
     if cache_version is not None:
@@ -243,7 +264,9 @@ def main(
     optimization = RecoveryOptimization(
         num_train_steps, batch_size, beta, num_nodes, expert_axis, context_axis, jax_memory_fraction
     )
-    optimizer = recovery_optimizer_step(cache, selection_name=selection, optimization=optimization)
+    optimizer = recovery_optimizer_step(
+        cache, selection_name=selection, optimization=optimization, resume_checkpoint=resume_checkpoint
+    )
     return replace(optimizer, runtime_args={"execution": COLLECTION_EXECUTION})
 
 
