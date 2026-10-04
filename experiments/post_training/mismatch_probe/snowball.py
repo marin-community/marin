@@ -117,7 +117,11 @@ def snowball_recipe(
             "max_new_tokens_per_turn": response_tokens,
             "max_turns": 1,
         },
-        "environment": {"env_class": "aime"},
+        "environment": (
+            {"env_class": "gsm8k", "skyrl_gym": {"gsm8k": {"structured_chat": True}}}
+            if campaign is Campaign.MISMATCH
+            else {"env_class": "aime"}
+        ),
         "trainer": {
             "strategy": SNOWBALL_RECIPE.strategy,
             "flash_attn": False,
