@@ -944,7 +944,11 @@ def run_bootstrap_loop(
                 plan=selected,
                 output_path=ctx.output_path,
             ),
-            run=freeze_round_dataset,
+            run=remote(
+                freeze_round_dataset,
+                resources=ResourceConfig.with_cpu(cpu=4, ram="16GB", disk="64GB"),
+                pip_packages=["./lib/taskcompendium"],
+            ),
         )
         outputs = bootstrap_round_workflow(
             frozen,
