@@ -285,7 +285,7 @@ def _job_benchmark(job_dir: StoragePath) -> BenchmarkMetadataRef:
 
 
 def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> None:
-    """Remove results Harbor should retry after a confirmed inference interruption."""
+    """Remove unscored results selected for a Harbor retry."""
     for result_file in (job_dir / _TRIAL_RESULT_GLOB).glob():
         try:
             trial = _read_trial(result_file, taxonomy)
