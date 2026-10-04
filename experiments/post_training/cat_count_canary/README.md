@@ -9,14 +9,17 @@ Held-out and extrapolation results do not determine the learning verdict.
 The canary uses two Megatron data-parallel ranks on one H100 host and two
 vLLM engines on another. Each task requests two H100s and 65 CPUs; the CPU
 request places our tasks on separate 128-CPU hosts. Four task rollout workers
-on the policy host reserve 32 CPUs and use token requests. The HTTP endpoint
-serves Harbor and is off in this recipe. Training metrics and
+on the policy host reserve 32 CPUs and use token requests. The model HTTP
+endpoint is off in this recipe. Training metrics and
 policy-training and rollout spans are enabled explicitly.
 
 `--lane async` uses behavior clipping, permits two steps of rollout staleness
 and applies two update epochs per batch. `--lane sync` is a manual experiment
 outside the canary and CI. It uses zero staleness,
-the regular policy objective and TIS with a cap of 2. Both use the same
+the regular policy objective and truncated importance sampling (TIS) with a cap of 2.
+These select `trainer.algorithm.policy_loss_type=behavior_clip` or `regular`.
+The sync lane selects `trainer.algorithm.off_policy_correction=tis`.
+The two lanes use the same
 trainer loop, 64 prompts with eight samples each, a full-batch mini-batch,
 matching training and forward micro-batches of 16 per GPU, and learning
 rate 2e-6.
@@ -124,7 +127,13 @@ one sampled response is exact; the environment exact rate is the fraction of
 responses that are exact. `eval/sampled/train/avg_score` is the stopping signal. Training logs also report `environment/exact_n{N}` and
 `reward/zero_std_group_fraction`.
 
-`--model` selects the instruct model, `qwen2.5-0.5b`, or `qwen3-0.6b`.
+Exact responses contain lowercase `cat` words separated by single spaces,
+with no punctuation or extra text. The scorer removes outer whitespace and
+trailing end-of-turn markers. `avg_score` is the shaped reward, not the exact
+rate. The [scorer](https://github.com/marin-community/MarinSkyRL/blob/main/skyrl-gym/skyrl_gym/envs/cat_count/reward.py)
+defines partial-count rewards and penalties.
+
+`--model` selects `qwen2.5-0.5b-instruct`, `qwen2.5-0.5b`, or `qwen3-0.6b`.
 `--batch-size`, `--group-size`, `--micro-train-batch-size`, repeated
 `--train-n` and `--seed` select experiment inputs. Sampled evaluation always
 uses eight responses, independently of the training group size. `--set`
@@ -188,7 +197,8 @@ The canary uses seed 17 and learning rate 2e-6. Native historical replay at the
 0.65 sampled-score threshold passes six healthy async runs. Their smallest
 peak margin by step 30 is +0.0953. Sign reversal, rollout-probability corruption
 and learning rates 5e-6/1e-5 fail; the closest control margin is −0.1153.
-Historical replay checks existing metric rows. Current GPU validation covers
+Historical replay checks existing metric rows. This guide does not provide the
+replay inputs or control configurations. Current GPU validation covers
 the post-step checksum and the 20-minute deadline with checkpoints/export off.
 
 Model staging, Ray and vLLM startup happen once per invocation. With checkpoints enabled, the measured dry step took 72 seconds, including
