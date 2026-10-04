@@ -19,6 +19,7 @@ from taskcompendium.environment import (
     EnvironmentKind,
     EnvironmentSpec,
     ExitCodeReward,
+    ExternalVerifierSpec,
     FileReward,
     HealthcheckSpec,
     RewardFile,
@@ -26,7 +27,7 @@ from taskcompendium.environment import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.grading import Outcome, numeric_answer
+from taskcompendium.grading import GradeResult, Outcome, numeric_answer
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -47,6 +48,8 @@ from rolloutengine.contracts import (
     ModelTurn,
     RolloutInterrupted,
     RolloutOperation,
+    SessionStart,
+    Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
 
@@ -275,6 +278,85 @@ async def test_shellbox_tools_persist_files_and_mask_observations():
     observation = model.requests[1].messages[-1]
     assert observation["tool_call_id"] == "call-1"
     assert json.loads(observation["content"])["exit_code"] == 0
+
+
+@pytest.mark.parametrize("interruption", [None, "failure", "cancel"])
+async def test_custom_session_uses_prepared_machine_and_releases_it_after_session_cleanup(interruption):
+    entered = asyncio.Event()
+    factory = RecordingShellSimFactory()
+    task = arithmetic_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                interaction="file-answer",
+                files=(EnvironmentFile(path="/workspace/question", content=b"six plus six"),),
+            ),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.EXTERNAL,
+                parameters_json=ExternalVerifierSpec(
+                    name="file-answer", parameters={"expected": "12"}
+                ).model_dump_json(),
+            ),
+        }
+    )
+
+    class FileAnswerSession:
+        def __init__(self, task, machine):
+            self.task = task
+            self.machine = machine
+
+        async def prepare(self):
+            result = await self.machine.run(Command(("cat", "question")))
+            return SessionStart(({"role": "user", "content": result.stdout.decode()},), {})
+
+        async def advance(self, turn):
+            await self.machine.run(Command(("sh", "-c", f"echo {turn.message['content']} > answer")))
+            if interruption == "failure":
+                raise OSError("Execution failed")
+            if interruption == "cancel":
+                entered.set()
+                await asyncio.Future()
+            return Transition(done=True)
+
+        async def grade(self, messages):
+            verifier = ExternalVerifierSpec.model_validate_json(self.task.verifier.parameters_json)
+            answer = await self.machine.run(Command(("cat", "answer")))
+            return GradeResult(Outcome.GRADED, float(answer.stdout.decode().strip() == verifier.parameters["expected"]))
+
+        async def close(self):
+            # Session cleanup must retain access to the machine.
+            result = await self.machine.run(Command(("test", "-f", "answer")))
+            assert result.exit_code == 0
+
+    model = ReplayModel([{"role": "assistant", "content": "12"}])
+    runner = ShellboxRolloutEngine(
+        model.complete,
+        {EnvironmentKind.SHELLSIM: factory},
+        max_turns=2,
+        command_timeout=5,
+        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        sessions={"file-answer": FileAnswerSession},
+    )
+    pending = asyncio.create_task(runner.run(task))
+    if interruption == "cancel":
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    elif interruption == "failure":
+        with pytest.raises(RolloutInterrupted) as failure:
+            await pending
+        assert failure.value.operation == RolloutOperation.ADVANCE
+        assert isinstance(failure.value.__cause__, OSError)
+    else:
+        result = await pending
+        assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+        assert result.response_token_ids == (20,)
+        assert result.loss_mask == (1,)
+    assert model.requests[0].messages == ({"role": "user", "content": "six plus six"},)
+    for machine in factory.machines:
+        with pytest.raises(RuntimeError, match="closed"):
+            await machine.run(Command(("true",)))
 
 
 @pytest.mark.parametrize("completed_turns", [0, 1])

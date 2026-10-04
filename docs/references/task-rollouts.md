@@ -46,7 +46,8 @@ remain in `verifier` and do not enter the agent's build context.
 factory.
 The caller's machine factory selects the Docker backend and its image cache.
 An `environment.interaction` value selects a factory from the engine's `sessions`
-mapping. The callable receives the task and returns a fresh session.
+mapping. The callable receives the task and its Shellbox machine, then returns a fresh session.
+Null environments pass no machine. The engine closes the session before it closes the machine.
 Without that value, the engine uses its shell-tool session.
 
 The caller supplies a `MachineFactory` for each executable environment kind.
