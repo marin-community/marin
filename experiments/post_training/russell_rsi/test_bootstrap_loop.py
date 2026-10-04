@@ -4,9 +4,11 @@
 import hashlib
 import json
 from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 from rigging.filesystem.storage_path import StoragePath
+from rigging.runtime_bundle import RuntimeBundle
 from taskcompendium.grading import exact_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
 from taskcompendium.parquet import read_tasks, write_tasks
@@ -25,6 +27,12 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     load_round,
     round_plan,
     seal_round,
+)
+from experiments.post_training.russell_rsi.rollout_eval import DevelopmentEvaluationConfig
+from experiments.post_training.russell_rsi.startup_replacement import (
+    StartupReplacementConfig,
+    issue_startup_replacement,
+    validate_startup_replacement,
 )
 
 
@@ -60,6 +68,75 @@ def plan(state, fresh=()):
 def initial_state():
     parent = CheckpointScore("parent", (25 / 32, 25 / 32), 0.8)
     return LoopState(parent, parent, parent, tasks(0, 16))
+
+
+@pytest.mark.parametrize("change", [None, "candidate", "task"])
+def test_startup_replacement_accepts_only_the_original_task_before_model_output(tmp_path, change):
+    task = TaskSpec(
+        id="original",
+        context=ConversationInput(events=(TextMessage(role="user", content="Return done."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        verifier=exact_answer("done"),
+        source=Source(dataset="source", revision="pin", row="0", importer_revision="1"),
+    )
+    original_task_sha256 = hashlib.sha256(json.dumps(task.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
+    original = {
+        "task_id": task.id,
+        "interrupted_operation": "grade" if change == "candidate" else "start",
+        "steps": (
+            [{"turn": {"message": {"role": "assistant", "content": "failed candidate"}}}]
+            if change == "candidate"
+            else []
+        ),
+        "response_token_ids": [2] if change == "candidate" else [],
+        "grade": {"status": "unavailable", "reward": None},
+    }
+    traces = tmp_path / "traces.jsonl"
+    original_line = json.dumps(original) + "\n"
+    traces.write_text(json.dumps({**original, "task_id": "another-task"}) + "\n" + original_line)
+    if change == "task":
+        task = task.model_copy(
+            update={"context": ConversationInput(events=(TextMessage(role="user", content="Changed."),))}
+        )
+    parquet = tmp_path / "train.parquet"
+    write_tasks(str(parquet), [task])
+    config = StartupReplacementConfig(
+        evaluation=DevelopmentEvaluationConfig(
+            model_uri="model",
+            model_identity="parent",
+            tasks_identity="replacement",
+            tokenizer="tokenizer",
+            tokenizer_revision="revision",
+            tasks_path=str(parquet),
+            output_path=str(tmp_path / "result"),
+            runtime_bundle=RuntimeBundle("manifest", "manifest-hash", "archive", "archive-hash", "/opt"),
+            limit=1,
+            samples_per_task=1,
+            temperature=1.0,
+        ),
+        original_traces_uri=str(traces),
+        original_traces_sha256=hashlib.sha256(traces.read_bytes()).hexdigest(),
+        original_line_index=1,
+        original_line_sha256=hashlib.sha256(original_line.encode()).hexdigest(),
+        original_task_sha256=original_task_sha256,
+        tasks_sha256=hashlib.sha256(parquet.read_bytes()).hexdigest(),
+        runtime_module_hashes={"json": hashlib.sha256(Path(json.__file__).read_bytes()).hexdigest()},
+    )
+    if change is None:
+        assert validate_startup_replacement(config) == original
+        with pytest.raises(ValueError, match="runtime differs"):
+            issue_startup_replacement(replace(config, runtime_module_hashes={"json": "different-runtime"}))
+        issue_startup_replacement(config)
+        issuance = tmp_path / "result" / "replacement-issued.json"
+        issued_bytes = issuance.read_bytes()
+        assert json.loads(issued_bytes)["original_line_sha256"] == config.original_line_sha256
+        with pytest.raises(ValueError, match="already issued"):
+            issue_startup_replacement(config)
+        assert issuance.read_bytes() == issued_bytes
+    else:
+        with pytest.raises(ValueError, match="without model output" if change == "candidate" else "frozen task"):
+            validate_startup_replacement(config)
 
 
 def test_tied_working_checkpoint_continues_then_strict_champion_improvement():
