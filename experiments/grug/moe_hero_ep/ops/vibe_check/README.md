@@ -41,8 +41,8 @@ The workflow runs hourly. With its default, `submission=next`, it keeps at most 
 jobs for the current sampling specification active. It submits unfinished requests
 only into free slots. One sample set takes about 40 hours with the queue wait, and
 the hero writes a permanent checkpoint about every 28 hours. One active job falls
-behind, and the newest-first order then never samples the older checkpoints. Priorities are `batch`, `interactive`,
-or `production`. A manual invocation saves its selected priority for subsequent
+behind, and the newest-first order then never samples the older checkpoints.
+Priorities are `batch`, `interactive`, or `production`. A manual invocation saves its selected priority for subsequent
 attempts of all discovered requests. Active jobs retain their assigned priority.
 Future checkpoints use batch priority unless a manual invocation sets a different
 priority.
