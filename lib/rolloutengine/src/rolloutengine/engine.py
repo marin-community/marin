@@ -57,7 +57,7 @@ class ShellboxRolloutEngine:
         max_turns: int,
         command_timeout: float,
         convention: Submission,
-        sessions: Mapping[str, Callable[[TaskSpec], TaskSession]] | None = None,
+        sessions: Mapping[str, Callable[[TaskSpec, Machine | None], TaskSession]] | None = None,
     ):
         if max_turns < 1 or command_timeout <= 0:
             raise ValueError("Rollout limits must be positive")
@@ -92,7 +92,7 @@ class ShellboxRolloutEngine:
         if task.environment.interaction is None:
             session = _ShellboxTaskSession(task, machine, self.convention, self.command_timeout, self.factories)
         else:
-            session = self.sessions[task.environment.interaction](task)
+            session = self.sessions[task.environment.interaction](task, machine)
         resources.push_async_callback(session.close)
         return await self._run_session(task, session)
 
