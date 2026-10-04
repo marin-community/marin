@@ -10,7 +10,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 import dataclasses
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import equinox as eqx
 import jax
@@ -30,6 +30,8 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.shared_swiglu import SharedSwigluMlp, select_shared_swiglu_mlp
+from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -41,16 +43,19 @@ from levanter.grug.attention import (
     token_validity_from_attention_mask,
 )
 from levanter.grug.grug_moe import (
+    DISPATCH_OVERLAP_SAVE_NAME,
     MOE_DROPPED_ASSIGNMENTS_METRIC,
     MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_REMAT_SAVE_NAMES,
     MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
+    DispatchOverlap,
     MoeActivation,
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
+    forward_barrier,
     moe_routing_stats_local,
     qb_beta_topk_shard,
     qb_topk_physical_count,
@@ -59,6 +64,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
+from levanter.kernels.pallas.short_conv import Implementation as ShortConvImplementation
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
@@ -115,6 +121,12 @@ OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
 LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
+# The routed experts' combined output, before the latent up projection. The ragged backend's
+# backward reads neither the expert down projection nor the return transport, so saving this
+# value leaves the recompute only the dispatch and the gate/up projection. At the hero shapes it
+# is 402 MB per layer, 18 GiB of HBM across 48 layers.
+MOE_OUTPUT_REMAT_NAME = "grug_moe_routed_output"
+RAGGED_MOE_IMPLEMENTATION: MoeImplementation = "ragged_all_to_all"
 
 
 def _batch_spec() -> P:
@@ -146,6 +158,20 @@ def _token_spec() -> P:
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
     """Preserve the input residual layout after an MLP flattens and restores tokens."""
     return _partition_spec_of(x) or _batch_spec()
+
+
+def _router_top_k(logits: Float[Array, "T E"], k: int) -> Int[Array, "T K"]:
+    """Per-token top-k expert indices, in ``jax.lax.top_k``'s order, from a fused GPU kernel.
+
+    XLA sorts every row of a few hundred logits in full; the kernel selects in registers.
+    """
+    token_spec = _token_spec()
+    return shard_map(
+        lambda local: top_k_indices(local, k),
+        mesh=get_abstract_mesh(),
+        in_specs=P(*token_spec, None),
+        out_specs=P(*token_spec, None),
+    )(reshard(logits, P(*token_spec, None)))
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -243,6 +269,9 @@ class GrugModelConfig:
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
+    sconv_implementation: ShortConvImplementation | None = None
+    """Kernel for the SConvs. None picks the fused Pallas kernel on GPU; "triton_gpu" streams the
+    sequence with the taps in registers. Parameters are the same either way."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
@@ -493,20 +522,23 @@ class ShortConv(eqx.Module):
 
     weight: Float[Array, "W C"]
     kernel_size: int = eqx.field(static=True)
+    implementation: ShortConvImplementation | None = eqx.field(static=True, default=None)
 
     @staticmethod
-    def init(channels: int, kernel_size: int) -> "ShortConv":
+    def init(channels: int, kernel_size: int, implementation: ShortConvImplementation | None = None) -> "ShortConv":
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
         # FSDP-shard the channel dim so the grad reduce-scatters instead of all-reducing; the
         # forward gathers the weight back to replicated.
-        return ShortConv(weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size)
+        return ShortConv(
+            weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size, implementation=implementation
+        )
 
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
         # With segment_ids (packed documents), a tap that reaches into a previous document is
         # zeroed so the conv never mixes across a boundary; the lag-0 (current-token) tap is
         # always kept.
         weight = reshard(self.weight, P(None, None))
-        return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
+        return short_conv(weight, x, segment_ids, implementation=self.implementation, batch_axes=_BATCH_AXES)
 
 
 class CausalSelfAttention(eqx.Module):
@@ -528,7 +560,11 @@ class CausalSelfAttention(eqx.Module):
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
-            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            sconv_k=(
+                ShortConv.init(m * h, cfg.sconv_kernel, cfg.sconv_implementation)
+                if cfg.sconv and "k" in cfg.sconv_sites
+                else None
+            ),
             cfg=cfg,
         )
 
@@ -747,17 +783,84 @@ class DenseMLP(eqx.Module):
         else:
             activation_fn = activation
 
-        b, s, _ = x.shape
-        # Flattening sequence shards requires an all-to-all when a device owns multiple
-        # batch rows; restoring the residual layout exchanges them back.
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
-        # Reshard after the reshape so the shared-expert output carries the same sharding as the
-        # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
-        # for why the unflattened tensor cannot keep the fused token tuple.
-        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
+        mlp = select_shared_swiglu_mlp(activation_fn, jnp.result_type(x, self.w_gate, self.w_up, self.w_down))
+        return self.project_out(mlp, self.gate_up(mlp, _flat_tokens(x)), x)
+
+    def gate_up(self, mlp: SharedSwigluMlp, x_flat: Float[Array, "T D"]) -> tuple[jax.Array, ...]:
+        """The gate/up half of the MLP on token-major activations; see `SharedSwigluMlp`."""
+        token_spec = _token_spec()
+        gate_spec, up_spec = _weight_spec(self.w_gate), _weight_spec(self.w_up)
+
+        def _local(x, w_gate, w_up):
+            return mlp.gate_up(x, _gather_weight(w_gate, gate_spec), _gather_weight(w_up, up_spec))
+
+        with jax.named_scope("DenseMLP"):
+            return shard_map(
+                _local,
+                mesh=get_abstract_mesh(),
+                in_specs=(token_spec, gate_spec, up_spec),
+                out_specs=token_spec,
+                check_rep=False,
+            )(x_flat, self.w_gate, self.w_up)
+
+    def project_out(
+        self, mlp: SharedSwigluMlp, gate_up: tuple[jax.Array, ...], like: Float[Array, "B S D"]
+    ) -> Float[Array, "B S D"]:
+        """The down half of the MLP on `gate_up`'s output, back in ``like``'s residual layout."""
+        token_spec = _token_spec()
+        down_spec = _weight_spec(self.w_down)
+
+        def _local(gate_up, w_down):
+            return mlp.down(gate_up, _gather_weight(w_down, down_spec))
+
+        b, s, _ = like.shape
+        with jax.named_scope("DenseMLP"):
+            out_flat = shard_map(
+                _local,
+                mesh=get_abstract_mesh(),
+                in_specs=(token_spec, down_spec),
+                out_specs=token_spec,
+                check_rep=False,
+            )(gate_up, self.w_down)
+            # Reshard after the reshape so the shared-expert output carries the same sharding as the
+            # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
+            # for why the unflattened tensor cannot keep the fused token tuple.
+            return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(like))
+
+
+def _weight_spec(w: jax.Array) -> P:
+    """``w``'s partition spec, one entry per dimension."""
+    spec = _partition_spec_of(w) or P()
+    return P(*spec, *([None] * (w.ndim - len(spec))))
+
+
+def _gather_weight(w: jax.Array, spec: P) -> jax.Array:
+    """All-gather a shard map's local block of ``w`` over the mesh axes ``spec`` splits it on.
+
+    A weight that arrives FSDP-sharded is gathered inside the shard map, so its gradient's transpose
+    is a reduce-scatter; one already gathered ahead of the MoE section (`_prefetch_mlp_weights`)
+    passes through.
+    """
+    for dim, axes in enumerate(spec):
+        if axes is not None:
+            w = jax.lax.all_gather(w, axes, axis=dim, tiled=True)
+    return w
+
+
+def _flat_tokens(x: Float[Array, "B S D"]) -> Float[Array, "T D"]:
+    # Flattening sequence shards requires an all-to-all when a device owns multiple
+    # batch rows; restoring the residual layout exchanges them back.
+    return reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
+
+
+def _staged_gate_up(mlp: SharedSwigluMlp):
+    """A `DispatchOverlap` callback: a shared expert's gate/up half on this shard's tokens."""
+
+    def gate_up(weights: tuple[jax.Array, jax.Array], x_local: Float[Array, "T D"]) -> tuple[jax.Array, ...]:
+        with jax.named_scope("DenseMLP"):
+            return mlp.gate_up(x_local, *weights)
+
+    return gate_up
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -993,37 +1096,30 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
         token_valid: Bool[Array, "B S"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        b, s, _ = x.shape
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-        token_valid_flat = reshard(rearrange(token_valid, "b s -> (b s)"), _token_spec())
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-        router_probs = jax.nn.softmax(router_logits, axis=-1)
-        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
-        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
-        mesh = get_abstract_mesh()
-        # Per-shard partials only; the cross-device reduction happens once after the layer scan.
-        router_stats = moe_routing_stats_local(
-            reshard(selected_experts, _token_spec()),
-            reshard(router_probs, _token_spec()),
-            reshard(router_logits, _token_spec()),
-            reshard(token_valid_flat, _token_spec()),
-            mesh,
-            batch_axes=_token_axes(mesh),
-            num_experts=self.cfg.num_experts,
-        )
-        # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
-        s_minus_alpha = reshard(router_logits - qb_alpha, _token_spec())
+        routed, router_stats, _ = self._route(x, token_valid, None)
+        return routed, router_stats
+
+    # Same scope name as `__call__`, so profiles attribute both paths alike.
+    @named_call(name="MoEMLP")
+    def call_with_dispatch_overlap(
+        self,
+        x: Float[Array, "B S D"],
+        token_valid: Bool[Array, "B S"],
+        overlap: DispatchOverlap,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], tuple[jax.Array, ...]]:
+        """`__call__` that also runs ``overlap`` beside the first expert chunk's dispatch."""
+        routed, router_stats, staged = self._route(x, token_valid, overlap)
+        assert staged is not None
+        return routed, router_stats, staged
+
+    def _qb_statistics(
+        self,
+        router_stats: dict[str, jax.Array],
+        s_minus_alpha: jax.Array,
+        token_valid_flat: jax.Array,
+        mesh: jax.sharding.AbstractMesh,
+    ) -> None:
+        """Add the sharded QB threshold statistics for the next step's router bias to ``router_stats``."""
         if self.cfg.qb_estimator == QbEstimator.HIST:
             beta, margin_min, margin_max = _qb_beta_hist(
                 s_minus_alpha,
@@ -1070,6 +1166,46 @@ class MoEMLP(eqx.Module):
             router_stats["margin_min"] = zero
             router_stats["margin_max"] = zero
 
+    def _route(
+        self,
+        x: Float[Array, "B S D"],
+        token_valid: Bool[Array, "B S"],
+        overlap: DispatchOverlap | None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], tuple[jax.Array, ...] | None]:
+        b, s, _ = x.shape
+        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
+        token_valid_flat = reshard(rearrange(token_valid, "b s -> (b s)"), _token_spec())
+        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
+        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+        router_probs = jax.nn.softmax(router_logits, axis=-1)
+        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
+        selected_experts = _router_top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+        qb_alpha = jnp.take_along_axis(biased_logits, selected_experts[:, -1:], axis=-1)
+        selected_experts = selected_experts[:, :-1]
+        # Sigmoid combine weights on unbiased logits for selected experts.
+        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+        combine_weights = combine_weights_f.astype(x.dtype)
+        mesh = get_abstract_mesh()
+        # Per-shard partials only; the cross-device reduction happens once after the layer scan.
+        router_stats = moe_routing_stats_local(
+            reshard(selected_experts, _token_spec()),
+            reshard(router_probs, _token_spec()),
+            reshard(router_logits, _token_spec()),
+            reshard(token_valid_flat, _token_spec()),
+            mesh,
+            batch_axes=_token_axes(mesh),
+            num_experts=self.cfg.num_experts,
+        )
+        # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
+        s_minus_alpha = reshard(router_logits - qb_alpha, _token_spec())
+        if overlap is not None:
+            self._qb_statistics(router_stats, s_minus_alpha, token_valid_flat, mesh)
+
         # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
         # `latent_dim`-wide rows in both directions. The router above already read the full-width
         # token, and the shared experts in the enclosing block never see this path.
@@ -1083,14 +1219,43 @@ class MoEMLP(eqx.Module):
             )
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(routed_input)
-        moe_out = self.expert_mlp(
-            routed_input,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            token_valid=token_valid_flat,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=self.cfg.report_capacity_overflow,
-        )
+        staged: tuple[jax.Array, ...] | None = None
+        if overlap is None:
+            moe_out = self.expert_mlp(
+                routed_input,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                token_valid=token_valid_flat,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=self.cfg.report_capacity_overflow,
+            )
+            # The QB statistics feed only the next step's router bias. Their collectives run after the
+            # routed MLP, so none of them holds the collective slot through an expert GEMM.
+            s_minus_alpha, _ = forward_barrier((s_minus_alpha, moe_out))
+            self._qb_statistics(router_stats, s_minus_alpha, token_valid_flat, mesh)
+        else:
+            # With the dispatch overlap, the QB collectives finish before the routed MLP starts, so
+            # none of them takes the collective slot between its transports. The recompute for the
+            # backward replays this tie; the saved statistics spare it the QB collectives.
+            qb_keys = [
+                k
+                for k in ("qb_beta", "margin_min", "margin_max", "qb_beta_local", "qb_beta_weight_local")
+                if k in router_stats
+            ]
+            qb_values = tree_checkpoint_name([router_stats[k] for k in qb_keys], DISPATCH_OVERLAP_SAVE_NAME)
+            routed_input, qb_values = forward_barrier((routed_input, qb_values))
+            router_stats.update(zip(qb_keys, qb_values, strict=True))
+            routed_flat, counts, staged_work = self.expert_mlp.call_with_dispatch_overlap(
+                routed_input,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                overlap,
+                token_valid=token_valid_flat,
+                mesh=get_abstract_mesh(),
+            )
+            # The block's overlap work is a shared expert's gate/up half, which returns a tuple of arrays.
+            staged = cast(tuple[jax.Array, ...], staged_work)
+            moe_out = (routed_flat, counts) if self.cfg.report_capacity_overflow else routed_flat
         if self.cfg.report_capacity_overflow:
             routed_flat, capacity_overflow = moe_out
             dropped_assignments = capacity_overflow.dropped
@@ -1103,6 +1268,7 @@ class MoEMLP(eqx.Module):
             sender_dropped_assignments = _zero_dropped_assignments()
             receiver_dropped_assignments = _zero_dropped_assignments()
             skipped_assignments = padding_skipped_assignments(token_valid_flat, topk=self.cfg.num_experts_per_token)
+        routed_flat = tree_checkpoint_name(routed_flat, MOE_OUTPUT_REMAT_NAME)
         router_stats["capacity_overflow"] = dropped_assignments
         router_stats["sender_capacity_overflow"] = sender_dropped_assignments
         router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
@@ -1120,7 +1286,7 @@ class MoEMLP(eqx.Module):
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _activation_spec(x))
-        return routed, router_stats
+        return routed, router_stats, staged
 
 
 class Block(eqx.Module):
@@ -1157,10 +1323,14 @@ class Block(eqx.Module):
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             sconv_attn=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_implementation)
+                if cfg.sconv and "attn" in cfg.sconv_sites
+                else None
             ),
             sconv_mlp=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_implementation)
+                if cfg.sconv and "mlp" in cfg.sconv_sites
+                else None
             ),
         )
 
@@ -1172,28 +1342,132 @@ class Block(eqx.Module):
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        # A remat policy acts on named intermediates, and a block argument is not one. This
-        # reassignment routes every use below through the name, which lets the policy offload it.
-        x = tree_checkpoint_name(x, LAYER_CARRY_REMAT_NAME)
+        x, block, mask, disable_rope, is_global = _name_layer_carry(self, x, mask, disable_rope, is_global)
         # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
-        if self.sconv_attn is not None:
-            attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
+        attn_in = block.attn_gated_norm(block.rms_attn(x))
+        attn_out = block.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+        if block.sconv_attn is not None:
+            attn_out = block.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
-        mlp_out, router_stats = self.mlp(mlp_in, token_valid)
-        if self.shared is not None:
-            for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
-        if self.sconv_mlp is not None:
-            mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
+        mlp_out, router_stats = _mlp_section(block.mlp, block.shared, mlp_in, token_valid)
+        if block.sconv_mlp is not None:
+            mlp_out = block.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
         return x, router_stats
+
+
+def _name_layer_carry(
+    block: Block,
+    x: Float[Array, "B S D"],
+    mask: AttentionMask | jax.Array,
+    disable_rope: bool | jax.Array,
+    is_global: bool | jax.Array,
+) -> tuple[Float[Array, "B S D"], Block, AttentionMask | jax.Array, bool | jax.Array, bool | jax.Array]:
+    """Name the layer's input carry for the remat policy, and return the layer inputs to read from.
+
+    Under the carry offload, the returned block, mask and flags are tied to the named carry, so the
+    carry's offload copy starts after the layer's weight slices.
+    """
+    offload_carry = block.mlp.cfg.remat_mode == OFFLOAD_CARRY_REMAT_MODE
+    if offload_carry:
+        # The carry's offload copy starts only once this layer's weights and per-layer flags are
+        # sliced out of the scanned inputs. XLA spreads both kinds of copy over the same few
+        # streams, so a slice issued after the carry copy can land behind it on its stream; the
+        # weight gather waiting on that slice then holds the one collective slot for the copy's
+        # ~4 ms while the layer's compute waits for the gathers queued behind it. Only the
+        # carry leaves this barrier: the recompute for the backward starts from the offloaded
+        # carry, and a barrier output it needed would make it keep the raw carry on device.
+        arrays, rest = eqx.partition((x, block, mask, disable_rope, is_global), eqx.is_array)
+        x = eqx.combine(forward_barrier(arrays), rest)[0]
+    # A remat policy acts on named intermediates, and a block argument is not one. The layer reads
+    # the carry only through the name, which lets the policy offload it.
+    x = tree_checkpoint_name(x, LAYER_CARRY_REMAT_NAME)
+    if offload_carry:
+        # Every use in the layer reads the weights and flags tied to the named carry, so none of
+        # them reslices the weights after the carry copy has started.
+        arrays, rest = eqx.partition((x, block, mask, disable_rope, is_global), eqx.is_array)
+        x, block, mask, disable_rope, is_global = eqx.combine(forward_barrier(arrays), rest)
+    return x, block, mask, disable_rope, is_global
+
+
+def _mlp_section(
+    mlp: MoEMLP,
+    shared: tuple[DenseMLP, ...] | None,
+    mlp_in: Float[Array, "B S D"],
+    token_valid: Bool[Array, "B S"],
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    """The routed MoE plus the shared experts on the block's MLP input, with the router statistics."""
+    if resolve_moe_implementation(mlp.cfg.moe_implementation) == RAGGED_MOE_IMPLEMENTATION:
+        mlp, shared, mlp_in = _prefetch_mlp_weights(mlp, shared, mlp_in)
+    shared = shared or ()
+    if shared and _schedules_dispatch_overlap(mlp.cfg):
+        # The first chunk's dispatch has no routed compute to hide behind, in the forward and in
+        # the backward's recompute alike; the first shared expert's gate/up projections run
+        # beside it, and its output projection runs wherever the scheduler places it.
+        first, shared = shared[0], shared[1:]
+        shared_mlp = select_shared_swiglu_mlp(
+            ActivationFunctionEnum.silu.to_jax_fn(), jnp.result_type(mlp_in, first.w_gate, first.w_up, first.w_down)
+        )
+        overlap = DispatchOverlap(
+            fn=_staged_gate_up(shared_mlp), params=(first.w_gate, first.w_up), x=_flat_tokens(mlp_in)
+        )
+        mlp_out, router_stats, staged = mlp.call_with_dispatch_overlap(mlp_in, token_valid, overlap)
+        mlp_out = mlp_out + first.project_out(shared_mlp, staged, mlp_in)
+    else:
+        mlp_out, router_stats = mlp(mlp_in, token_valid)
+    for shared_expert in shared:
+        mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+    return mlp_out, router_stats
+
+
+def _schedules_dispatch_overlap(cfg: GrugModelConfig) -> bool:
+    """Whether the block runs shared-expert work beside the routed MoE's first dispatch.
+
+    The dispatch overlap orders the ragged transports for XLA's latency-hiding scheduler with one
+    collective in flight, which the launcher enables only with the carry offload. Other
+    configurations keep the plain path. Neither path is safe under XLA's default scheduler alone,
+    which can start two transports together; the launcher makes collectives synchronous there.
+    """
+    return (
+        resolve_moe_implementation(cfg.moe_implementation) == RAGGED_MOE_IMPLEMENTATION
+        and cfg.remat_mode == OFFLOAD_CARRY_REMAT_MODE
+    )
+
+
+def _prefetch_mlp_weights(
+    mlp: "MoEMLP", shared: tuple[DenseMLP, ...] | None, mlp_in: Float[Array, "B S D"]
+) -> tuple["MoEMLP", tuple[DenseMLP, ...] | None, Float[Array, "B S D"]]:
+    """Gather the MLP section's FSDP-sharded weights before routing starts.
+
+    With one collective in flight at a time, a weight all-gather issued inside the MoE section
+    holds the collective slot through an expert GEMM, and the ragged transport that should overlap
+    that GEMM runs bare instead. Tying the gathered weights to ``mlp_in`` completes the gathers
+    before routing, so the scheduler issues them under attention.
+    """
+    latent_down = latent_up = None
+    if mlp.w_latent_down is not None and mlp.w_latent_up is not None:
+        latent_down = reshard(mlp.w_latent_down, P(None, "model"))
+        latent_up = reshard(mlp.w_latent_up, P("model", None))
+    shared_weights = ()
+    if shared is not None:
+        shared_weights = tuple(
+            (reshard(e.w_gate, P(None, "model")), reshard(e.w_up, P(None, "model")), reshard(e.w_down, P("model", None)))
+            for e in shared
+        )
+    mlp_in, latent_down, latent_up, shared_weights = forward_barrier((mlp_in, latent_down, latent_up, shared_weights))
+    if latent_down is not None:
+        mlp = dataclasses.replace(mlp, w_latent_down=latent_down, w_latent_up=latent_up)
+    if shared is not None:
+        shared = tuple(
+            dataclasses.replace(e, w_gate=g, w_up=u, w_down=d)
+            for e, (g, u, d) in zip(shared, shared_weights, strict=True)
+        )
+    return mlp, shared, mlp_in
 
 
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
@@ -1289,7 +1563,7 @@ class Transformer(eqx.Module):
             # Adding names is therefore not free. The carry alone fits. The carry plus the
             # attention residuals exceeds the host memory the run has.
             remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
-                names_which_can_be_saved=[],
+                names_which_can_be_saved=[MOE_OUTPUT_REMAT_NAME, DISPATCH_OVERLAP_SAVE_NAME],
                 names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
                 offload_src="device",
                 offload_dst="pinned_host",

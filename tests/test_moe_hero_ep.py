@@ -1,13 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import collections
 import dataclasses
 import math
 import os
+import struct
 import subprocess
 import sys
 import textwrap
 import tomllib
+from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,7 +45,7 @@ from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
 from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
-from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, pgle_profile, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
@@ -409,6 +412,27 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
     assert os.environ["JAX_ENABLE_PGLE"] == "true"
 
 
+def test_pgle_profile_writes_xla_text_profile_into_a_new_directory(tmp_path, monkeypatch):
+    # The converter's output, encoded by hand in XLA's ProfiledInstructionsProto wire format:
+    # costs (field 1) holds an InstructionCost with name (field 1) and the double cost_us (field 2).
+    name = b"all-to-all-start.1"
+    cost = bytes([1 << 3 | 2, len(name)]) + name + bytes([2 << 3 | 1]) + struct.pack("<d", 2500.25)
+    serialized = bytes([1 << 3 | 2, len(cost)]) + cost
+
+    class _Bucket:
+        def get(self, remote, local):
+            Path(local).write_bytes(b"xplane")
+
+    monkeypatch.setattr(pgle_profile, "filesystem_for", lambda uri: (_Bucket(), uri))
+    monkeypatch.setattr(pgle_profile.profiler, "get_profiled_instructions_proto", lambda run_dir: serialized)
+    # The README writes into pgle/, which does not exist in a fresh checkout.
+    out = tmp_path / "pgle" / "run.pbtxt"
+
+    pgle_profile.main("s3://bucket/run/host.xplane.pb", str(out))
+
+    assert out.read_text() == 'costs {\n  name: "all-to-all-start.1"\n  cost_us: 2500.25\n}\n'
+
+
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
@@ -587,6 +611,74 @@ def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monke
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
 
 
+def test_a_ragged_run_without_the_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
+    inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" in flags
+
+
+def test_the_carry_offload_widens_the_memory_budget_for_the_saved_moe_output(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] == train.OFFLOAD_CARRY_MEM_FRACTION
+    slop = f"--xla_gpu_memory_limit_slop_factor={train.OFFLOAD_CARRY_SLOP_FACTOR}"
+    assert slop in os.environ["XLA_FLAGS"].split()
+
+
+@pytest.mark.parametrize("value", ["false", "0", "False"])
+def test_the_carry_offload_refuses_a_ragged_run_with_the_scheduler_off(monkeypatch, value):
+    # The offload configuration runs the MoE dispatch overlap, whose transport order holds only
+    # under the latency-hiding scheduler; without it two transports can be in flight together.
+    monkeypatch.setenv("XLA_FLAGS", f"{train.XLA_LATENCY_HIDING_FLAG}={value}")
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"), pytest.raises(ValueError, match="latency_hiding"):
+        train.run_grug(config)
+
+
+def test_a_ragged_run_without_the_offload_runs_collectives_synchronously(monkeypatch):
+    # The overlap limit binds only the latency-hiding scheduler, which this configuration keeps off.
+    inherited = f"{train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}=ALLREDUCE"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}={train.SYNC_COLLECTIVES}" in flags
+
+
+def test_the_carry_offload_keeps_collectives_asynchronous(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=model.OFFLOAD_CARRY_REMAT_MODE
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert not any(f.startswith(train.XLA_DISABLE_ASYNC_COLLECTIVES_FLAG) for f in flags)
+
+
 def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
     # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
     # skips the offload has to keep the posture it was measured under.
@@ -597,6 +689,32 @@ def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
         train.run_grug(config)
 
     assert "--xla_gpu_enable_latency_hiding_scheduler=false" in os.environ["XLA_FLAGS"].split()
+
+
+@pytest.mark.parametrize(
+    ("remat_mode", "inherited", "expected"),
+    [
+        (model.OFFLOAD_CARRY_REMAT_MODE, None, "true"),
+        (model.OFFLOAD_CARRY_REMAT_MODE, "false", "false"),
+        ("recompute_all", None, None),
+    ],
+)
+def test_the_carry_offload_lets_rematerialization_discount_host_buffers(monkeypatch, remat_mode, inherited, expected):
+    if inherited is None:
+        monkeypatch.delenv("XLA_FLAGS", raising=False)
+    else:
+        monkeypatch.setenv("XLA_FLAGS", f"{train.XLA_HOST_MEMORY_OFFLOADING_FLAG}={inherited}")
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode=remat_mode)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    settings = [
+        flag.partition("=")[2]
+        for flag in os.environ["XLA_FLAGS"].split()
+        if flag.partition("=")[0] == train.XLA_HOST_MEMORY_OFFLOADING_FLAG
+    ]
+    assert settings == ([] if expected is None else [expected])
 
 
 @pytest.mark.parametrize(
@@ -1005,6 +1123,164 @@ def _latent_config(latent_dim=None):
         moe_implementation="fixed_all_to_all",
         report_capacity_overflow=True,
     )
+
+
+def _hero_ragged_offload_config(num_layers: int) -> model.GrugModelConfig:
+    """A small ragged EP model under the carry offload, whose shared-expert width no other weight has."""
+    return dataclasses.replace(
+        _latent_config(latent_dim=16),
+        num_layers=num_layers,
+        num_shared_experts=2,
+        shared_expert_intermediate_dim=24,
+        num_experts_per_token=2,
+        moe_implementation="ragged_all_to_all",
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+        qb_estimator=model.QbEstimator.HIST,
+        qb_hist_bins=16,
+    )
+
+
+def _hero_ragged_offload_loss_and_grad_jaxpr(num_layers: int, axis_sizes=(1, 2, 1, 2, 1)):
+    """Trace the loss and its gradient for `_hero_ragged_offload_config`."""
+    mesh = AbstractMesh(
+        axis_sizes=axis_sizes,
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    cfg = _hero_ragged_offload_config(num_layers)
+    sharding = NamedSharding(mesh, P(model._BATCH_AXES, None))
+    tokens = jax.ShapeDtypeStruct((4, 8), jnp.int32, sharding=sharding)
+    weight = jax.ShapeDtypeStruct((4, 8), jnp.float32, sharding=sharding)
+
+    def loss_and_grad(token_ids, loss_weight):
+        transformer = model.Transformer.init(cfg, key=jax.random.key(0))
+        return eqx.filter_value_and_grad(
+            lambda m: m.next_token_loss(token_ids, loss_weight, mask=AttentionMask.causal())
+        )(transformer)
+
+    with use_abstract_mesh(mesh):
+        return jax.make_jaxpr(loss_and_grad)(tokens, weight)
+
+
+def _equations(jaxpr) -> Iterator:
+    """Every equation of a traced program, each before the equations of its sub-programs."""
+    for eqn in jaxpr.eqns:
+        yield eqn
+        for param in eqn.params.values():
+            for sub in param if isinstance(param, (tuple, list)) else (param,):
+                inner = getattr(sub, "jaxpr", sub)
+                if hasattr(inner, "eqns"):
+                    yield from _equations(inner)
+
+
+def _layer_scans(jaxpr) -> list:
+    """The scan equations of a traced program, outermost first."""
+    return [eqn for eqn in _equations(jaxpr) if eqn.primitive.name == "scan"]
+
+
+def _primitive_counts(jaxpr) -> collections.Counter:
+    return collections.Counter(eqn.primitive.name for eqn in _equations(jaxpr))
+
+
+def test_the_hero_block_stages_shared_expert_0_inside_the_expert_shard_map():
+    # ragged_all_to_all cannot run on CPU, so this checks the traced EP program: shared expert 0's
+    # gate/up runs inside the MoE's expert shard map, beside the first dispatch, and no layer
+    # computes a shared expert's gate/up a second time outside it.
+    cfg = _hero_ragged_offload_config(2)
+    forward = _layer_scans(_hero_ragged_offload_loss_and_grad_jaxpr(2).jaxpr)[0].params["jaxpr"].jaxpr
+    moe_shard_maps = [
+        eqn
+        for eqn in forward.eqns
+        if eqn.primitive.name == "shard_map" and _primitive_counts(eqn.params["jaxpr"])["ragged_all_to_all"]
+    ]
+    assert len(moe_shard_maps) == 1
+
+    def shared_gate_up_count(jaxpr) -> int:
+        shared_weight = (cfg.hidden_dim, cfg.shared_expert_intermediate_dim)
+        return sum(
+            eqn.primitive.name == "dot_general" and eqn.invars[1].aval.shape == shared_weight
+            for eqn in _equations(jaxpr)
+        )
+
+    assert shared_gate_up_count(moe_shard_maps[0].params["jaxpr"]) == 2
+    assert shared_gate_up_count(forward) == 2 * cfg.num_shared_experts
+
+
+def test_the_dispatch_overlap_mlp_section_is_the_routed_moe_plus_every_shared_expert():
+    # Shared expert 0 runs in two halves on the overlap path: its gate/up staged inside the routed
+    # MoE, its output projection added afterwards. Without an expert axis the overlap work runs
+    # beside the plain MoE, so the section executes on CPU.
+    cfg = dataclasses.replace(
+        _latent_config(latent_dim=16),
+        num_shared_experts=2,
+        num_experts_per_token=2,
+        moe_implementation="ragged_all_to_all",
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+    )
+    token_valid = jnp.ones((2, 8), dtype=jnp.bool_)
+    probe = jax.random.normal(jax.random.key(62), (2, 8, cfg.hidden_dim))
+
+    def overlapped(inputs):
+        block, mlp_in = inputs
+        out, router_stats = model._mlp_section(block.mlp, block.shared, mlp_in, token_valid)
+        return jnp.sum(out * probe), (out, router_stats)
+
+    def reference(inputs):
+        block, mlp_in = inputs
+        out, router_stats = block.mlp(mlp_in, token_valid)
+        for shared in block.shared:
+            out = out + shared(mlp_in)
+        return jnp.sum(out * probe), (out, router_stats)
+
+    with set_mesh(_explicit_mesh(1, 1, 1, 1, 1)):
+        block = model.Block.init(cfg, key=jax.random.key(63))
+        assert model._schedules_dispatch_overlap(cfg) and len(block.shared) == 2
+        inputs = (block, jax.random.normal(jax.random.key(61), (2, 8, cfg.hidden_dim)))
+        (_, (actual, actual_stats)), actual_grads = eqx.filter_jit(eqx.filter_value_and_grad(overlapped, has_aux=True))(
+            inputs
+        )
+        (_, (expected, expected_stats)), expected_grads = eqx.filter_jit(
+            eqx.filter_value_and_grad(reference, has_aux=True)
+        )(inputs)
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-6, atol=1e-6)
+    # The overlap path computes the router statistics ahead of the MoE; the next step's router bias
+    # reads them.
+    jax.tree.map(
+        lambda got, want: np.testing.assert_array_equal(np.asarray(got), np.asarray(want)), actual_stats, expected_stats
+    )
+    # The router, the routed experts, every shared expert's three weights and the section input.
+    (actual_block, actual_input), (expected_block, expected_input) = actual_grads, expected_grads
+    for got, want in zip(
+        jax.tree.leaves((actual_block.mlp, actual_block.shared, actual_input)),
+        jax.tree.leaves((expected_block.mlp, expected_block.shared, expected_input)),
+        strict=True,
+    ):
+        np.testing.assert_allclose(np.asarray(got), np.asarray(want), rtol=1e-5, atol=1e-6)
+
+
+def test_the_carry_offload_keeps_no_carry_stack_on_device():
+    # The backward recompute starts from the offloaded carry; a device copy of every layer's input
+    # alongside it would cost a full [L, B, S, D] stack of HBM.
+    num_layers = 3
+    jaxpr = _hero_ragged_offload_loss_and_grad_jaxpr(num_layers).jaxpr
+    forward = _layer_scans(jaxpr)[0]
+    carry_shaped = [
+        var.aval for var in forward.outvars if var.aval.shape[:1] == (num_layers,) and var.aval.shape[-1] == 32
+    ]
+    assert [aval.memory_space for aval in carry_shaped] == [jax.memory.Space.Host]
+
+
+def test_the_dispatch_overlap_recompute_reruns_no_statistics_collectives():
+    # The overlap path computes the QB statistics and the drop count before the first dispatch. The
+    # backward's recompute replays that ordering from saved values instead of rerunning their
+    # all-reduces, which would take the one collective slot.
+    forward, backward = _layer_scans(_hero_ragged_offload_loss_and_grad_jaxpr(3).jaxpr)
+    forward_counts = _primitive_counts(forward.params["jaxpr"].jaxpr)
+    backward_counts = _primitive_counts(backward.params["jaxpr"].jaxpr)
+    assert forward_counts["pmin"] == forward_counts["pmax"] == 1
+    assert backward_counts["pmin"] == backward_counts["pmax"] == backward_counts["psum_invariant"] == 0
+    assert backward_counts["ragged_all_to_all"] == 8
 
 
 @pytest.mark.parametrize("context_size", [1, 2])

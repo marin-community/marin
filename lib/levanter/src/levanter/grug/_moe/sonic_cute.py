@@ -11,17 +11,18 @@ elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
 ``ragged_dot``, reached through its transpose, which is where the contraction runs over the
 ragged dimension. QuACK covers ~2/3 of the MoE FLOPs.
 
-``_expert_mlp_quack_wgrad`` computes the same active rows with those two weight gradients also on
-QuACK, through its varlen-k grouping, which is faster than ``ragged_dot`` at the hero shapes. It
-leaves rows past the last expert segment unspecified instead of zeroing them. That is the path the
-ragged all-to-all EP backend takes, so on the hero every grouped GEMM in the expert MLP is one
-kernel family.
+``_expert_mlp_quack_wgrad_fwd`` and ``_expert_mlp_quack_wgrad_backward`` compute the same active
+rows with those two weight gradients also on QuACK, through its varlen-k grouping, which is faster
+than ``ragged_dot`` at the hero shapes. They leave rows past the last expert segment unspecified
+instead of zeroing them. The ragged all-to-all EP backend calls them inside its own VJP, so on the
+hero every grouped GEMM in the expert MLP is one kernel family.
 """
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax.jax_utils import tree_checkpoint_name
+from jax.custom_derivatives import SymbolicZero
 from haliax.nn.ragged_dot import ragged_dot
 from jaxtyping import Array, Bool, Float, Int
 
@@ -29,6 +30,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _chunk_capacity_drops,
+    _deinterleave_gate_up,
     _interleave_gate_up,
     _prepare_moe_dispatch,
     _swiglu_gate_up_backward,
@@ -37,6 +39,7 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.quack_moe_cute import (
     quack_gated_grouped_gemm,
+    quack_grouped_dswiglu_gemm,
     quack_grouped_gemm,
     quack_grouped_wgrad,
 )
@@ -48,11 +51,11 @@ from levanter.grug._moe.quack_moe_cute import (
 # grouped GEMMs -- down forward plus the backward dh/dx matmuls -- gain 1.055x at (2, 2, 1).
 # All of this is scheduling, so none of it changes the computed function.
 #
-# These reach `_expert_mlp_quack_wgrad` only. `_expert_mlp` -- the local FSDP path, used by the
-# `fsdp-nodrop` and `fsdp-chunk4` ablation arms -- still calls the GEMMs at their defaults, as it
-# did before this tuning existed, so nothing regressed. It is untuned rather than deliberately
-# tuned differently: the measurements above were taken at the i3072 hero shapes and the FSDP arms
-# run d768, so the numbers do not transfer without re-measuring.
+# `_expert_mlp` -- the local FSDP path, used by the `fsdp-nodrop` and `fsdp-chunk4` ablation arms --
+# does not use these: it still calls the GEMMs at their defaults, as it did before this tuning
+# existed, so nothing regressed. It is untuned rather than deliberately tuned differently: the
+# measurements above were taken at the i3072 hero shapes and the FSDP arms run d768, so the
+# numbers do not transfer without re-measuring.
 # TODO: re-measure these at the FSDP ablation shapes and either extend the tuning to
 # `_expert_mlp` or record why the defaults win there.
 _QUACK_TILE_MN = (256, 256)
@@ -67,6 +70,11 @@ _QUACK_GROUPED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 2, 1), use_clc_
 # Like the activation-path settings above, it is all scheduling: none of it changes the computed
 # function.
 _QUACK_WGRAD_KW: dict = dict(tile_mn=(256, 256), cluster_mnk=(2, 2, 1), use_clc_persistence=False)
+# The shared experts' fused GEMMs run one group spanning every token. At the hero's per-GPU shapes
+# (65536 tokens, d6144, i3072) the routed gated setting is the fastest of those tried for the gate/up
+# GEMM, and the dh GEMM prefers the (2, 1, 1) cluster: 1.494 against 1.543 ms at (2, 2, 1).
+_SHARED_GATED_KW = _QUACK_GATED_KW
+_SHARED_DSWIGLU_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 1, 1), use_clc_persistence=_QUACK_USE_CLC)
 
 
 @jax.custom_vjp
@@ -76,7 +84,8 @@ def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
     """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
+    # The primal runs only when nothing differentiates it, so it skips the pre-activations' store.
+    h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
     return _zero_inactive_grouped_rows(y, cu)
 
@@ -108,39 +117,119 @@ def _expert_mlp_bwd(res, dy):
 _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
 
 
-@jax.custom_vjp
-def _expert_mlp_quack_wgrad(x_dispatch, w13_il, moe_w2, cu):
-    """``_expert_mlp`` with the two weight-gradient GEMMs on QuACK's varlen-k grouping.
-
-    Every grouped GEMM here is driven by ``cu`` alone, so unlike ``_expert_mlp`` -- whose weight
-    gradients go through ``ragged_dot`` -- this one never needs the per-expert sizes.
-
-    Rows past ``cu[-1]`` are unspecified in both the output and input gradient, so a caller
-    must read only the active rows. Every grouped GEMM here bounds its reads by ``cu``.
-    """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
-    return quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
-
-
 def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
+    """The expert MLP forward, plus the residuals ``_expert_mlp_quack_wgrad_backward`` reads.
+
+    Every grouped GEMM is driven by ``cu`` alone. Rows past ``cu[-1]`` are unspecified in the
+    output, and every grouped GEMM bounds its reads by ``cu``.
+    """
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
     return y, (x_dispatch, w13_il, moe_w2, gu, h, cu)
 
 
-def _expert_mlp_quack_wgrad_bwd(res, dy):
+def _expert_mlp_quack_apply(x_dispatch, w13_il, moe_w2, cu):
+    """``_expert_mlp_quack_wgrad_fwd``'s output alone, without writing the pre-activations.
+
+    Returns ``(y, h)``: ``h`` is the gate/up stage's output, the last residual the fwd produces.
+    """
+    h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, **_QUACK_GATED_KW)
+    return quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW), h
+
+
+def _expert_mlp_quack_wgrad_backward(res, dy):
+    """The backward of ``_expert_mlp_quack_wgrad_fwd``, plus each row's ``<y, dy>``.
+
+    ``y = h @ W2`` row by row, so ``<y, dy> = <h, dy @ W2^T> = <h, dh>``: the backward already
+    holds both factors and never needs ``y``. The ``dh`` GEMM applies the SwiGLU backward and this
+    row dot in its epilogue, in fp32 on the fp32 accumulator, so ``dh`` is never written. Rows past
+    ``cu[-1]`` are unspecified in every row-indexed output.
+
+    Returns ``(dx, dw13_il, dw2, output_dot_cotangent)``.
+    """
     x_dispatch, w13_il, moe_w2, gu, h, cu = res
-    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
+    d_gu, output_dot_cotangent = quack_grouped_dswiglu_gemm(dy, moe_w2, gu, cu, **_QUACK_GROUPED_KW)
     dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
-    d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
-    # the int-typed routing arg gets a float0 zero cotangent
-    cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
-    return dx, dw13_il, dw2, cu_ct
+    return dx, dw13_il, dw2, output_dot_cotangent
 
 
-_expert_mlp_quack_wgrad.defvjp(_expert_mlp_quack_wgrad_fwd, _expert_mlp_quack_wgrad_bwd)
+def _single_group(rows: int) -> Int[Array, "2"]:
+    return jnp.array([0, rows], dtype=jnp.int32)
+
+
+def _shared_w13(w_gate: Float[Array, "D I"], w_up: Float[Array, "D I"]) -> Float[Array, "1 D I2"]:
+    return _interleave_gate_up(jnp.concatenate([w_gate, w_up], axis=-1)[None], w_gate.shape[1])
+
+
+@jax.custom_vjp
+def shared_gate_up(
+    x: Float[Array, "T D"], w_gate: Float[Array, "D I"], w_up: Float[Array, "D I"]
+) -> tuple[Float[Array, "T I2"], Float[Array, "T I"]]:
+    """A shared expert's gate/up projection on QuACK, with SwiGLU in the GEMM's epilogue.
+
+    Returns the interleaved ``[g0, u0, g1, u1, ...]`` pre-activations and ``h = silu(gate) * up``,
+    computed in fp32 on the accumulator. Pass both to `shared_swiglu_down`, whose backward runs the
+    SwiGLU backward in its own GEMM epilogue and returns the gradient on the pre-activations. A
+    gradient that reaches ``h`` directly instead also gets the SwiGLU backward, as an elementwise
+    pass, so the pair is a correct VJP whoever consumes ``h``.
+    """
+    return quack_gated_grouped_gemm(
+        x, _shared_w13(w_gate, w_up), _single_group(x.shape[0]), return_preact=True, **_SHARED_GATED_KW
+    )
+
+
+def _shared_gate_up_fwd(x, w_gate, w_up):
+    x, w_gate, w_up = x.value, w_gate.value, w_up.value
+    w13 = _shared_w13(w_gate, w_up)
+    preact, h = quack_gated_grouped_gemm(x, w13, _single_group(x.shape[0]), return_preact=True, **_SHARED_GATED_KW)
+    return (preact, h), (x, w13, preact)
+
+
+def _shared_gate_up_bwd(residuals, cotangents):
+    x, w13, preact = residuals
+    d_preact, d_h = cotangents
+    if isinstance(d_h, SymbolicZero):
+        d_preact = jnp.zeros_like(preact) if isinstance(d_preact, SymbolicZero) else d_preact
+    else:
+        d_from_h = _swiglu_gate_up_backward(preact, d_h)
+        d_preact = d_from_h if isinstance(d_preact, SymbolicZero) else d_preact + d_from_h
+    dx = jnp.einsum("tn,dn->td", d_preact, w13[0])
+    dw13 = _deinterleave_gate_up(jnp.einsum("td,tn->dn", x, d_preact))
+    intermediate = preact.shape[1] // 2
+    return dx, dw13[:, :intermediate], dw13[:, intermediate:]
+
+
+shared_gate_up.defvjp(_shared_gate_up_fwd, _shared_gate_up_bwd, symbolic_zeros=True)
+
+
+@jax.custom_vjp
+def shared_swiglu_down(
+    preact: Float[Array, "T I2"], h: Float[Array, "T I"], w_down: Float[Array, "I D"]
+) -> Float[Array, "T D"]:
+    """``h @ w_down`` for `shared_gate_up`'s outputs, with the SwiGLU backward in the dh GEMM.
+
+    ``h`` must be ``silu(gate) * up`` of the interleaved ``preact``, as `shared_gate_up` returns them.
+    The backward sends the whole input gradient to ``preact`` through the dh GEMM's dSwiGLU epilogue
+    and none to ``h``, so ``dh`` is never written. The gradient is right only for that pair.
+    """
+    return jnp.einsum("tm,md->td", h, w_down)
+
+
+def _shared_swiglu_down_fwd(preact, h, w_down):
+    return jnp.einsum("tm,md->td", h, w_down), (preact, h, w_down)
+
+
+def _shared_swiglu_down_bwd(residuals, dy):
+    preact, h, w_down = residuals
+    d_preact, _row_dot = quack_grouped_dswiglu_gemm(
+        dy, w_down[None], preact, _single_group(dy.shape[0]), **_SHARED_DSWIGLU_KW
+    )
+    return d_preact, None, jnp.einsum("tm,td->md", h, dy)
+
+
+shared_swiglu_down.defvjp(_shared_swiglu_down_fwd, _shared_swiglu_down_bwd)
 
 
 def _moe_mlp_local_sonic_cute(

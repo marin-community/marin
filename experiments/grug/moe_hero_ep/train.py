@@ -67,6 +67,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.coordinated_gc import GC_TIME_METRIC, GC_WARMUP_STEPS, collect_garbage, coordinated_gc
 from experiments.grug.moe_hero_ep.model import (
     OFFLOAD_CARRY_REMAT_MODE,
+    RAGGED_MOE_IMPLEMENTATION,
     GrugModelConfig,
     RematMode,
     Transformer,
@@ -95,18 +96,29 @@ HERO_EP_RUNTIME_ENV = {
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
+DEFAULT_SLOP_FACTOR = 85
+# The carry offload also saves the ragged backend's routed MoE output (`MOE_OUTPUT_REMAT_NAME`,
+# 18 GiB) for the backward. Rematerialization and the scheduler both work within
+# `(fraction x 184.3 GiB - persistent state) x slop`, 87.7 GiB at 0.75 / 85, below that backward's
+# ~105 GiB, so remat would recompute what was saved. 0.78 / 105 raises the budget to 114 GiB. Remat
+# also counts the 18.9 GiB of collective buffers, which caps the arena at 95 GiB, so the 143.8 GiB
+# pool holds the worst case with 13 GiB to spare and 40.5 GiB stays outside it, above the ~28.5 GiB
+# NCCL, cuBLAS, and the CUDA context need.
+OFFLOAD_CARRY_MEM_FRACTION = "0.78"
+OFFLOAD_CARRY_SLOP_FACTOR = 105
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
+XLA_HOST_MEMORY_OFFLOADING_FLAG = "--xla_gpu_enable_host_memory_offloading"
+XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
+XLA_DISABLE_ASYNC_COLLECTIVES_FLAG = "--xla_gpu_disable_async_collectives"
+# Every collective type runs synchronously, one at a time.
+SYNC_COLLECTIVES = "ALLCOLLECTIVES"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
-# The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
-# dispatch and combine form one long dependent chain, so admitting several concurrent collectives
-# only contends for the SMs the transport itself needs.
-RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
-# Offload and latency hiding race the reloaded residual with its consumer when overlap exceeds 1.
-OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT = 1
-RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
+# The ragged transport and the carry offload run with one collective in flight. Both force it rather
+# than default it; see `_apply_hero_ep_runtime_defaults`.
+SERIAL_COLLECTIVE_OVERLAP_LIMIT = 1
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -198,6 +210,9 @@ def _apply_hero_ep_runtime_defaults(
     processes_per_task: int = 1,
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
+    offload_carry = remat_mode == OFFLOAD_CARRY_REMAT_MODE
+    if offload_carry:
+        env_defaults["XLA_PYTHON_CLIENT_MEM_FRACTION"] = OFFLOAD_CARRY_MEM_FRACTION
     if processes_per_task > 1:
         # With one process per GPU, the per-process CUPTI sessions collide with each
         # other and with CoreWeave's DCGM, so PGLE cannot profile and its recompile
@@ -207,36 +222,46 @@ def _apply_hero_ep_runtime_defaults(
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
-    if ragged:
-        overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
-    elif inline_watch_enabled:
-        overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
-    else:
-        overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     # The scheduler's longer buffer live ranges fit on the ragged transport only once the layer
     # carry leaves HBM. Without that offload its first-step NCCL allocations fail.
     latency_hiding = not ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        f"--xla_gpu_enable_latency_hiding_scheduler={'true' if latency_hiding else 'false'}",
-        # The scheduler sizes the single `jit_train_step` temp arena against this percentage of
-        # its memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and
-        # persistent state occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served
-        # from pool free space and forces a fresh mapping against the ~17 GiB of physical memory
-        # outside the pool. The default 95 asks for 125.7 GiB and fails that way. 85 sizes the
-        # arena at 113.6 GiB, leaving enough slack for per-node variation in fragmentation. A
-        # lower percentage costs throughput, because a smaller arena makes `HloRematerialization`
-        # recompute more of the step.
-        "--xla_gpu_memory_limit_slop_factor=85",
+        f"{XLA_LATENCY_HIDING_FLAG}={'true' if latency_hiding else 'false'}",
+        # The scheduler and rematerialization size the single `jit_train_step` temp arena against
+        # this percentage of their memory budget. An arena the pool's free space cannot serve forces
+        # a fresh mapping against the little physical memory outside the pool: without the carry
+        # offload, XLA's default 95 asked for a 125.7 GiB arena and failed that way, and 85 leaves
+        # slack for per-node variation in fragmentation. A lower percentage costs throughput,
+        # because a smaller budget makes `HloRematerialization` recompute more of the step. The
+        # carry offload raises the memory fraction and the percentage together; see
+        # `OFFLOAD_CARRY_SLOP_FACTOR`.
+        f"--xla_gpu_memory_limit_slop_factor={OFFLOAD_CARRY_SLOP_FACTOR if offload_carry else DEFAULT_SLOP_FACTOR}",
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
+    if offload_carry:
+        # Post-schedule `HloRematerialization` charges pinned-host buffers against the device
+        # limit unless this is set, so the 36 GiB offloaded carry stack makes it recompute
+        # ~10 GiB of the backward per step that already fits in HBM.
+        flag_defaults += (f"{XLA_HOST_MEMORY_OFFLOADING_FLAG}=true",)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
-    if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
-        # A wrong overlap limit corrupts training silently, so the offload takes the flag
-        # away from the caller instead of defaulting it.
+    if ragged and offload_carry and not _xla_bool_flag(xla_flags, XLA_LATENCY_HIDING_FLAG):
+        # This configuration runs the MoE's dispatch overlap (`model._schedules_dispatch_overlap`),
+        # whose transport order holds only under the latency-hiding scheduler; without it two
+        # transports can be in flight together and deadlock.
+        raise ValueError(f"the carry offload with {RAGGED_MOE_IMPLEMENTATION} needs {XLA_LATENCY_HIDING_FLAG}=true")
+    if ragged or offload_carry:
+        # A wrong overlap limit corrupts training silently, so these configurations take the flag
+        # away from the caller instead of defaulting it. With the carry offload, a reloaded
+        # residual races its consumer. On the ragged transport, the backward's transports do not
+        # depend on the recomputed forward's, and with several collectives in flight the two
+        # overlapped and gave run-to-run different gradients, or hung, on GB200. The transport's
+        # dispatch and combine also form one dependent chain, so admitting more collectives only
+        # contends for the SMs it needs.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
-        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT}")
+        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={SERIAL_COLLECTIVE_OVERLAP_LIMIT}")
     if ragged:
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
@@ -245,7 +270,28 @@ def _apply_hero_ep_runtime_defaults(
         # occurrence XLA's parser keeps.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
         xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
+    if ragged and not offload_carry:
+        # The overlap limit binds only the latency-hiding scheduler, which this configuration keeps
+        # off. XLA's default scheduler then starts collectives regardless of the limit: compiled for
+        # the EP64 hero layer, it puts two ragged transports in flight at once in the forward and in
+        # the backward, and that hangs or corrupts like an unforced overlap limit. Synchronous
+        # collectives keep them one at a time, so, like the limit, the caller does not choose this.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_DISABLE_ASYNC_COLLECTIVES_FLAG]
+        xla_flags.append(f"{XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}={SYNC_COLLECTIVES}")
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+
+
+def _xla_bool_flag(xla_flags: list[str], name: str) -> bool:
+    """The value XLA reads for boolean flag ``name``: its last occurrence wins, a bare flag is true."""
+    values = [flag.partition("=")[2] for flag in xla_flags if flag.partition("=")[0] == name]
+    if not values:
+        raise ValueError(f"{name} is not set")
+    value = values[-1].lower()
+    if value in ("", "true", "1"):
+        return True
+    if value in ("false", "0"):
+        return False
+    raise ValueError(f"{name}={values[-1]} is not a boolean")
 
 
 def verify_ragged_pjrt() -> None:
