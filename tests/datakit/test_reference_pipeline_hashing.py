@@ -27,7 +27,6 @@ from experiments.datakit.reference_pipeline import (
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
-from experiments.datakit.zephyr_benchmark import _route_outputs
 
 
 @pytest.fixture(autouse=True)
@@ -69,12 +68,14 @@ def test_global_exact_dedup_filters_only_the_store():
     assert _depends_on(steps["datakit/store"], exact_dedup)
 
 
-def test_benchmark_routes_every_stage_under_one_prefix():
-    routed = _route_outputs(reference_pipeline.zephyr_datakit_steps(_sources()), "gs://temp/benchmark")
-    steps = [routed.exact_dedup, *routed.tokenize.values(), *routed.minhash.values(), routed.fuzzy_dedup]
+def test_output_prefix_routes_every_step_without_changing_identity():
+    default = _steps_by_name(_build())
+    routed = _steps_by_name(_build(output_prefix="gs://marin-test-region/tmp/ttl=1d/ferry"))
 
-    assert all(step.output_path.startswith("gs://temp/benchmark/") for step in steps)
-    assert routed.fuzzy_dedup.deps == list(routed.minhash.values())
+    assert routed.keys() == default.keys()
+    for name, step in routed.items():
+        assert step.output_path.startswith("gs://marin-test-region/tmp/ttl=1d/ferry/"), name
+        assert step.name_with_hash == default[name].name_with_hash, name
 
 
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
