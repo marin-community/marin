@@ -276,16 +276,18 @@ def development_step(
         build_config=build_config,
         run=remote(
             run_development_evaluation,
-            resources=ResourceConfig.with_gpu("H100", 8, cpu=32, ram="512GB", disk="2TB", target_cluster=CLUSTER),
+            # Remote workers inherit the required CW02 root coordinator; SkyRL and public eval submit separate roots.
+            resources=ResourceConfig.with_gpu("H100", 8, cpu=32, ram="512GB", disk="2TB"),
             pip_packages=[MARIN_SKYRL.requirement()],
         ),
     )
 
 
 def run_adaptive_tasks(config: AdaptiveTasksConfig) -> None:
+    # This remote worker inherits the required CW02 root coordinator.
     remote(
         run_adaptive_tasks_in_project,
-        resources=ResourceConfig.with_cpu(cpu=32, ram="128GB", disk="64GB", target_cluster=CLUSTER),
+        resources=ResourceConfig.with_cpu(cpu=32, ram="128GB", disk="64GB"),
         env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
     )(config)
 
