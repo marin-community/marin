@@ -13,7 +13,7 @@ import pytest
 from config import ClusterTarget
 from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 from server import create_app
 from starlette.testclient import TestClient
@@ -351,17 +351,18 @@ def _in_window(sql: str) -> str:
     return sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
 
 
-def _view_sql(view: str) -> str:
-    dataset = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
+def _view_sql(view: str, endpoint: str) -> str:
+    build = {"/v1/rl/overview": rl_overview_dataset, "/v1/rl/gpu": rl_gpu_dataset}[endpoint]
+    dataset = build((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
     sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
     return f"WITH {sources}\n{dataset.views[view]}"
 
 
 def _panel_sql(title: str) -> str:
     (panel,) = [panel for panel in dashboard_panels(_dashboard()["panels"]) if panel.get("title") == title]
-    (target,) = [target for target in panel["targets"] if target.get("url") == "/v1/rl/overview"]
+    (target,) = [target for target in panel["targets"] if target.get("url") in ("/v1/rl/overview", "/v1/rl/gpu")]
     (view,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "view"]
-    return _view_sql(view)
+    return _view_sql(view, target["url"])
 
 
 def _request_rows(store, path, params):
@@ -376,10 +377,10 @@ def _request_rows(store, path, params):
         return response.json()
 
 
-def _overview_rows(store, view):
+def _overview_rows(store, view, endpoint="/v1/rl/overview"):
     return _request_rows(
         store,
-        "/v1/rl/overview",
+        endpoint,
         {
             "clusters": CLUSTER,
             "run": RUN_ID,
@@ -511,16 +512,77 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store, contende
             }
         ],
     }
+    params = {"clusters": CLUSTER, "run": RUN_ID, "from": _WINDOW_START_MS, "to": _NOW_MS, "bucket_ms": 300000}
+    panels = [
+        panel
+        for panel in dashboard_panels(_dashboard()["panels"])
+        if any(target["url"] == "/v1/rl/gpu" for target in panel.get("targets", []))
+    ]
     for view, wanted in expected.items():
-        actual = _overview_rows(store, view)
         for row in wanted:
             row["section"] = view
-        assert sorted(actual, key=lambda row: (row.get("t", 0), row.get("series", ""))) == sorted(
-            wanted, key=lambda row: (row.get("t", 0), row.get("series", ""))
-        )
+
+    def query(sql, *, max_rows):
+        return store.execute(sql).fetch_arrow_table()
+
+    source = SimpleNamespace(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query)
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    with TestClient(app) as client:
+        for end in (_NOW_MS, _WINDOW_START_MS + 7 * 60 * 60 * 1000):
+            for panel in panels:
+                (target,) = panel["targets"]
+                target_params = {
+                    param["key"]: str(params[param["key"]]) if param["key"] in params else param["value"]
+                    for param in target["url_options"]["params"]
+                }
+                target_params["to"] = str(end)
+                response = client.get(f"/finelog/marin{target['url']}", params=target_params)
+                assert response.status_code == 200, response.text
+                wanted = expected[target_params["view"]]
+                assert sorted(response.json(), key=lambda row: (row.get("t", 0), row.get("series", ""))) == sorted(
+                    wanted, key=lambda row: (row.get("t", 0), row.get("series", ""))
+                )
+
+    overview = _request_rows(store, "/v1/rl/overview", params)
+    assert overview
     store.execute('UPDATE "telemetry_v1.marinskyrl" SET node_name = NULL')
     for view in expected:
-        assert _overview_rows(store, view) == []
+        assert _overview_rows(store, view, "/v1/rl/gpu") == []
+    store.execute('DROP TABLE "telemetry_v1.node_agent"')
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    message = "Zoom to 7h or less for GPU detail."
+    capped = {
+        view: {
+            "section": view,
+            "status": "range_limit",
+            "message": message,
+            **(
+                {"t": _WINDOW_START_MS, "mean_used_bytes": None, "peak_used_bytes": None}
+                if view == "gpu_memory"
+                else (
+                    {"node": message, "gpu": None, "peak_power_watts": None, "pcie_replay_increase": None}
+                    if view == "pcie_faults"
+                    else {"t": _WINDOW_START_MS, "series": message, "value": None}
+                )
+            ),
+        }
+        for view in expected
+    }
+    with TestClient(app, raise_server_exceptions=False) as client:
+        failed = client.get("/finelog/marin/v1/rl/gpu", params=params)
+        assert failed.status_code == 500
+        healthy = client.get("/finelog/marin/v1/rl/overview", params=params)
+        assert healthy.status_code == 200, healthy.text
+        assert sorted(healthy.json(), key=lambda row: json.dumps(row, sort_keys=True)) == sorted(
+            overview, key=lambda row: json.dumps(row, sort_keys=True)
+        )
+        for end in (_WINDOW_START_MS + 7 * 60 * 60 * 1000 + 1, _WINDOW_START_MS + 7 * 24 * 60 * 60 * 1000):
+            for panel in panels:
+                (target,) = panel["targets"]
+                view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
+                response = client.get(f"/finelog/marin{target['url']}", params={**params, "to": end, "view": view})
+                assert response.status_code == 200, response.text
+                assert response.json() == [capped[view]]
 
 
 def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
@@ -600,7 +662,7 @@ def test_every_timeseries_panel_declares_the_columns_its_projection_returns(stor
         if panel.get("type") != "timeseries":
             continue
         for target in panel["targets"]:
-            if target["url"] != "/v1/rl/overview":
+            if target["url"] not in ("/v1/rl/overview", "/v1/rl/gpu"):
                 continue
             declared = {column["selector"]: column["type"] for column in target["columns"]}
             store.execute(_panel_sql(panel["title"]))

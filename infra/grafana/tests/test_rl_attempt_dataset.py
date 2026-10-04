@@ -15,7 +15,7 @@ from config import ClusterTarget
 from conftest import bridge_config, dashboard_panels, install_finelog_dialect_macros
 from dashboard_stitch import stitch_all
 from rl_attempt_observability import _METRIC_NAMES, RL_ATTEMPT_MAX_RESULT_ROWS, rl_attempt_dataset
-from rl_observability import _DCGM_SERIES, rl_overview_dataset
+from rl_observability import _DCGM_SERIES, rl_gpu_dataset, rl_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
 
@@ -687,9 +687,11 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
 
     _long_run_nodes(store, 1)
     overview = rl_overview_dataset((CLUSTER,), RUN_ID, WINDOW_START_MS, WINDOW_START_MS + window_ms, 60000)
-    narrow_counts = {source.name: store.execute(source.sql).fetch_arrow_table().num_rows for source in overview.sources}
+    gpu = rl_gpu_dataset((CLUSTER,), RUN_ID, WINDOW_START_MS, WINDOW_START_MS + 7 * 60 * 60 * 1000, 60000)
+    sources = (*overview.sources, *gpu.sources)
+    narrow_counts = {source.name: store.execute(source.sql).fetch_arrow_table().num_rows for source in sources}
     _long_run_nodes(store, 8)
-    for source in overview.sources:
+    for source in sources:
         rows = store.execute(source.sql).fetch_arrow_table()
         assert 0 < rows.num_rows <= source.max_rows, (source.name, rows.num_rows, source.max_rows)
         assert rows.num_rows == narrow_counts[source.name] + (7 * 8 * 2 if source.name == "gpu" else 0)
@@ -703,6 +705,11 @@ def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
                 "/finelog/marin/v1/rl/overview", params={**long_params, "bucket_ms": 60000, "view": view}
             )
             assert response.status_code == 200, (view, response.text)
+        for view in gpu.views:
+            response = client.get("/finelog/marin/v1/rl/gpu", params={**long_params, "bucket_ms": 60000, "view": view})
+            assert response.status_code == 200, (view, response.text)
+            assert len(response.json()) == 1
+            assert response.json()[0]["status"] == "range_limit"
 
 
 def test_step_composition_closes_on_the_mean_step_and_keeps_attempts_separate(telemetry_table):
