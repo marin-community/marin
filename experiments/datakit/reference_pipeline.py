@@ -153,6 +153,7 @@ from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
 )
+from marin.training.run_environment import dependency_groups_for_resources
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
@@ -225,8 +226,6 @@ TOKENIZER = "marin-community/marin-tokenizer"
 # loader.
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
-# Stable recipe identity for the quality-model files at QUALITY_MODEL.
-QUALITY_MODEL_VERSION = "pooled-junkgate2"
 SPLIT = "train"
 
 DEFAULT_MAX_CONCURRENT = 8
@@ -234,7 +233,7 @@ DEFAULT_MAX_CONCURRENT = 8
 
 @dataclass(frozen=True)
 class TokenizerSpec:
-    """Tokenizer location and content identity for DataKit cache keys."""
+    """Tokenizer location and cache identity, not a revision enforced by the loader."""
 
     name: str
     identity: str
@@ -309,7 +308,23 @@ def coordinator_source_steps(sources: dict[str, StepSpec]) -> dict[str, StepSpec
 
     def place(step: StepSpec) -> StepSpec:
         if id(step) not in placed:
-            fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
+            fn = step.fn
+            if isinstance(fn, RemoteCallable):
+                if fn.env_vars:
+                    raise ValueError(
+                        f"Cannot place source step {step.name!r} on coordinator: remote env_vars are unsupported"
+                    )
+                if fn.pip_packages:
+                    raise ValueError(
+                        f"Cannot place source step {step.name!r} on coordinator: remote pip_packages are unsupported"
+                    )
+                dependency_groups = dependency_groups_for_resources(fn.resources, fn.pip_dependency_groups)
+                if set(dependency_groups) - set(CPU_DATAKIT_DEPENDENCY_GROUPS):
+                    raise ValueError(
+                        f"Cannot place source step {step.name!r} on coordinator: "
+                        "remote dependency groups are unsupported"
+                    )
+                fn = fn.fn
             placed[id(step)] = replace(step, fn=fn, resources=None, deps=[place(dep) for dep in step.deps])
         return placed[id(step)]
 
@@ -960,9 +975,10 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
         output_prefix: Root for every step output, for example a temporary
             prefix below ``MARIN_PREFIX``. ``None`` uses ``MARIN_PREFIX``.
-        driver_placement: Location of source-recipe and lightweight stage drivers. Centroid training remains remote.
         tokenizer: Tokenizer location and stable content identity. Uses the
-            pinned reference tokenizer by default.
+            pinned reference tokenizer by default. Its identity affects DataKit
+            cache keys; it does not enforce the revision loaded by the tokenizer.
+        driver_placement: Location of source-recipe and lightweight stage drivers. Centroid training remains remote.
     """
     if driver_placement is DriverPlacement.COORDINATOR:
         sources = coordinator_source_steps(sources)
@@ -1213,8 +1229,6 @@ def materialize_reference_store(
     quality_model: str,
     quality_model_version: str,
     scale: PipelineScale = DEFAULT_SCALE,
-    zephyr_context: ZephyrContext | None = None,
-    tokenizer: TokenizerSpec | None = None,
     max_concurrent: int = DEFAULT_MAX_CONCURRENT,
 ) -> ClusteredStoreData:
     """Run the reference DataKit DAG and return its clustered store."""
@@ -1223,8 +1237,6 @@ def materialize_reference_store(
         quality_model=quality_model,
         quality_model_version=quality_model_version,
         scale=scale,
-        zephyr_context=zephyr_context,
-        tokenizer=tokenizer,
     )
     StepRunner().run(datakit.all_steps, max_concurrent=max_concurrent)
     return read_artifact(datakit.output_buckets.output_path, ClusteredStoreData)

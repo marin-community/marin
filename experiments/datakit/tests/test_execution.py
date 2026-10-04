@@ -181,3 +181,27 @@ def test_coordinator_drivers_preserve_caches_without_source_jobs(tmp_path, share
     run_steps_in_pool([heavy], pool=pool, max_concurrent=4)
     assert submitted == []
     assert [Path(source.output_path, "value.txt").read_text() for source in sources] == ["0", "1", "4", "9"]
+
+
+@pytest.mark.parametrize(
+    ("config_name", "remote_options", "resources"),
+    [
+        ("env_vars", {"env_vars": {"PROBE_SECRET": "do-not-report"}}, ResourceConfig(cpu=1)),
+        ("pip_packages", {"pip_packages": ["probe-package"]}, ResourceConfig(cpu=1)),
+        ("dependency groups", {"pip_dependency_groups": ["gpu"]}, ResourceConfig(cpu=1)),
+        ("dependency groups", {}, ResourceConfig.with_gpu("H100", count=1)),
+    ],
+)
+def test_coordinator_source_steps_rejects_remote_settings_that_would_be_dropped(config_name, remote_options, resources):
+    step = StepSpec(
+        name="source-step",
+        fn=remote(lambda output_path: None, resources=resources, **remote_options),
+    )
+
+    with pytest.raises(ValueError) as error:
+        coordinator_source_steps({"source": step})
+
+    message = str(error.value)
+    assert "source-step" in message
+    assert config_name in message
+    assert "do-not-report" not in message
