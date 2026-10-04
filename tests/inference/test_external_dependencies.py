@@ -183,19 +183,31 @@ def test_stage_gpu_candidate_rejects_a_promoted_release(tmp_path, monkeypatch):
     assert pin.read_text() == 'release_tag = "keep-me"\n'
 
 
-def test_stage_gpu_candidate_moved_tip_preserves_the_current_pin(tmp_path, monkeypatch, gpu_pin_workspace):
+@pytest.mark.parametrize("invalid_metadata", ["moved-tip", "stale-digests"])
+def test_stage_gpu_candidate_rejection_preserves_pin_and_generated_dependencies(
+    tmp_path, monkeypatch, gpu_pin_workspace, invalid_metadata
+):
     update_external, pin, generated = gpu_pin_workspace
     original = update_external.render_gpu_release_toml(_promoted_manifest())
     pin.write_text(original)
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(_staged_candidate_manifest()))
+    manifest = _staged_candidate_manifest()
+    published = _published_candidate(manifest)
+    tip = "a" * 40
+    if invalid_metadata == "moved-tip":
+        tip = "c" * 40
+    else:
+        published["assets"][1]["digest"] = "sha256:" + "f" * 64
     monkeypatch.setattr(
         update_external.subprocess,
         "run",
-        lambda args, **kwargs: update_external.subprocess.CompletedProcess(args, 0, stdout=f"{'c' * 40}\n", stderr=""),
+        lambda args, **kwargs: update_external.subprocess.CompletedProcess(
+            args, 0, stdout=(f"{tip}\n" if "--jq" in args else json.dumps(published)), stderr=""
+        ),
     )
-
-    with pytest.raises(ValueError, match="is not the current main-next tip"):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    failure = "is not the current main-next tip" if invalid_metadata == "moved-tip" else "metadata no longer matches"
+    with pytest.raises(ValueError, match=failure):
         update_external.stage_gpu_candidate(manifest_path)
     assert pin.read_text() == original
     assert generated.read_text() == "# previous generated pins\n"
@@ -306,32 +318,5 @@ def test_gpu_manifest_generation_failure_preserves_the_existing_pin(tmp_path, mo
     manifest_path.write_text(json.dumps(_promoted_manifest()))
     with pytest.raises(FileNotFoundError):
         update_external.promote_gpu_release(manifest_path)
-    assert pin.read_text() == original
-    assert generated.read_text() == "# previous generated pins\n"
-
-
-def test_stage_gpu_candidate_stale_metadata_preserves_pin_and_generated_dependencies(
-    tmp_path, monkeypatch, gpu_pin_workspace
-):
-    update_external, pin, generated = gpu_pin_workspace
-    original = update_external.render_gpu_release_toml(_promoted_manifest())
-    pin.write_text(original)
-    manifest = _staged_candidate_manifest()
-    published = _published_candidate(manifest)
-    published["assets"][1]["digest"] = "sha256:" + "f" * 64
-    monkeypatch.setattr(
-        update_external.subprocess,
-        "run",
-        lambda args, **kwargs: update_external.subprocess.CompletedProcess(
-            args,
-            0,
-            stdout=(f"{'a' * 40}\n" if "--jq" in args else json.dumps(published)),
-            stderr="",
-        ),
-    )
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match="metadata no longer matches"):
-        update_external.stage_gpu_candidate(manifest_path)
     assert pin.read_text() == original
     assert generated.read_text() == "# previous generated pins\n"

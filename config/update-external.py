@@ -576,12 +576,15 @@ def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_r
     )
 
 
-def _gpu_artifact_identity(
-    release: VllmGpuRelease,
-) -> tuple[str, str, str, str, tuple[tuple[str, tuple[str, ...], str], ...]]:
+def _gpu_artifact_identity(release: VllmGpuRelease) -> dict[str, object]:
     """Identify the source and wheel bytes that crossed the GPU gates."""
-    wheels = tuple(sorted((wheel.architecture, wheel.sm_targets, wheel.sha256) for wheel in release.wheels))
-    return release.source_commit, release.version, release.torch_backend, release.torch_version, wheels
+    return {
+        "source_commit": release.source_commit,
+        "version": release.version,
+        "torch_backend": release.torch_backend,
+        "torch_version": release.torch_version,
+        "wheels": {wheel.architecture: (wheel.sm_targets, wheel.sha256) for wheel in release.wheels},
+    }
 
 
 def _install_gpu_manifest(

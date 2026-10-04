@@ -105,11 +105,12 @@ gh workflow run marin-gpu-release.yaml \
 on `main-next`, audit the CUDA, Torch, and stable-extension boundaries, then
 build and qualify the exact candidate:
 
-Land the workflow repair and updater first. Carry the repaired vLLM workflows
-and release helpers onto the proposed source before freezing its SHA and
+Land the candidate workflow's `stage` mode, the release workflow's qualification
+and reuse modes, and Marin's `--stage-gpu-candidate` updater first. Carry those
+vLLM workflows and release helpers onto the proposed source before freezing its SHA and
 building it. The eventual exact source swap must retain that publication code.
 The serving owner supplies the full source SHA, candidate manifest and both
-wheel digests; it also owns the unchanged model qualification scope.
+wheel digests; it also owns the model qualification scope.
 
 ```sh
 gh workflow run marin-gpu-candidate.yaml \
@@ -188,8 +189,8 @@ validation.
   manifest must name both source SHAs, the workflow SHA, and both wheel hashes;
   its qualification record must name that exact candidate tag.
 - `tests/cluster/vllm/test_snowball_backend_parity.py` is the GPU model parity
-  gate. Run it with `-m cluster -o addopts= --import-mode=importlib`; pair it
-  with the fork release workflow's H100 serve smoke.
+  gate. Run it with `-m cluster -o addopts= --import-mode=importlib`; require
+  both H100 and GB200 qualification results from the fork release workflow.
 
 ```sh
 uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
