@@ -543,3 +543,64 @@ guide](../../../infra/pulumi/README.md) for infrastructure, and
 - [`composer.py`](../src/iris/cluster/composer.py) — config-to-backend wiring.
 - [`infra/pulumi/src/iac/coreweave/cluster.py`](../../../infra/pulumi/src/iac/coreweave/cluster.py)
   — Pulumi ownership of CoreWeave prerequisites.
+
+### Node storage health
+
+Opt in per cluster with a dedicated scratch prefix in the **same regional S3
+store as the tasks**. Set a bucket lifecycle expiry on this prefix so a node
+that times out and never returns cannot leave its small probe object forever.
+No live configuration enables this automatically.
+
+```yaml
+kubernetes_provider:
+  storage_health:
+    scratch_prefix: s3://REGIONAL-BUCKET/iris-node-health
+    interval: 60
+    timeout: 15
+    failure_threshold: 3
+    max_cordoned_nodes: 1
+    minimum_healthy_peers: 2
+```
+
+Durations are seconds. Each node-agent writes, reads, compares, and deletes a
+23-byte object at `<scratch_prefix>/<node UID>/<boot ID>`. The next probe reuses
+that key after a timeout. The deadline covers the entire subprocess, including
+DNS, credentials, SDK retries, and cleanup. Successful and configuration-error
+probes reset the consecutive-failure count. Read/write/delete permissions are
+required. Agents receive the same task environment Secret and cluster literals
+as tasks; individual job environment overrides are outside this check. Deployment
+injects an `environment_revision` derived from the Secret UID/resource version
+and task literals. Credential or endpoint changes roll the agents, and old
+reports cannot corroborate probes from the new environment. Do not set this
+revision by hand; it contains no Secret values.
+
+Agents report on `iris.marin.community/storage-health`, independently of
+Finelog. Failures also appear in node-agent logs, without SDK exception bodies
+or credentials. The controller cordons an outlier only after the configured
+failure threshold, while a majority of Kubernetes nodes (at least
+`minimum_healthy_peers`) have fresh successful probes of the same configured
+target that began after the failure started. Missing reports, changed node UID
+or boot ID, and old reports cannot corroborate a cordon. Broad storage or
+credential failures leave failed health reports for investigation without
+cordoning the fleet. Set `max_cordoned_nodes: 0` for observation only.
+
+The controller writes `spec.unschedulable=true` and records the supporting
+report in `iris.marin.community/storage-health-cordon`. It does not evict tasks,
+restart gangs, or automatically uncordon recovered nodes. An existing operator
+cordon stays untouched. The shared controller/node-agent service account needs
+`patch` on Nodes in addition to its existing read permissions. Cordons can
+reduce topology-constrained gang capacity; inspect rack capacity before
+restarting a job.
+
+The cluster-wide budget counts cordon annotations even after a manual uncordon
+and survives controller restarts. After repairing a node and confirming fresh
+successful probes, explicitly uncordon it and remove its annotation to release
+the budget:
+
+```bash
+kubectl uncordon NODE
+kubectl annotate node NODE iris.marin.community/storage-health-cordon-
+```
+
+Do not release the budget during an unresolved shared storage outage. Current
+health and provenance remain inspectable with `kubectl get node NODE -o json`.
