@@ -127,7 +127,8 @@ def main(config_uri: str, config_sha256: str) -> ArtifactStep[Artifact]:
     if not config["manifest_prefix"].startswith(("gs://", "s3://")):
         raise click.UsageError("The loop requires an explicit regional object-storage manifest prefix")
     return ArtifactStep(
-        name="documents/russell-rsi-bootstrap-loop",
+        # The cache uses name and version. Each reviewed config must execute the coordinator.
+        name=f"documents/russell-rsi-bootstrap-loop-{config_sha256}",
         version=version,
         artifact_type=Artifact,
         build_config=lambda ctx: config,

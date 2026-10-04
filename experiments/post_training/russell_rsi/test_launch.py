@@ -19,6 +19,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle
 
 from experiments.post_training.russell_rsi import launch as russell_launch
+from experiments.post_training.russell_rsi import launch_bootstrap_loop
 from experiments.post_training.russell_rsi.bootstrap_loop import (
     CheckpointScore,
     LoopState,
@@ -40,7 +41,47 @@ from experiments.post_training.russell_rsi.launch import (
     repair_spike_workflow,
     spike_workflow,
 )
+from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV, IRIS_TASK_ID_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
+
+
+def test_coordinator_submits_new_config_and_reuses_identical_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    monkeypatch.setenv(IRIS_TASK_ID_ENV, "/test/coordinator/0")
+    monkeypatch.setenv(GLM_TOKEN_ENV, "test-token")
+    submissions = tmp_path / "submissions.jsonl"
+
+    def remote_submission(function, **kwargs):
+        def submit(config):
+            with submissions.open("a") as stream:
+                stream.write(json.dumps(config) + "\n")
+
+        return submit
+
+    monkeypatch.setattr(launch_bootstrap_loop, "remote", remote_submission)
+    initial = {
+        "version": "2026.10.04.5",
+        "manifest_prefix": "s3://test/immutable-rounds",
+        "reviewed_banks": {},
+    }
+    reviewed = {**initial, "reviewed_banks": {"1": {}}}
+    for index, config in enumerate((initial, reviewed, reviewed)):
+        source = tmp_path / f"config-{index}.json"
+        source.write_text(json.dumps(config) + "\n")
+        result = CliRunner().invoke(
+            launch_bootstrap_loop.main,
+            [
+                "--config-uri",
+                str(source),
+                "--config-sha256",
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+                "--version",
+                config["version"],
+                "--run",
+            ],
+        )
+        assert result.exit_code == 0, result.output + str(result.exception)
+    assert [json.loads(line) for line in submissions.read_text().splitlines()] == [initial, reviewed]
 
 
 def test_spike_retains_frozen_development_and_checks_rewards_before_policy_allocation():
