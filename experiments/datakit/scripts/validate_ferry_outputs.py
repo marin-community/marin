@@ -11,8 +11,9 @@ artifact paths are stored relative to it.
 Checks the persisted output invariants:
   download (14 files, ~9.7M rows)
   → normalize (106 files under outputs/main, ~9.3M rows)
-  → store (every normalized record enters the store; the store keeps fewer
-    records than it reads, and its buckets hold exactly the records it keeps)
+  → store (every normalized record enters the store, fuzzy dedup removes some
+    of them, and the finished leaf caches of its buckets hold exactly the
+    records it keeps)
 
 Successful ferry completion covers the reference stages between normalize and
 the store, which each write their own report under ``datakit/report``.
@@ -21,11 +22,13 @@ the store, which each write their own report under ``datakit/report``.
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow.parquet as pq
+from levanter.store.cache import CacheLedger
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.store.datakit_store import ClusteredStoreData
@@ -43,6 +46,7 @@ NORMALIZE_REQUIRED_COLUMNS = frozenset({"id", "text", "url", "source_id", "token
 
 # --- Store: duplicate and contamination filters drop some records, never most ---
 STORE_DROP_MAX_FRACTION = 0.50
+LEDGER_READ_THREADS = 32
 
 
 def _list_parquet(path: str) -> list[str]:
@@ -112,6 +116,26 @@ def _validate_normalize(base: str, download_rows: int) -> int:
     return rows
 
 
+def _bucket_records(bucket_path: str) -> int:
+    """Return the records in a bucket after checking each leaf cache's own ledger."""
+    ledger = CacheLedger.load(bucket_path)
+    if not ledger.is_finished:
+        raise SystemExit(f"Store: bucket ledger not finished: {bucket_path}")
+
+    def leaf_rows(shard: str) -> int:
+        leaf = CacheLedger.load(prefix_join(bucket_path, shard))
+        if not leaf.is_finished:
+            raise SystemExit(f"Store: leaf cache not finished: {bucket_path}/{shard}")
+        return leaf.total_num_rows
+
+    shards = sorted(ledger.shard_rows)
+    with ThreadPoolExecutor(LEDGER_READ_THREADS) as pool:
+        rows = dict(zip(shards, pool.map(leaf_rows, shards), strict=True))
+    if rows != ledger.shard_rows:
+        raise SystemExit(f"Store: leaf cache rows differ from the bucket ledger in {bucket_path}")
+    return ledger.total_num_rows
+
+
 def _validate_store(base: str, normalize_rows: int) -> int:
     store_dirs = [str(m) for m in StoragePath(f"{base}/datakit/store_*").glob()]
     if len(store_dirs) != 1:
@@ -128,11 +152,12 @@ def _validate_store(base: str, normalize_rows: int) -> int:
     if dropped_fraction > STORE_DROP_MAX_FRACTION:
         raise SystemExit(f"Store: dropped {dropped_fraction:.1%} of records (max {STORE_DROP_MAX_FRACTION:.0%})")
 
-    bucket_records = sum(bucket.total_elements for bucket in store.buckets)
+    if int(store.counters["datakit_store/fuzzy_duplicate_dropped"]) <= 0:
+        raise SystemExit("Store: fuzzy dedup removed no records")
+
+    bucket_records = sum(_bucket_records(bucket.path) for bucket in store.buckets)
     if bucket_records != records_out:
-        raise SystemExit(f"Store: buckets hold {bucket_records} records, store kept {records_out}")
-    if not all(bucket.total_tokens > 0 for bucket in store.buckets):
-        raise SystemExit("Store: a bucket has no tokens")
+        raise SystemExit(f"Store: bucket caches hold {bucket_records} records, store kept {records_out}")
 
     logger.info(
         "Store OK: %d records in %d buckets (%.2f%% dropped: %d fuzzy, %d exact, %d contaminated)",

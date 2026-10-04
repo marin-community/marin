@@ -6,23 +6,24 @@ import pytest
 from scripts.ci import collect_perf_metrics
 
 
-def _line(step: str, elapsed: str) -> str:
-    return f"I20261003 07:57:03 140387406554816 marin.execution.step_runner Step {step} succeeded in {elapsed}"
+def _line(text: str) -> str:
+    return f"I20261003 07:57:03 140387406554816 marin.execution.step_runner {text}"
 
 
-def test_stage_wall_seconds_sums_steps_per_stage_and_flags_missing_stages():
+def test_stage_wall_seconds_sums_steps_and_separates_cached_from_missing_stages():
     lines = [
-        _line("datakit-smoke/normalize_01f7b77e", "0:09:00.554201"),
-        _line("datakit/quality/a_7b16eabf", "1:00:00"),
-        _line("datakit/quality/b_1d2c3b4a", "0:30:00.5"),
-        "I20261003 07:43:22 1 marin.execution.step_runner Step = datakit/minhash/a_e6985ee7\tParams = {}",
-        "I20261003 07:43:22 1 marin.execution.step_runner Skip datakit/dedup_4bfbdbb1: already succeeded",
+        _line("Step datakit-smoke/normalize_01f7b77e succeeded in 0:09:00.554201"),
+        _line("Step datakit/quality/a_7b16eabf succeeded in 1:00:00"),
+        _line("Step datakit/quality/b_1d2c3b4a succeeded in 0:30:00.5"),
+        _line("Step = datakit/minhash/a_e6985ee7\tParams = {}"),
+        _line("Step failed: datakit/minhash/a_e6985ee7 (status=FAILED)"),
+        _line("Skip datakit/dedup_4bfbdbb1: already succeeded"),
     ]
 
     durations, cached = collect_perf_metrics.compute_stage_wall_seconds(lines)
 
     assert durations["normalize"] == pytest.approx(540.554201)
     assert durations["quality"] == pytest.approx(5400.5)
-    assert "minhash" in cached and durations["minhash"] == 0.0
-    assert "dedup" in cached
-    assert "normalize" not in cached
+    assert cached == ["dedup"]
+    assert durations["dedup"] == 0.0
+    assert "minhash" not in durations

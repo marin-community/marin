@@ -47,6 +47,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # only per-stage clock.
 _STEP_RUNNER_LOGGER = "marin.execution.step_runner"
 _STEP_SUCCEEDED = re.compile(r"Step (?P<name>\S+)_[0-9a-f]{8} succeeded in (?P<elapsed>\d+:\d{2}:\d{2}(?:\.\d+)?)")
+_STEP_SKIPPED = re.compile(r"Skip (?P<name>\S+)_[0-9a-f]{8}: already succeeded")
 _DRIVER_LOG_MAX_LINES = 10_000
 
 # Non-fatal warning if any of these stages is missing from the parsed durations.
@@ -315,19 +316,20 @@ def compute_stage_wall_seconds(step_lines: list[str]) -> tuple[dict[str, float],
 
     A stage with several steps (one per source, or several reports) sums them, so
     the value is busy time, not the stage's critical path. Returns
-    ``(stage_wall_seconds, cached_steps)``. Stages in ``EXPECTED_STEPS`` with no
-    completed step are reported with ``0.0`` and added to ``cached_steps``: the
-    runner skips a step only when its output already exists.
+    ``(stage_wall_seconds, cached_steps)``. A stage whose steps the runner only
+    skipped as already succeeded is reported with ``0.0`` in ``cached_steps``.
+    A stage with no line at all is left out.
     """
     durations: dict[str, float] = {}
+    skipped: set[str] = set()
     for line in step_lines:
-        match = _STEP_SUCCEEDED.search(line)
-        if match is None:
-            continue
-        stage = _stage(match["name"])
-        durations[stage] = durations.get(stage, 0.0) + _seconds(match["elapsed"])
+        if match := _STEP_SUCCEEDED.search(line):
+            stage = _stage(match["name"])
+            durations[stage] = durations.get(stage, 0.0) + _seconds(match["elapsed"])
+        elif match := _STEP_SKIPPED.search(line):
+            skipped.add(_stage(match["name"]))
 
-    cached_steps = sorted(s for s in EXPECTED_STEPS if s not in durations)
+    cached_steps = sorted(skipped - durations.keys())
     for s in cached_steps:
         durations[s] = 0.0
     return durations, cached_steps
@@ -466,7 +468,10 @@ def build_report(
     if step_lines is not None:
         report.stage_wall_seconds, report.cached_steps = compute_stage_wall_seconds(step_lines)
         if all(report.stage_wall_seconds.get(s, 0.0) == 0.0 for s in EXPECTED_STEPS):
-            report.warnings.append("all expected steps cache-hit; pipeline may not have done any work")
+            report.warnings.append("no expected step ran; pipeline may not have done any work")
+        missing = [s for s in EXPECTED_STEPS if s not in report.stage_wall_seconds]
+        if missing:
+            report.warnings.append(f"expected steps neither ran nor were cached: {', '.join(missing)}")
     else:
         report.warnings.append("driver step log unavailable; stage_wall_seconds empty")
 

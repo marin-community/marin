@@ -71,4 +71,3 @@ def sample_rows(directory: str, columns: list[str], limit: int) -> list[dict]:
         if len(out) >= limit:
             break
     return out
-    return out
