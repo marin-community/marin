@@ -7,7 +7,7 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Semantic task contracts, submission extraction, and shared grading"
 requires-python = ">=3.12,<3.14"
-dependencies = ["marin-rigging>=0.2.135.dev36906221286", "pyarrow>=17", "pydantic>=2.0", "verifyit[answer,judge,reasoning-gym,schema]", "marin-shellbox"]
+dependencies = ["marin-rigging>=0.2.139.dev37117265303", "pyarrow>=17", "pydantic>=2.0", "verifyit[answer,judge,reasoning-gym,schema]", "marin-shellbox"]
 
 [project.optional-dependencies]
 pipeline = ["datasets>=3.1.0,<5.0.0", "marin-zephyr", "marin-finestore", "numpy>=1.26"]
