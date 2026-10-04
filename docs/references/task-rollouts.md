@@ -6,14 +6,16 @@ TaskCompendium defines executable tasks. The `marin-rolloutengine` package owns 
 
 ## Task format
 
-`taskcompendium.parquet.write_tasks(path, tasks)` writes a Parquet file with one
-`task_spec` string column. Each value is a serialized `TaskSpec`.
-`read_tasks(path)` reads bounded batches and validates the task schema.
-Paths use Rigging's guarded filesystem access, including transfer budgets and
-backend timeouts.
+`TaskSpec.model_dump_json()` serializes a task.
+`TaskSpec.model_validate_json()` validates a serialized task.
+TaskCompendium and the rollout engine do not select a dataset file format.
+SkyRL converts source rows through Hugging Face `Dataset.map` without an
+intermediate Parquet file. The prepared dataset stays in memory.
+Explicit SkyRL exports and Harbor caches use a
+`task_spec` string column with one serialized task per row.
 
-The Parquet file contains private grading inputs. The model request contains the
-public conversation, submission instructions, and tool definitions.
+The serialized task contains private grading inputs. The model request contains
+the public conversation, submission instructions, and tool definitions.
 
 | Field | Execution contract |
 | --- | --- |
