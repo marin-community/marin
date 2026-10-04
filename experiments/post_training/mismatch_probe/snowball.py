@@ -30,7 +30,7 @@ from mergedeep import merge
 
 from experiments.post_training.async_rl import GPUS_PER_NODE, SNOWBALL_RECIPE
 from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY, SNOWBALL_SFT_EXPORT_URI
-from experiments.post_training.mismatch_probe.launch import NUMERICS_MODES, REPLAY_MODES, ProbeSettings, probe_block
+from experiments.post_training.mismatch_probe.launch import REPLAY_MODES, ProbeSettings, probe_block
 
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 HELDOUT_DATA_URI = (
@@ -89,7 +89,7 @@ def snowball_recipe(
         replace(SNOWBALL_RECIPE.megatron, expert_model_parallel_size=1) if model_slice else SNOWBALL_RECIPE.megatron
     )
     if campaign is Campaign.MISMATCH:
-        modes = (*NUMERICS_MODES, *extra_modes)
+        modes = ("router_replay", *extra_modes)
     elif campaign is Campaign.DRIFT:
         modes = ("native_again", *extra_modes)
     else:
@@ -102,7 +102,14 @@ def snowball_recipe(
         timing_modes=timing_modes,
         train_numerics=train_numerics,
     )
-    probe["generator"]["sampling_params"]["seed"] = settings.seed
+    if campaign is Campaign.MISMATCH:
+        if settings.prompt_offset or capture_layers or timing_modes or train_numerics:
+            raise ValueError("the startup benchmark uses the default prompt range and current probe modes")
+        mismatch = probe["trainer"]["mismatch_probe"]
+        mismatch["prompts"].pop("offset")
+        mismatch["updates"] = max(mismatch.pop("score_after_updates"))
+        for field in ("reread_again", "capture_layers", "timing_modes", "train_numerics"):
+            mismatch.pop(field)
     config = {
         "entrypoint": "standard",
         "context_budget": {
@@ -145,7 +152,11 @@ def snowball_recipe(
                 },
                 "megatron_config": {
                     **asdict(megatron),
-                    **({"moe_router_replay_keep_fraction": settings.keep_fraction} if routing is Routing.FILTERED else {}),
+                    **(
+                        {"moe_router_replay_keep_fraction": settings.keep_fraction}
+                        if routing is Routing.FILTERED
+                        else {}
+                    ),
                 },
             },
             "ref": {"megatron_config": asdict(megatron)},
