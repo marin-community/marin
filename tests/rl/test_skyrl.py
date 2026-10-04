@@ -165,20 +165,16 @@ def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
 
 
 def test_skyrl_launch_preserves_online_draft_checkpoint_root() -> None:
+    document = _recipe().to_skyrl()
+    document["generator"]["speculative_decoding"] = SpeculativeDecoding(
+        method="eagle3",
+        model=Model(source_uri="hf://test/draft", source_identity="0" * 40),
+        num_speculative_tokens=3,
+        training=Training(),
+    ).to_skyrl()
     spec = dataclasses.replace(
         _spec(),
-        recipe=_recipe().merge(
-            RecipePatch(
-                generator=Generator(
-                    speculative_decoding=SpeculativeDecoding(
-                        method="eagle3",
-                        model=Model(source_uri="hf://test/draft", source_identity="0" * 40),
-                        num_speculative_tokens=3,
-                        training=Training(),
-                    )
-                )
-            )
-        ),
+        recipe=SkyRLRecipe.from_document(document),
     )
     step = skyrl_step(spec, _execution())
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))

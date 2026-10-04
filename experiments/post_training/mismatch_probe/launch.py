@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from typing import get_args
 
@@ -125,18 +126,20 @@ def main(
     data: ArtifactStep[Artifact] = ArtifactStep.adopt(
         user_owned_name("documents/iceball-micro-gsm8k-skyrl"), input_version, data_uri
     )
-    settings = MismatchProbe.from_document(
-        {
-            "enabled": True,
-            "prompts": {"count": prompt_count, "samples_per_prompt": samples_per_prompt},
-            "seed": seed,
-            "archive_uri": None,
-            "reuse_probe": reuse_probe,
-            "updates": updates,
-            "extra_trainer_modes": extra_trainer_modes,
-            "filtered_replay": {"keep_fraction": keep_fraction},
-            "rescore_prefix_cache": cache_mode,
-        }
+    settings = MismatchProbe.model_validate_json(
+        json.dumps(
+            {
+                "enabled": True,
+                "prompts": {"count": prompt_count, "samples_per_prompt": samples_per_prompt},
+                "seed": seed,
+                "archive_uri": None,
+                "reuse_probe": reuse_probe,
+                "updates": updates,
+                "extra_trainer_modes": extra_trainer_modes,
+                "filtered_replay": {"keep_fraction": keep_fraction},
+                "rescore_prefix_cache": cache_mode,
+            }
+        )
     )
     spec = iceball_rl_spec(model, data)
     spec = replace(spec, recipe=spec.recipe.merge(ICEBALL_PROBE_RECIPE))

@@ -159,9 +159,9 @@ writing. Use `--schema-source /path/to/MarinSkyRL` when the uv Git cache has no 
 
 Marin format, license and type-file checks exclude copied source; callers remain type checked.
 The commit-and-hash check owns the copy. Bot updates admit only the copied inventory and provenance
-alongside the project lock and generated pins. M0 builds every supported producer configuration
-and loads each document with the installed pin. A breaking pin migration is a human PR that changes
-the pin, copy and producers together.
+alongside the project lock and generated pins. The required unit-test launch-document check builds
+every supported producer configuration and loads each document with the installed pin. A breaking
+pin migration is a human PR that changes the pin, copy and producers together.
 
 ## Artifact and runtime boundaries
 

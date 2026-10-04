@@ -102,30 +102,33 @@ ANSWERS_PER_PROMPT = 4
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
 
 
-SNOWBALL_RECIPE = RecipePatch.combine(
-    resources=RecipePatch(
-        trainer=Trainer(
-            placement=Placement(
-                colocate_all=False,
-                colocate_policy_ref=True,
-                policy_num_nodes=4,
-                policy_num_gpus_per_node=GPUS_PER_NODE,
-                ref_num_nodes=4,
-                ref_num_gpus_per_node=GPUS_PER_NODE,
-            ),
-            train_batch_size=PROMPTS_PER_UPDATE,
-            policy_mini_batch_size=PROMPTS_PER_UPDATE,
-            micro_train_batch_size_per_gpu=1,
+SNOWBALL_RESOURCES = RecipePatch(
+    trainer=Trainer(
+        placement=Placement(
+            colocate_all=False,
+            colocate_policy_ref=True,
+            policy_num_nodes=4,
+            policy_num_gpus_per_node=GPUS_PER_NODE,
+            ref_num_nodes=4,
+            ref_num_gpus_per_node=GPUS_PER_NODE,
         ),
-        generator=Generator(
-            num_inference_engines=1,
-            inference_engine_tensor_parallel_size=1,
-            inference_engine_pipeline_parallel_size=1,
-            inference_engine_data_parallel_size=GPUS_PER_NODE,
-            inference_engine_expert_parallel_size=GPUS_PER_NODE,
-            n_samples_per_prompt=ANSWERS_PER_PROMPT,
-        ),
+        train_batch_size=PROMPTS_PER_UPDATE,
+        policy_mini_batch_size=PROMPTS_PER_UPDATE,
+        micro_train_batch_size_per_gpu=1,
     ),
+    generator=Generator(
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
+        n_samples_per_prompt=ANSWERS_PER_PROMPT,
+    ),
+)
+
+
+SNOWBALL_RECIPE = RecipePatch.combine(
+    resources=SNOWBALL_RESOURCES,
     policy=RecipePatch(
         entrypoint=RLEntrypoint.STANDARD,
         trainer=Trainer(
@@ -297,7 +300,17 @@ def training_recipe(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
             hf_save_interval=lcm(trainer.max_steps, interval),
         )
     )
-    recipe = SkyRLRecipe.combine(recipe=recipe, policy=SNOWBALL_RECIPE, checkpoint_schedule=computed)
+    recipe = SkyRLRecipe.combine(
+        recipe=recipe,
+        resources=SNOWBALL_RESOURCES,
+        launch_policy=RecipePatch(
+            entrypoint=RLEntrypoint.STANDARD,
+            trainer=Trainer(resume_mode="latest"),
+            generator=Generator(run_engines_locally=True),
+            data=Data(kind="parquet", train_data=(), val_data=()),
+        ),
+        checkpoint_schedule=computed,
+    )
     budget = recipe.context_budget
     if MAX_PROMPT_TOKENS > budget.request_window_tokens - budget.max_new_tokens_per_turn:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")

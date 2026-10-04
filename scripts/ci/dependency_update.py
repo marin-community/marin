@@ -224,20 +224,24 @@ def required_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
     return tuple(CheckRow.from_json(row) for row in rows)
 
 
-def changed_worktree_files() -> tuple[str, ...]:
+def changed_worktree_files(policy: PullRequestPolicy) -> tuple[str, ...]:
     result = subprocess.run(
         ["git", "diff", "--name-only"],
         check=True,
         capture_output=True,
         text=True,
     )
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return tuple(sorted(set(result.stdout.splitlines()) | set(untracked.stdout.splitlines())))
+    files = set(result.stdout.splitlines())
+    if policy.copied_inventory is not None:
+        prefix = policy.copied_inventory.removesuffix(".provenance.json")
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "--", prefix, policy.copied_inventory],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        files.update(untracked.stdout.splitlines())
+    return tuple(sorted(files))
 
 
 def prepare_update_branch(*, policy: PullRequestPolicy, repository: str) -> UpdateBranch:
@@ -299,7 +303,7 @@ def prepare_update_branch(*, policy: PullRequestPolicy, repository: str) -> Upda
 
 def commit_update(policy: PullRequestPolicy) -> str:
     """Commit the allowlisted generator output and return its SHA."""
-    changed_files = validate_changed_files(changed_worktree_files(), policy=policy)
+    changed_files = validate_changed_files(changed_worktree_files(policy), policy=policy)
     if not changed_files:
         raise ValueError("dependency update has no changed files to publish")
     subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
@@ -520,7 +524,7 @@ def main() -> None:
             parser.error("--project applies only to external-runtime updates")
         policy = NATIVE_PACKAGE_POLICY
     if args.command == "changed-files":
-        print("\n".join(validate_changed_files(changed_worktree_files(), policy=policy)))
+        print("\n".join(validate_changed_files(changed_worktree_files(policy), policy=policy)))
         return
     if args.command == "prepare":
         branch = prepare_update_branch(policy=policy, repository=args.repository)

@@ -40,7 +40,7 @@ jobs:
       run: uv sync --all-packages --extra=cpu --no-default-groups --frozen
 
     - name: Resolve the pinned recipe source
-      run: uv lock --project config/external/MarinSkyRL --locked
+      run: uv lock --project config/external/MarinSkyRL --locked --refresh-package marinskyrl
 
     - name: Run pre-commit checks
       run: ./infra/pre-commit.py --all-files
