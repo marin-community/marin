@@ -284,19 +284,17 @@ async def _file_grade(
             Outcome.GRADED,
             reward,
             passed=None if specification.pass_above is None else reward > specification.pass_above,
-            diagnostics={
-                **diagnostics,
-                "rewards": (
-                    {
-                        key: float(value)
-                        for key, value in values.items()
-                        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-                    }
-                    | {file.key: reward}
-                    if isinstance(values, dict)
-                    else {"reward": reward}
-                ),
-            },
+            diagnostics=diagnostics,
+            rewards=(
+                {
+                    key: float(value)
+                    for key, value in values.items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+                }
+                | {file.key: reward}
+                if isinstance(values, dict)
+                else {"reward": reward}
+            ),
         )
     return GradeResult(
         Outcome.INFRA_ERROR,
@@ -331,8 +329,8 @@ def _combined_stage_grade(grades: list[GradeResult], strategy: StageRewardStrate
     if not valid:
         return final
     reward = sum(value for _, value in valid) / len(valid)
-    components = [grade.diagnostics.get("rewards", {"reward": value}) for grade, value in valid]
+    components = [grade.rewards or {"reward": value} for grade, value in valid]
     rewards = {key: sum(values.get(key, 0.0) for values in components) / len(valid) for key in set().union(*components)}
     pass_results = [grade.passed for grade, _ in valid]
     passed = all(pass_results) if all(result is not None for result in pass_results) else None
-    return GradeResult(Outcome.GRADED, reward, passed=passed, diagnostics={"rewards": rewards})
+    return GradeResult(Outcome.GRADED, reward, passed=passed, rewards=rewards)

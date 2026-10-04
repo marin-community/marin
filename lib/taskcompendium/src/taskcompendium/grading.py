@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Extract TaskCompendium submission evidence for shared pure candidate graders."""
+"""Verifier validation, grading records, and pure candidate grading."""
 
 import json
 from dataclasses import dataclass, field
@@ -60,6 +60,7 @@ class GradeResult:
     failure: GradingFailure | None = None
     score_min: float = 0.0
     score_max: float = 1.0
+    rewards: dict[str, float] = field(default_factory=dict)
 
 
 def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
