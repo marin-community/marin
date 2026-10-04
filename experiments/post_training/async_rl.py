@@ -85,8 +85,8 @@ WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
 PROMPTS_PER_UPDATE = 128
 # Answers sampled per prompt, so one update trains on 512 sequences.
 ANSWERS_PER_PROMPT = 4
-# Engines abort requests still generating at each weight sync; the client retries each one,
-# re-rendering its partial answer through the chat template, so it continues under the new weights.
+# Engines abort active requests at each weight sync. The client continues each
+# partial answer under the new weights and keeps the exact served token prefix.
 PAUSE_MODE = "abort"
 # Keep two resumable checkpoints in the temporary bucket, which deletes objects after 14 days. The
 # terminal export does not expire.
@@ -497,8 +497,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "enforce_eager": False,
         # The fully asynchronous entrypoint samples through the OpenAI-compatible chat route.
         "enable_http_endpoint": True,
-        # Each turn re-renders the conversation through the chat template; the entrypoint requires it.
-        "use_conversation_multi_turn": True,
         "chat_template": asdict(CHAT_TEMPLATE),
         "engine_init_kwargs": dict(recipe.engine_init_kwargs),
         "sampling_params": {

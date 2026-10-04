@@ -151,6 +151,16 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
+@pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
+@pytest.mark.parametrize("value", [False, True])
+def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["generator"][key] = value
+
+    with pytest.raises(ValueError, match=f"generator.{key}"):
+        dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe))
+
+
 def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
     policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
 
