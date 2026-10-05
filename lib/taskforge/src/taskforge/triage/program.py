@@ -14,7 +14,6 @@ majority. One sample at temperature 0.7 agreed with a second run on only 31 of 4
 """
 
 import asyncio
-import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -22,6 +21,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.store import CallStore
@@ -172,10 +172,6 @@ def model_call(completion: Completion) -> ModelCall:
     return ModelCall(usage=completion.usage, wall_time=completion.wall_time, finish_reason=completion.finish_reason)
 
 
-def encode(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
-
-
 def structural_record(structural: Sequence[CheckResult]) -> list[dict[str, str]]:
     return [{"check": r.name, "severity": r.severity, "status": r.status, "reason": r.reason} for r in structural]
 
@@ -184,8 +180,8 @@ def review_messages(
     p: TaskProposal, structural: Sequence[CheckResult], source_record: Mapping[str, object]
 ) -> list[Message]:
     user = (
-        f"SOURCE RECORD:\n{encode(source_record)}\n\n"
-        f"STRUCTURAL CHECKS:\n{encode(structural_record(structural))}\n\n"
+        f"SOURCE RECORD:\n{pretty_json(source_record)}\n\n"
+        f"STRUCTURAL CHECKS:\n{pretty_json(structural_record(structural))}\n\n"
         f"PROPOSAL:\n{render(p)}"
     )
     return [{"role": "system", "content": REVIEW_SYSTEM_PROMPT}, {"role": "user", "content": user}]
@@ -214,8 +210,8 @@ def review_record(verdict: Verdict) -> dict[str, object]:
 def repair_messages(p: TaskProposal, verdict: Verdict, source_record: Mapping[str, object]) -> list[Message]:
     user = (
         f"Revise the task proposal below so that it passes review.\n\n{REPAIR_GUIDANCE}\n\n{repair_format_rules()}\n\n"
-        f"SOURCE RECORD:\n{encode(source_record)}\n\n"
-        f"REVIEW (independent reviewers of the same proposal):\n{encode(review_record(verdict))}\n\n"
+        f"SOURCE RECORD:\n{pretty_json(source_record)}\n\n"
+        f"REVIEW (independent reviewers of the same proposal):\n{pretty_json(review_record(verdict))}\n\n"
         f"PROPOSAL:\n{render(p)}"
     )
     return [{"role": "system", "content": REPAIR_SYSTEM_PROMPT}, {"role": "user", "content": user}]
