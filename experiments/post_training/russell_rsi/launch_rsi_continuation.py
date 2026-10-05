@@ -46,7 +46,7 @@ from experiments.post_training.russell_rsi.launch import (
     development_step,
     evaluation_model,
 )
-from experiments.post_training.russell_rsi.launch_post_teacher_sft import adopted, evaluated_score
+from experiments.post_training.russell_rsi.launch_post_teacher_sft import RETENTION_TASKS, adopted, evaluated_score
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.replay import (
     REPLAY_SEED,
@@ -63,7 +63,6 @@ PROTOCOL = "champion-rsi-r1"
 UPDATES = PILOT_UPDATES
 MAX_NEW_FAMILIES = 4
 RETAINED_TASKS = 26
-RETENTION_TASKS = 3
 PARENT_CODING = (25 / 32, 25 / 32)
 INCUMBENT_CODING = (25 / 32, 27 / 32)
 BASELINE_RETENTION = 1 / 3

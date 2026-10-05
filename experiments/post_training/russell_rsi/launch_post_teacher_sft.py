@@ -45,6 +45,7 @@ from experiments.post_training.russell_rsi.launch import (
     evaluation_model,
 )
 from experiments.post_training.russell_rsi.launch_dose_comparison import selected_dose
+from experiments.post_training.russell_rsi.launch_teacher_sft import SFT_LEARNING_RATE
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.replay import (
     REPLAY_SEED,
@@ -87,7 +88,7 @@ def _qualified_sft(record: dict, *, identity: str, root: str, updates: int, prot
         or record["sft_root"] != root
         or record["hf_export_uri"] != export
         or record["optimizer_updates"] != updates
-        or record["learning_rate"] != 1e-6
+        or record["learning_rate"] != SFT_LEARNING_RATE
         or any(not math.isfinite(record[key]) for key in ("loss", "gradient_norm", "update_norm"))
         or any(record[key] <= 0 for key in ("gradient_norm", "update_norm"))
         or record["serving_reload"]["verified"] is not True
@@ -587,7 +588,7 @@ def qualified_four_update_sft(record: dict, *, identity: str, root: str) -> str:
         raise ValueError("Four-pass serving reload identifies a different SFT model")
     if (
         [step["step"] for step in steps] != list(range(4))
-        or any(step["skipped"] is not False or step["learning_rate"] != 1e-6 for step in steps)
+        or any(step["skipped"] is not False or step["learning_rate"] != SFT_LEARNING_RATE for step in steps)
         or any(not math.isfinite(step[key]) for step in steps for key in ("loss", "gradient_norm", "update_norm"))
         or any(step[key] <= 0 for step in steps for key in ("gradient_norm", "update_norm"))
     ):

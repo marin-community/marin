@@ -48,8 +48,11 @@ flowchart LR
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
 | `environment` | Executable environment, public files, resource limits, and optional task session. |
+| `attempt_timeout` | Optional time limit for the full attempt, including setup and grading. |
+| `agent_timeout` | Optional time limit for model requests and task actions after setup. |
+| `agent_user` | Optional operating system user for agent commands. |
+| `stages` | Ordered stages with contexts, setup, and private verifiers on a shared machine. |
 | `metadata` | Application metadata, including an optional teacher route. |
-
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Ordered descriptive strings. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
