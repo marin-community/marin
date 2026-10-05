@@ -26,6 +26,7 @@ from experiments.june_tpu_67b_a2b.moe.model import Transformer as TrainingTransf
 logger = logging.getLogger(__name__)
 REFERENCE = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_CONFIG = Path(__file__).with_name("full_ab_export_model_config.json")
+CONTEXT_AXIS_SIZE = 4
 
 
 def inference_model(training_model: TrainingTransformer, config: InferenceConfig) -> InferenceTransformer:
@@ -53,7 +54,7 @@ def main() -> None:
     initialize_jax()
     training_config = draccus.decode(TrainingConfig, json.loads(MODEL_CONFIG.read_text()))
     inference_config = InferenceConfig.from_hf_config(GrugMoeHfConfig.from_pretrained(REFERENCE))
-    mesh = compact_grug_mesh(replica_axis_size=1)
+    mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=CONTEXT_AXIS_SIZE)
     with jax.set_mesh(mesh):
         template = eqx.filter_eval_shape(TrainingTransformer.init, training_config, key=jax.random.PRNGKey(0))
         checkpoint = load_checkpoint(

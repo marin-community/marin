@@ -75,7 +75,9 @@ def main() -> None:
         for name in EXPORT_FILES:
             local = staging / name
             copy_from_gcs(f"{source}/{name}", local)
-            if name == "chat_template.jinja" and local.read_bytes() != (RELEASE_DIR / name).read_bytes():
+            if name == "chat_template.jinja" and local.read_bytes().rstrip(b"\n") != (
+                RELEASE_DIR / name
+            ).read_bytes().rstrip(b"\n"):
                 raise ValueError("Exported inference template differs from the release template")
             api.upload_file(
                 path_or_fileobj=local,
@@ -120,8 +122,12 @@ def main() -> None:
         "total_size": EXPECTED_TENSOR_BYTES,
         "default_enable_thinking": True,
         "generation_eos_token_ids": [128001, 128009],
-        "training_template_sha256": hashlib.sha256((RELEASE_DIR / "training_chat_template.jinja").read_bytes()).hexdigest(),
-        "inference_template_sha256": hashlib.sha256((RELEASE_DIR / "chat_template.jinja").read_bytes()).hexdigest(),
+        "training_template_sha256": (
+            hashlib.sha256((RELEASE_DIR / "training_chat_template.jinja").read_bytes()).hexdigest()
+        ),
+        "inference_template_sha256": (
+            hashlib.sha256((RELEASE_DIR / "chat_template.jinja").read_bytes().rstrip(b"\n")).hexdigest()
+        ),
     }
     api.upload_file(
         path_or_fileobj=json.dumps(complete, indent=2).encode(),
