@@ -387,11 +387,14 @@ async def test_advance_failure_retains_pending_turn_without_training_data(comple
         async def prepare(self):
             return SessionStart(({"role": "user", "content": "Do the task."},), {})
 
-        async def advance(self, _turn):
+        async def advance(self, turn: ModelTurn):
             if self.calls == completed_turns:
                 raise OSError("Guest failed during command")
             self.calls += 1
             return Transition(False, ({"role": "user", "content": "Continue."},))
+
+        async def grade(self, messages):
+            raise AssertionError("An advance failure must not invoke grading")
 
         async def close(self):
             pass
@@ -504,8 +507,10 @@ async def test_later_stage_advance_failure_preserves_graded_prefix_only():
     assert rollout.response_token_ids == (20, 90, 91, 21, 90, 91, 22)
     assert rollout.loss_mask == (1, 0, 0, 1, 0, 0, 0)
     assert len(rollout.steps) == 2
+    assert rollout.steps[0].transition.grade is not None
     assert rollout.steps[0].transition.grade.status == Outcome.GRADED
     assert rollout.grade.diagnostics["stages"][1]["status"] == Outcome.UNAVAILABLE
+    assert rollout.failure is not None
     assert rollout.failure.diagnostics["pending_turn"]["response_token_ids"] == (22,)
 
 

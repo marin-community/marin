@@ -14,6 +14,7 @@ from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from itertools import islice
 from pathlib import Path
+from typing import Any
 
 import httpx
 from marin.datakit.download.opencode import opencode_protocol_messages
@@ -227,7 +228,7 @@ async def rollout_evidence(
                 and not rollout.response_token_ids
                 and (rollout.failure is None or "pending_turn" not in rollout.failure.diagnostics)
             )
-        evidence = {
+        evidence: dict[str, Any] = {
             **asdict(rollout),
             "interrupted_operation": operation,
             "execution_error": execution_error,
@@ -426,7 +427,7 @@ async def evaluate_development(
                         saved = await journal.attempt(
                             "task", f"{task.id}/{sample_index}", digest(task.model_dump(mode="json"))
                         ).run(rollout_attempt)
-                    record = saved["record"]
+                    record: dict[str, Any] = saved["record"]
                     startup_counts.update(saved["startup_counts"])
                     record = {**record, "sample_index": sample_index}
                     records[(task.id, sample_index)] = record
