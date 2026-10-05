@@ -3,7 +3,6 @@
 
 """Collect bounded teacher trajectories with durable native GLM token evidence."""
 
-import base64
 import hashlib
 import json
 from collections.abc import Callable, Mapping
@@ -41,6 +40,7 @@ from experiments.post_training.russell_rsi.collection_recovery import (
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.rollout_eval import rollout_evidence
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
+from experiments.post_training.russell_rsi.teacher_http import journal_teacher_response
 from experiments.post_training.russell_rsi.token_preflight import run_token_preflight
 
 PUBLIC_MODEL_OPTIONS = frozenset({"tools", "tool_choice", "parallel_tool_calls", "response_format"})
@@ -61,12 +61,12 @@ class TeacherModelConfig:
     reasoning_effort: str
 
 
-def teacher_request(request: ModelRequest, config: TeacherModelConfig) -> dict:
+def teacher_request(messages: tuple[dict, ...], options: dict, config: TeacherModelConfig) -> dict:
     """Build a native chat request from the public session interface."""
-    if request.options.keys() - PUBLIC_MODEL_OPTIONS:
+    if options.keys() - PUBLIC_MODEL_OPTIONS:
         raise ValueError("Teacher session contains unsupported public model options")
-    messages = []
-    for original in request.messages:
+    outbound_messages = []
+    for original in messages:
         message = dict(original)
         if message.get("role") == "assistant":
             reasoning = message.get("reasoning")
@@ -78,11 +78,11 @@ def teacher_request(request: ModelRequest, config: TeacherModelConfig) -> dict:
             if "reasoning" in message:
                 del message["reasoning"]
                 message["reasoning_content"] = canonical or reasoning
-        messages.append(message)
+        outbound_messages.append(message)
     return {
         "model": GLM_MODEL,
-        "messages": messages,
-        **request.options,
+        "messages": outbound_messages,
+        **options,
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
         "chat_template_kwargs": {"reasoning_effort": config.reasoning_effort},
@@ -91,8 +91,8 @@ def teacher_request(request: ModelRequest, config: TeacherModelConfig) -> dict:
     }
 
 
-def teacher_model_turn(raw: bytes, request: ModelRequest) -> ModelTurn:
-    """Validate actual server tokens and preserve native tools and reasoning."""
+def native_teacher_turn(raw: bytes) -> ModelTurn:
+    """Read exact server tokens and the unmodified assistant message."""
     response = json.loads(raw)
     choice = response["choices"][0]
     prompt_ids = response.get("prompt_token_ids")
@@ -102,11 +102,7 @@ def teacher_model_turn(raw: bytes, request: ModelRequest) -> ModelTurn:
         for tokens in (prompt_ids, response_ids)
     ):
         raise RolloutContractError("GLM did not return exact prompt and response token IDs")
-    if tuple(prompt_ids[: len(request.prefix_token_ids)]) != request.prefix_token_ids:
-        raise RolloutContractError("Native GLM chat changed the served token prefix")
     message = choice["message"]
-    # Validate native tool syntax without removing the teacher reasoning fields.
-    assistant_message(message)
     return ModelTurn(
         message=message,
         prompt_token_ids=tuple(prompt_ids),
@@ -116,6 +112,15 @@ def teacher_model_turn(raw: bytes, request: ModelRequest) -> ModelTurn:
         text=message.get("content") or "",
         metadata={"response_sha256": hashlib.sha256(raw).hexdigest(), "usage": response["usage"]},
     )
+
+
+def teacher_model_turn(raw: bytes, request: ModelRequest) -> ModelTurn:
+    """Require an unchanged native token prefix for strict rollouts."""
+    result = native_teacher_turn(raw)
+    if result.prompt_token_ids[: len(request.prefix_token_ids)] != request.prefix_token_ids:
+        raise RolloutContractError("Native GLM chat changed the served token prefix")
+    assistant_message(result.message)
+    return result
 
 
 @dataclass
@@ -136,61 +141,14 @@ class TeacherTurnProvider:
         directory = self.directory / "turns" / f"{self.turn_index:03d}"
         self.turn_index += 1
         directory.mkdirs()
-        body = teacher_request(request, self.config)
+        body = teacher_request(request.messages, request.options, self.config)
         identity = {
             "session_identity": self.config.session_identity,
             "request_sha256": compact_json_sha256(body),
             "prefix_token_ids": list(request.prefix_token_ids),
             "assistant_message_index": request.assistant_message_index,
         }
-        issued = directory / "issued.json"
-        response_path = directory / "response.json"
-        request_path = directory / "request.json"
-        wire_path = directory / "request-wire.bin"
-        wire_record_path = directory / "request-wire.json"
-        if issued.exists():
-            if json.loads(issued.read_text()) != identity:
-                raise ValueError("Saved teacher issuance has a different request identity")
-            if json.loads(request_path.read_text()) != body:
-                raise ValueError("Saved teacher request differs from its reserved request")
-            if not response_path.exists():
-                raise RuntimeError("Teacher request is ambiguous; no replacement request is permitted")
-            wire = wire_path.read_bytes()
-            wire_record = json.loads(wire_record_path.read_text())
-            if hashlib.sha256(wire).hexdigest() != wire_record["sha256"] or json.loads(wire) != body:
-                raise ValueError("Saved teacher wire bytes differ from their request identity")
-            record = json.loads(response_path.read_text())
-        else:
-            if response_path.exists():
-                raise ValueError("Saved teacher response lacks its request reservation")
-            write_once(request_path, body)
-            url = self.resolve_base_url().rstrip("/") + "/chat/completions"
-            outbound = self.client.build_request("POST", url, json=body)
-            wire = outbound.content
-            if wire_path.exists():
-                if wire_path.read_bytes() != wire:
-                    raise ValueError("Saved teacher wire bytes differ from the pending request")
-            else:
-                wire_path.write_bytes(wire)
-            write_once(
-                wire_record_path,
-                {"sha256": hashlib.sha256(wire).hexdigest(), "content_type": outbound.headers["Content-Type"]},
-            )
-            write_once(issued, identity)
-            response = await self.client.send(outbound)
-            record = {
-                "identity": identity,
-                "url": url,
-                "status_code": response.status_code,
-                "body_base64": base64.b64encode(response.content).decode("ascii"),
-            }
-            write_once(response_path, record)
-        if record["identity"] != identity:
-            raise ValueError("Saved teacher response has a different request identity")
-        raw = base64.b64decode(record["body_base64"], validate=True)
-        httpx.Response(
-            record["status_code"], content=raw, request=httpx.Request("POST", record["url"])
-        ).raise_for_status()
+        raw = await journal_teacher_response(self.client, self.resolve_base_url, directory, body, identity)
         result = teacher_model_turn(raw, request)
         write_once(directory / "model-turn.json", asdict(result))
         return result

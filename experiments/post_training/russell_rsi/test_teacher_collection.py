@@ -18,7 +18,9 @@ from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.contracts import ModelRequest, RolloutContractError
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import MachineStartupError
 from taskcompendium.environment import EnvironmentKind
+from taskcompendium.grading_result import Outcome
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 from experiments.post_training.glm import GLM_MODEL
@@ -30,6 +32,7 @@ from experiments.post_training.russell_rsi.collection_recovery import (
 )
 from experiments.post_training.russell_rsi.contract_tasks import digest
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
+from experiments.post_training.russell_rsi.teacher_chat_collection import chat_teacher_evidence, run_teacher_chat
 from experiments.post_training.russell_rsi.teacher_collection import (
     TeacherModelConfig,
     TeacherTask,
@@ -719,3 +722,183 @@ def test_counted_recovery_retires_first_slot_and_reuses_exact_preflight(tmp_path
     first_row = json.loads((tmp_path / "amended/trajectories/00-1/student-row.json").read_text())
     assert 4096 < len(first_row["input_ids"]) <= 16384
     assert any(first_row["assistant_mask"])
+
+
+@pytest.mark.parametrize("chat_only", [False, True])
+def test_chat_teacher_retains_changed_native_request_tokens_without_rl_stream(tmp_path, chat_only):
+    requests = []
+    responses = []
+
+    async def send(request):
+        index = len(requests)
+        body = json.loads(request.content)
+        requests.append(request.content)
+        assert (tmp_path / "turns" / f"{index:03d}" / "request-wire.bin").read_bytes() == request.content
+        if index == 0:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "reasoning": "Read the file.",
+                "tool_calls": [
+                    {
+                        "id": "read",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": '{"command":"cat /workspace/preflight-value.txt"}'},
+                    }
+                ],
+            }
+            response = httpx.Response(200, json=model_response([100], [101], message, "tool_calls"))
+        else:
+            assert body["messages"][-1]["role"] == "tool"
+            assert "48213" in body["messages"][-1]["content"]
+            assert body["messages"][-2]["reasoning_content"] == "Read the file."
+            response = httpx.Response(
+                200, json=model_response([100, 999, 102], [103], {"role": "assistant", "content": "48213"})
+            )
+        responses.append(response.content)
+        return response
+
+    async def run():
+        task = preflight_task(1, PREFLIGHT_INSTRUCTION, 48213)
+        factories = {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(send)) as client:
+            if chat_only:
+                result = await run_teacher_chat(
+                    task, StoragePath(str(tmp_path)), config(), client, lambda: "https://teacher.test/v1", factories
+                )
+                assert result.grade.reward == 1.0
+                assert result.execution_error is None
+                assert result.turns[0].response_token_ids == (101,)
+                assert result.turns[1].prompt_token_ids == (100, 999, 102)
+                evidence = chat_teacher_evidence(result)
+                assert json.loads((tmp_path / "chat-result.json").read_text()) == json.loads(json.dumps(evidence))
+                with pytest.raises(RuntimeError, match="reserved chat session"):
+                    await run_teacher_chat(
+                        task, StoragePath(str(tmp_path)), config(), client, lambda: "https://teacher.test/v1", factories
+                    )
+                return
+            engine = ShellboxRolloutEngine(
+                TeacherTurnProvider(client, lambda: "https://teacher.test/v1", config(), StoragePath(str(tmp_path))),
+                factories,
+                max_turns=16,
+                command_timeout=120,
+                convention=SubmissionConvention(id="russell-teacher", answer_format=AnswerFormat.PLAIN),
+            )
+            await engine.run(task)
+
+    if chat_only:
+        asyncio.run(run())
+    else:
+        with pytest.raises(RolloutContractError):
+            asyncio.run(run())
+    assert len(requests) == len(responses) == 2
+    for index, raw in enumerate(responses):
+        record = json.loads((tmp_path / "turns" / f"{index:03d}" / "response.json").read_text())
+        assert base64.b64decode(record["body_base64"]) == raw
+
+
+def test_chat_teacher_thinking_exhaustion_preserves_length_and_rejects_row(tmp_path):
+    raw = json.dumps(
+        model_response(
+            [100], [101, 102], {"role": "assistant", "content": None, "reasoning": "Still thinking."}, "length"
+        )
+    ).encode()
+
+    async def send(request):
+        return httpx.Response(200, content=raw)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(send)) as client:
+            return await run_teacher_chat(
+                preflight_task(1, PREFLIGHT_INSTRUCTION, 48213),
+                StoragePath(str(tmp_path)),
+                config(),
+                client,
+                lambda: "https://teacher.test/v1",
+                {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+            )
+
+    result = asyncio.run(run())
+    assert result.stop_reason == "length"
+    assert result.grade.status == Outcome.EXTRACTION_ERROR
+    assert result.grade.reward is None
+    assert result.turns[0].response_token_ids == (101, 102)
+    saved = json.loads((tmp_path / "turns/000/response.json").read_text())
+    assert base64.b64decode(saved["body_base64"]) == raw
+
+
+class StartupFailureThenShellSim:
+    def __init__(self):
+        self.failed = False
+
+    async def create(self, spec):
+        if not self.failed:
+            self.failed = True
+            raise MachineStartupError("Guest did not boot")
+        return await ShellSimMachineFactory().create(spec)
+
+
+def test_chat_teacher_startup_retry_preserves_later_http_failure(tmp_path):
+    requests = []
+
+    async def send(request):
+        requests.append(request.content)
+        return httpx.Response(503, content=b"endpoint unavailable")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(send)) as client:
+            task = preflight_task(1, PREFLIGHT_INSTRUCTION, 48213)
+            args = (
+                task,
+                StoragePath(str(tmp_path)),
+                config(),
+                client,
+                lambda: "https://teacher.test/v1",
+                {EnvironmentKind.SHELLSIM: StartupFailureThenShellSim()},
+            )
+            result = await run_teacher_chat(*args)
+            with pytest.raises(RuntimeError, match="reserved chat session"):
+                await run_teacher_chat(*args)
+            return result
+
+    result = asyncio.run(run())
+    assert result.startup_attempt == 2
+    assert result.interrupted_operation == "model"
+    assert result.execution_error is not None
+    assert result.execution_error["type"] == "HTTPStatusError"
+    assert result.grade.reward is None
+    assert len(requests) == 1
+    assert (tmp_path / "startup-failure-1.json").exists()
+    record = json.loads((tmp_path / "turns/000/response.json").read_text())
+    assert record["status_code"] == 503
+    assert base64.b64decode(record["body_base64"]) == b"endpoint unavailable"
+
+
+def test_chat_teacher_agent_deadline_preserves_ambiguous_issuance(tmp_path):
+    requests = []
+
+    async def send(request):
+        requests.append(request.content)
+        await asyncio.Event().wait()
+        raise AssertionError("Unreachable response")
+
+    async def run():
+        task = preflight_task(1, PREFLIGHT_INSTRUCTION, 48213).model_copy(update={"agent_timeout": 0.01})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(send)) as client:
+            return await run_teacher_chat(
+                task,
+                StoragePath(str(tmp_path)),
+                config(),
+                client,
+                lambda: "https://teacher.test/v1",
+                {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+            )
+
+    result = asyncio.run(run())
+    assert result.execution_error is not None
+    assert result.execution_error["type"] == "TimeoutError"
+    assert result.interrupted_operation == "model"
+    assert result.grade.reward is None
+    assert len(requests) == 1
+    assert (tmp_path / "turns/000/issued.json").exists()
+    assert not (tmp_path / "turns/000/response.json").exists()
