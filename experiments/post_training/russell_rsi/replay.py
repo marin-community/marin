@@ -84,7 +84,7 @@ def _family_groups(
     return tuple(tuple(families[key]) for key in sorted(families))
 
 
-def replay_plan(
+def sampled_replay_plan(
     plan: RoundPlan,
     measurements: tuple[Measurement, ...],
     targeted_tasks: tuple[QualifiedTask, ...],
@@ -96,8 +96,10 @@ def replay_plan(
     parent_identity: str,
     model_identity: str,
     family_by_task: dict[str, str] | None = None,
+    updates: int,
+    seed: int,
 ) -> dict:
-    """Seal four 12/2/2 schedules and their calibration signal estimate."""
+    """Seal the declared number of 12/2/2 schedules and their calibration signal estimate."""
     if pilot_number < 2 or pilot_number > MAX_PILOTS:
         raise ValueError("Replay applies only to pilots two and three")
     measured = {item.task_sha256: item for item in measurements}
@@ -161,10 +163,10 @@ def replay_plan(
             / GROUPS_PER_UPDATE
         )
 
-    rng = random.Random(REPLAY_SEED)
+    rng = random.Random(seed)
     occurrences: list[ReplayOccurrence] = []
     update_q4: list[float] = []
-    for update in range(1, PILOT_UPDATES + 1):
+    for update in range(1, updates + 1):
         selected_targeted = [targeted[0], targeted[0]] if len(targeted) == 1 else rng.sample(targeted, TARGETED_GROUPS)
         if family_by_task is not None:
             groups = [
@@ -211,9 +213,9 @@ def replay_plan(
             )
 
     counts = Counter((entry.task_id, entry.category) for entry in occurrences)
-    sampling_spec = {
-        "seed": REPLAY_SEED,
-        "updates": PILOT_UPDATES,
+    sampling_spec: dict = {
+        "seed": seed,
+        "updates": updates,
         "groups_per_update": GROUPS_PER_UPDATE,
         "rollouts_per_group": ROLLOUTS_PER_GROUP,
         "allocation": {"replay": REPLAY_GROUPS, "targeted": TARGETED_GROUPS, "exploration": EXPLORATION_GROUPS},
@@ -229,7 +231,7 @@ def replay_plan(
         sampling_spec["selection"] = "uniform_original_family_then_uniform_eligible_member"
         sampling_spec["task_probabilities"] = probabilities
         sampling_spec["targeted_task_ids"] = [task.task_id for task in targeted]
-    payload = {
+    payload: dict = {
         "protocol": "pilot2-calibrated-replay-v1",
         "pilot_number": pilot_number,
         "parent_identity": parent_identity,
@@ -274,6 +276,36 @@ def replay_plan(
         payload["family_by_task"] = dict(sorted(family_by_task.items()))
     payload["schedule_sha256"] = compact_json_sha256(payload)
     return payload
+
+
+def replay_plan(
+    plan: RoundPlan,
+    measurements: tuple[Measurement, ...],
+    targeted_tasks: tuple[QualifiedTask, ...],
+    *,
+    pilot_number: int,
+    bank_identity: str,
+    calibration_identity: str,
+    frozen_identity: str,
+    parent_identity: str,
+    model_identity: str,
+    family_by_task: dict[str, str] | None = None,
+) -> dict:
+    """Seal the existing four-update replay protocol."""
+    return sampled_replay_plan(
+        plan,
+        measurements,
+        targeted_tasks,
+        pilot_number=pilot_number,
+        bank_identity=bank_identity,
+        calibration_identity=calibration_identity,
+        frozen_identity=frozen_identity,
+        parent_identity=parent_identity,
+        model_identity=model_identity,
+        family_by_task=family_by_task,
+        updates=PILOT_UPDATES,
+        seed=REPLAY_SEED,
+    )
 
 
 def validate_replay_plan(
@@ -339,7 +371,7 @@ class ReplayDatasetConfig:
     replay_plan: dict
 
 
-def freeze_replay_dataset(config: ReplayDatasetConfig) -> None:
+def freeze_sampled_replay_dataset(config: ReplayDatasetConfig, *, rows_required: int) -> None:
     """Write unchanged task rows in sealed schedule order, including replay duplicates."""
     from taskcompendium.parquet import read_tasks, write_tasks  # noqa: PLC0415
 
@@ -380,9 +412,14 @@ def freeze_replay_dataset(config: ReplayDatasetConfig) -> None:
             raise ValueError("Replay task family differs from its sealed admission evidence")
         output.append(task)
     occurrences = config.replay_plan["schedule"]
-    if len(output) != REPLAY_ROWS or len({entry["occurrence_id"] for entry in occurrences}) != REPLAY_ROWS:
-        raise ValueError("Replay artifact requires sixty-four distinct occurrences")
+    if len(output) != rows_required or len({entry["occurrence_id"] for entry in occurrences}) != rows_required:
+        raise ValueError(f"Replay artifact requires {rows_required} distinct occurrences")
     write_tasks(prefix_join(config.output_path, "train.parquet"), output)
     StoragePath(prefix_join(config.output_path, "replay-plan.json")).write_text(
         json.dumps(config.replay_plan, sort_keys=True, indent=2) + "\n"
     )
+
+
+def freeze_replay_dataset(config: ReplayDatasetConfig) -> None:
+    """Write the existing sixty-four-row replay artifact."""
+    freeze_sampled_replay_dataset(config, rows_required=REPLAY_ROWS)

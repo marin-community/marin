@@ -19,6 +19,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     QualifiedTask,
     round_plan,
 )
+from experiments.post_training.russell_rsi.launch_dose_comparison import dose_replay_plan, freeze_dose_dataset
 from experiments.post_training.russell_rsi.repair_tasks import canonical_sha256
 from experiments.post_training.russell_rsi.replay import (
     ReplayDatasetConfig,
@@ -105,6 +106,34 @@ def test_replay_artifact_preserves_source_tasks_and_seals_four_update_schedules(
     assert sealed["sampling_spec"]["data_shuffle"] is False
     assert sealed["sampling_spec"]["epochs"] == 1
     assert sealed["signal_gate_passed"]
+
+    family_source = replay_plan(
+        plan,
+        measurements,
+        fresh,
+        pilot_number=2,
+        bank_identity="bank",
+        calibration_identity="calibration",
+        frozen_identity="frozen",
+        parent_identity="parent",
+        model_identity="parent",
+        family_by_task={task.task_id: task.contract_id for task in records},
+    )
+    extended = dose_replay_plan(family_source, plan)
+    dose_path = tmp_path / "dose"
+    dose_path.mkdir()
+    freeze_dose_dataset(ReplayDatasetConfig(str(bank_path), str(dose_path), tuple(records), extended))
+    dose_rows = list(read_tasks(str(dose_path / "train.parquet")))
+    assert len(dose_rows) == 128
+    assert extended["schedule"][:64] == family_source["schedule"]
+    assert [task.id for task in dose_rows] == [entry["task_id"] for entry in extended["schedule"]]
+    for update in range(1, 9):
+        assert Counter(entry["category"] for entry in extended["schedule"] if entry["update"] == update) == {
+            "replay": 12,
+            "targeted": 2,
+            "exploration": 2,
+        }
+    assert json.loads((dose_path / "replay-plan.json").read_text()) == extended
 
     one_target = replay_plan(
         plan,

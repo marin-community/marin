@@ -161,6 +161,7 @@ def recipe(
     machine_config: dict | None = None,
     *,
     sampling_mode: SamplingMode = SamplingMode.FROZEN_ROUND,
+    checkpoint_interval: int | None = None,
 ) -> str:
     """Configure shared task rollouts and bounded GRPO training."""
     replay = sampling_mode is SamplingMode.CALIBRATED_REPLAY
@@ -201,13 +202,16 @@ def recipe(
             },
         },
     }
+    if checkpoint_interval is not None:
+        trainer_config["ckpt_interval"] = checkpoint_interval
+        trainer_config["hf_save_interval"] = checkpoint_interval
     if replay:
         data_config["shuffle"] = REPLAY_DATA_SHUFFLE
         trainer_config["rollout_buffer"] = {
             "max_staleness_steps": REPLAY_MAX_STALENESS_STEPS,
             "batch_policy": REPLAY_BATCH_POLICY,
         }
-    # One frozen 16-row pass uses one epoch per update. Replay uses one 64-row pass for four updates.
+    # Frozen sampling uses one epoch per update; replay consumes the sealed schedule once.
     config = {
         "entrypoint": "taskcompendium",
         "context_budget": {
@@ -267,15 +271,20 @@ def train_step(
     machine_config: dict | None = None,
     name_component: str | None = None,
     sampling_mode: SamplingMode = SamplingMode.FROZEN_ROUND,
+    *,
+    bounded_scale: Scale | None = None,
+    checkpoint_interval: int | None = None,
 ) -> ArtifactStep[SkyRLRun]:
-    selected = SCALES[scale]
+    selected = bounded_scale or SCALES[scale]
     label = f"{name_component}-{scale}" if name_component else scale
     # The HF export is at the artifact root. A dot is a literal S3 key component.
     return skyrl_step(
         SkyRLSpec(
             name=f"checkpoints/russell-rsi-{label}",
             version=version,
-            config_yaml=recipe(selected, machine_config, sampling_mode=sampling_mode),
+            config_yaml=recipe(
+                selected, machine_config, sampling_mode=sampling_mode, checkpoint_interval=checkpoint_interval
+            ),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(model, MODEL, MODEL_REVISION, relative_path=""),
             train_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
