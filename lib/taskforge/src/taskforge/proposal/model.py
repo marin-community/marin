@@ -28,13 +28,14 @@ in a fixed order, and the body is stripped of trailing whitespace. ``digest`` ha
 so a proposal's identity does not depend on how its author formatted the header.
 """
 
-import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
 import yaml
+
+from taskforge.content_hash import sha256_hex
 
 FRONT_MATTER_DELIMITER = "---"
 CODE_FENCES = ("```", "~~~")
@@ -142,7 +143,7 @@ class TaskProposal:
 
     @property
     def digest(self) -> str:
-        return hashlib.sha256(render(self).encode()).hexdigest()
+        return sha256_hex(render(self).encode())
 
 
 def _quoted(value: str) -> str:
