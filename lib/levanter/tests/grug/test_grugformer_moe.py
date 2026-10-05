@@ -880,23 +880,86 @@ def test_sonic_scatter_rows_matches_gather_on_kept_rows_on_gpu(weighted):
     np.testing.assert_array_equal(np.asarray(actual)[kept].view(np.uint16), expected[kept].view(np.uint16))
 
 
-@pytest.mark.parametrize("width", [7, 37, 100, 384, 1000, 1023])
-def test_top_k_indices_match_lax_top_k_on_gpu(width):
-    _skip_without_sonic_gpu_runtime()
-    rows, k = 96, 7
-    rng = np.random.default_rng(width)
+# 0xFFFFFFFF is the negative NaN whose total-order key is the smallest int32.
+_TOP_K_SPECIAL_VALUES = np.array(
+    [0x00000000, 0x80000000, 0x7F800000, 0xFF800000]  # signed zeros and infinities
+    + [0x7FC00000, 0xFFC00000, 0x7F800001, 0xFF800001, 0x7FFFFFFF, 0xFFFFFFFF],  # NaNs of either sign
+    np.uint32,
+).view(np.float32)
+
+
+def _top_k_adversarial_rows(rows: int, width: int, seed: int) -> jax.Array:
+    rng = np.random.default_rng(seed)
     values = rng.standard_normal((rows, width)).astype(np.float32)
-    values[0::4] = rng.integers(0, 3, size=values[0::4].shape)  # heavy ties
-    values[1::4] = np.where(rng.random(values[1::4].shape) < 0.5, -0.0, 0.0)  # signed zeros
-    special = np.array([np.inf, -np.inf, np.nan, -np.nan], np.float32)
-    values[2::4] = np.where(
-        rng.random(values[2::4].shape) < 0.3, rng.choice(special, values[2::4].shape), values[2::4]
+    values[0::5] = rng.integers(0, 3, size=values[0::5].shape)  # heavy ties
+    values[1::5] = np.where(rng.random(values[1::5].shape) < 0.5, -0.0, 0.0)  # signed zeros
+    values[2::5] = np.where(
+        rng.random(values[2::5].shape) < 0.3, rng.choice(_TOP_K_SPECIAL_VALUES, values[2::5].shape), values[2::5]
     )
-    values = jnp.asarray(values)
+    values[3::5] = rng.choice(_TOP_K_SPECIAL_VALUES, values[3::5].shape)
+    values[4] = _TOP_K_SPECIAL_VALUES[-1]  # every key ties with the smallest int32
+    return jnp.asarray(values)
 
-    actual = jax.jit(lambda v: top_k_indices(v, min(k, width)))(values)
 
-    expected = jax.jit(lambda v: jax.lax.top_k(v, min(k, width))[1])(values)
+# Widths cover one tile, exact or padded, and three tiles, exact (384) or padded (37). k = 37 runs the
+# steps under fori_loop.
+_TOP_K_CASES = [
+    (61, 1, 1),
+    (61, 7, 7),
+    (97, 37, 9),
+    (61, 37, 37),
+    (61, 100, 9),
+    (61, 128, 9),
+    (61, 256, 9),
+    (97, 384, 9),
+    (64, 384, 8),
+    (61, 1000, 9),
+    (61, 1023, 9),
+]
+
+
+@pytest.mark.parametrize(("rows", "width", "k"), _TOP_K_CASES)
+def test_top_k_indices_interpreted_kernel_matches_lax_top_k(rows, width, k):
+    values = _top_k_adversarial_rows(rows, width, seed=width)
+
+    actual = jax.jit(lambda v: top_k_indices(v, k, interpret=True))(values)
+
+    expected = jax.jit(lambda v: jax.lax.top_k(v, k)[1])(values)
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+
+
+@pytest.mark.parametrize("interpret", [True, False], ids=["interpreted", "compiled"])
+def test_top_k_indices_runs_inside_a_shard_map(interpret):
+    # The hero calls the kernel per token shard, inside a shard_map with check_vma=False.
+    if not interpret and not any(device.platform == "gpu" for device in jax.devices()):
+        pytest.skip("the compiled top-k kernel requires a GPU")
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+    values = _top_k_adversarial_rows(64, 384, seed=11)
+
+    with jax.set_mesh(mesh):
+        actual = jax.jit(
+            jax.shard_map(
+                lambda local: top_k_indices(local, 9, interpret=interpret),
+                mesh=mesh,
+                in_specs=P("data", None),
+                out_specs=P("data", None),
+                check_vma=False,
+            )
+        )(jax.sharding.reshard(values, P("data", None)))
+
+    expected = jax.jit(lambda v: jax.lax.top_k(v, 9)[1])(values)
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+
+
+@pytest.mark.parametrize(("rows", "width", "k"), _TOP_K_CASES)
+def test_top_k_indices_match_lax_top_k_on_gpu(rows, width, k):
+    if not any(device.platform == "gpu" for device in jax.devices()):
+        pytest.skip("the compiled top-k kernel requires a GPU")
+    values = _top_k_adversarial_rows(rows, width, seed=width)
+
+    actual = jax.jit(lambda v: top_k_indices(v, k))(values)
+
+    expected = jax.jit(lambda v: jax.lax.top_k(v, k)[1])(values)
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 

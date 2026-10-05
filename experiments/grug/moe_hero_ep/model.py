@@ -171,6 +171,8 @@ def _router_top_k(logits: Float[Array, "T E"], k: int) -> Int[Array, "T K"]:
         mesh=get_abstract_mesh(),
         in_specs=P(*token_spec, None),
         out_specs=P(*token_spec, None),
+        # The kernel is a Pallas call, whose output carries no varying-axes type.
+        check_rep=False,
     )(reshard(logits, P(*token_spec, None)))
 
 
