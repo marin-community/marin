@@ -27,14 +27,16 @@ from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import remote
 from marin.experiment.cli import build_options
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.parquet import read_tasks
 
+from experiments.evaluation.pipeline import eval_step
 from experiments.post_training.glm import resolve_glm_base_url
 from experiments.post_training.russell_rsi.bootstrap_loop import checkpoint_score, promotes, write_once
+from experiments.post_training.russell_rsi.launch import CLUSTER, evaluation_model
 from experiments.post_training.russell_rsi.launch_dose_comparison import selected_dose
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.rollout_eval import qemu_factory
@@ -268,13 +270,29 @@ def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
         )
 
     trained = replace(trained, build_config=training_config)
-    return {"collect": collected, "train": trained}
+    reload_model = evaluation_model("russell-rsi-teacher-sft-reload", "<completed-sft-export>", None)
+    reload = eval_step(
+        reload_model,
+        "mmlu-smoke",
+        version=version,
+        deps=(trained,),
+        resolve_model=lambda ctx: replace(
+            reload_model,
+            location=prefix_join(ctx.artifact_path(trained), "hf/step-0"),
+            identity=artifact_identity(trained),
+        ),
+        limit=1,
+        accelerator="H100x8",
+        submission_cluster=CLUSTER,
+        federated_cluster=CLUSTER,
+    )
+    return {"collect": collected, "train": trained, "reload": reload}
 
 
 @click.command(help=__doc__)
 @click.option("--config-uri", required=True)
 @click.option("--config-sha256", required=True)
-@click.option("--stage", type=click.Choice(["collect", "train"]), required=True)
+@click.option("--stage", type=click.Choice(["collect", "train", "reload"]), required=True)
 @build_options
 def main(config_uri: str, config_sha256: str, stage: str) -> dict[str, ArtifactStep]:
     config = json.loads(pinned_bytes(config_uri, config_sha256))
