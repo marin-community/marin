@@ -101,34 +101,57 @@ gh workflow run marin-gpu-release.yaml \
 
 ## Refresh the GPU source and artifact
 
-`vllm-gpu` alone rebases the vLLM overlay onto upstream head. Stage the result
-on `main-next`, audit the CUDA, Torch, and stable-extension boundaries, then
-build and qualify the exact candidate:
+GPU wheels build only from `main`. The same process applies after an upstream
+refresh or a patch authored in the fork.
+
+1. Prepare and review the vLLM source change. For an upstream rebase, replay
+   the overlay on `main-next` and audit the CUDA, Torch, and stable-extension
+   boundaries. An admin reviews the source and completes the backed-up swap to
+   `main` described in `promotion-protocol.md` before wheel builds. For an
+   ordinary patch, merge its reviewed vLLM PR to `main`. Keep the build and
+   release automation in the selected source.
+
+For an unattended rebase, prepare a source-review handoff with the `main-next`
+compare link, old and new source SHAs, replay audit, and rollback and date tags.
+Wait for an admin to review and promote the source, then resume at the build.
+
+2. The build workflow builds both wheels, runs the existing H100 and GB200
+   qualification, and publishes one release after both jobs pass. Source
+   changes on `main` trigger it automatically. To start it manually:
 
 ```sh
 gh workflow run marin-gpu-candidate.yaml \
-  --repo marin-community/vllm --ref main-next -f lane=gpu
-
-gh workflow run marin-gpu-release.yaml \
-  --repo marin-community/vllm --ref main-next \
-  -f lane=gpu -f candidate_tag=<exact-gpu-candidate-tag>
+  --repo marin-community/vllm --ref main -f lane=gpu
 ```
 
-The release job validates the wheel on the configured GPU hardware and
-publishes `marin-vllm-gpu-manifest.json`. Download that manifest and re-pin
-without hand-editing `gpu.toml`:
+Builds and qualification use the same commit and temporary Actions artifacts.
+The published tag is `marin-vllm-gpu-<source-UTC-date>-<12-character-sha>`.
+Monitor the exact workflow and Iris jobs. The workflow owns cleanup for its jobs.
+A failed qualification publishes no GPU release; fix the source or rerun the
+failed jobs in that workflow.
+
+3. In an isolated Marin worktree, download the published manifest, update the
+   exact wheel pins, and run Snowball parity:
 
 ```sh
 gh release download <release-tag> \
   --repo marin-community/vllm \
-  --pattern marin-vllm-gpu-manifest.json
+  --pattern marin-vllm-gpu-manifest.json --dir release
 uv run config/update-external.py \
-  --promote-gpu-release marin-vllm-gpu-manifest.json
+  --promote-gpu-release release/marin-vllm-gpu-manifest.json
+uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
+  -m cluster -o addopts= --import-mode=importlib -vv -s
 ```
 
-Promote `main-next` to protected `main` only after the GPU gate and review,
-using the rollback tags and lease in `promotion-protocol.md`. A later TPU
-refresh selects that main-line source independently.
+Open one draft Marin PR with `gpu.toml`, the generated pins, the full source
+SHA, both wheel hashes, and links to the fork qualification and Snowball results.
+Review and merge that PR to adopt the wheels. There is no temporary candidate
+pin or later GPU publication step.
+
+Source approval precedes GPU qualification and Marin validation. Marin keeps
+its previous wheel until the adoption PR merges. If Snowball fails, leave the
+Marin pins in production unchanged and fix the failure before adoption. A later
+TPU refresh selects a main-line source independently.
 
 ## Fork suite caveat
 
@@ -142,8 +165,8 @@ validation.
   manifest must name both source SHAs, the workflow SHA, and both wheel hashes;
   its qualification record must name that exact candidate tag.
 - `tests/cluster/vllm/test_snowball_backend_parity.py` is the GPU model parity
-  gate. Run it with `-m cluster -o addopts= --import-mode=importlib`; pair it
-  with the fork release workflow's H100 serve smoke.
+  gate. Run it with `-m cluster -o addopts= --import-mode=importlib`; require
+  both H100 and GB200 qualification results from the fork release workflow.
 
 ```sh
 uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \

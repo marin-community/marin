@@ -5,6 +5,7 @@
 
 import importlib.util
 import json
+import runpy
 import tomllib
 from pathlib import Path
 
@@ -133,3 +134,44 @@ def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validat
         update_external.promote_gpu_release(manifest_path)
     assert pin.read_text() == original
     assert not list(tmp_path.glob("gpu.*.toml.tmp"))
+
+
+@pytest.fixture
+def gpu_pin_workspace(tmp_path, monkeypatch):
+    update_external = _update_external()
+    pin = tmp_path / "gpu.toml"
+    generated = tmp_path / "external_dependencies.py"
+    monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
+    monkeypatch.setattr(update_external, "GENERATED_PINS", generated)
+    generated.write_text("# previous generated pins\n")
+    return update_external, pin, generated
+
+
+def test_promote_gpu_release_updates_pin_and_generated_dependencies(tmp_path, gpu_pin_workspace):
+    update_external, pin, generated = gpu_pin_workspace
+    previous = _promoted_manifest()
+    previous["source"]["fork_commit"] = "e" * 40
+    previous["release"]["tag"] = "marin-vllm-gpu-20251201-eeeeeeeeeeee"
+    pin.write_text(update_external.render_gpu_release_toml(previous))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
+
+    update_external.promote_gpu_release(manifest_path)
+
+    release = update_external.load_vllm_gpu_release(pin)
+    packaged = runpy.run_path(str(generated))["VLLM_GPU_RELEASE"]
+    assert release.release_tag == packaged.release_tag == _promoted_manifest()["release"]["tag"]
+    assert release.source_commit == packaged.source_commit == "a" * 40
+
+
+def test_gpu_manifest_generation_failure_preserves_the_existing_pin(tmp_path, monkeypatch, gpu_pin_workspace):
+    update_external, pin, generated = gpu_pin_workspace
+    original = update_external.render_gpu_release_toml(_promoted_manifest())
+    pin.write_text(original)
+    monkeypatch.setattr(update_external, "TPU_FORKS_CONFIG", tmp_path / "missing-tpu.toml")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
+    with pytest.raises(FileNotFoundError):
+        update_external.promote_gpu_release(manifest_path)
+    assert pin.read_text() == original
+    assert generated.read_text() == "# previous generated pins\n"
