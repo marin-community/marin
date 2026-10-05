@@ -267,7 +267,7 @@ def submission_instruction(convention: SubmissionConvention) -> str:
 
 
 def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
-    """Return Harbor instruction text for the selected convention."""
+    """Return readable instruction text for the selected convention."""
     context = specification.context
     compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:

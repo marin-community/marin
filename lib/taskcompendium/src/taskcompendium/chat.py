@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize OpenAI chat messages at the Harbor harness boundary."""
+"""Normalize OpenAI chat messages into semantic submission evidence."""
 
 import json
 from typing import Any, Literal
@@ -49,7 +49,7 @@ class ChatAssistantMessage(BaseModel):
 def assistant_message(message: dict[str, Any]) -> TextMessage | RawAssistantToolCalls:
     """Validate chat wire data and return protocol-independent submission evidence.
 
-    Malformed protocol data raises at this harness boundary. A valid text reply,
+    Malformed protocol data raises at this decoding boundary. A valid text reply,
     wrong function name, or wrong arguments remain available for grading.
     """
     validated = ChatAssistantMessage.model_validate(message)

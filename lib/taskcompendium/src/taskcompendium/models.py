@@ -152,7 +152,7 @@ ConversationEvent = Annotated[TextMessage | AssistantToolCalls | ToolResult, Fie
 
 
 def format_conversation(events: tuple[ConversationEvent, ...]) -> str:
-    """Produce the Harbor instruction view of a structured conversation."""
+    """Format a structured conversation as readable instruction text."""
     sections = []
     for event in events:
         if isinstance(event, TextMessage):
