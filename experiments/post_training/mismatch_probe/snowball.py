@@ -38,6 +38,9 @@ HELDOUT_DATA_URI = (
     "1.0.0-candidate1/batteries/e9-heldout-v1/snowball"
 )
 HELDOUT_FILENAME = "heldout-math-l345.parquet"
+EXACT_CHAT_HELDOUT_DATA_URI = (
+    "s3://marin-us-east-02a/marin/users/ahmad/experiments/rl-startup-latency/snowball-inputs-exact-chat-v1"
+)
 
 
 # A Snowball export cut to its first layers runs on this many GPUs of one node: two pipeline stages that the colocated
@@ -368,6 +371,9 @@ def main(
     slice_model_version: str | None,
 ) -> ArtifactStep[SkyRLRun]:
     selected = Campaign(campaign)
+    if selected is Campaign.MISMATCH and data_uri == HELDOUT_DATA_URI and data_version == "2026.09.14":
+        data_uri = EXACT_CHAT_HELDOUT_DATA_URI
+        data_version = "2026.10.05"
     if (slice_model_uri is None) != (slice_model_version is None):
         raise click.UsageError("--slice-model-uri and --slice-model-version go together")
     return build_run(
