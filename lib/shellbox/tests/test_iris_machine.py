@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise the Iris exec wire path with a local subprocess provider."""
+"""Exercise the Iris backend with a local subprocess exec provider and a scripted controller."""
 
 import asyncio
 import subprocess
@@ -9,16 +9,42 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from shellbox.backends.iris.machine import IrisMachine
+from iris.cluster.types import JobName
+from iris.resources.state import TaskState
+from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, NetworkPolicy
+from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+
+# Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
+LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
 
 
 class LocalRpc:
     def exec_in_container(self, request, timeout_ms):
         del timeout_ms
+        if max(len(argument.encode()) + 1 for argument in request.command) > LINUX_ARGUMENT_LIMIT_BYTES:
+            return SimpleNamespace(exit_code=0, stdout="", stderr="", error="[Errno 7] Argument list too long: 'docker'")
         result = subprocess.run(request.command, capture_output=True, text=True, timeout=30)
         return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
+
+
+class FailingRpc:
+    def exec_in_container(self, request, timeout_ms):
+        del request, timeout_ms
+        return SimpleNamespace(exit_code=0, stdout="", stderr="", error="Task /user/shellbox/0 is not running")
+
+
+class LocalTask:
+    """A sandbox task in one fixed state."""
+
+    def __init__(self, state: TaskState):
+        self.state = state
+        self.task_id = JobName.from_wire("/user/shellbox/0")
+
+    def status(self):
+        return SimpleNamespace(
+            state=self.state, error_message="" if self.state is TaskState.RUNNING else "container exited"
+        )
 
 
 class LocalJob:
@@ -39,6 +65,20 @@ class LocalEndpoint:
         pass
 
 
+def local_machine(tmp_path: Path, rpc=None, task: LocalTask | None = None) -> tuple[IrisMachine, LocalJob]:
+    job = LocalJob()
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+    machine = IrisMachine(
+        LocalEndpoint(),  # type: ignore[arg-type]
+        LocalClient(),  # type: ignore[arg-type]
+        rpc or LocalRpc(),  # type: ignore[arg-type]
+        job,  # type: ignore[arg-type]
+        task or LocalTask(TaskState.RUNNING),  # type: ignore[arg-type]
+        spec,
+    )
+    return machine, job
+
+
 @pytest.mark.parametrize("resource", ["cpus", "storage_mb"])
 def test_zero_resource_requests_cannot_silently_select_iris_defaults(resource):
     with pytest.raises(ValueError, match=resource):
@@ -47,15 +87,7 @@ def test_zero_resource_requests_cannot_silently_select_iris_defaults(resource):
 
 def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
     async def scenario() -> None:
-        job = LocalJob()
-        machine = IrisMachine(
-            LocalEndpoint(),
-            LocalClient(),
-            LocalRpc(),
-            job,
-            "task",  # type: ignore[arg-type]
-            MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path), network=NetworkPolicy.ALLOW),
-        )
+        machine, job = local_machine(tmp_path)
         try:
             result = await machine.run(
                 Command(("/bin/sh", "-c", "cat; printf '\\000\\377' >&2"), stdin=b"abc\x00\xff", output_limit_bytes=4)
@@ -76,3 +108,42 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
         assert job.terminated
 
     asyncio.run(scenario())
+
+
+def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        machine, _ = local_machine(tmp_path)
+        payload = bytes(range(256)) * 2048
+        source = tmp_path / "large.bin"
+        source.write_bytes(payload)
+        try:
+            await machine.upload(source, str(tmp_path / "remote.bin"))
+            await machine.download(str(tmp_path / "remote.bin"), tmp_path / "back.bin")
+        finally:
+            await machine.close()
+        assert (tmp_path / "back.bin").read_bytes() == payload
+
+    asyncio.run(scenario())
+
+
+def test_create_refuses_a_network_policy_the_cluster_does_not_provide() -> None:
+    factory = IrisMachineFactory(controller_url="http://controller", cluster_network=NetworkPolicy.DENY)
+
+    with pytest.raises(UnsupportedMachineSpec, match="provides deny, not allow"):
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), network=NetworkPolicy.ALLOW)))
+
+
+@pytest.mark.parametrize("state", [TaskState.KILLED, TaskState.FAILED, TaskState.PREEMPTED, TaskState.WORKER_FAILED])
+def test_command_on_an_ended_sandbox_raises_machine_terminated(tmp_path: Path, state: TaskState) -> None:
+    machine, _ = local_machine(tmp_path, FailingRpc(), LocalTask(state))
+
+    with pytest.raises(MachineTerminated, match=f"is {state}"):
+        asyncio.run(machine.run(Command(("true",))))
+
+
+def test_exec_error_on_a_running_sandbox_is_not_machine_terminated(tmp_path: Path) -> None:
+    machine, _ = local_machine(tmp_path, FailingRpc(), LocalTask(TaskState.RUNNING))
+
+    with pytest.raises(RuntimeError, match="Iris exec failed") as raised:
+        asyncio.run(machine.run(Command(("true",))))
+    assert not isinstance(raised.value, MachineTerminated)

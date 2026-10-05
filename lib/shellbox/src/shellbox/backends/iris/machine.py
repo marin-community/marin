@@ -14,18 +14,31 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 
+from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
-from iris.client import IrisClient, Job
+from iris.client import IrisClient, Job, Task
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.timing import Duration
 
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    ExitReason,
+    MachineSpec,
+    MachineTerminated,
+    NetworkPolicy,
+    Result,
+    UnsupportedMachineSpec,
+)
 
-TRANSFER_CHUNK_BYTES = 128 * 1024
+# The worker runs `docker exec` or `kubectl exec` with the command as argv, and Linux caps one
+# argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
+# `sh -c` script, so 64 KiB of data (87,384 encoded bytes) leaves room for the target path.
+TRANSFER_CHUNK_BYTES = 64 * 1024
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
@@ -42,14 +55,14 @@ class IrisMachine:
         client: IrisClient,
         rpc: ControllerServiceClientSync,
         job: Job,
-        task_id: str,
+        task: Task,
         spec: MachineSpec,
     ):
         self.endpoint = endpoint
         self.client = client
         self.rpc = rpc
         self.job = job
-        self.task_id = task_id
+        self.task = task
         self.spec = spec
         self._closed = False
 
@@ -59,15 +72,29 @@ class IrisMachine:
         if self._closed:
             raise RuntimeError("Machine is closed")
         seconds = math.ceil(timeout) if timeout is not None else -1
-        response = self.rpc.exec_in_container(
-            controller_pb2.Controller.ExecInContainerRequest(
-                task_id=self.task_id, command=argv, timeout_seconds=seconds
-            ),
-            timeout_ms=(seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000,
-        )
+        try:
+            response = self.rpc.exec_in_container(
+                controller_pb2.Controller.ExecInContainerRequest(
+                    task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
+                ),
+                timeout_ms=(seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000,
+            )
+        except ConnectError as error:
+            self._raise_if_terminated(error)
+            raise
         if response.error:
-            raise RuntimeError(f"Iris exec failed: {response.error}")
+            error = RuntimeError(f"Iris exec failed: {response.error}")
+            self._raise_if_terminated(error)
+            raise error
         return response
+
+    def _raise_if_terminated(self, cause: Exception) -> None:
+        """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
+        status = self.task.status()
+        if status.state != TaskState.RUNNING:
+            raise MachineTerminated(
+                f"Iris sandbox task {self.task.task_id} is {status.state}: {status.error_message or cause}"
+            ) from cause
 
     async def _script(
         self, script: str, timeout: float | None = None
@@ -187,11 +214,17 @@ class IrisMachine:
 
 
 class IrisMachineFactory:
-    """Submit a CPU-only gVisor job from a registry image."""
+    """Submit a CPU-only gVisor job from a registry image.
+
+    Iris cannot set a job's network, so ``cluster_network`` is the caller's assertion of the network
+    the target cluster's gVisor profile gives every sandbox. ``create`` refuses any spec that asks
+    for a different policy; the factory does not check the assertion.
+    """
 
     def __init__(
         self,
         *,
+        cluster_network: NetworkPolicy,
         cluster: str | None = None,
         controller_url: str | None = None,
         scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
@@ -200,6 +233,7 @@ class IrisMachineFactory:
     ):
         if (cluster is None) == (controller_url is None):
             raise ValueError("Specify exactly one Iris cluster or controller URL")
+        self.cluster_network = cluster_network
         self.cluster = cluster
         self.controller_url = controller_url
         self.scheduling_timeout = scheduling_timeout
@@ -211,8 +245,11 @@ class IrisMachineFactory:
             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Iris requires a registry image reference")
-        if spec.network is NetworkPolicy.DENY:
-            raise UnsupportedMachineSpec("Iris does not provide per-job network denial; select NetworkPolicy.ALLOW")
+        if spec.network is not self.cluster_network:
+            raise UnsupportedMachineSpec(
+                f"Iris cannot set a job's network; this factory's cluster provides {self.cluster_network}, "
+                f"not {spec.network}"
+            )
         return await asyncio.to_thread(self._create_sync, spec)
 
     def _create_sync(self, spec: MachineSpec) -> IrisMachine:
@@ -251,7 +288,7 @@ class IrisMachineFactory:
                 if tasks:
                     status = tasks[0].status()
                     if status.state == job_pb2.TASK_STATE_RUNNING:
-                        machine = IrisMachine(endpoint, client, rpc, job, tasks[0].task_id.to_wire(), spec)
+                        machine = IrisMachine(endpoint, client, rpc, job, tasks[0], spec)
                         created = machine._exec_sync(["mkdir", "-p", spec.workdir])
                         if created.exit_code:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
