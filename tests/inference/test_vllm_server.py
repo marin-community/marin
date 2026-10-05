@@ -227,7 +227,7 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
 
 
 def test_native_error_summary_preserves_originating_exception(tmp_path):
-    (tmp_path / "stdout.log").write_text("ordinary output\nRuntimeError: engine initialization failed\n")
+    (tmp_path / "stdout.log").write_text("RuntimeError: engine initialization failed\n" + "ordinary output\n" * 1000)
     (tmp_path / "stderr.log").write_text("Ninja build stopped\nCalledProcessError: nvcc exited 1\n")
 
     summary = _native_error_summary(str(tmp_path))
@@ -243,6 +243,7 @@ def test_native_logs_keeps_placement_older_than_diagnostic_tail(tmp_path):
     (tmp_path / "stderr.log").write_text("")
 
     assert placement not in _native_logs_tail(str(tmp_path), max_lines=200)
+    assert "later line 249" not in _native_logs_tail(str(tmp_path), max_lines=0)
     assert placement in _native_logs(str(tmp_path))
 
 
