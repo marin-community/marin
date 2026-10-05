@@ -5420,12 +5420,15 @@ def _softmax_mix(logits: list[jax.Array], sources: list[jax.Array]) -> tuple[jax
         def chunked(x):
             return rearrange(x.astype(jnp.float32), "b s (h d) -> b s h d", h=heads)
 
-        mixed = weights[0][..., None] * chunked(sources[0])
-        for weight, source in zip(weights[1:], sources[1:], strict=True):
+        rows = _logit_rows(weights)
+        mixed = rows[0][..., None] * chunked(sources[0])
+        for weight, source in zip(rows[1:], sources[1:], strict=True):
             mixed = mixed + weight[..., None] * chunked(source)
         return weights, rearrange(mixed, "b s h d -> b s (h d)")
-    mixed = weights[0][..., None] * sources[0].astype(jnp.float32)
-    for weight, source in zip(weights[1:], sources[1:], strict=True):
+    # Per-source rows through ``_logit_rows``: slicing ``weights`` would pad every row's gradient to [N, B, S].
+    rows = _logit_rows(weights)
+    mixed = rows[0][..., None] * sources[0].astype(jnp.float32)
+    for weight, source in zip(rows[1:], sources[1:], strict=True):
         mixed = mixed + weight[..., None] * source.astype(jnp.float32)
     return weights, mixed
 
