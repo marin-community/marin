@@ -23,6 +23,8 @@ from taskcompendium.environment import (
     RegistryImage,
 )
 
+from rolloutengine.cleanup import _Cleanup, _retain_task
+
 
 async def _install_files(machine: Machine, files: tuple[EnvironmentFile, ...]) -> None:
     with TemporaryDirectory(prefix="rollout-files-") as directory:
@@ -72,12 +74,7 @@ async def _wait_for_healthcheck(machine: Machine, healthcheck: HealthcheckSpec) 
         await asyncio.sleep(healthcheck.start_interval if in_grace else healthcheck.interval)
 
 
-@asynccontextmanager
-async def _task_machine(environment: EnvironmentSpec, factories: Mapping[EnvironmentKind, MachineFactory]):
-    """Yield a prepared machine, or none for a null environment, and release it after use."""
-    if environment.kind == EnvironmentKind.NULL:
-        yield None
-        return
+async def _create_machine(environment: EnvironmentSpec, factories: Mapping[EnvironmentKind, MachineFactory]) -> Machine:
     async with AsyncExitStack() as resources:
         if environment.kind == EnvironmentKind.SHELLSIM:
             source = ShellSimBuiltins()
@@ -92,38 +89,46 @@ async def _task_machine(environment: EnvironmentSpec, factories: Mapping[Environ
                 path.write_bytes(file.content)
                 path.chmod(file.mode)
             source = DockerfileSource(directory, directory / environment.image.dockerfile.lstrip("/"))
-        async with asyncio.timeout(environment.startup_timeout):
-            machine = await factories[environment.kind].create(
-                MachineSpec(
-                    source=source,
-                    workdir=environment.workdir,
-                    env=resolve_env_vars(environment.env),
-                    network=NetworkPolicy.ALLOW if environment.network else NetworkPolicy.DENY,
-                    memory_mb=environment.memory_mb,
-                    cpus=environment.cpus,
-                    storage_mb=environment.storage_mb,
-                    gpus=environment.gpus,
-                    startup_timeout=environment.startup_timeout,
-                )
+        return await factories[environment.kind].create(
+            MachineSpec(
+                source=source,
+                workdir=environment.workdir,
+                env=resolve_env_vars(environment.env),
+                network=NetworkPolicy.ALLOW if environment.network else NetworkPolicy.DENY,
+                memory_mb=environment.memory_mb,
+                cpus=environment.cpus,
+                storage_mb=environment.storage_mb,
+                gpus=environment.gpus,
+                startup_timeout=environment.startup_timeout,
             )
-            resources.push_async_callback(_close_machine, machine)
+        )
+
+
+async def _discard_machine(creation: asyncio.Task[Machine], cleanup_timeout: float) -> None:
+    machine = await creation
+    cleanup = _Cleanup(cleanup_timeout)
+    await cleanup.run("late_machine_close", machine.close)
+
+
+@asynccontextmanager
+async def _task_machine(
+    environment: EnvironmentSpec, factories: Mapping[EnvironmentKind, MachineFactory], cleanup: _Cleanup
+):
+    """Prepare a machine. Close a machine created after cancellation in the background."""
+    if environment.kind == EnvironmentKind.NULL:
+        yield None
+        return
+    async with AsyncExitStack() as resources:
+        async with asyncio.timeout(environment.startup_timeout):
+            creation = asyncio.create_task(_create_machine(environment, factories))
+            try:
+                machine = await asyncio.shield(creation)
+            except asyncio.CancelledError:
+                _retain_task(asyncio.create_task(_discard_machine(creation, cleanup.timeout)))
+                raise
+            resources.push_async_callback(cleanup.run, "machine_close", machine.close)
             await _install_files(machine, environment.files)
             await _run_setup_commands(machine, environment.setup, "Environment setup command")
             if environment.healthcheck is not None:
                 await _wait_for_healthcheck(machine, environment.healthcheck)
         yield machine
-
-
-async def _close_machine(machine: Machine) -> None:
-    # A total-attempt deadline can expire during cleanup after a startup timeout.
-    cleanup = asyncio.create_task(machine.close())
-    try:
-        await asyncio.shield(cleanup)
-    except asyncio.CancelledError:
-        while not cleanup.done():
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                continue
-        cleanup.result()
-        raise
