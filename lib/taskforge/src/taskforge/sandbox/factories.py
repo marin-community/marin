@@ -10,7 +10,6 @@ describes the same factories so validation can refuse a task up front with a typ
 The capability table mirrors the checks each shellbox backend makes at create time.
 """
 
-import os
 import shutil
 import subprocess
 from collections.abc import Mapping
@@ -36,7 +35,6 @@ from taskcompendium.environment import (
 from taskcompendium.models import TaskSpec, VerifierKind
 
 IMAGE_CACHE_DIR = Path("~/.cache/taskforge/images").expanduser()
-IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
 DOCKER_PROBE_TIMEOUT = 20
 # ShellSim accepts no execution user other than root (shellbox.backends.shellsim.machine.ShellSimMachine.run).
 SHELLSIM_USERS = frozenset({"0", "root"})
@@ -152,7 +150,7 @@ IRIS_DOCKER = FactoryCapabilities(
 
 
 def factory_capabilities(where: MachineHost) -> dict[EnvironmentKind, FactoryCapabilities]:
-    """What the factories ``machine_factories(where)`` returns can run, per environment kind."""
+    """What the factories ``machine_factories(where, ...)`` returns can run, per environment kind."""
     if where is MachineHost.IRIS:
         return {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: IRIS_DOCKER}
     docker = local_docker()
@@ -162,16 +160,16 @@ def factory_capabilities(where: MachineHost) -> dict[EnvironmentKind, FactoryCap
     return {EnvironmentKind.SHELLSIM: SHELLSIM, EnvironmentKind.DOCKER: LOCAL_DOCKER}
 
 
-def machine_factories(where: MachineHost) -> Mapping[EnvironmentKind, MachineFactory]:
+def machine_factories(where: MachineHost, controller_url: str | None) -> Mapping[EnvironmentKind, MachineFactory]:
     """The factories ``ShellboxRolloutEngine`` takes. DOCKER is absent when the laptop has no Docker.
 
-    On Iris the factory submits sandboxes to the controller of the task it runs in.
+    On Iris the DOCKER factory submits sandboxes to ``controller_url``, the controller of the task
+    Taskforge runs in; on a laptop ``controller_url`` must be ``None``.
     """
+    if (where is MachineHost.IRIS) != (controller_url is not None):
+        raise ValueError(f"{where} factories take a controller URL only on Iris, got {controller_url!r}")
     factories: dict[EnvironmentKind, MachineFactory] = {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}
-    if where is MachineHost.IRIS:
-        controller_url = os.environ.get(IRIS_CONTROLLER_URL_ENV)
-        if not controller_url:
-            raise RuntimeError(f"{IRIS_CONTROLLER_URL_ENV} is unset; MachineHost.IRIS runs only inside an Iris task")
+    if controller_url is not None:
         factories[EnvironmentKind.DOCKER] = IrisMachineFactory(controller_url=controller_url)
         return factories
     docker = local_docker()
