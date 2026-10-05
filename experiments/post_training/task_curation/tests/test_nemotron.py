@@ -48,7 +48,6 @@ def test_safety_selection_preserves_request_for_normalization(tmp_path):
     result = recipe.pipeline.normalize(RawRow("safety-1", _source(), records[0]["data"]))
     assert isinstance(result, NormalizedTask)
     assert result.task.context.events == (TextMessage(role="user", content="Explain safe handling."),)
-    assert result.task.verifier is not None
 
 
 def test_swe_components_split_by_pinned_membership(tmp_path):

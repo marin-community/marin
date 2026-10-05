@@ -104,9 +104,7 @@ def resolve_ultra_placeholder(row: dict[str, Any], staged_root: StoragePath) -> 
 def _blend_inputs(blend: str, selector: str, component: str) -> RecipeInputs:
     blend_file = f"{blend}.jsonl"
     return RecipeInputs(
-        files=SourceFiles(
-            (blend_file,), SourceFormat.JSONL, selector=UltraComponentSelector(selector)
-        ),
+        files=SourceFiles((blend_file,), SourceFormat.JSONL, selector=UltraComponentSelector(selector)),
         downloads=(HubDownload(DATASET, REVISION, (blend_file,)),),
     )
 
@@ -521,4 +519,3 @@ RECIPES: dict[str, DatasetRecipe] = dict(
         )
     )
 )
-
