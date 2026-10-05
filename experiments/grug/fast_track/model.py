@@ -1214,6 +1214,9 @@ class GrugModelConfig:
     """Rank ``r`` of a learned token-identity bias on the router logits, ``A[token_id] @ B_l``: ``A`` is one
     shared ``[vocab, r]`` table (random, like an embedding) and ``B_l`` a zero-init ``[r, E]`` per layer, so
     the model is unchanged at init. Added before QB, which then balances it. 0: off."""
+    router_on_embed: bool = False
+    """Every MoE router reads only the token's input embedding (RMS-normed, the first AttnRes source) instead of
+    the layer's MLP input: routing by learned token identity, one router per layer. AttnRes only."""
     router_on_latent: bool = False
     """The router reads the expert input (the RMS-normed MoE latent, ``latent_dim`` wide) instead of the full
     MLP input ``x``: its weight is ``[latent_dim, E]`` and routing gradients reach the latent projection."""
@@ -1599,6 +1602,21 @@ class GrugModelConfig:
             raise ValueError(f"sigmoid_gain_norms: unknown norms {sorted(unknown)}; choose from {SIGMOID_GAIN_ROLES}")
         if self.moe_compress_norm_weight > 0 and self.moe_compress != MoeCompress.TRANSFER:
             raise ValueError("moe_compress_norm_weight is the counter force for moe_compress=transfer")
+        if self.router_on_embed and (
+            self.router_on_latent
+            or self.dense_mlp
+            or not self.attn_res
+            or self.router_rank
+            or self.expert_router_orthogonal != "off"
+            or self.erc_loss_weight > 0
+            or self.router_embed_tie
+            or self.attn_res_sum_inputs
+            or self.moe_hash_layers
+        ):
+            raise ValueError(
+                "router_on_embed needs AttnRes and a plain full-rank router: no router_on_latent, router_rank, "
+                "expert_router_orthogonal, erc_loss_weight, router_embed_tie, attn_res_sum_inputs or moe_hash_layers"
+            )
         if self.router_on_latent and (
             self.dense_mlp
             or self.latent_dim is None
@@ -3307,7 +3325,7 @@ class MoEMLP(eqx.Module):
         """The ``[D, *]`` projections this MLP applies to its input: the router (unless ``router_on_latent``), then
         the latent down."""
         weights = []
-        if not self.cfg.router_on_latent:
+        if not (self.cfg.router_on_latent or self.cfg.router_on_embed):
             router_in = self.router if self.router is not None else self.router_down
             assert router_in is not None
             weights.append(reshard(router_in, P(None, None)))
@@ -3531,8 +3549,10 @@ class MoEMLP(eqx.Module):
         overlap: MoeOverlapWork | None = None,
         router_tok_rows: Float[Array, "B S r"] | None = None,
         router_seed_bias: Float[Array, "B S E"] | None = None,
+        router_embed: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller
+        """``router_embed`` is the token embedding the router reads under ``router_on_embed``.
+        ``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller
         computed them already (fused with other projections of the same input). ``hash_token_ids`` picks
         the experts by token-id hash (``moe_hash_layers``); ``noise_key`` adds the training-only Gumbel
         noise of ``moe_gumbel_tau`` to the expert selection; ``router_tok_rows`` are the tokens' rows of the
@@ -3544,13 +3564,24 @@ class MoEMLP(eqx.Module):
         if projected is None:
             projected = [jnp.einsum("td,de->te", x_flat, w) for w in self.input_projection_weights(x_flat.dtype)]
         latent_input = None
+        embed_logits = None
+        if self.cfg.router_on_embed:
+            assert router_embed is not None and self.router is not None
+            # The router reads the token embedding; the latent projection is the only fused projection here.
+            e = rms_norm(rearrange(router_embed, "b s d -> (b s) d").astype(jnp.float32), self.cfg.layer_norm_eps)
+            embed_logits = jnp.einsum(
+                "td,de->te", e, reshard(self.router, P(None, None)).astype(jnp.float32), out_sharding=_batch_spec()
+            )
+            projected = [None, *projected]
         if self.cfg.router_on_latent:
             # The router reads the expert input: the latent projection is the only fused projection here.
             assert self.latent_norm is not None and self.router is not None
             latent_input = self.latent_norm(reshard(projected[0], _batch_spec()))
             projected = [None, projected[0]]
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        if latent_input is not None:
+        if embed_logits is not None:
+            router_logits = embed_logits
+        elif latent_input is not None:
             router_logits = jnp.einsum(
                 "tl,le->te",
                 latent_input.astype(jnp.float32),
@@ -3873,6 +3904,7 @@ def moe_and_shared_fused(
     router_tok_rows: Float[Array, "B S r"] | None = None,
     router_seed_bias: Float[Array, "B S E"] | None = None,
     shadow: DenseMLP | None = None,
+    router_embed: Float[Array, "B S D"] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -3913,7 +3945,7 @@ def moe_and_shared_fused(
         parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1)
     else:
         # Some projections read another stream (attn_res_sum_inputs): one GEMM per projection.
-        moe_names = ["latent"] if mlp.cfg.router_on_latent else ["router", "latent"]
+        moe_names = ["latent"] if (mlp.cfg.router_on_latent or mlp.cfg.router_on_embed) else ["router", "latent"]
         names = moe_names[: len(moe_weights)] + ["shared"] * (len(weights) - len(moe_weights))
         flats = {k: rearrange(v, "b s d -> (b s) d") for k, v in part_inputs.items()}
         parts = [
@@ -3928,6 +3960,7 @@ def moe_and_shared_fused(
         router_tok_rows=router_tok_rows,
         router_seed_bias=router_seed_bias,
         overlap=overlap,
+        router_embed=router_embed,
     )
     if overlap is not None:
         return routed, stats
@@ -4547,6 +4580,7 @@ class Block(eqx.Module):
         noise_key: jax.Array | None = None,
         router_tok_rows: Float[Array, "B S r"] | None = None,
         router_seed_bias: Float[Array, "B S E"] | None = None,
+        router_embed: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
@@ -4575,6 +4609,7 @@ class Block(eqx.Module):
                 router_tok_rows,
                 router_seed_bias,
                 self.shadow,
+                router_embed,
             )
         else:
             out, stats = self.mlp(
@@ -4583,6 +4618,7 @@ class Block(eqx.Module):
                 noise_key=noise_key,
                 router_tok_rows=router_tok_rows,
                 router_seed_bias=router_seed_bias,
+                router_embed=router_embed,
             )
         if self.moe_out_gate_w is not None and self.moe_out_gate_b is not None:
             gate_logit = jnp.einsum(
@@ -5598,6 +5634,7 @@ def _route_kwargs(
         "hash_token_ids": token_ids if physical_layer in cfg.moe_hash_layers else None,
         "noise_key": noise_key,
         "router_tok_rows": None if extras is None else extras.get("router_tok"),
+        "router_embed": None if extras is None else extras.get("router_embed"),
         "router_seed_bias": _merged_router_bias(
             _router_seed_bias(cfg, physical_layer, token_ids) if cfg.router_bias_seed else None,
             None if extras is None else extras.get("router_hist"),
@@ -6725,6 +6762,9 @@ class Transformer(eqx.Module):
             if cfg.attn_res_heads > 1:
                 raise ValueError("attn_res_token_query needs single-head AttnRes (attn_res_heads=1)")
             logit_bias = {**(logit_bias or {}), "token_ids": token_ids}
+        if cfg.router_on_embed:
+            # router_on_embed: every MoE router reads the token embedding (the first AttnRes source).
+            logit_bias = {**(logit_bias or {}), "router_embed": hidden}
         if self.router_tok_a is not None:
             # router_token_bias_rank: every MoE layer reads the tokens' rows of the shared table.
             logit_bias = {**(logit_bias or {}), "router_tok": _embedding_gather(self.router_tok_a, token_ids)}
