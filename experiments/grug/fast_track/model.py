@@ -682,6 +682,9 @@ class GrugModelConfig:
     topk_layer_k: int | None = None
     num_layers: int = 6
     num_heads: int = 4
+    mla_num_heads: int | None = None
+    """Query/KV heads of the global (MLA / full-attention) layers when they differ from ``num_heads`` (the KDA
+    layers keep ``num_heads``); the head width stays ``inferred_head_dim``."""
     num_kv_heads: int = 1
     local_kv_heads: int | None = 1
     global_kv_heads: int | None = 1
@@ -4507,10 +4510,11 @@ class Block(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        attn_cfg = cfg if cfg.mla_num_heads is None else dataclasses.replace(cfg, num_heads=cfg.mla_num_heads)
         attn = (
             KimiDeltaAttention.init(cfg, key=attn_key)
             if use_kda
-            else CausalSelfAttention.init(cfg, key=attn_key, layer_index=layer_index)
+            else CausalSelfAttention.init(attn_cfg, key=attn_key, layer_index=layer_index)
         )
         # KDA blocks have no branch-output SConv (K3 has only the q/k/v convs).
         use_attn_sconv = cfg.sconv and "attn" in cfg.sconv_sites and not use_kda
