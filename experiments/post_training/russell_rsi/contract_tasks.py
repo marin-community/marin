@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -254,6 +255,7 @@ async def contract_attempt(
     build,
     factory,
     persist: Callable[[Path], Awaitable[None]],
+    consumed_attempts: int = 0,
 ):
     """Share two startup attempts across observation capture and final admission."""
     from shellbox.machine import MachineStartupError  # noqa: PLC0415
@@ -272,6 +274,10 @@ async def contract_attempt(
     )
 
     result: dict
+    if type(consumed_attempts) is not int or not 0 <= consumed_attempts <= MAX_ATTEMPTS:
+        raise ValueError("Invalid consumed attempt count")
+    if consumed_attempts:
+        identity = {**identity, "consumed_attempts": consumed_attempts}
     if stage not in {"prepare", "admit"}:
         raise ValueError("Unknown fixed contract stage")
     if len(contract.probes) < 2 or len(contract.probes) > 4:
@@ -284,6 +290,14 @@ async def contract_attempt(
         raise ValueError("Contract scientific identity changed")
     await save_admission_record(identity_path, identity, persist)
     await save_admission_record(directory / "snapshot.json", snapshot.model_dump(mode="json"), persist)
+    attempts = directory / "attempts"
+    attempts.mkdir(exist_ok=True)
+    local_attempts = sorted(attempts.iterdir())
+    if consumed_attempts + len(local_attempts) > MAX_ATTEMPTS:
+        raise ValueError("Contract attempt journal exceeds the shared budget")
+    expected_names = [f"{consumed_attempts + index + 1:04d}" for index in range(len(local_attempts))]
+    if [path.name for path in local_attempts] != expected_names:
+        raise ValueError("Local attempts do not match the carried attempt count")
     expected_path = directory / "expected.json"
     statement_path = directory / "statement.json"
     final = directory / "result.json"
@@ -300,9 +314,7 @@ async def contract_attempt(
     prepared_path = directory / "prepared.json"
     if stage == "prepare" and prepared_path.exists():
         return {"accepted": False, "stage": "review_ready", **json.loads(prepared_path.read_text())}
-    attempts = directory / "attempts"
-    attempts.mkdir(exist_ok=True)
-    for previous in sorted(attempts.iterdir()):
+    for previous in local_attempts:
         exception_path = previous / "exception.json"
         if exception_path.exists():
             exception = json.loads(exception_path.read_text())
@@ -341,8 +353,8 @@ async def contract_attempt(
             result = {"accepted": False, "stage": "statement_review", "statement_sha256": statement_hash}
             await save_admission_record(final, result, persist)
             return result
-    while resume is not None or len(list(attempts.iterdir())) < MAX_ATTEMPTS:
-        attempt = resume or attempts / f"{len(list(attempts.iterdir())) + 1:04d}"
+    while resume is not None or consumed_attempts + len(list(attempts.iterdir())) < MAX_ATTEMPTS:
+        attempt = resume or attempts / f"{consumed_attempts + len(list(attempts.iterdir())) + 1:04d}"
         resume = None
         attempt.mkdir(exist_ok=True)
         await save_admission_record(attempt / "started.json", {"identity_sha256": digest(identity)}, persist)
@@ -521,6 +533,81 @@ class ContractTasksConfig:
     observation_manifest_sha256: str
     observation_source_manifest_uri: str
     observation_source_manifest_sha256: str
+    case_timeout: float = 10
+    verifier_timeout: float = 120
+    recovery_manifest_uri: str = ""
+    recovery_manifest_sha256: str = ""
+
+
+def recovery_attempts(
+    recovery: dict,
+    predecessor: Path,
+    terminal: dict,
+    manifest: dict,
+    snapshots: dict,
+    current_code: str,
+    source_manifest_sha256: str,
+    stopped_files: dict[str, str],
+) -> dict[str, int]:
+    """Carry the first attempt from a pinned, stopped predecessor cohort."""
+    scientific_files = {path: sha for path, sha in recovery["files"].items() if not path.startswith(".executor_")}
+    if stopped_files != scientific_files:
+        raise ValueError("Recovery inventory differs from the stopped predecessor output")
+    if recovery["source_manifest_sha256"] != source_manifest_sha256:
+        raise ValueError("Recovery changed the frozen source manifest")
+    if recovery["new_contract_code_sha256"] != hashlib.sha256(Path(__file__).read_bytes()).hexdigest():
+        raise ValueError("Recovery does not pin the current contract code")
+    if recovery["new_admission_code_sha256"] != current_code:
+        raise ValueError("Recovery does not pin the current admission code")
+    jobs = terminal["jobs"]
+    if terminal["source"] != "Iris Controller.GetJobStatus":
+        raise ValueError("Recovery requires controller job metadata")
+    if not jobs or sum(job["job_id"] == recovery["predecessor_job_id"] for job in jobs) != 1:
+        raise ValueError("Recovery terminal metadata does not identify the predecessor")
+    for job in jobs:
+        if job["state"] != "JOB_STATE_KILLED" or int(job["finished_at"]["epochMs"]) <= 0:
+            raise ValueError("Recovery requires terminal predecessor job metadata")
+        if job["task_count"] < 1 or job["task_state_counts"] != {"killed": job["task_count"]}:
+            raise ValueError("Recovery predecessor still has active tasks")
+    cohort = json.loads((predecessor / "cohort-identity.json").read_text())
+    if (
+        cohort["manifest_sha256"] != recovery["source_manifest_sha256"]
+        or cohort["admission_code_sha256"] != recovery["old_admission_code_sha256"]
+        or cohort["code_sha256"] != recovery["old_contract_code_sha256"]
+    ):
+        raise ValueError("Recovery predecessor code or source identity changed")
+    contracts = {row["contract_id"]: row for row in manifest["contracts"]}
+    recovered = {row["contract_id"]: row for row in recovery["contracts"]}
+    if len(recovered) != len(recovery["contracts"]) or set(recovered) != set(contracts):
+        raise ValueError("Recovery must preserve all original contracts")
+    for identifier, row in contracts.items():
+        carried = recovered[identifier]
+        if carried["original_family_id"] != row.get("original_family_id", identifier):
+            raise ValueError("Recovery changed an original family")
+        if carried["consumed_attempts"] != 1 or type(carried["consumed_attempts"]) is not int:
+            raise ValueError("Recovery permits only one consumed predecessor attempt")
+        directory = predecessor / "contracts" / identifier
+        identity = json.loads((directory / "identity.json").read_text())
+        snapshot = snapshots[row["source_id"]]
+        if (
+            identity["cohort_sha256"] != digest(cohort)
+            or identity["source_sha256"] != digest(snapshot.model_dump(mode="json"))
+            or identity["probes_sha256"] != digest(fixed_contract(row).probes)
+            or SourceSnapshot.model_validate_json((directory / "snapshot.json").read_bytes()) != snapshot
+        ):
+            raise ValueError("Recovery changed the predecessor source or probes")
+        if (directory / "result.json").exists():
+            raise ValueError("Recovery cannot retry a completed scientific result")
+        attempts = sorted((directory / "attempts").iterdir())
+        if [attempt.name for attempt in attempts] != ["0001"]:
+            raise ValueError("Recovery predecessor does not contain exactly its first attempt")
+        result_path = attempts[0] / "result.json"
+        if result_path.exists() and json.loads(result_path.read_text()).get("exception_type") != "MachineStartupError":
+            raise ValueError("Recovery cannot retry a completed behavioral outcome")
+        started = json.loads((attempts[0] / "started.json").read_text())
+        if started["identity_sha256"] != digest(identity):
+            raise ValueError("Recovery predecessor attempt identity changed")
+    return {identifier: 1 for identifier in contracts}
 
 
 def run_contract_tasks_in_project(config: ContractTasksConfig) -> None:
@@ -552,6 +639,8 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
         save_admission_record,
     )
 
+    if not all(math.isfinite(value) and value > 0 for value in (config.case_timeout, config.verifier_timeout)):
+        raise ValueError("Task budgets must be finite and positive")
     if config.method not in {TEACHER_METHOD, RENDERED_METHOD, FRESH_RENDERED_METHOD}:
         raise ValueError("Unknown construction method")
     imported_rendering = config.method == RENDERED_METHOD
@@ -585,6 +674,8 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
         evidence = root / "input"
         manifest = download_evidence(config.manifest_uri, config.manifest_sha256, evidence)
         contracts = manifest["contracts"]
+        if any(config.verifier_timeout <= len(row["probes"]) * config.case_timeout for row in contracts):
+            raise ValueError("Verifier budget must exceed the total case budget")
         feedback_labels = {row["label"] for row in capabilities["skills"]}
         for row in contracts:
             labels = {CodingSkill(label).value for label in row["capability_labels"]}
@@ -680,6 +771,53 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                 )
                 for row in contracts
             }
+        consumed = {}
+        recovery = None
+        if bool(config.recovery_manifest_uri) != bool(config.recovery_manifest_sha256):
+            raise ValueError("Recovery requires a manifest URI and SHA256")
+        if config.recovery_manifest_uri:
+            if config.method != FRESH_RENDERED_METHOD:
+                raise ValueError("Recovery requires fresh rendered observations")
+            predecessor = root / "predecessor"
+            recovery = download_evidence(config.recovery_manifest_uri, config.recovery_manifest_sha256, predecessor)
+            terminal = json.loads(
+                pinned_bytes(recovery["terminal_job_metadata"]["uri"], recovery["terminal_job_metadata"]["sha256"])
+            )
+            for predecessor_uri in (recovery["original_artifact_uri"], recovery["predecessor_output_uri"]):
+                if config.output_path.rstrip("/") == predecessor_uri.rstrip("/") or config.output_path.startswith(
+                    predecessor_uri.rstrip("/") + "/"
+                ):
+                    raise ValueError("Recovery requires a separate output namespace")
+            predecessor_storage = StoragePath(recovery["predecessor_output_uri"])
+            actual_files = {}
+            for source in (predecessor_storage / "**/*").glob():
+                if source.isdir():
+                    continue
+                relative = source.relative_to(predecessor_storage)
+                if not relative.startswith(".executor_"):
+                    actual_files[relative] = hashlib.sha256(source.read_bytes()).hexdigest()
+            old_cohort = json.loads((predecessor / "cohort-identity.json").read_text())
+            if (
+                old_cohort["method"] != config.method
+                or old_cohort["capabilities_sha256"] != config.capabilities_sha256
+                or old_cohort["renderer_sha256"] != digest(RENDERER_SPEC)
+            ):
+                raise ValueError("Recovery changed the construction method, capabilities, or renderer")
+            if recovery["new_task_budgets"] != {
+                "case_timeout": config.case_timeout,
+                "verifier_timeout": config.verifier_timeout,
+            }:
+                raise ValueError("Recovery task budgets differ from its declaration")
+            consumed = recovery_attempts(
+                recovery,
+                predecessor,
+                terminal,
+                manifest,
+                snapshots,
+                admission_code_sha256(),
+                config.manifest_sha256,
+                actual_files,
+            )
         runtime_config = RuntimeBundle(**manifest["runtime_bundle"])
         runtime = install_runtime_bundle(runtime_config)
         factory = QemuMachineFactory(
@@ -710,6 +848,14 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
             "code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "admission_code_sha256": admission_code_sha256(),
         }
+        if config.case_timeout != 10 or config.verifier_timeout != 120:
+            scientific_identity["task_budgets"] = {
+                "case_timeout": config.case_timeout,
+                "verifier_timeout": config.verifier_timeout,
+            }
+        if recovery is not None:
+            scientific_identity["recovery_manifest_sha256"] = config.recovery_manifest_sha256
+            scientific_identity["consumed_attempts"] = consumed
         if rendered_method:
             scientific_identity["renderer_sha256"] = digest(RENDERER_SPEC)
             if imported_rendering:
@@ -753,7 +899,8 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                         snapshot,
                         repair,
                         image=manifest["image"],
-                        timeout=120,
+                        timeout=config.verifier_timeout,
+                        case_timeout=config.case_timeout,
                         dependency_wheels=dependency.path if dependency else None,
                         dependency_wheels_uri=dependency.uri if dependency else None,
                     )
@@ -818,6 +965,7 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                     build=build,
                     factory=factory,
                     persist=persist,
+                    consumed_attempts=consumed.get(contract.contract_id, 0),
                 )
                 task = None
                 if result.get("accepted"):

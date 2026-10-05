@@ -176,7 +176,7 @@ def prepared_statement(directory):
     return statement
 
 
-def execute(contract, source, tmp_path, stage, review=None):
+def execute(contract, source, tmp_path, stage, review=None, consumed_attempts=0):
     return asyncio.run(
         contract_attempt(
             contract,
@@ -190,6 +190,7 @@ def execute(contract, source, tmp_path, stage, review=None):
             build=lambda repair: tasks.build_task(source, repair, image="python-git", timeout=10),
             factory=None,
             persist=persisted,
+            consumed_attempts=consumed_attempts,
         )
     )
 
@@ -618,3 +619,107 @@ def test_import_rejects_changed_capture_evidence(tmp_path, source, contract, mut
         manifest["files"]["cohort-identity.json"] = "changed"
     with pytest.raises(ValueError, match=message):
         contract_tasks.imported_observations(tmp_path, manifest, contract, source)
+
+
+def test_recovery_offset_consumes_final_attempt_and_cannot_reset_identity(tmp_path, monkeypatch, source, contract):
+    calls = configure_observations(monkeypatch, source, [MachineStartupError("last startup")])
+    prepared_statement(tmp_path)
+    result = execute(contract, source, tmp_path, "prepare", consumed_attempts=1)
+    assert result["stage"] == "infrastructure_exhausted"
+    assert len(calls) == 1
+    assert [p.name for p in (tmp_path / "attempts").iterdir()] == ["0002"]
+    assert execute(contract, source, tmp_path, "prepare", consumed_attempts=1) == result
+    with pytest.raises(ValueError, match="identity changed"):
+        execute(contract, source, tmp_path, "prepare", consumed_attempts=0)
+    assert len(calls) == 1
+    (tmp_path / "attempts" / "0003").mkdir()
+    with pytest.raises(ValueError, match="exceeds the shared budget"):
+        execute(contract, source, tmp_path, "prepare", consumed_attempts=1)
+    assert len(calls) == 1
+
+
+def test_recovery_offset_two_cannot_start_a_machine(tmp_path, monkeypatch, source, contract):
+    calls = configure_observations(monkeypatch, source, [])
+    result = execute(contract, source, tmp_path, "prepare", consumed_attempts=2)
+    assert result["stage"] == "infrastructure_exhausted"
+    assert calls == []
+    assert list((tmp_path / "attempts").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "mutation", ["family", "probes", "active_job", "old_code", "omitted_attempt", "completed_result"]
+)
+def test_recovery_preserves_source_families_and_requires_stopped_predecessor(tmp_path, source, contract, mutation):
+    directory = tmp_path / "contracts" / contract.contract_id
+    attempt = directory / "attempts" / "0001"
+    attempt.mkdir(parents=True)
+    cohort = {
+        "manifest_sha256": "source-manifest",
+        "admission_code_sha256": "old-admission",
+        "code_sha256": "old-contract",
+    }
+    (tmp_path / "cohort-identity.json").write_text(json.dumps(cohort))
+    identity = {
+        "cohort_sha256": digest(cohort),
+        "source_sha256": digest(source.model_dump(mode="json")),
+        "probes_sha256": digest(contract.probes),
+    }
+    (directory / "identity.json").write_text(json.dumps(identity))
+    (directory / "snapshot.json").write_text(source.model_dump_json())
+    (attempt / "started.json").write_text(json.dumps({"identity_sha256": digest(identity)}))
+    row = asdict(contract) | {"source_id": source_group_id(source)}
+    manifest = {"contracts": [row]}
+    recovery = {
+        "source_manifest_sha256": "source-manifest",
+        "old_admission_code_sha256": "old-admission",
+        "old_contract_code_sha256": "old-contract",
+        "new_admission_code_sha256": "new-admission",
+        "new_contract_code_sha256": hashlib.sha256(Path(contract_tasks.__file__).read_bytes()).hexdigest(),
+        "predecessor_job_id": "first-job",
+        "contracts": [
+            {"contract_id": contract.contract_id, "original_family_id": contract.contract_id, "consumed_attempts": 1}
+        ],
+    }
+    terminal = {
+        "source": "Iris Controller.GetJobStatus",
+        "jobs": [
+            {
+                "job_id": "first-job",
+                "state": "JOB_STATE_KILLED",
+                "error": "Terminated by user",
+                "finished_at": {"epochMs": "1"},
+                "completed_count": 1,
+                "task_count": 1,
+                "task_state_counts": {"killed": 1},
+            }
+        ],
+    }
+    snapshots = {source_group_id(source): source}
+    stopped_files = {
+        path.relative_to(tmp_path).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    recovery["files"] = dict(stopped_files)
+    assert contract_tasks.recovery_attempts(
+        recovery, tmp_path, terminal, manifest, snapshots, "new-admission", "source-manifest", stopped_files
+    ) == {contract.contract_id: 1}
+    if mutation == "family":
+        recovery["contracts"][0]["original_family_id"] = "another-family"
+    elif mutation == "probes":
+        row["probes"] = ("observation = 99", "observation = 100")
+    elif mutation == "active_job":
+        terminal["jobs"][0]["state"] = "JOB_STATE_RUNNING"
+    elif mutation == "old_code":
+        recovery["old_admission_code_sha256"] = "changed"
+    elif mutation == "omitted_attempt":
+        stopped_files[f"contracts/{contract.contract_id}/attempts/0002/started.json"] = "second-attempt"
+    else:
+        result = directory / "result.json"
+        result.write_text(json.dumps({"accepted": False, "stage": "prequalification"}))
+        stopped_files[result.relative_to(tmp_path).as_posix()] = hashlib.sha256(result.read_bytes()).hexdigest()
+        recovery["files"] = dict(stopped_files)
+    with pytest.raises(ValueError):
+        contract_tasks.recovery_attempts(
+            recovery, tmp_path, terminal, manifest, snapshots, "new-admission", "source-manifest", stopped_files
+        )

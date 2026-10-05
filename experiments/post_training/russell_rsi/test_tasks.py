@@ -24,6 +24,7 @@ from experiments.post_training.russell_rsi.sources import SourceSnapshot, source
 from experiments.post_training.russell_rsi.tasks import (
     CONTROL_SOURCE,
     PROBE_RUNNER,
+    RUNNER_PATH,
     AdmissionPersistenceError,
     GeneratedRepair,
     InvalidRepair,
@@ -797,3 +798,32 @@ def test_admission_cancellation_persists_interruption_and_partial_dataset(tmp_pa
         assert report["exception_type"] == "CancelledError"
         assert report["stage"]["stage"] == "parent-1"
     assert "accepted/train.parquet" in persisted
+
+
+def test_explicit_case_budget_preserves_default_task_and_controls_real_probe_timeout(tmp_path):
+    default = build_task(seed(), repair(), image="python-git", timeout=120)
+    explicit = build_task(seed(), repair(), image="python-git", timeout=120, case_timeout=10)
+    assert default.model_dump_json() == explicit.model_dump_json()
+    delayed = repair().model_copy(
+        update={
+            "cases": (ObservationCase(probe_python="import time\ntime.sleep(0.08)\nobservation = 7", expected_json=7),)
+        }
+    )
+    outcomes = []
+    for budget in (0.01, 1):
+        task = build_task(seed(), delayed, image="python-git", timeout=300, case_timeout=budget)
+        verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
+        runner = next(file.content for file in verifier.files if file.path == RUNNER_PATH)
+        directory = tmp_path / str(budget)
+        directory.mkdir()
+        # Use host paths and the host user for this local subprocess boundary.
+        runner = runner.replace(b"if os.geteuid() != 0:", b"if False:")
+        runner = runner.replace(b'cwd="/workspace"', f"cwd={str(tmp_path)!r}".encode())
+        runner = runner.replace(b"user=65534, group=65534, extra_groups=[], ", b"")
+        script = directory / "runner.py"
+        script.write_bytes(runner)
+        (directory / "cases.json").write_text(json.dumps([case.model_dump() for case in delayed.cases]))
+        result = subprocess.run([sys.executable, "-I", str(script)], capture_output=True, timeout=5, check=False)
+        metrics = json.loads(result.stdout.decode().removeprefix("RSI_RESULT="))
+        outcomes.append((result.returncode, metrics["case_errors"], metrics["observations"]))
+    assert outcomes == [(1, ["timeout"], [None]), (0, [None], [7])]

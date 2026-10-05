@@ -10,6 +10,7 @@ import difflib
 import hashlib
 import inspect
 import json
+import math
 import os
 import tempfile
 import traceback
@@ -238,8 +239,16 @@ def build_task(
     timeout: float,
     dependency_wheels: Path | None = None,
     dependency_wheels_uri: str | None = None,
+    case_timeout: float = 10,
 ) -> TaskSpec:
     """Expose only the parent tree and keep the verifier in a fresh machine."""
+    if not math.isfinite(case_timeout) or case_timeout <= 0:
+        raise ValueError("Case timeout must be finite and positive")
+    if RUNNER.count("CASE_TIMEOUT = 10\n") != 1:
+        raise ValueError("Verifier runner must contain one case timeout assignment")
+    runner = (
+        RUNNER if case_timeout == 10 else RUNNER.replace("CASE_TIMEOUT = 10\n", f"CASE_TIMEOUT = {case_timeout!r}\n")
+    )
     changed = {
         path
         for path in set(snapshot.parent_files) | set(snapshot.reference_files)
@@ -389,7 +398,7 @@ def build_task(
                 EnvironmentFile(
                     path=PRIVATE_CASES, content=json.dumps([case.model_dump() for case in repair.cases]).encode()
                 ),
-                EnvironmentFile(path=RUNNER_PATH, content=RUNNER.encode()),
+                EnvironmentFile(path=RUNNER_PATH, content=runner.encode()),
                 EnvironmentFile(path=GUARD_PATH, content=guard.encode()),
             ),
         }
