@@ -1,28 +1,53 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verifier validation, grading records, and pure candidate grading."""
+"""Grade TaskCompendium submissions with packaged VerifyIT specifications."""
 
+import asyncio
 import json
-from dataclasses import dataclass, field
-from enum import StrEnum
-from typing import Any
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from rigging.filesystem.path_validation import validate_relative_file_path
+from shellbox.backends.docker.machine import DockerMachineFactory
 from verifyit.candidate import (
-    CandidateSpec,
     candidate_spec,
     grade_text_candidate,
     supports_candidate_mode,
 )
-from verifyit.grade import InvalidTask
+from verifyit.grade import InvalidTask, Reward, Status
+from verifyit.grade import grade as verifyit_grade
 from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
-from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec, Spec, mode_of, spec_to_table
+from verifyit.spec import (
+    DEFAULT_OUTPUT,
+    DEFAULT_WORKSPACE,
+    ExactSpec,
+    GotestSpec,
+    JsonSchemaSpec,
+    JudgeSpec,
+    JunitSpec,
+    McqSpec,
+    Mode,
+    NumericSpec,
+    PredictedActionSpec,
+    PytestSpec,
+    ReasoningGymSpec,
+    ScriptSpec,
+    Spec,
+    StdioSpec,
+    spec_from_table,
+)
 from verifyit.spec import FunctionCall as CandidateCall
 
-from taskcompendium.environment import ExternalVerifierSpec, ShellVerifierSpec
+from taskcompendium.environment import EnvironmentFile, ExternalVerifierSpec, ShellVerifierSpec
+from taskcompendium.grader import grader_package
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    AnswerType,
     AssistantToolCalls,
     ConversationTrace,
+    FunctionCall,
     SkippedVerifierSpec,
     StageVerifierSpec,
     TaskSpec,
@@ -30,44 +55,20 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
+from taskcompendium.runtime.grading import grade_submission
+from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.submission import AnswerFormat, FinalAction, Submission, extract_answer
 
 
-class Outcome(StrEnum):
-    GRADED = "graded"
-    EXTRACTION_ERROR = "extraction_error"
-    INFRA_ERROR = "infra_error"
-    UNAVAILABLE = "unavailable"
-    SKIPPED = "skipped"
-
-
-class GradingFailure(StrEnum):
-    TIMEOUT = "timeout"
-    MISSING_REWARD = "missing_reward"
-    EMPTY_REWARD = "empty_reward"
-    INVALID_REWARD = "invalid_reward"
-    EXECUTION = "execution"
-
-
-@dataclass(frozen=True)
-class GradeResult:
-    status: Outcome
-    reward: float | None
-    error: str | None = None
-    passed: bool | None = None
-    diagnostics: dict[str, Any] = field(default_factory=dict)
-    failure: GradingFailure | None = None
-    score_min: float = 0.0
-    score_max: float = 1.0
-    rewards: dict[str, float] = field(default_factory=dict)
-
-
-def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
-    """Validate and return the pure candidate grader for a verifier spec."""
-    if specification.environment_requirements.capabilities:
-        raise NotImplementedError("Pure verifiers cannot satisfy private environment requirements")
+def resolve_verifier(specification: VerifierSpec) -> Spec:
+    """Read a shared verifier spec without any TaskCompendium registration step."""
     try:
-        return candidate_spec(specification.kind, json.loads(specification.parameters_json))
+        parameters = json.loads(specification.parameters_json)
+        if "mode" in parameters:
+            raise ValueError("Verifier parameters must not override the mode")
+        if supports_candidate_mode(specification.kind):
+            return candidate_spec(specification.kind, parameters)
+        return spec_from_table({"mode": specification.kind, **parameters})
     except (ValueError, InvalidTask) as error:
         raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error
 
@@ -75,7 +76,9 @@ def resolve_verifier(specification: VerifierSpec) -> CandidateSpec:
 def validate_verifier(specification: VerifierSpec) -> None:
     """Validate the payload for each supported verifier kind."""
     if specification.kind == VerifierKind.SHELL:
-        ShellVerifierSpec.model_validate_json(specification.parameters_json)
+        verifier = ShellVerifierSpec.model_validate_json(specification.parameters_json)
+        if verifier.artifacts and specification.environment is None:
+            raise ValueError("Grading artifacts require a separate private environment")
     elif specification.kind == VerifierKind.EXTERNAL:
         ExternalVerifierSpec.model_validate_json(specification.parameters_json)
     elif specification.kind == VerifierKind.STAGED:
@@ -87,15 +90,38 @@ def validate_verifier(specification: VerifierSpec) -> None:
 
 
 def supports_verifier(specification: VerifierSpec) -> bool:
-    if specification.environment_requirements.capabilities or not supports_candidate_mode(specification.kind):
+    if specification.environment_requirements.capabilities or specification.environment is not None:
         return False
-    validate_verifier(specification)
-    return True
+    if specification.kind not in {mode.value for mode in Mode}:
+        return False
+    verifier = resolve_verifier(specification)
+    if isinstance(verifier, ScriptSpec):
+        if verifier.verdict_file is None or verifier.workspace != DEFAULT_WORKSPACE:
+            return False
+        try:
+            validate_relative_file_path(verifier.path)
+        except ValueError:
+            return False
+    return not isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec | ReasoningGymSpec)
 
 
-def grade_answer(specification: TaskSpec, convention: Submission, conversation: ConversationTrace) -> GradeResult:
+def grade_task(
+    specification: TaskSpec,
+    convention: Submission,
+    conversation: ConversationTrace,
+    evidence: RuntimeEvidence | None = None,
+) -> GradeResult:
     """Score terminal evidence and return its grading status and reward."""
     verifier = resolve_verifier(specification.verifier)
+    requirements = specification.verifier.environment_requirements
+    environment = specification.verifier.environment
+    executable = isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec)
+    if (requirements.capabilities or environment is not None) and isinstance(
+        verifier, PredictedActionSpec | ExactSpec | NumericSpec | McqSpec
+    ):
+        return GradeResult(Outcome.INVALID_TASK, None, "Direct candidate modes cannot declare a private runtime")
+    if requirements.capabilities and environment is None:
+        return GradeResult(Outcome.INFRA_ERROR, None, "Private grading environment is unavailable")
     final = conversation.events[-1]
     if isinstance(convention, FinalAction):
         try:
@@ -113,22 +139,145 @@ def grade_answer(specification: TaskSpec, convention: Submission, conversation: 
             else ()
         )
         return GradeResult(Outcome.GRADED, grade_predicted_action_candidate(verifier, calls).reward)
+    if isinstance(verifier, ExactSpec | NumericSpec | McqSpec):
+        try:
+            candidate = extract_answer(final, convention)
+        except (ValueError, TypeError) as error:
+            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+        if isinstance(verifier, McqSpec):
+            letter = candidate.strip()
+            if len(letter) != 1 or not "A" <= letter.upper() <= "Z":
+                return GradeResult(Outcome.EXTRACTION_ERROR, None, "MCQA response requires one option letter")
+        return _grade_result(grade_text_candidate(verifier, candidate))
+
+    if environment is not None:
+        if evidence is None:
+            return GradeResult(Outcome.INFRA_ERROR, None, "Missing captured submission files")
+        files = dict(evidence.files)
+        files["/app/state.json"] = evidence.state_json.encode()
+        if specification.answer_type in {AnswerType.TEXT, AnswerType.NUMBER}:
+            try:
+                candidate = extract_answer(final, convention)
+            except (ValueError, TypeError) as error:
+                return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+            try:
+                output = _answer_output(verifier)
+            except InvalidTask as error:
+                return GradeResult(Outcome.INVALID_TASK, None, str(error))
+            if not output.is_relative_to(DEFAULT_WORKSPACE) or ".." in output.parts:
+                return GradeResult(Outcome.INVALID_TASK, None, "Answer output must be within /app")
+            files[str(output)] = candidate.encode()
+        return asyncio.run(grade_submission(specification, files, DockerMachineFactory()))
+    if executable:
+        return GradeResult(Outcome.INFRA_ERROR, None, "Executable grading requires an isolated image")
+    if isinstance(verifier, ReasoningGymSpec):
+        return GradeResult(Outcome.INFRA_ERROR, None, "Reasoning-gym grading requires an isolated runner")
     try:
-        candidate = extract_answer(final, convention)
+        candidate = (
+            extract_answer(final, convention)
+            if specification.answer_type in {AnswerType.TEXT, AnswerType.NUMBER}
+            else None
+        )
     except (ValueError, TypeError) as error:
-        return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-    if isinstance(verifier, McqSpec):
-        letter = candidate.strip()
-        if len(letter) != 1 or not "A" <= letter.upper() <= "Z":
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, "MCQA response requires one option letter")
-    return GradeResult(Outcome.GRADED, grade_text_candidate(verifier, candidate).reward)
+        if evidence is None:
+            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+        candidate = None
+    return _grade_files(specification, verifier, candidate, evidence)
+
+
+def grade_answer(specification: TaskSpec, convention: Submission, conversation: ConversationTrace) -> GradeResult:
+    """Grade a final direct-chat answer."""
+    return grade_task(specification, convention, conversation)
+
+
+def _grade_result(verdict: Reward) -> GradeResult:
+    if verdict.status == Status.SCORED:
+        return GradeResult(Outcome.GRADED, verdict.reward, detail=verdict.detail)
+    status = Outcome.INVALID_TASK if verdict.status == Status.INVALID_TASK else Outcome.INFRA_ERROR
+    return GradeResult(status, None, verdict.detail.get("error"), detail=verdict.detail)
+
+
+def _answer_output(verifier: Spec) -> Path:
+    if isinstance(verifier, ScriptSpec):
+        return Path(DEFAULT_OUTPUT)
+    if isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec):
+        raise InvalidTask("Executable verifiers do not accept extracted text answers")
+    return Path(verifier.output)
+
+
+def _write_resource(root: Path, resource: EnvironmentFile) -> None:
+    path = root / resource.path.removeprefix("/")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(resource.content)
+    path.chmod(resource.mode)
+    if resource.mtime_ns is not None:
+        os.utime(path, ns=(resource.mtime_ns, resource.mtime_ns))
+
+
+def _grade_files(task: TaskSpec, verifier: Spec, candidate: str | None, evidence: RuntimeEvidence | None) -> GradeResult:
+    with TemporaryDirectory(prefix="taskcompendium-grader-") as directory:
+        root = Path(directory)
+        tests = root / "tests"
+        workspace = root / "app"
+        tests.mkdir()
+        workspace.mkdir()
+        for resource in task.environment.files:
+            _write_resource(root, resource)
+        if evidence is not None:
+            for path, data in evidence.files.items():
+                source = Path(path)
+                if not source.is_absolute() or ".." in source.parts:
+                    return GradeResult(Outcome.INFRA_ERROR, None, f"Invalid captured path: {path}")
+                if source.is_relative_to(DEFAULT_WORKSPACE):
+                    relative = source.relative_to(DEFAULT_WORKSPACE)
+                else:
+                    relative = Path("captured") / source.relative_to("/")
+                destination = workspace / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(data)
+            (workspace / "state.json").write_text(evidence.state_json)
+        if candidate is not None:
+            try:
+                output = _answer_output(verifier)
+            except InvalidTask as error:
+                return GradeResult(Outcome.INVALID_TASK, None, str(error))
+            if not output.is_relative_to(DEFAULT_WORKSPACE) or ".." in output.parts:
+                return GradeResult(Outcome.INVALID_TASK, None, "Answer output must be within /app")
+            target = workspace / output.relative_to(DEFAULT_WORKSPACE)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(candidate)
+        for resource in task.verifier.files:
+            _write_resource(root, resource)
+        if isinstance(verifier, ScriptSpec):
+            if verifier.verdict_file is None:
+                return GradeResult(Outcome.INVALID_TASK, None, "Script graders require a structured verdict file")
+            if verifier.workspace != DEFAULT_WORKSPACE:
+                return GradeResult(Outcome.INVALID_TASK, None, "Script workspace must be /app")
+            private_paths = (verifier.path,)
+        elif isinstance(verifier, JsonSchemaSpec):
+            private_paths = (verifier.schema,)
+        elif isinstance(verifier, ReasoningGymSpec):
+            private_paths = (verifier.entry, *((verifier.params,) if verifier.params is not None else ()))
+        elif isinstance(verifier, JudgeSpec) and verifier.context:
+            private_paths = (verifier.context,)
+        else:
+            private_paths = ()
+        try:
+            for path in private_paths:
+                validate_relative_file_path(path)
+        except ValueError as error:
+            return GradeResult(Outcome.INVALID_TASK, None, str(error))
+        try:
+            return _grade_result(verifyit_grade(verifier, tests, workspace))
+        except InvalidTask as error:
+            return GradeResult(Outcome.INVALID_TASK, None, str(error))
+        except Exception as error:
+            return GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
 
 
 def verifier_descriptor(spec: Spec) -> VerifierSpec:
     """Store a conversion-selected shared verifier contract in the private task slot."""
-    parameters = spec_to_table(spec)
-    parameters.pop("mode")
-    descriptor = VerifierSpec(kind=mode_of(spec), parameters_json=json.dumps(parameters))
+    descriptor = grader_package(spec)
     validate_verifier(descriptor)
     return descriptor
 
@@ -141,6 +290,16 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
 
 def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:
     return verifier_descriptor(NumericSpec(expected=expected, tolerance_abs=tolerance_abs, tolerance_rel=tolerance_rel))
+
+
+def multiple_choice_answer(expected: str, options: int) -> VerifierSpec:
+    return verifier_descriptor(McqSpec(expected=expected.strip().upper(), options=options))
+
+
+def predicted_action_verifier(expected_calls: tuple[FunctionCall, ...]) -> VerifierSpec:
+    return verifier_descriptor(
+        PredictedActionSpec(expected_calls=tuple(CandidateCall(call.name, call.arguments) for call in expected_calls))
+    )
 
 
 def skipped_verifier(reason: str) -> VerifierSpec:
