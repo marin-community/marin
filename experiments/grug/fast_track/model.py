@@ -5385,9 +5385,29 @@ def _token_query_logit(source: Float[Array, "B S D"], rows: Float[Array, "B S D"
     return dots * inv_rms
 
 
-def _block_logit(block_logits: jax.Array, queries: jax.Array, gate_index: int) -> jax.Array:
-    """Gate ``gate_index``'s row of a block's logits, which cover the trailing queries of the stack."""
-    return block_logits[gate_index - (queries.shape[0] - block_logits.shape[0])]
+@jax.custom_vjp
+def _logit_rows(logits: jax.Array) -> tuple[jax.Array, ...]:
+    """A block's ``[G, ...]`` gate logits as a tuple of per-gate rows.
+
+    Each later gate reads one row. Indexing the array instead makes every read's backward a pad to the
+    full ``[G, ...]`` shape plus an add, quadratic in the gate count; here the backward is one stack."""
+    return tuple(logits[i] for i in range(logits.shape[0]))
+
+
+def _logit_rows_fwd(logits):
+    return _logit_rows(logits), None
+
+
+def _logit_rows_bwd(_, row_cotangents):
+    return (jnp.stack(row_cotangents),)
+
+
+_logit_rows.defvjp(_logit_rows_fwd, _logit_rows_bwd)
+
+
+def _block_logit(block_logits: tuple[jax.Array, ...], queries: jax.Array, gate_index: int) -> jax.Array:
+    """Gate ``gate_index``'s row of a block's logits (``_logit_rows``), which cover the trailing queries."""
+    return block_logits[gate_index - (queries.shape[0] - len(block_logits))]
 
 
 def _softmax_mix(logits: list[jax.Array], sources: list[jax.Array]) -> tuple[jax.Array, jax.Array]:
@@ -5726,7 +5746,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     blocks = (*blocks, attn_out)
     block_logits = (
         *block_logits,
-        _attn_res_source_logits(attn_out, queries[first_reader:], eps, cfg.attn_res_head_norm),
+        _logit_rows(_attn_res_source_logits(attn_out, queries[first_reader:], eps, cfg.attn_res_head_norm)),
     )
     mlp_blocks, mlp_block_logits = shortcut_history if cfg.moe_shortcut else (blocks, block_logits)
     h, z_mlp, w_mlp = _attn_res_mix(
@@ -5882,7 +5902,7 @@ def _attn_res_layer_remat_bwd(
             cotangent = (d_partial, d_compress)
         ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_logit_bias),) = vjp_fn(cotangent)
         d_blocks = tuple(a + b for a, b in zip(d_blocks, d_blocks_own, strict=True))
-        d_block_logits = tuple(a + b for a, b in zip(d_block_logits, d_block_logits_own, strict=True))
+        d_block_logits = jax.tree.map(jnp.add, d_block_logits, d_block_logits_own)
         # One barrier over every cotangent: the weight gradients are off the critical path, and without
         # it XLA defers them past later layers' backward and keeps their inputs alive.
         return jax.lax.optimization_barrier((d_layer, d_blocks, d_block_logits, d_partial_in, d_queries, d_logit_bias))
@@ -6996,7 +7016,7 @@ class Transformer(eqx.Module):
                     # Score the new block only against the gates that can read it (this layer's onwards).
                     block_logits = (
                         *block_logits,
-                        _attn_res_source_logits(partial, queries[2 * eff :], eps, cfg.attn_res_head_norm),
+                        _logit_rows(_attn_res_source_logits(partial, queries[2 * eff :], eps, cfg.attn_res_head_norm)),
                     )
                     partial = None
                 if pass_index > 0 and i == 0:
