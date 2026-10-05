@@ -332,6 +332,9 @@ class RouterCombine(StrEnum):
     no renormalization: a token's total expert weight can vary."""
     SQRT_SOFTPLUS_RENORM = "sqrt_softplus_renorm"
     """``sqrt(softplus(logit))`` (DeepSeek-V4's SqrtSoftplus gate), renormalized to sum to ``routing_renorm_sum``."""
+    SQRT_SOFTPLUS_RAW = "sqrt_softplus_raw"
+    """``sqrt(softplus(logit))`` times a constant (``routing_renorm_sum / (K sqrt(log 2))``, so the sum matches at
+    init), no renormalization: a token's total expert weight can vary."""
 
 
 class AttnResTokenQuery(StrEnum):
@@ -777,6 +780,9 @@ class GrugModelConfig:
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     routing_renorm_sum: float = 2.5
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
+    routing_sum_learnable: bool = False
+    """Make ``routing_renorm_sum`` a learned scalar per MoE layer (init ``routing_renorm_sum``, Adam), logged as
+    ``train/attn_res/knob_routing_sum_L*``."""
     latent_select_pattern: str = "first"
     """Which ``latent_dim`` hidden channels ``latent_select`` reads: ``first`` (channels ``[0, latent_dim)`` in
     every layer), ``random`` (a fixed random subset per layer), or ``rotating`` (a contiguous window offset by
@@ -2286,6 +2292,8 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
     """Values of the small learned knobs of layer ``i`` (value residual mix, DIFF lambda, DyT alpha, PLE
     up-projection norm), exported as ``train/attn_res/knob_*`` to diagnose how each feature is used."""
     stats = {}
+    if isinstance(layer.mlp, MoEMLP) and layer.mlp.routing_sum is not None:
+        stats[f"attn_res_knob_routing_sum_L{i}"] = jax.lax.stop_gradient(layer.mlp.routing_sum).astype(jnp.float32)
     if layer.attn.cfg.attn_res_key_rank is not None:
         # LR-AttnRes: norms of this layer's r-wide pseudo-queries (0 at init = uniform routing).
         for name, query in (("attn", layer.attn_res_query_attn), ("mlp", layer.attn_res_query_mlp)):
@@ -3174,6 +3182,8 @@ class MoEMLP(eqx.Module):
     null_const_v: Float[Array, "C L"] | None
     null_const_w: Float[Array, "C L 2"] | None
     w_latent_down: jax.Array | None
+    routing_sum: Float[Array, ""] | None
+    """Learned total combine weight (``routing_sum_learnable``); None: the fixed ``routing_renorm_sum``."""
     router_mlp_a: jax.Array | None
     router_mlp_b: jax.Array | None
     expert_router_alpha: jax.Array | None
@@ -3250,6 +3260,7 @@ class MoEMLP(eqx.Module):
                 if cfg.expert_router_orthogonal == "learned"
                 else None
             ),
+            routing_sum=jnp.full((), cfg.routing_renorm_sum, jnp.float32) if cfg.routing_sum_learnable else None,
             w_latent_down=(
                 None
                 if latent is None or (selects and not cfg.latent_select_plus_proj)
@@ -3614,11 +3625,14 @@ class MoEMLP(eqx.Module):
             )(table, flat_ids)
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        renorm_sum = self.cfg.routing_renorm_sum
+        renorm_sum = self.cfg.routing_renorm_sum if self.routing_sum is None else self.routing_sum.astype(jnp.float32)
         if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
             combine_weights_f = renorm_sum * jax.nn.softmax(unbiased_topk, axis=-1)
         elif self.cfg.router_combine == RouterCombine.SIGMOID_RAW:
             combine_weights_f = jax.nn.sigmoid(unbiased_topk) * (renorm_sum / (k / 2))
+        elif self.cfg.router_combine == RouterCombine.SQRT_SOFTPLUS_RAW:
+            gate = jnp.sqrt(jnp.maximum(jax.nn.softplus(unbiased_topk), 1e-30))
+            combine_weights_f = gate * (renorm_sum / (k * math.sqrt(math.log(2.0))))
         else:
             if self.cfg.router_combine == RouterCombine.SQRT_SOFTPLUS_RENORM:
                 # The floor keeps sqrt's gradient finite if softplus underflows to 0 (logit below about -100).
