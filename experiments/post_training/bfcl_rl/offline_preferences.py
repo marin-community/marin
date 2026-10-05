@@ -44,7 +44,7 @@ from experiments.post_training.bfcl_rl.recovery_data import (
 
 @dataclass(frozen=True)
 class NativePreferenceConfig:
-    teacher: NativeCollectionInput
+    teachers: tuple[NativeCollectionInput, ...]
     student: NativeCollectionInput
     data_root: str
     student_tokenizer: str
@@ -86,8 +86,10 @@ def opencode_student_identity(messages: list[dict], source_alias: str, student_a
 
 def build_native_preference_cache(config: NativePreferenceConfig, partition: BFCLPartition) -> RecoveryPreferenceCache:
     """Retokenize both audited native branches and publish only sole-correct preference pairs."""
-    if config.teacher.seed != config.student.seed:
-        raise ValueError("Native preference collections must share the saved seed")
+    if not config.teachers:
+        raise ValueError("Native preferences require at least one teacher collection")
+    if len({source.terminal_uri for source in config.teachers}) != len(config.teachers):
+        raise ValueError("Native preferences require distinct teacher collections")
     root = StoragePath(config.output_path)
     raw = root / "native-chat"
     raw.mkdirs()
@@ -95,9 +97,10 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
     reports = []
     identity_adaptations = []
     with (raw / "branches.jsonl").open("w") as destination:
-        for role, source in (("teacher", config.teacher), ("student", config.student)):
+        sources = (*(("teacher", source) for source in config.teachers), ("student", config.student))
+        for index, (role, source) in enumerate(sources):
             selected = []
-            audit_path = str(root / f"{role}-collection.json")
+            audit_path = str(root / f"{role}-collection-{index:04d}.json")
             for evidence in collection_native_evidence(source, partition, audit_path):
                 if role == "student" and evidence.served_model_alias != config.student_model_alias:
                     raise ValueError("Student collection's served-model alias differs from the saved preference config")
@@ -140,14 +143,18 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                 selected.append(NativePreferenceBranch(evidence.retained.rollout, source_id, initial_prompt))
             branches.append(selected)
             reports.append(json.loads(StoragePath(audit_path).read_text()))
-    if reports[0]["conditions_digest"] != reports[1]["conditions_digest"]:
+    if any(report["conditions_digest"] != reports[-1]["conditions_digest"] for report in reports[:-1]):
         raise ValueError("Native preference collections used different harness or sampling conditions")
-    selections = select_training_pairs(
-        [branch.rollout for branch in branches[0]],
-        [branch.rollout for branch in branches[1]],
-        complement_source_ids=frozenset(task.source_id for task in partition.complement),
-        parity_source_ids=frozenset(task.source_id for task in partition.parity),
-    )
+    selections = [
+        selection
+        for teacher_branches in branches[:-1]
+        for selection in select_training_pairs(
+            [branch.rollout for branch in teacher_branches],
+            [branch.rollout for branch in branches[-1]],
+            complement_source_ids=frozenset(task.source_id for task in partition.complement),
+            parity_source_ids=frozenset(task.source_id for task in partition.parity),
+        )
+    ]
     normalized = normalize_chat_to_parquet(
         input_path=str(raw),
         output_path=str(root / "harmony"),
@@ -194,12 +201,15 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
     accepted = []
     excluded = []
     rows = []
+    student_source_ids = {branch.source_id for branch in branches[-1]}
+    paired_student_ids = set()
     for selection in selections:
         pair = selection.pair
         if pair is None:
             continue
         chosen = by_uri[pair.chosen.trajectory_uri]
         rejected = by_uri[pair.rejected.trajectory_uri]
+        student_source_id = chosen.source_id if chosen.source_id in student_source_ids else rejected.source_id
         reason = ""
         if chosen.initial_prompt_sha256 != rejected.initial_prompt_sha256:
             reason = "initial_context_mismatch"
@@ -207,6 +217,8 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
             reason = "normalization_rejected"
         elif chosen.source_id not in branch_indices or rejected.source_id not in branch_indices:
             reason = "overlength"
+        elif student_source_id in paired_student_ids:
+            reason = "duplicate_student_counterpart"
         if reason:
             excluded.append({"reason": reason, "pair": asdict(pair)})
             continue
@@ -217,11 +229,12 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
             encoded[f"{role}_assistant_masks"] = np.asarray(value["assistant_masks"]).tolist()
         rows.append(encoded)
         accepted.append(asdict(pair))
+        paired_student_ids.add(student_source_id)
     report = {
         "dataset_commit": partition.dataset_commit,
         "partition_manifest_sha256": PARTITION_MANIFEST_SHA256,
-        "teacher": reports[0]["identity"],
-        "student": reports[1]["identity"],
+        "teachers": [report["identity"] for report in reports[:-1]],
+        "student": reports[-1]["identity"],
         "collections": reports,
         "student_tokenizer": config.student_tokenizer,
         "conditions_digest": reports[0]["conditions_digest"],
@@ -234,6 +247,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
         "max_length": config.max_length,
         "repeated_tool_call_policy": RepeatedToolCallPolicy.RETAIN,
         "scoring": "student-retokenized normalized branch transcripts; assistant-only loss",
+        "pair_selection": "first usable sole-correct pair in saved teacher order; at most one per student trajectory",
     }
     write_recovery_cache(rows, report, config.output_path)
     return recovery_cache_value(config.output_path)
@@ -248,7 +262,7 @@ def dispatch_native_preference_cache(config: NativePreferenceConfig) -> Recovery
 
 
 def native_preference_step(
-    teacher_collection_root: str,
+    teacher_collections: tuple[tuple[str, int], ...],
     student_collection_root: str,
     teacher_source: str,
     seed: int,
@@ -256,11 +270,14 @@ def native_preference_step(
     policy_export_version: str,
     policy_checkpoint_step: int,
 ) -> ArtifactStep[RecoveryPreferenceCache]:
-    teacher = ArtifactStep.adopt(
-        user_owned_name(f"inputs/bfcl-rl-native-teacher-{seed}"),
-        teacher_collection_root.rsplit("/", 1)[-1],
-        teacher_collection_root,
-        kind=SkyRLRun,
+    teachers = tuple(
+        ArtifactStep.adopt(
+            user_owned_name(f"inputs/bfcl-rl-native-teacher-{teacher_seed}"),
+            collection_root.rsplit("/", 1)[-1],
+            collection_root,
+            kind=SkyRLRun,
+        )
+        for collection_root, teacher_seed in teacher_collections
     )
     student = ArtifactStep.adopt(
         user_owned_name(f"inputs/bfcl-rl-native-student-{seed}"),
@@ -278,10 +295,13 @@ def native_preference_step(
         original = MODELS["student"]
         student_source = policy.resolve(ctx).uri
         return NativePreferenceConfig(
-            NativeCollectionInput(
-                str(StoragePath(ctx.artifact_path(teacher)) / "terminal.json"),
-                ModelSource(TEACHER_MODEL, TEACHER_REVISION, teacher_source, "pinned"),
-                seed,
+            tuple(
+                NativeCollectionInput(
+                    str(StoragePath(ctx.artifact_path(teacher)) / "terminal.json"),
+                    ModelSource(TEACHER_MODEL, TEACHER_REVISION, teacher_source, "pinned"),
+                    teacher_seed,
+                )
+                for teacher, (_, teacher_seed) in zip(teachers, teacher_collections, strict=True)
             ),
             NativeCollectionInput(
                 str(StoragePath(ctx.artifact_path(student)) / "terminal.json"),
@@ -302,12 +322,18 @@ def native_preference_step(
         artifact_type=RecoveryPreferenceCache,
         run=dispatch_native_preference_cache,
         build_config=build_config,
-        deps=(teacher, student, policy.step, data),
+        deps=(*teachers, student, policy.step, data),
     )
 
 
 @click.command(help=__doc__)
-@click.option("--teacher-collection-root", required=True)
+@click.option(
+    "--teacher-collection",
+    "teacher_collections",
+    type=(str, click.IntRange(min=0, max=2**31 - 1)),
+    multiple=True,
+    required=True,
+)
 @click.option("--student-collection-root", required=True)
 @click.option("--teacher-source", required=True)
 @click.option("--seed", type=click.IntRange(min=0, max=2**31 - 1), required=True)
@@ -316,7 +342,7 @@ def native_preference_step(
 @click.option("--policy-checkpoint-step", type=click.IntRange(min=0), required=True)
 @rl_build_options
 def main(
-    teacher_collection_root: str,
+    teacher_collections: tuple[tuple[str, int], ...],
     student_collection_root: str,
     teacher_source: str,
     seed: int,
@@ -325,7 +351,7 @@ def main(
     policy_checkpoint_step: int,
 ) -> ArtifactStep:
     return native_preference_step(
-        teacher_collection_root,
+        teacher_collections,
         student_collection_root,
         teacher_source,
         seed,

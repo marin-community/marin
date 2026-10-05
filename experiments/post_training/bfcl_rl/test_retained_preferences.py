@@ -475,7 +475,13 @@ def test_completed_native_collection_joins_archives_and_literal_messages(tmp_pat
 
 
 def _native_pair_collection(
-    root: Path, model: str, outcomes: tuple[float | None, ...], partition: BFCLPartition, fault: str
+    root: Path,
+    model: str,
+    outcomes: tuple[float | None, ...],
+    partition: BFCLPartition,
+    fault: str,
+    seed: int = 7,
+    date: str = "",
 ) -> NativeCollectionInput:
     root.mkdir()
     terminal, resolved = _receipts(model)
@@ -491,7 +497,8 @@ def _native_pair_collection(
     config["inputs"]["train_data"][0]["relative_path"] = "bfcl_complement"
     resolved["train_data_sources"][0]["relative_path"] = "bfcl_complement"
     skyrl["trainer"]["policy"]["model"]["source_uri"] = locator.uri
-    skyrl["trainer"]["seed"] = 7
+    skyrl["trainer"]["seed"] = seed
+    skyrl["generator"]["trajectory_retention"]["run_id"] = f"{root.name}-collection"
     skyrl["terminal_bench_config"]["harbor"].update(
         name="opencode", version="1.18.2", agent_profiles=list(NATIVE_AGENT_PROFILES)
     )
@@ -506,6 +513,7 @@ def _native_pair_collection(
     with zipfile.ZipFile(archive_path, "w") as archive:
         for index, (task, score) in enumerate(zip(partition.complement, outcomes, strict=True)):
             record = _record(model, score or 0.0, task=task)
+            record["run_id"] = f"{root.name}-collection"
             profile = NATIVE_AGENT_PROFILES[index % len(NATIVE_AGENT_PROFILES)]
             trial_id = f"{model}-{index}"
             trial = {
@@ -560,7 +568,7 @@ def _native_pair_collection(
                         f"You are powered by the model named {model}-alias. "
                         f"The exact model ID is hosted_vllm/{model}-alias"
                     )
-                    messages.insert(0, {"role": "system", "content": f"SYSTEM_INSTRUCTIONS\n{identity_line}\n"})
+                    messages.insert(0, {"role": "system", "content": f"SYSTEM_INSTRUCTIONS\n{identity_line}\n{date}"})
                     # A model identification quoted in task data must remain literal.
                     user["content"] += (
                         "\nYou are powered by the model named teacher-alias. "
@@ -596,16 +604,10 @@ def _native_pair_collection(
     literal = root / "literal/logs/native_literal.jsonl"
     literal.parent.mkdir(parents=True)
     literal.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
-    return NativeCollectionInput(str(root / "terminal.json"), locator, 7)
+    return NativeCollectionInput(str(root / "terminal.json"), locator, seed)
 
 
-@pytest.mark.parametrize("fault", ["none", "context", "negative_tokens", "agent_error"])
-def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_semantics(tmp_path: Path, fault: str):
-    tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
-    partition = replace(PARTITION, complement=tasks)
-    teacher = _native_pair_collection(tmp_path / "teacher", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, fault)
-    student = _native_pair_collection(tmp_path / "student", "student", (0.0, 1.0, 0.0, 1.0, None), partition, fault)
-    tokenizer_path = tmp_path / "student-tokenizer"
+def _native_pair_tokenizer(path: Path) -> None:
     tokenizer = Tokenizer(models.BPE())
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
     tokenizer.decoder = decoders.ByteLevel()
@@ -615,9 +617,19 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
     )
     hf = PreTrainedTokenizerFast(tokenizer_object=tokenizer, bos_token="<bos>", eos_token="<eos>", pad_token="<pad>")
     hf.chat_template = MARIN_CHAT_TEMPLATE
-    hf.save_pretrained(tokenizer_path)
+    hf.save_pretrained(path)
+
+
+@pytest.mark.parametrize("fault", ["none", "context", "negative_tokens", "agent_error"])
+def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_semantics(tmp_path: Path, fault: str):
+    tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
+    partition = replace(PARTITION, complement=tasks)
+    teacher = _native_pair_collection(tmp_path / "teacher", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, fault)
+    student = _native_pair_collection(tmp_path / "student", "student", (0.0, 1.0, 0.0, 1.0, None), partition, fault)
+    tokenizer_path = tmp_path / "student-tokenizer"
+    _native_pair_tokenizer(tokenizer_path)
     config = NativePreferenceConfig(
-        teacher, student, "unused", str(tokenizer_path), 4096, str(tmp_path / "cache"), 1, "student-alias"
+        (teacher,), student, "unused", str(tokenizer_path), 4096, str(tmp_path / "cache"), 1, "student-alias"
     )
     if fault == "negative_tokens":
         with pytest.raises(ValueError, match="differ from retained trainable"):
@@ -681,6 +693,53 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
             assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named student-alias." in text
             assert "The exact model ID is hosted_vllm/teacher-alias" in text
             assert "SYSTEM_INSTRUCTIONS\nYou are powered by the model named teacher-alias." not in text
+
+
+def test_native_teacher_pool_matches_context_without_reweighting_student_trajectories(tmp_path: Path):
+    tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
+    partition = replace(PARTITION, complement=tasks)
+    earlier = _native_pair_collection(
+        tmp_path / "earlier", "teacher", (1.0, 0.0, 0.0, 1.0, 1.0), partition, "none", date="Today's date: Oct 4\n"
+    )
+    fresh = _native_pair_collection(
+        tmp_path / "fresh",
+        "teacher",
+        (1.0, 0.0, 1.0, 1.0, 1.0),
+        partition,
+        "none",
+        seed=11,
+        date="Today's date: Oct 5\n",
+    )
+    student = _native_pair_collection(
+        tmp_path / "student", "student", (0.0, 1.0, 0.0, 1.0, None), partition, "none", date="Today's date: Oct 5\n"
+    )
+    tokenizer_path = tmp_path / "student-tokenizer"
+    _native_pair_tokenizer(tokenizer_path)
+    config = NativePreferenceConfig(
+        (earlier, fresh), student, "unused", str(tokenizer_path), 4096, str(tmp_path / "cache"), 1, "student-alias"
+    )
+    with set_current_client(LocalClient()):
+        value = build_native_preference_cache(config, partition)
+    assert value.num_preferences == 3
+    report = json.loads((tmp_path / "cache/selection.json").read_text())
+    assert [collection["seed"] for collection in report["collections"]] == [7, 11, 7]
+    assert [item["reason"] for item in report["excluded_preferences"]] == [
+        "initial_context_mismatch",
+        "duplicate_student_counterpart",
+    ]
+    pairs = {pair["chosen"]["task_source_id"]: pair for pair in report["preferences"]}
+    assert set(pairs) == {task.source_id for task in tasks[:3]}
+    assert "/fresh/" in pairs[tasks[0].source_id]["chosen"]["trajectory_uri"]
+    assert "/earlier/" in pairs[tasks[1].source_id]["rejected"]["trajectory_uri"]
+    assert pairs[tasks[1].source_id]["chosen"]["model_revision"] == MODELS["student"].revision
+    documents = [json.loads(line) for line in (tmp_path / "cache/native-chat/branches.jsonl").read_text().splitlines()]
+    dated = {
+        document["source_id"]: document["messages"][0]["content"][0]["text"]
+        for document in documents
+        if document["messages"][0]["role"] == "system"
+    }
+    assert "Today's date: Oct 4" in dated[f"earlier-collection/teacher-{tasks[0].name}"]
+    assert "Today's date: Oct 5" in dated[f"fresh-collection/teacher-{tasks[0].name}"]
 
 
 def test_recovery_cache_roundtrip_preserves_causal_scoring_with_tool_context(tmp_path: Path):
