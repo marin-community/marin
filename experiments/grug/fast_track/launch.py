@@ -407,6 +407,7 @@ def build_h100_ladder_run(
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
     final_param_dump: tuple[str, ...] = (),
+    head_probe: bool = False,
     xla_memory_report: bool = False,
     pgle_runs: int = 0,
     pipeline_depth: int = 0,
@@ -648,6 +649,7 @@ def build_h100_ladder_run(
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 final_param_dump_path=prefix_join(ctx.output_path, "final_params.npz") if final_param_dump else None,
+                head_probe_path=prefix_join(ctx.output_path, "head_probe.npz") if head_probe else None,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
                 final_param_dump_patterns=final_param_dump,
                 pipeline_depth=pipeline_depth,
@@ -815,6 +817,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     "--final-param-dump",
     multiple=True,
     help="Regex (repeatable) of param paths to write to <output>/final_params.npz after training.",
+)
+@click.option(
+    "--head-probe",
+    is_flag=True,
+    help="After training, write per-token query-head attention stats and head ablations to <output>/head_probe.npz "
+    "(dense baseline only).",
 )
 @click.option(
     "--xla-memory-report",
@@ -1038,6 +1046,7 @@ def main(
     profile_start_step: int | None,
     dump_hlo: bool,
     final_param_dump: tuple[str, ...],
+    head_probe: bool,
     xla_memory_report: bool,
     pgle_runs: int,
     pipeline_depth: int,
@@ -1098,6 +1107,7 @@ def main(
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
         final_param_dump=tuple(final_param_dump),
+        head_probe=head_probe,
         xla_memory_report=xla_memory_report,
         pgle_runs=pgle_runs,
         pipeline_depth=pipeline_depth,

@@ -93,6 +93,8 @@ from experiments.grug.fast_track.model import (
     ATTN_PROBE_KEYS,
     ATTN_PROBE_STAT,
     FINAL_HIDDEN_KEY,
+    HEAD_PROBE_FIELDS,
+    HEAD_PROBE_STAT,
     NEWTON_GRAM_KEY,
     DenseMLP,
     ForwardProbe,
@@ -103,7 +105,9 @@ from experiments.grug.fast_track.model import (
     RMSNorm,
     Transformer,
     ZeroCenteredRMSNorm,
+    _long_layer_schedule,
     forward_probe,
+    head_probe,
     ngram_stat_table_add,
     refresh_attn_prev,
     tie_routers,
@@ -316,6 +320,10 @@ class GrugTrainerConfig:
     # After training, write the params whose dotted path matches any of ``final_param_dump_patterns`` (``re.search``)
     # to ``final_param_dump_path`` as one npz (process 0), for offline analysis of small learned tables.
     final_param_dump_path: str | None = None
+    # After training, write per-token, per-query-head attention statistics of the final (EMA) weights on fixed
+    # held-out sequences, plus each head's per-token ablation loss change, to this npz (``_head_probe_dump``).
+    head_probe_path: str | None = None
+    head_probe_sequences: int = 32
     # Written by process 0 once the final eval has run; a restarted job that finds it exits instead of retraining
     # (a preemption during the post-training blend evals otherwise reran the whole run).
     completion_marker_path: str | None = None
@@ -1879,6 +1887,80 @@ def _dump_final_params(params, patterns: tuple[str, ...], path: str) -> None:
         logger.info("wrote %d final params to %s", len(host), path)
 
 
+def _head_probe_dump(config: "GrugRunConfig", params: Transformer, mesh: Mesh, path: str) -> None:
+    """Probe every softmax-attention query head of a dense, non-AttnRes model on fixed held-out sequences and write
+    ``path`` (process 0): ``tokens`` / ``segments`` ``[N, S]``, ``stats`` ``[L, N, S, H, F]`` (``HEAD_PROBE_FIELDS``),
+    the per-token next-token ``loss`` ``[N, S]``, and ``ablation_dloss`` ``[L, H, N, S]``: each token's loss with
+    that head's output projection rows zeroed, minus the full model's."""
+    cfg = config.model
+    if cfg.attn_res or not cfg.dense_mlp or params.stacked_blocks_tail is not None:
+        raise ValueError("head_probe supports the dense baseline (one scanned softmax-attention stack)")
+    mp = config.trainer.trainer.mp
+    heads, head_dim = cfg.num_heads, cfg.inferred_head_dim
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _routing_dump_sequences,
+            config.data,
+            seq_len=cfg.max_seq_len,
+            num_sequences=config.trainer.head_probe_sequences,
+        ).result()
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    batch = jax.device_count()
+
+    def global_batch(host: np.ndarray) -> jax.Array:
+        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
+
+    def per_token_loss(model, ids, segs):
+        mask = AttentionMask.causal().with_segment_ids(segs)
+        weight = (segs >= 0).astype(jnp.float32)
+        return model.next_token_loss(ids, weight, mask=mask, reduction="none")
+
+    @jax.jit
+    def probe(params, ids, segs):
+        model = _cast_to_compute(mp, params)
+        with head_probe():
+            _, metrics = model(ids, mask=AttentionMask.causal().with_segment_ids(segs))
+        return metrics[HEAD_PROBE_STAT], per_token_loss(model, ids, segs)
+
+    @jax.jit
+    def ablated(params, ids, segs, layer, head):
+        w_o = params.stacked_blocks.stacked.attn.w_o  # [L, H * D, E]
+        rows = (jnp.arange(w_o.shape[1]) // head_dim) == head
+        zero = (jnp.arange(w_o.shape[0]) == layer)[:, None, None] & rows[None, :, None]
+        model = eqx.tree_at(lambda m: m.stacked_blocks.stacked.attn.w_o, params, jnp.where(zero, 0.0, w_o))
+        return per_token_loss(_cast_to_compute(mp, model), ids, segs)
+
+    def gather(x) -> np.ndarray:
+        return np.asarray(multihost_utils.process_allgather(x, tiled=True))
+
+    stats, loss, dloss = [], [], []
+    with set_mesh(mesh):
+        for start in range(0, len(tokens), batch):
+            ids, segs = global_batch(tokens[start : start + batch]), global_batch(segments[start : start + batch])
+            batch_stats, batch_loss = probe(params, ids, segs)
+            stats.append(gather(batch_stats).astype(np.float16))
+            base = gather(batch_loss)
+            loss.append(base)
+            per_head = [
+                [gather(ablated(params, ids, segs, layer, head)) - base for head in range(heads)]
+                for layer in range(cfg.num_layers)
+            ]
+            dloss.append(np.asarray(per_head, np.float32))
+    if jax.process_index() == 0:
+        with fsspec.open(path, "wb") as f:
+            np.savez(
+                f,
+                tokens=tokens,
+                segments=segments,
+                stats=np.concatenate(stats, axis=1),
+                fields=np.asarray(HEAD_PROBE_FIELDS),
+                loss=np.concatenate(loss, axis=0),
+                ablation_dloss=np.concatenate(dloss, axis=2),
+                layer_is_long=np.asarray(_long_layer_schedule(cfg.num_layers, cfg.global_every, cfg.global_layers)),
+            )
+        logger.info("wrote head probe of %d sequences to %s", len(tokens), path)
+
+
 def _routing_dump_sequences(
     data_config: LmDataConfig, *, seq_len: int, num_sequences: int
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -2786,6 +2868,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if dump_routing is not None and pending_dumps:
                 # Steps past the end of the run dump the final weights.
                 dump_routing(state)
+            if config.trainer.head_probe_path is not None:
+                probed = state.ema_params if state.ema_params is not None else state.params
+                _head_probe_dump(config, probed, mesh, config.trainer.head_probe_path)
             if config.trainer.final_param_dump_path is not None:
                 _dump_final_params(
                     state.params, config.trainer.final_param_dump_patterns, config.trainer.final_param_dump_path

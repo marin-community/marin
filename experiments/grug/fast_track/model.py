@@ -126,6 +126,14 @@ class ForwardProbe:
 
 
 _FORWARD_PROBE: ForwardProbe | None = None
+
+# Per-token, per-query-head attention statistics (``head_probe``), ``[B, S, H, len(HEAD_PROBE_FIELDS)]`` per layer:
+# softmax mass on the document's first token and on the query's own position, attention entropy (nats), the head's
+# output gate, its gated output norm, and the norm of its contribution to the residual (through its ``w_o`` rows).
+HEAD_PROBE_STAT = f"{_LAYER_KNOB_PREFIX}head_probe"
+HEAD_PROBE_FIELDS = ("p_doc_start", "p_self", "entropy", "gate", "out_norm", "contrib_norm")
+_HEAD_PROBE_QUERY_BLOCK = 512
+_HEAD_PROBE = False
 _MEMORY_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}mem_"
 _KDA_ERASE_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}kda_erase_"
 # Bound on one chunk's gathered ``[tokens, rows, dim]`` memory rows in the product-key EmbeddingBag.
@@ -2354,6 +2362,7 @@ class CausalSelfAttention(eqx.Module):
         # The Inkling bias: a per-head content-dependent bias (from x) on the pre-softmax logits.
         rel_bias = self.rel_pos(x) if self.rel_pos is not None else None
         q, k = _transform_qk(q, k)
+        head_probe_attn = _head_attention_stats(q, k, mask, rel_bias, sconv_segment_ids) if _HEAD_PROBE else None
         if _FORWARD_PROBE is not None and _FORWARD_PROBE.attn_queries and self.cfg.mla:
             if fox_key_bias is not None or second_qk is not None:
                 raise ValueError("forward_probe attention supports MLA without FoX or differential attention")
@@ -2432,6 +2441,8 @@ class CausalSelfAttention(eqx.Module):
         per_channel = self.cfg.attn_gate_elementwise or self.attn_gate_up is not None
         gate = rearrange(gate, "... (n d) -> ... n d", d=head_dim) if per_channel else gate[..., None]
         attn_out = gate * attn_out
+        if head_probe_attn is not None:
+            stats[HEAD_PROBE_STAT] = _head_output_stats(head_probe_attn, gate, attn_out, self.w_o)
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
@@ -4878,9 +4889,11 @@ class Block(eqx.Module):
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_out, _ = self.attn_branch(x, mask, disable_rope, is_global)
+        attn_out, attn_stats = self.attn_branch(x, mask, disable_rope, is_global)
         x = x + attn_out
         mlp_out, router_stats = self.mlp_branch(x, mask)
+        if HEAD_PROBE_STAT in attn_stats:
+            router_stats = {**router_stats, HEAD_PROBE_STAT: attn_stats[HEAD_PROBE_STAT]}
         return x + mlp_out, router_stats
 
 
@@ -5119,6 +5132,84 @@ def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key:
         mlp = eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None)
     # Masked input rows start at zero, so they stay zero (no gradient) and take no share of the MuonH norm.
     return _mask_expert_reads(mlp, cfg) if cfg.expert_read_subset else mlp
+
+
+@contextmanager
+def head_probe() -> Iterator[None]:
+    """Forwards traced inside this context record ``HEAD_PROBE_STAT`` from every softmax-attention layer (dense
+    reference attention over query blocks, so it is for analysis forwards, not training)."""
+    global _HEAD_PROBE
+    previous, _HEAD_PROBE = _HEAD_PROBE, True
+    try:
+        yield
+    finally:
+        _HEAD_PROBE = previous
+
+
+def _head_attention_stats(
+    q: Float[Array, "B S H D"],
+    k: Float[Array, "B S K D"],
+    mask: AttentionMask | jax.Array,
+    rel_bias: jax.Array | None,
+    segment_ids: Int[Array, "B S"] | None,
+) -> Float[Array, "B S H 3"]:
+    """Per query and head: softmax mass on its document's first token, on itself, and the attention entropy,
+    from the kernel's inputs (scale ``1/sqrt(head_dim)``, causal, document and window masks)."""
+    if rel_bias is not None:
+        raise ValueError("head_probe supports attention without the Inkling relative-position bias")
+    if not isinstance(mask, AttentionMask):
+        raise ValueError("head_probe needs an AttentionMask")
+    b, s, h, d = q.shape
+    # Batch-sharded only: q's heads may be model-sharded while the shared MQA key head is not.
+    q = reshard(q, P(_BATCH_AXES, None, None, None))
+    k = reshard(align_kv_heads(k, num_q_heads=h), P(_BATCH_AXES, None, None, None))
+    starts = jnp.arange(s)[None, :] - _positions_in_document(segment_ids, s).reshape(-1, s)  # [B or 1, S]
+    if mask.fa4_bounds is not None:
+        lower, valid = mask.fa4_bounds
+    else:
+        lower, valid = jnp.broadcast_to(starts, (b, s)), jnp.ones((b, s), jnp.bool_)
+        if mask.sliding_window is not None:
+            lower = jnp.maximum(lower, jnp.arange(s)[None, :] - (mask.sliding_window - 1))
+    block = min(_HEAD_PROBE_QUERY_BLOCK, s)
+    if s % block:
+        raise ValueError(f"head_probe needs the sequence length divisible by {block}, got {s}")
+    keys = jnp.arange(s)
+
+    def one_block(i):
+        rows = i * block + jnp.arange(block)
+        qb = jax.lax.dynamic_slice_in_dim(q, i * block, block, axis=1).astype(jnp.float32)
+        logits = jnp.einsum("bqhd,bkhd->bhqk", qb, k.astype(jnp.float32)) / math.sqrt(d)
+        lb = jax.lax.dynamic_slice_in_dim(lower, i * block, block, axis=1)  # [B, Q]
+        ok = (keys[None, None, :] <= rows[None, :, None]) & (keys[None, None, :] >= lb[:, :, None])
+        ok = ok & jax.lax.dynamic_slice_in_dim(valid, i * block, block, axis=1)[:, :, None]
+        logits = jnp.where(ok[:, None], logits, -jnp.inf)
+        p = jax.nn.softmax(logits, axis=-1)
+        p = jnp.where(ok[:, None], p, 0.0)
+        start = jax.lax.dynamic_slice_in_dim(jnp.broadcast_to(starts, (b, s)), i * block, block, axis=1)
+        p_start = jnp.take_along_axis(p, start[:, None, :, None], axis=-1)[..., 0]
+        p_self = jnp.take_along_axis(p, jnp.broadcast_to(rows, (b, block))[:, None, :, None], axis=-1)[..., 0]
+        entropy = -jnp.sum(jnp.where(p > 0, p * jnp.log(jnp.maximum(p, 1e-30)), 0.0), axis=-1)
+        return jnp.stack([p_start, p_self, entropy], axis=-1)  # [B, H, Q, 3]
+
+    out = jax.lax.map(one_block, jnp.arange(s // block))  # [blocks, B, H, Q, 3]
+    return jax.lax.stop_gradient(rearrange(out, "n b h q f -> b (n q) h f"))
+
+
+def _head_output_stats(
+    attn_stats: Float[Array, "B S H 3"],
+    gate: jax.Array,
+    gated_out: Float[Array, "B S H D"],
+    w_o: Float[Array, "HD E"],
+) -> Float[Array, "B S H 6"]:
+    """``attn_stats`` plus each head's mean output gate, gated output norm and residual-contribution norm."""
+    h, d = gated_out.shape[-2:]
+    gated = reshard(gated_out, P(_BATCH_AXES, None, None, None)).astype(jnp.float32)
+    head_gate = jnp.mean(jnp.broadcast_to(gate, gated_out.shape).astype(jnp.float32), axis=-1)
+    head_gate = reshard(head_gate, P(_BATCH_AXES, None, None))
+    per_head_wo = reshard(w_o, P(None, None)).astype(jnp.float32).reshape(h, d, -1)
+    contrib = jnp.einsum("bshd,hde->bshe", gated, per_head_wo)
+    extra = jnp.stack([head_gate, jnp.linalg.norm(gated, axis=-1), jnp.linalg.norm(contrib, axis=-1)], axis=-1)
+    return jax.lax.stop_gradient(jnp.concatenate([attn_stats, extra], axis=-1))
 
 
 def _positions_in_document(segment_ids: Int[Array, "B S"] | None, seq_len: int) -> jax.Array:
@@ -6311,8 +6402,9 @@ class Transformer(eqx.Module):
 
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
         softmax_tail, kda_tail = _tail_stack_layer_indices(cfg)
-        # The tail layers' config override is static per layer (MoEMLP.cfg).
-        tail_cfg = _tail_layer_config(cfg)
+        # The tail layers' config override is static per layer (MoEMLP.cfg); without tail layers there is none
+        # (and dense models could not even build one).
+        tail_cfg = _tail_layer_config(cfg) if softmax_tail or kda_tail else cfg
         model = Transformer(
             token_embed=token_embed,
             embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="embed"),
@@ -6952,6 +7044,8 @@ class Transformer(eqx.Module):
             )
         if cfg.dense_mlp:
             router_metrics: dict[str, jax.Array] = {}
+            if not cfg.attn_res and HEAD_PROBE_STAT in stacked_router_stats:
+                router_metrics[HEAD_PROBE_STAT] = stacked_router_stats[HEAD_PROBE_STAT]  # [L, B, S, H, F]
         else:
             # One cross-device reduction for the whole layer stack, not one per layer (see router_metrics).
             reduced_router_stats = reduce_router_stats(
