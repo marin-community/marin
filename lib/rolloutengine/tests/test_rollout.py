@@ -196,6 +196,13 @@ async def test_executable_native_action_keeps_final_and_shell_tools():
         {"environment_requirements": EnvironmentRequirements(working_directory="/workspace")},
         {"interaction_tools": (FunctionDefinition(name="run", parameters={"type": "object"}),)},
         {"output_paths": ("/app/submission.py",)},
+        {
+            "verifier": (
+                arithmetic_task().verifier.model_copy(
+                    update={"environment_requirements": EnvironmentRequirements(working_directory="/private")}
+                )
+            )
+        },
     ],
 )
 async def test_rollout_rejects_unsupported_runtime_inputs(runtime_inputs):

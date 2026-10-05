@@ -28,7 +28,14 @@ from taskcompendium.environment import (
 )
 from taskcompendium.grading import grade_task, validate_verifier
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    SkippedVerifierSpec,
+    StageRewardStrategy,
+    TaskSpec,
+    TaskStage,
+    VerifierKind,
+)
 from taskcompendium.submission import Submission
 
 from rolloutengine.machines import _install_files, _machine_command, _task_machine
@@ -54,6 +61,12 @@ def _validate_task(task: TaskSpec) -> None:
     if task.verifier.kind == VerifierKind.EXTERNAL and task.environment.interaction is None:
         raise ValueError("External verifiers require an interaction session")
     for specification in (task.verifier, *(stage.verifier for stage in task.stages)):
+        if (
+            specification.kind
+            not in {VerifierKind.SHELL, VerifierKind.EXTERNAL, VerifierKind.STAGED, VerifierKind.SKIPPED}
+            and specification.environment_requirements != EnvironmentRequirements()
+        ):
+            raise ValueError("The rollout engine requires private machine inputs in shell verifiers")
         validate_verifier(specification)
 
 
