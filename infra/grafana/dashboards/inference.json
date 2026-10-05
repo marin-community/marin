@@ -292,7 +292,8 @@
         "y": 19,
         "w": 8,
         "h": 7
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "panelRef": "inference_tpot",
@@ -414,7 +415,8 @@
         "y": 19,
         "w": 8,
         "h": 7
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "type": "table",
@@ -606,7 +608,8 @@
         "y": 26,
         "w": 24,
         "h": 8
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "panelRef": "inference_kv",
@@ -701,7 +704,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "panelRef": "inference_preemptions",
@@ -818,7 +822,8 @@
         "y": 41,
         "w": 12,
         "h": 8
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "type": "table",
@@ -906,7 +911,8 @@
         "y": 41,
         "w": 6,
         "h": 8
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "panelRef": "inference_outcomes",
@@ -1031,7 +1037,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "type": "barchart",
@@ -1129,7 +1136,8 @@
         "y": 49,
         "w": 16,
         "h": 8
-      }
+      },
+      "maxDataPoints": 360
     },
     {
       "type": "stat",
@@ -1215,7 +1223,8 @@
         "y": 49,
         "w": 8,
         "h": 8
-      }
+      },
+      "maxDataPoints": 360
     }
   ],
   "links": [

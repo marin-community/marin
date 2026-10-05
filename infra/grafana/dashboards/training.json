@@ -20,7 +20,7 @@
         "name": "run",
         "label": "Run",
         "type": "query",
-        "description": "Levanter runs active in the last 12 hours, hero runs first and newest first within each group. A run supplied in the dashboard URL remains selectable for older graph windows. Sorting is left to the query, so the default selection is the newest hero run.",
+        "description": "Levanter runs active in the last 12 hours, hero runs first and newest first within each group. A run supplied in the dashboard URL remains selectable for older graph windows. Sorting is left to the query, so the default selection is the newest hero run. Refreshed on dashboard load; reload to discover newly started runs.",
         "datasource": {
           "type": "yesoreyeram-infinity-datasource",
           "uid": "finelog-marin"
@@ -62,7 +62,7 @@
         "options": [],
         "includeAll": false,
         "multi": false,
-        "refresh": 2,
+        "refresh": 1,
         "sort": 0,
         "regex": "",
         "hide": 0
@@ -544,7 +544,8 @@
           ]
         }
       ],
-      "timeFrom": "15m"
+      "timeFrom": "15m",
+      "maxDataPoints": 360
     },
     {
       "id": 2,
@@ -639,7 +640,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 10,
@@ -879,7 +881,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 4,
@@ -1006,7 +1009,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 5,
@@ -1117,7 +1121,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 6,
@@ -1228,7 +1233,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 7,
@@ -1335,7 +1341,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 8,
@@ -1429,7 +1436,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 9,
@@ -1554,7 +1562,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 11,
@@ -1848,7 +1857,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 12,
@@ -1978,7 +1988,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 13,
@@ -2233,7 +2244,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 14,
@@ -2339,7 +2351,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 15,
@@ -2481,7 +2494,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     }
   ]
 }

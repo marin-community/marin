@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A TTL cache that coalesces concurrent misses on one key into a single call.
+"""A TTL cache with per-key coordination and an optional size limit.
 
-N callers that miss the same key at once run compute once and share its result
-or failure. Entries are pruned on write.
+Concurrent callers share a cached result or failure. Entries are pruned on
+write and may be evicted before their TTL to meet an optional size budget.
 """
 
 import copy
+import sys
 import threading
 import time
 from collections.abc import Callable, Hashable
@@ -21,6 +22,7 @@ V = TypeVar("V")
 class _Entry(Generic[V]):
     value: V
     expires_at: float
+    size: int
 
 
 @dataclass
@@ -30,16 +32,23 @@ class _Failure:
 
 
 class TtlCache(Generic[V]):
-    """Cache outcomes under a key for ttl seconds, coalescing concurrent misses.
+    """Cache outcomes for up to ttl seconds, subject to the size budget.
 
     A miss holds a per-key lock while it computes; concurrent callers for the same
-    key wait and read the fresh outcome. Failures are cached too, so an upstream
-    timeout does not turn client retries into repeated work. Different keys do
-    not block one another.
+    key wait and reuse the outcome if it remains cached. Cached failures suppress
+    repeated upstream work on retries. Different keys do not block one another.
     """
 
-    def __init__(self, ttl: float) -> None:
+    def __init__(
+        self,
+        ttl: float,
+        *,
+        max_size: int = sys.maxsize,
+        get_size: Callable[[V], int] = sys.getsizeof,
+    ) -> None:
         self._ttl = ttl
+        self._max_size = max_size
+        self._get_size = get_size
         self._entries: dict[Hashable, _Entry[V] | _Failure] = {}
         self._key_locks: dict[Hashable, threading.Lock] = {}
         self._guard = threading.Lock()
@@ -69,6 +78,14 @@ class TtlCache(Generic[V]):
                 # deadlock.
                 self._key_locks.pop(k, None)
 
+            size = sum(entry.size for entry in self._entries.values() if isinstance(entry, _Entry))
+            while size > self._max_size:
+                oldest = next(iter(self._entries))
+                removed = self._entries.pop(oldest)
+                if isinstance(removed, _Entry):
+                    size -= removed.size
+                self._key_locks.pop(oldest, None)
+
     @staticmethod
     def _resolve(entry: _Entry[V] | _Failure) -> V:
         if isinstance(entry, _Failure):
@@ -91,7 +108,14 @@ class TtlCache(Generic[V]):
             except Exception as error:
                 self._store(key, _Failure(error=error, expires_at=time.monotonic() + self._ttl))
                 raise
-            self._store(key, _Entry(value=value, expires_at=time.monotonic() + self._ttl))
+            self._store(
+                key,
+                _Entry(
+                    value=value,
+                    expires_at=time.monotonic() + self._ttl,
+                    size=self._get_size(value),
+                ),
+            )
             return value
 
     def __len__(self) -> int:
