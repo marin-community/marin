@@ -3,13 +3,11 @@
 
 """Score the postcondition of a calendar tool episode."""
 
-import os
-from pathlib import Path
-from dataclasses import asdict
 import json
-
+import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from verifyit.grade import Reward, scored
 
@@ -64,7 +62,11 @@ def main() -> None:
     workspace = Path(os.environ["VERIFYIT_WORKSPACE"])
     config = json.loads((tests / "config.json").read_text())
     state = json.loads((workspace / "state.json").read_text())
-    verdict = score_calendar(tuple(CalendarEvent(**event) for event in state["events"]), tuple(CalendarEvent(**event) for event in config["original_events"]), **{key: value for key, value in config.items() if key != "original_events"})
+    verdict = score_calendar(
+        tuple(CalendarEvent(**event) for event in state["events"]),
+        tuple(CalendarEvent(**event) for event in config["original_events"]),
+        **{key: value for key, value in config.items() if key != "original_events"},
+    )
     (Path(os.environ["VERIFYIT_LOGS_DIR"]) / "verdict.json").write_text(json.dumps(asdict(verdict)))
 
 

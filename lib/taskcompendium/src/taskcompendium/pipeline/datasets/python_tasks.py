@@ -49,7 +49,7 @@ def submission_paths(instruction: str) -> tuple[str, ...]:
     return tuple(sorted(paths))
 
 
-def normalize_python(row: RawRow, image: str, timeout: float, memory_mb: int) -> NormalizedTask | ImportRejection:
+def normalize_python(row: RawRow, image: str) -> NormalizedTask | ImportRejection:
     task = normalize(row, image)
     if isinstance(task, ImportRejection):
         return task
@@ -119,7 +119,7 @@ def recipe(
     """Bind a pinned source, rubric, and explicit grading limits."""
 
     def normalize_row(row: RawRow) -> NormalizedTask | ImportRejection:
-        return normalize_python(row, image, timeout, memory_mb)
+        return normalize_python(row, image)
 
     source_recipe = DatasetRecipe(
         name=f"tasktrove-{name}",

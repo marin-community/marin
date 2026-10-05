@@ -42,7 +42,7 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
-from taskcompendium.runtime.grading import grade_submission
+from taskcompendium.runtime.grading import GRADING_MEMORY_MB, GRADING_TIMEOUT, grade_submission
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import INTERFACE, ShellFactory
 
@@ -169,11 +169,15 @@ def recipe(
     return with_raw_converter(source_recipe, converter, converter_revision)
 
 
-def verification_report(task: TaskSpec, *, timeout: float = 600, memory_mb: int = 4096) -> VerificationReport:
+def verification_report(
+    task: TaskSpec, *, timeout: float = GRADING_TIMEOUT, memory_mb: int = GRADING_MEMORY_MB
+) -> VerificationReport:
     return asyncio.run(executable_checks(task, timeout=timeout, memory_mb=memory_mb))
 
 
-async def executable_checks(task: TaskSpec, *, timeout: float = 600, memory_mb: int = 4096) -> VerificationReport:
+async def executable_checks(
+    task: TaskSpec, *, timeout: float = GRADING_TIMEOUT, memory_mb: int = GRADING_MEMORY_MB
+) -> VerificationReport:
     """Check missing, empty, wrong, and oracle submissions in fresh machines."""
     image = task.verifier.environment_requirements.docker_image
     if image is None:

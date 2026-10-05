@@ -4,8 +4,9 @@
 """Behavioral contracts for imported calendar and shell-output scorers."""
 
 from verifyit.grade import Status
-from taskcompendium.pipeline.datasets.grader_scripts.calendar import CalendarEvent, score_calendar
 from verifyit.modes.grade_nl2bash import score_capture
+
+from taskcompendium.pipeline.datasets.grader_scripts.calendar import CalendarEvent, score_calendar
 from taskcompendium.pipeline.datasets.grader_scripts.schedule import score_schedule
 
 

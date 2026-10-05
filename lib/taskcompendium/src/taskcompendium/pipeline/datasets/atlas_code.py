@@ -20,6 +20,7 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
+from taskcompendium.runtime.grading import GRADING_MEMORY_MB, GRADING_TIMEOUT
 
 CONFIGS = {
     "code_contests": "DCAgent__code-contests-noblock",
@@ -33,7 +34,9 @@ CODENET_EXIT_PARITY = CheckResult(
 )
 
 
-def verification_report(task: TaskSpec, name: str, timeout: float = 600, memory_mb: int = 4096) -> VerificationReport:
+def verification_report(
+    task: TaskSpec, name: str, timeout: float = GRADING_TIMEOUT, memory_mb: int = GRADING_MEMORY_MB
+) -> VerificationReport:
     report = executable_verification_report(task, timeout=timeout, memory_mb=memory_mb)
     if name == "codenet":
         return VerificationReport(checks=[*report.checks, CODENET_EXIT_PARITY], rollouts=report.rollouts)

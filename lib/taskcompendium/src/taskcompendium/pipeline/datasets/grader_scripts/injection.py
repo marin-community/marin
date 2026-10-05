@@ -3,12 +3,11 @@
 
 """Match an indirect injection's avoided next action."""
 
-import os
-from pathlib import Path
-from dataclasses import asdict
-
 import json
+import os
 import re
+from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 from verifyit.grade import Reward, scored

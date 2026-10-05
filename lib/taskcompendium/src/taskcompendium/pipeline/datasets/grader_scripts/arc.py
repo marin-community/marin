@@ -3,12 +3,11 @@
 
 """Parse ARC grids and score the final boxed grid or whole answer."""
 
-import os
-from pathlib import Path
-from dataclasses import asdict
-
 import json
+import os
 import re
+from dataclasses import asdict
+from pathlib import Path
 
 from verifyit.grade import Reward, scored
 

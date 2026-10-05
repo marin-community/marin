@@ -3,15 +3,14 @@
 
 """Score a final calendar JSON value against TaskTrove scheduling constraints."""
 
-import os
-from pathlib import Path
-from dataclasses import asdict
-
 import json
+import os
 import re
 import unicodedata
 from collections.abc import Mapping
+from dataclasses import asdict
 from itertools import pairwise
+from pathlib import Path
 
 from verifyit.grade import Reward, scored
 

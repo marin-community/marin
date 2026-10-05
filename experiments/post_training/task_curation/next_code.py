@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adapt archived code-contest and Python-test tasks for curation."""
+"""Bind CodeContests and CodeNet stdin/stdout converters for curation."""
 
 from collections.abc import Callable
 from dataclasses import replace

@@ -59,6 +59,7 @@ from taskcompendium.pipeline.transforms import (
 from taskcompendium.pipeline.verification import verify_task
 
 AUDIT_SHARDS = 64
+AUDIT_INPUT_PATTERN = "audit/*.parquet"
 AUDIT_SHARD_TEMPLATE = "audit/part-{shard:05d}.parquet"
 OUTPUT_SHARD_ROWS = 100000
 
@@ -115,7 +116,7 @@ def canonicalize_sources(merged_path: str, output_path: str) -> dict[str, Any]:
         context.execute(dataset)
         for view in ("accepted", "train", "eval", "executable"):
             context.execute(
-                Dataset.from_files(str(output / "audit/*.parquet"))
+                Dataset.from_files(str(output / AUDIT_INPUT_PATTERN))
                 .load_parquet()
                 .filter(partial(selected_view, view=view))
                 .write_parquet(str(output / view / "part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
@@ -220,7 +221,7 @@ def _combine_manifest_counts(partials: Iterator[dict[str, Any]]) -> dict[str, An
 def manifest_counts(path: StoragePath) -> dict[str, Any]:
     """Reduce audit row counts and decisions across completed Parquet shards."""
     dataset = (
-        Dataset.from_files(str(path / "audit/*.parquet"))
+        Dataset.from_files(str(path / AUDIT_INPUT_PATTERN))
         .load_parquet(
             columns=[
                 "task_id",
@@ -301,7 +302,7 @@ def filter_source(audit_path: str, output_path: str, policy: FilterPolicy) -> di
     source = StoragePath(audit_path)
     output = StoragePath(output_path)
     annotated = (
-        Dataset.from_files(str(source / "audit/*.parquet"))
+        Dataset.from_files(str(source / AUDIT_INPUT_PATTERN))
         .load_parquet()
         .map(partial(filter_row, policy=policy))
         .write_parquet(str(output / AUDIT_SHARD_TEMPLATE), schema=TASK_SCHEMA)
@@ -309,7 +310,7 @@ def filter_source(audit_path: str, output_path: str, policy: FilterPolicy) -> di
     with ZephyrContext(name="filter-tasks") as context:
         context.execute(annotated)
         accepted = (
-            Dataset.from_files(str(output / "audit/*.parquet"))
+            Dataset.from_files(str(output / AUDIT_INPUT_PATTERN))
             .load_parquet()
             .filter(is_accepted)
             .write_parquet(str(output / "accepted/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)
@@ -477,7 +478,7 @@ def rewrite_audit_source(
     if len(selected) != len(selected_task_ids):
         raise ValueError("Selected rewrite task IDs must be unique")
     source, output = StoragePath(source_path), StoragePath(output_path)
-    input_pattern = str(source / "audit/*.parquet")
+    input_pattern = str(source / AUDIT_INPUT_PATTERN)
     membership = (
         Dataset.from_files(input_pattern)
         .load_parquet(columns=["task_id", "task_json"])
@@ -511,7 +512,7 @@ def rewrite_audit_source(
     with ZephyrContext(max_workers=max_workers, name=f"rewrite-{recipe.name}") as context:
         context.execute(dataset)
         context.execute(
-            Dataset.from_files(str(output / "audit/*.parquet"))
+            Dataset.from_files(str(output / AUDIT_INPUT_PATTERN))
             .load_parquet()
             .filter(is_accepted)
             .write_parquet(str(output / "accepted/part-{shard:05d}.parquet"), schema=TASK_SCHEMA)

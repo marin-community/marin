@@ -16,12 +16,20 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
 
+GRADING_TIMEOUT = 600.0
+GRADING_MEMORY_MB = 4096
+
 SPEC_PATH = "/tests/verifier.toml"
 VERDICT_PATH = "/logs/verifier/verdict.json"
 
 
 async def grade_submission(
-    task: TaskSpec, files: dict[str, bytes], factory: MachineFactory, *, timeout: float = 600, memory_mb: int = 4096
+    task: TaskSpec,
+    files: dict[str, bytes],
+    factory: MachineFactory,
+    *,
+    timeout: float = GRADING_TIMEOUT,
+    memory_mb: int = GRADING_MEMORY_MB,
 ) -> GradeResult:
     """Run the shared grader independently of the agent's environment."""
     try:
@@ -31,7 +39,7 @@ async def grade_submission(
 
 
 async def _sandbox_grade(
-    task: TaskSpec, files: dict[str, bytes], factory: MachineFactory, *, timeout: float = 600, memory_mb: int = 4096
+    task: TaskSpec, files: dict[str, bytes], factory: MachineFactory, *, timeout: float, memory_mb: int
 ) -> GradeResult:
     spec = spec_from_table({"mode": task.verifier.kind, **json.loads(task.verifier.parameters_json)})
     paths = task.output_paths
