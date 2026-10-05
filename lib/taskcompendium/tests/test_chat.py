@@ -4,14 +4,16 @@
 """Chat wire normalization and pure grading preserve semantic result contracts."""
 
 import json
+from dataclasses import replace
+from typing import Any
 
 import pytest
 from pydantic import TypeAdapter
 from verifyit.json_comparison import NumericTypePolicy
 
-from taskcompendium.chat import chat_conversation
+from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
-from taskcompendium.grading_contract import GradingAttempt
+from taskcompendium.grading_contract import GradingAttempt, TextSubmission
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -139,7 +141,7 @@ async def test_text_convention_retains_but_rejects_tool_call_evidence(specificat
     attempt = _attempt(specification, convention, _answer_action("12"))
     result = await grade_answer(specification, convention, attempt)
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
-    assert json.loads(attempt.conversation.events[-1].calls[0].arguments_json) == {"answer": "12"}
+    assert attempt.conversation.events[-1].calls[0].arguments == {"answer": "12"}
 
 
 @pytest.mark.parametrize(
@@ -160,6 +162,37 @@ async def test_answer_call_grades_semantic_answers(specification, answer_type, v
     assert (correct.status, correct.reward) == (Outcome.GRADED, 1.0)
     assert (wrong.status, wrong.reward) == (Outcome.GRADED, 0.0)
     assert (rejected.status, rejected.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+class ChatAnswerCall(AnswerCall):
+    response: dict[str, Any]
+
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        conversation = ConversationTrace(events=(*attempt.conversation.events[:-1], assistant_message(self.response)))
+        return await super().extract(replace(attempt, conversation=conversation))
+
+
+@pytest.mark.parametrize(
+    "arguments,status,reward",
+    [
+        ('{"answer":"12"}', Outcome.GRADED, 1.0),
+        ('{"answer":"13"}', Outcome.GRADED, 0.0),
+        ('{"answer":', Outcome.SUBMISSION_FAILURE, 0.0),
+        ('{"answer":"12","answer":"13"}', Outcome.SUBMISSION_FAILURE, 0.0),
+    ],
+)
+async def test_chat_decoding_during_acquisition_exposes_structural_failure_as_zero(
+    specification, arguments, status, reward
+):
+    response = _answer_action("12")
+    response["tool_calls"][0]["function"]["arguments"] = arguments
+    convention = ChatAnswerCall(id="chat-answer", response=response)
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="Done."))),
+        object(),
+    )
+    result = await grade_answer(specification, convention, attempt)
+    assert (result.status, result.reward) == (status, reward)
 
 
 @pytest.mark.parametrize("answer_format", [AnswerFormat.PLAIN, AnswerFormat.JSON, AnswerFormat.ANSWER_CALL])

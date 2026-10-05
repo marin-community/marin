@@ -12,16 +12,14 @@ import pytest
 
 from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import grade_answer, validate_verifier
-from taskcompendium.grading_contract import GradingAttempt
+from taskcompendium.grading_contract import GradingAttempt, SubmissionFailure
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
-    ConversationInput,
     ConversationToolCall,
     ConversationTrace,
     TaskSpec,
-    TextMessage,
 )
 from taskcompendium.submission import FinalAction, chat_request, render_instruction
 
@@ -290,7 +288,7 @@ async def test_predicted_action_grades_typed_evidence_from_any_harness():
     ],
 )
 def test_chat_protocol_failure_rejects_invalid_transport_shape(response):
-    with pytest.raises(ValueError):
+    with pytest.raises(SubmissionFailure):
         assistant_message(response)
 
 
@@ -342,33 +340,19 @@ async def test_final_action_max_two_preserves_the_submission_limit_before_scorin
     assert (result.status, result.reward) == (status, reward)
 
 
-@pytest.mark.parametrize("arguments", ["not-json", '{"name":"Alice","name":"Bob"}', '{"name":{"x":1,"x":2}}'])
-async def test_malformed_final_argument_json_remains_evidence_and_is_submission_failure(arguments):
-    row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
-    trace = chat_conversation(
-        [*chat_request(specification, convention)["messages"], _action("authenticate_user", arguments)]
-    )
-    trace = ConversationTrace.model_validate_json(trace.model_dump_json())
-    result = await grade_answer(specification, convention, GradingAttempt(trace, object()))
-    assert (result.status, result.reward) == ("submission_failure", 0.0)
-    assert trace.events[-1].calls[0].arguments_json == arguments
-
-
-def test_raw_calls_cannot_enter_historical_context():
-    response = assistant_message(_action("authenticate_user", '{"name":"Alice"}'))
-    with pytest.raises(ValueError):
-        ConversationInput(events=(TextMessage(role="user", content="task"), response))
-    with pytest.raises(ValueError):
-        ConversationTrace(
-            events=(TextMessage(role="user", content="task"), response, TextMessage(role="assistant", content="Done"))
-        )
+@pytest.mark.parametrize(
+    "arguments",
+    ["not-json", '{"name":"Alice","name":"Bob"}', '{"name":{"x":1,"x":2}}', "[1]", '{"id":NaN}', '{"id":1e400}'],
+)
+def test_malformed_final_arguments_fail_at_chat_decoding(arguments):
+    with pytest.raises(SubmissionFailure):
+        assistant_message(_action("authenticate_user", arguments))
 
 
 @pytest.mark.parametrize("arguments", ['{"user_id":"first","user_id":"second"}', '{"nested":{"x":1,"x":2}}'])
 def test_chat_normalization_rejects_ambiguous_historical_arguments(arguments):
     historical = _action("get_user_profile", arguments)
-    with pytest.raises(ValueError):
+    with pytest.raises(SubmissionFailure):
         chat_conversation(
             [
                 {"role": "user", "content": "Read the profile."},

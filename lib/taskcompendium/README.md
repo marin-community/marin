@@ -66,7 +66,7 @@ For text and numeric tasks, the `answer_call` convention adds `submit_answer(ans
 
 `answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires a runtime and an appropriate submission convention; this package does not acquire files or environment state. The shared `structured_exact` verifier compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
 
-`answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. The shared structured scorer accepts either evidence envelope. The existing `JsonAnswer` convention instead unwraps an `answer` string for text or numeric tasks. Both reject duplicate keys at every nesting level and nonfinite numbers. Native final-call argument strings remain raw in trial evidence until the convention validates and decodes them; malformed or duplicate arguments receive `submission_failure`, rather than an infrastructure error. Historical source calls retain decoded arguments.
+`answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. The shared structured scorer accepts either evidence envelope. The existing `JsonAnswer` convention instead unwraps an `answer` string for text or numeric tasks. Both reject duplicate keys at every nesting level and nonfinite numbers. Tool-call arguments are decoded before entering the conversation evidence. Malformed JSON, duplicate keys and nonfinite arguments raise `SubmissionFailure` at the chat decoding boundary; the caller can report this structural failure with reward `0.0`. Both historical and final calls contain typed argument objects.
 
 Public expectations belong in `context`: for example, the columns a CSV must contain or the behavior a repaired project must provide. The private verifier checks those expectations. A submission convention chooses how the result is delivered and extracted. `answer_type` identifies its semantic kind. TaskSpec has no extra intrinsic encoding or answer-format field.
 
@@ -237,7 +237,23 @@ The caller must await grading. File or environment-state conventions may perform
 
 A valid correct answer produces `GradeResult(status=graded, reward=1.0)`; a valid wrong answer produces `graded` with reward `0.0`. Malformed text, JSON, numeric, or final-action evidence produces `submission_failure` with reward `0.0`. Invalid private configuration and infrastructure failures raise; the execution runtime must preserve those errors separately from wrong or invalid submissions.
 
-`taskcompendium.chat` normalizes OpenAI-compatible messages into shared conversation types. Historical function calls have decoded arguments; the final call can retain its argument JSON string until the submission convention validates it. The module performs no model request or tool dispatch.
+`taskcompendium.chat` normalizes OpenAI-compatible messages into shared conversation types, decoding every function call into an argument object. A malformed assistant response raises `SubmissionFailure` before a grading attempt is constructed. The caller can expose that failure as a zero-reward outcome:
+
+```python
+from taskcompendium.chat import assistant_message
+from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.grading_contract import SubmissionFailure
+
+async def score_chat_response(response: dict):
+    try:
+        final = assistant_message(response)
+    except SubmissionFailure as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+    conversation = ConversationTrace(events=(*spec.context.events, final))
+    return await grade_answer(spec, convention, GradingAttempt(conversation, workspace=object()))
+```
+
+The decoder performs no model request or tool dispatch. Network and execution failures propagate separately; callers must catch only submission failures when assigning reward zero.
 
 ## Dataset conversion
 

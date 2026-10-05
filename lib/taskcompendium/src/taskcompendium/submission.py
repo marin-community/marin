@@ -28,8 +28,6 @@ from taskcompendium.models import (
     AssistantToolCalls,
     ConversationEvent,
     ConversationInput,
-    ConversationToolCall,
-    RawAssistantToolCalls,
     TaskSpec,
     TextMessage,
     format_conversation,
@@ -136,7 +134,7 @@ class AnswerCall(Convention):
     answer_format: Literal[AnswerFormat.ANSWER_CALL] = AnswerFormat.ANSWER_CALL
 
     async def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        response = _decoded_final_action(attempt.conversation.events[-1])
+        response = attempt.conversation.events[-1]
         if (
             not isinstance(response, AssistantToolCalls)
             or len(response.calls) != 1
@@ -160,11 +158,8 @@ class FinalAction(Convention):
     require_call: bool = False
     max_calls: int | None = Field(default=None, gt=0)
 
-    def validate_final_message(
-        self, response: ConversationEvent | RawAssistantToolCalls
-    ) -> TextMessage | AssistantToolCalls:
+    def validate_final_message(self, response: ConversationEvent) -> TextMessage | AssistantToolCalls:
         """Require the assistant's final message to honor the call contract."""
-        response = _decoded_final_action(response)
         if not isinstance(response, (TextMessage, AssistantToolCalls)) or (
             isinstance(response, TextMessage) and response.role != "assistant"
         ):
@@ -197,22 +192,7 @@ def _json_submission(text: str) -> JsonValue:
     return JSON_VALUE.validate_python(value)
 
 
-def _decoded_final_action(response: ConversationEvent | RawAssistantToolCalls) -> ConversationEvent:
-    if not isinstance(response, RawAssistantToolCalls):
-        return response
-    try:
-        calls = []
-        for call in response.calls:
-            arguments = _json_submission(call.arguments_json)
-            if not isinstance(arguments, dict):
-                raise ValueError("Function arguments must be a JSON object")
-            calls.append(ConversationToolCall(call_id=call.call_id, name=call.name, arguments=arguments))
-        return AssistantToolCalls(calls=tuple(calls), content=response.content)
-    except ValueError as error:
-        raise SubmissionFailure("Function arguments are malformed") from error
-
-
-def _text_answer(response: ConversationEvent | RawAssistantToolCalls) -> str:
+def _text_answer(response: ConversationEvent) -> str:
     if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
         raise SubmissionFailure("Text submission requires nonempty assistant content without tool calls")
     return response.content

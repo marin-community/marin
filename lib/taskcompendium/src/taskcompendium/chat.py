@@ -9,13 +9,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from verifyit.json_objects import unique_object
 
+from taskcompendium.grading_contract import SubmissionFailure
 from taskcompendium.models import (
     AssistantToolCalls,
     ConversationEvent,
     ConversationToolCall,
     ConversationTrace,
-    RawAssistantToolCalls,
-    RawToolCall,
     TextMessage,
     ToolResult,
 )
@@ -46,48 +45,42 @@ class ChatAssistantMessage(BaseModel):
     tool_calls: list[ChatToolCall] | None = None
 
 
-def assistant_message(message: dict[str, Any]) -> TextMessage | RawAssistantToolCalls:
-    """Validate chat wire data and return protocol-independent submission evidence.
+def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCalls:
+    """Decode assistant output, raising SubmissionFailure for malformed wire data.
 
-    Malformed protocol data raises at this decoding boundary. A valid text reply,
-    wrong function name, or wrong arguments remain available for grading.
+    Callers may report structural failures with reward zero. Valid text replies
+    and decoded calls remain available for semantic grading.
     """
-    validated = ChatAssistantMessage.model_validate(message)
-    if validated.tool_calls:
-        return RawAssistantToolCalls(
-            calls=tuple(
-                RawToolCall(call_id=call.id, name=call.function.name, arguments_json=call.function.arguments)
-                for call in validated.tool_calls
-            ),
-            content=validated.content,
-        )
-    if validated.content is None:
-        raise ValueError("Chat response requires assistant content or function calls")
-    return TextMessage(role="assistant", content=validated.content)
+    try:
+        validated = ChatAssistantMessage.model_validate(message)
+        if validated.tool_calls:
+            return AssistantToolCalls(
+                calls=tuple(
+                    ConversationToolCall(
+                        call_id=call.id,
+                        name=call.function.name,
+                        arguments=ARGUMENT_OBJECT.validate_python(
+                            json.loads(call.function.arguments, object_pairs_hook=unique_object)
+                        ),
+                    )
+                    for call in validated.tool_calls
+                ),
+                content=validated.content,
+            )
+        if validated.content is None:
+            raise ValueError("Chat response requires assistant content or function calls")
+        return TextMessage(role="assistant", content=validated.content)
+    except ValueError as error:
+        raise SubmissionFailure("Assistant output is structurally invalid") from error
 
 
 def chat_conversation(messages: list[dict[str, Any]]) -> ConversationTrace:
     """Normalize a complete chat transcript for any TaskCompendium verifier."""
-    events: list[ConversationEvent | RawAssistantToolCalls] = []
-    for index, message in enumerate(messages):
+    events: list[ConversationEvent] = []
+    for message in messages:
         role = message.get("role")
         if role == "assistant":
-            response = assistant_message(message)
-            if isinstance(response, RawAssistantToolCalls) and index != len(messages) - 1:
-                response = AssistantToolCalls(
-                    calls=tuple(
-                        ConversationToolCall(
-                            call_id=call.call_id,
-                            name=call.name,
-                            arguments=ARGUMENT_OBJECT.validate_python(
-                                json.loads(call.arguments_json, object_pairs_hook=unique_object)
-                            ),
-                        )
-                        for call in response.calls
-                    ),
-                    content=response.content,
-                )
-            events.append(response)
+            events.append(assistant_message(message))
         elif role == "tool":
             events.append(ToolResult(call_id=message["tool_call_id"], content=message["content"]))
         else:

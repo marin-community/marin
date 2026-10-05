@@ -115,26 +115,6 @@ class AssistantToolCalls(BaseModel):
     content: str | None = None
 
 
-class RawToolCall(BaseModel):
-    """One final model call before JSON arguments have been extracted."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    call_id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
-    arguments_json: str
-
-
-class RawAssistantToolCalls(BaseModel):
-    """Final-call wire evidence; historical source calls remain decoded."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    type: Literal["raw_assistant_tool_calls"] = "raw_assistant_tool_calls"
-    calls: tuple[RawToolCall, ...] = Field(min_length=1)
-    content: str | None = None
-
-
 class ToolResult(BaseModel):
     """A historical result for a function call in the conversation prefix."""
 
@@ -206,7 +186,7 @@ class ConversationTrace(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    events: tuple[ConversationEvent | RawAssistantToolCalls, ...]
+    events: tuple[ConversationEvent, ...]
 
     @model_validator(mode="after")
     def validate_trace(self) -> "ConversationTrace":
@@ -216,7 +196,7 @@ class ConversationTrace(BaseModel):
         final = self.events[-1]
         if isinstance(final, ToolResult) or (isinstance(final, TextMessage) and final.role != "assistant"):
             raise ValueError("Grading evidence requires a final assistant message")
-        if isinstance(final, (AssistantToolCalls, RawAssistantToolCalls)):
+        if isinstance(final, AssistantToolCalls):
             identifiers = [call.call_id for call in final.calls]
             historical = {
                 call.call_id
