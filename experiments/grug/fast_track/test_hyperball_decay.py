@@ -77,7 +77,7 @@ def test_metrics_cover_muonh_matrices_and_the_adamh_lm_head():
         _, state = eqx.filter_jit(opt.update)(grads, opt.init(params), params)
         metrics = hyperball_metrics(state)
     names = set(metrics)
-    assert any(n.startswith("train/hyperball/output_proj/") for n in names), sorted(names)[:5]
-    assert "train/hyperball/kda_blocks.stacked.attn.w_q/L0/decay" in names, sorted(names)[:20]
+    assert any(n.startswith("train/optim/hyperball/output_proj/") for n in names), sorted(names)[:5]
+    assert "train/optim/hyperball/kda_blocks.stacked.attn.w_q/L0/decay" in names, sorted(names)[:20]
     for n, v in metrics.items():
         assert np.isfinite(float(v)), n

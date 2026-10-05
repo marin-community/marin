@@ -799,7 +799,7 @@ def magma_metrics(opt_state) -> dict[str, jax.Array]:
 
 
 def hyperball_metrics(opt_state) -> dict[str, jax.Array]:
-    """``train/hyperball/<matrix>[/L<i>]/<stat>`` for every ``HYPERBALL_STATS`` from the MuonH
+    """``train/optim/hyperball/<matrix>[/L<i>]/<stat>`` for every ``HYPERBALL_STATS`` from the MuonH
     (``MuonHState.hyperball``) and AdamH (``ScaleByAdamHState.hyperball``) states, one per stacked layer;
     per-expert spheres log the per-layer mean plus ``decay_max``."""
     is_state = lambda x: isinstance(x, (MuonHState, ScaleByAdamHState))  # noqa: E731
@@ -812,11 +812,11 @@ def hyperball_metrics(opt_state) -> dict[str, jax.Array]:
             name = jax.tree_util.keystr(path, simple=True, separator=".")
             if stats.ndim <= 3:  # an unstacked matrix: one sphere
                 for k, stat in enumerate(HYPERBALL_STATS):
-                    metrics[f"train/hyperball/{name}/{stat}"] = stats[k].reshape(())
+                    metrics[f"train/optim/hyperball/{name}/{stat}"] = stats[k].reshape(())
                 continue
             per_layer = stats.reshape(stats.shape[0], stats.shape[1], -1)
             for i in range(per_layer.shape[1]):
-                prefix = f"train/hyperball/{name}/L{i}"
+                prefix = f"train/optim/hyperball/{name}/L{i}"
                 for k, stat in enumerate(HYPERBALL_STATS):
                     metrics[f"{prefix}/{stat}"] = jnp.mean(per_layer[k, i])
                 if per_layer.shape[2] > 1:
