@@ -9,7 +9,6 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -64,7 +63,6 @@ REMOTE_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 REMOTE_MCP_AUTH_NONE = "none"
 REMOTE_MCP_AUTH_ENVIRONMENT = "environment"
 REMOTE_MCP_AUTH_IAP = "iap"
-WATCH_MAX_EXECUTION_SECONDS = 24 * 60 * 60
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -93,11 +91,6 @@ def _git_context_at_revision(revision: str) -> str:
 SECRET_REF = re.compile(r"^projects/[a-z0-9-]+/secrets/[A-Za-z0-9_-]+/versions/(?:latest|[0-9]+)$")
 
 
-class MisfirePolicy(StrEnum):
-    SKIP = "skip"
-    COALESCE = "coalesce"
-
-
 @dataclass(frozen=True)
 class CronWatchSchedule:
     cron: str
@@ -124,9 +117,7 @@ class AgentWatchConfig:
     trigger: CronWatchSchedule | IntervalWatchSchedule
     slack_channels: tuple[str, ...]
     enabled: bool
-    misfire_policy: MisfirePolicy
-    late_grace_secs: int
-    run_timeout_secs: int
+    run_timeout_secs: int | None
 
     @classmethod
     def parse(cls, name: str, value: Mapping[str, object]) -> AgentWatchConfig:
@@ -165,20 +156,14 @@ class AgentWatchConfig:
         ):
             raise ValueError("slackChannels must contain at most 32 Slack channel IDs")
         enabled = value.get("enabled", False)
-        policy = MisfirePolicy(str(value.get("misfirePolicy", MisfirePolicy.COALESCE)))
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be boolean")
-        grace, timeout = value.get("lateGraceSeconds", 600), value.get("runTimeoutSeconds", 300)
-        if (
-            not isinstance(grace, int)
-            or isinstance(grace, bool)
-            or not 0 <= grace <= WATCH_MAX_EXECUTION_SECONDS
-            or not isinstance(timeout, int)
-            or isinstance(timeout, bool)
-            or not 1 <= timeout <= WATCH_MAX_EXECUTION_SECONDS
+        timeout = value.get("runTimeoutSeconds")
+        if timeout is not None and (
+            not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 86400
         ):
-            raise ValueError("invalid watch late grace or run timeout")
-        return cls(name.strip(), profile, repo, prompt, trigger, tuple(channels), enabled, policy, grace, timeout)
+            raise ValueError("runTimeoutSeconds must be 1..86400 seconds")
+        return cls(name.strip(), profile, repo, prompt, trigger, tuple(channels), enabled, timeout)
 
     def manifest(self) -> dict[str, object]:
         return {
@@ -191,9 +176,7 @@ class AgentWatchConfig:
                 "prompt": self.prompt,
                 "slack_channels": list(self.slack_channels),
             },
-            "misfire_policy": self.misfire_policy.value,
-            "late_grace_secs": self.late_grace_secs,
-            "run_timeout_secs": self.run_timeout_secs,
+            **({"run_timeout_secs": self.run_timeout_secs} if self.run_timeout_secs is not None else {}),
         }
 
 

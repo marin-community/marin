@@ -283,15 +283,15 @@ marin-loom:watches:
     repo: marin-community/marin
     promptFile: watches/weekday-job-check.md
     slackChannels: []
-    misfirePolicy: coalesce
-    lateGraceSeconds: 600
-    runTimeoutSeconds: 300
 ```
 
-For an interval, replace `cron` and `timezone` with `every: 30m`. Intervals
-retain their original cadence after downtime. Cron uses five fields and an IANA
-time zone; missing local times are skipped and repeated local times fire once.
-Loom validates the complete cron expression when applying the manifest.
+For an interval, replace `cron` and `timezone` with `every: 30m`. Cron uses
+five fields and an IANA time zone. Loom validates the complete expression when
+applying the manifest.
+
+Loom coalesces recent missed runs and skips overlaps. Tasks have a five-minute
+timeout; set `runTimeoutSeconds` to override it. Completed sessions stay visible
+for five minutes before automatic archival.
 
 The `scheduled-message` profile uses low effort and a one-turn budget. It selects
 `loom/messaging/post@v1` from the `messaging` MCP group for Slack posting and

@@ -415,9 +415,6 @@ config:
       repo: marin-community/marin
       promptFile: watches/weekday-job-check.md
       slackChannels: []
-      misfirePolicy: coalesce
-      lateGraceSeconds: 600
-      runTimeoutSeconds: 300
 
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=
