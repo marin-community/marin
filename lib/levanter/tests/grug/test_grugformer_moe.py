@@ -48,7 +48,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _TransportBufferSite,
     _unpermute_from_global_expert,
 )
-from levanter.grug._moe.sonic import sonic_gather_sum
+from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
@@ -607,7 +607,8 @@ def test_dispatch_gradient_sums_each_tokens_accepted_assignments(topk, dtype, dr
     expected_gradient = np.zeros((tokens, hidden), dtype=np.float32)
     kept = accepted.reshape(-1)[indices]  # per sorted row
     np.add.at(expected_gradient, indices[kept] // topk, np.asarray(cotangent, dtype=np.float32)[kept])
-    np.testing.assert_array_equal(np.asarray(actual_output), np.asarray(x)[indices // topk])
+    # Only the accepted slots are specified; the GPU path never writes the others.
+    np.testing.assert_array_equal(np.asarray(actual_output)[kept], np.asarray(x)[indices // topk][kept])
     np.testing.assert_array_equal(np.asarray(actual_gradient), np.asarray(expected_gradient, dtype=dtype))
 
 
@@ -927,6 +928,31 @@ def test_sonic_gather_sum_matches_jax_reference_on_gpu():
     sonic_out.block_until_ready()
     reference_out.block_until_ready()
     np.testing.assert_allclose(np.asarray(sonic_out), np.asarray(reference_out), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("weighted", [False, True], ids=["copy", "weighted"])
+def test_sonic_scatter_rows_matches_gather_on_kept_rows_on_gpu(weighted):
+    _skip_without_sonic_gpu_runtime()
+    tokens, topk, hidden = 64, 8, 320
+    rng = np.random.default_rng(5)
+    x = jnp.asarray(rng.standard_normal((tokens, hidden), dtype=np.float32), jnp.bfloat16)
+    sorted_indices = rng.permutation(tokens * topk).astype(np.int32)
+    positions = np.argsort(sorted_indices).astype(np.int32).reshape(tokens, topk)
+    keep = rng.random((tokens, topk)) < 0.8
+    weights = np.where(rng.random((tokens, topk)) < 0.1, 0.0, rng.random((tokens, topk))).astype(np.float32)
+
+    actual = jax.jit(
+        lambda x, positions, keep, weights: sonic_scatter_rows(
+            x, positions, keep, rows=tokens * topk, weights=weights if weighted else None
+        )
+    )(x, jnp.asarray(positions), jnp.asarray(keep), jnp.asarray(weights))
+
+    sorted_rows = np.asarray(x, np.float32)[sorted_indices // topk]
+    if weighted:
+        sorted_rows = sorted_rows * weights.reshape(-1)[sorted_indices][:, None]
+    expected = np.asarray(jnp.asarray(sorted_rows, jnp.bfloat16))
+    kept = keep.reshape(-1)[sorted_indices]
+    np.testing.assert_array_equal(np.asarray(actual)[kept].view(np.uint16), expected[kept].view(np.uint16))
 
 
 def test_moe_mlp_sonic_matches_jax_gather_reference_on_gpu():
