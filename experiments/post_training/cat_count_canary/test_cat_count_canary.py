@@ -27,7 +27,7 @@ from experiments.post_training.cat_count_canary.launcher import (
     QWEN_SOURCE,
     build_run,
     main,
-    training_config,
+    training_recipe,
 )
 
 
@@ -103,7 +103,7 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
 )
 def test_owned_settings_reject_parent_and_canonical_overrides(setting):
     with pytest.raises(click.BadParameter):
-        training_config(settings=(setting,))
+        training_recipe(settings=(setting,))
 
 
 def test_model_pins_and_distinct_artifact_identities(monkeypatch):

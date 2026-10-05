@@ -9,6 +9,7 @@
 """Advance external projects and package their immutable runtime inputs."""
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -22,6 +23,9 @@ from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 ROOT = Path(__file__).parents[1]
 EXTERNAL_ROOT = Path(__file__).with_name("external")
 GENERATED_PINS = ROOT / "lib" / "marin" / "src" / "marin" / "external_dependencies.py"
+RECIPE_SCHEMA = ROOT / "lib/marin/src/marin/skyrl_recipe"
+RECIPE_PROVENANCE = RECIPE_SCHEMA.with_suffix(".provenance.json")
+UPSTREAM_RECIPE_SCHEMA = "marinskyrl/recipe_schema"
 GIT_SUFFIX = ".git"
 GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -557,6 +561,91 @@ def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, che
     )
 
 
+def recipe_schema_hash(files: dict[str, bytes]) -> str:
+    """Hash the sorted file names and contents of a flat recipe schema."""
+    digest = hashlib.sha256()
+    for name, content in sorted(files.items()):
+        digest.update(name.encode() + b"\0" + content + b"\0")
+    return digest.hexdigest()
+
+
+def synchronize_recipe_schema(dependency: LockedDependency, *, check: bool) -> bool:
+    """Return copy equality in check mode, or synchronize the copy and return True."""
+    if RECIPE_SCHEMA.is_symlink() or RECIPE_PROVENANCE.is_symlink():
+        raise ValueError("recipe schema and provenance must be local regular paths")
+    actual = (
+        {path.name for path in RECIPE_SCHEMA.iterdir() if path.name != "__pycache__" and path.suffix != ".pyc"}
+        if RECIPE_SCHEMA.exists()
+        else set()
+    )
+    if check:
+        if not RECIPE_PROVENANCE.is_file() or any(
+            (RECIPE_SCHEMA / name).is_symlink() or not (RECIPE_SCHEMA / name).is_file() for name in actual
+        ):
+            return False
+        files = {name: (RECIPE_SCHEMA / name).read_bytes() for name in actual}
+        return recipe_schema_hash(files) == json.loads(RECIPE_PROVENANCE.read_text())["sha256"]
+
+    with tempfile.TemporaryDirectory(prefix="marinskyrl-schema-") as directory:
+        source = Path(directory)
+        subprocess.run(["git", "init", "--quiet", str(source)], check=True)
+        subprocess.run(
+            ["git", "-C", str(source), "fetch", "--quiet", "--depth=1", dependency.repository, dependency.commit],
+            check=True,
+        )
+        commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "FETCH_HEAD"], text=True).strip()
+        if commit != dependency.commit:
+            raise ValueError(f"fetched MarinSkyRL commit {commit} does not match the pin {dependency.commit}")
+        inventory = subprocess.check_output(
+            ["git", "-C", str(source), "ls-tree", "-r", "-z", commit, UPSTREAM_RECIPE_SCHEMA]
+        )
+        files = {}
+        for entry in inventory.split(b"\0"):
+            if not entry:
+                continue
+            metadata, path = entry.decode().split("\t", 1)
+            mode, kind, blob = metadata.split()
+            name = Path(path).relative_to(UPSTREAM_RECIPE_SCHEMA)
+            if mode != "100644" or kind != "blob" or len(name.parts) != 1:
+                raise ValueError(f"recipe schema must contain flat regular files: {path}")
+            files[str(name)] = subprocess.check_output(["git", "-C", str(source), "cat-file", "blob", blob])
+    if "__init__.py" not in files:
+        raise ValueError("pinned MarinSkyRL source has no public recipe schema")
+    provenance = {
+        "repository": dependency.repository,
+        "commit": dependency.commit,
+        "source_path": UPSTREAM_RECIPE_SCHEMA,
+        "sha256": recipe_schema_hash(files),
+        "files": {name: hashlib.sha256(content).hexdigest() for name, content in sorted(files.items())},
+    }
+    rendered = json.dumps(provenance, indent=2) + "\n"
+    matches = actual == files.keys() and all(
+        not (RECIPE_SCHEMA / name).is_symlink()
+        and (RECIPE_SCHEMA / name).is_file()
+        and (RECIPE_SCHEMA / name).read_bytes() == content
+        for name, content in files.items()
+    )
+    matches = matches and RECIPE_PROVENANCE.exists() and RECIPE_PROVENANCE.read_text() == rendered
+    if matches:
+        return True
+    previous = json.loads(RECIPE_PROVENANCE.read_text())["files"] if RECIPE_PROVENANCE.exists() else {}
+    unknown = actual - files.keys() - previous.keys()
+    if unknown:
+        raise ValueError(f"recipe schema contains unmanaged files: {sorted(unknown)}")
+    RECIPE_SCHEMA.mkdir(parents=True, exist_ok=True)
+    for name in actual - files.keys():
+        if len(Path(name).parts) != 1 or not (RECIPE_SCHEMA / name).is_file():
+            raise ValueError(f"recipe schema contains an unexpected path: {name}")
+        (RECIPE_SCHEMA / name).unlink()
+    for name, content in files.items():
+        target = RECIPE_SCHEMA / name
+        if target.is_symlink():
+            raise ValueError(f"recipe schema contains a symlink: {name}")
+        target.write_bytes(content)
+    RECIPE_PROVENANCE.write_text(rendered)
+    return True
+
+
 def promote_gpu_release(manifest_path: Path) -> None:
     """Re-pin gpu.toml from a promoted manifest and regenerate external_dependencies.py.
 
@@ -611,6 +700,8 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     args = parser.parse_args()
+    if args.check and args.summary_file is not None:
+        parser.error("--check does not write --summary-file")
     if args.promote_gpu_release is not None and (args.check or args.projects or args.summary_file):
         parser.error("--promote-gpu-release runs on its own; drop --check, PROJECT, and --summary-file")
     return args
@@ -658,6 +749,9 @@ def main() -> None:
     pins_match = regenerate_generated_pins(dependencies, check=args.check)
     if args.check and not pins_match:
         raise SystemExit("external dependency pins are stale; run `uv run config/update-external.py`")
+    skyrl = next(dependency for dependency in dependencies if dependency.project.config_name == "MarinSkyRL")
+    if not synchronize_recipe_schema(skyrl, check=args.check):
+        raise SystemExit("copied recipe schema is stale; run `uv run config/update-external.py`")
 
 
 if __name__ == "__main__":

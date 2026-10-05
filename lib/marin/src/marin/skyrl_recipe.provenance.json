@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/marin-community/MarinSkyRL.git",
+  "commit": "1b72125e9d46a6036c419e2c767a8187cf94da02",
+  "source_path": "marinskyrl/recipe_schema",
+  "sha256": "02bd40db7172c96d186dab4479394ef25689315e2321ba942ceaf9c29e024c0a",
+  "files": {
+    "__init__.py": "ad65daa48c5819037c277a86a20e96a235c8024276c46b5e5f1bb5a899263da5",
+    "budget.py": "1ee7bc20d1668631871481d5263479518e9908b620c4ce71379c545d8a357846",
+    "documents.py": "6905464d120727ec2480df3a2924da0d6576c8db869624b8c6c2a0cc35bfc782",
+    "launch_result.py": "08a12be3fdedaabd3711871c28c3e577d834d0986418ede9443ef081100c30f2",
+    "model.py": "30d3bf86130146ce08742e344d6be84e8ddd3445fb6835387c0c6be7621905ac",
+    "operations.py": "5ce20efb993d9a551790a6ecb9aa5ddcc9abe79392edadc2637baea750a2f2b1",
+    "ownership.py": "a977bbb69817c5cd0c38c954572f358e66348ba897283bcabe39bc9deff7c6bb",
+    "recipe.py": "34f120464f048132fc548ddb05fe0d9f2f9542616b7954df4561213eea17e2bd",
+    "rules.py": "b672d08e12d841d781fca0c526ddfa05252e5f0c3c658fad0d820d3151e60993",
+    "sections.py": "e589426b495394213e6c9ea3061a9e8983ffa46d5b6836c4c187f3a9578e5846",
+    "settings.py": "ff34872384c3e54d7961bf1cb1a73dedc0ebee569f7e8ac36b12a1ba9c5f7e35",
+    "sidecar.py": "2c360b6f63b570fcade04cbe147f0f151b96cc6209ca0a5112287c0ee365364c"
+  }
+}

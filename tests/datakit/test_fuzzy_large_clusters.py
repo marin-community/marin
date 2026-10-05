@@ -82,3 +82,48 @@ def test_planner_ignores_count_files_from_previous_runs(tmp_path: Path) -> None:
 
     assert pq.read_table(output / "large_clusters.parquet").to_pylist() == [{"dup_cluster_id": "7", "size": 2}]
     assert json.loads((output / "summary.json").read_text())["candidates"] == str(tmp_path / "candidates")
+
+
+def test_planner_sums_cluster_counts_across_map_tasks(tmp_path: Path) -> None:
+    for index in range(3):
+        _write_parquet(
+            tmp_path / "attributes" / f"part-{index}.parquet",
+            [{"id": f"{index}-a", "dup_cluster_id": "7"}, {"id": f"{index}-b", "dup_cluster_id": "8"}],
+        )
+    write_artifact(
+        FuzzyDupsAttrData(
+            params=MinHashParams(num_perms=16, num_bands=4, ngram_size=5, seed=0),
+            sources={"normalized/source": FuzzyDupsPerSource(attr_dir="attributes")},
+            counters={},
+        ),
+        str(tmp_path / "candidates"),
+    )
+    output = tmp_path / "plan"
+
+    main(
+        [
+            "--prefix",
+            str(tmp_path),
+            "--candidates",
+            "candidates",
+            "--out",
+            str(output),
+            "--stride",
+            "1",
+            "--minimum-size",
+            "3",
+            "--shards-per-task",
+            "1",
+            "--max-workers",
+            "1",
+            "--worker-cpu",
+            "1",
+            "--worker-ram",
+            "1g",
+            "--task-ram",
+            "1g",
+        ]
+    )
+
+    large = pq.read_table(output / "large_clusters.parquet").sort_by("dup_cluster_id").to_pylist()
+    assert large == [{"dup_cluster_id": "7", "size": 3}, {"dup_cluster_id": "8", "size": 3}]

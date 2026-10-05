@@ -24,19 +24,29 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
-from marin.rl.drafting_sft import DraftSftPlan, MegatronDraftPolicy, OnlineEagleTraining, draft_sft_plan
+from marin.rl.drafting_sft import draft_sft_recipe
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLHardware,
     SkyRLRetentionPolicy,
     SkyRLRun,
-    SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
-    SkyRLTopology,
     skyrl_step,
+)
+from marin.skyrl_recipe import (
+    Generator,
+    Placement,
+    Policy,
+    PolicyMegatronConfig,
+    PolicyOptimizerConfig,
+    RecipePatch,
+    SkyRLRecipe,
+    SpeculativeDecoding,
+    Trainer,
+    Training,
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
@@ -76,43 +86,69 @@ SMOKE = _OnlineEaglePreset(label="smoke", artifact_suffix="-smoke", max_steps=7,
 FULL = _OnlineEaglePreset(label="full", artifact_suffix="", max_steps=25, checkpoint_interval=5)
 PRESETS = {preset.label: preset for preset in (SMOKE, FULL)}
 
-POLICY = MegatronDraftPolicy(
-    policy_num_nodes=4,
-    gpus_per_node=GPUS_PER_NODE,
-    inference_engine_expert_parallel_size=GPUS_PER_NODE,
-    train_batch_size=32,
-    policy_mini_batch_size=32,
-    micro_train_batch_size_per_gpu=1,
-    n_samples_per_prompt=4,
-    eval_batch_size=64,
-    micro_forward_batch_size_per_gpu=1,
-    tensor_model_parallel_size=1,
-    pipeline_model_parallel_size=2,
-    context_parallel_size=1,
-    expert_model_parallel_size=8,
-    expert_tensor_parallel_size=1,
-    learning_rate=1.0e-6,
+POLICY = RecipePatch.combine(
+    resources=RecipePatch(
+        trainer=Trainer(
+            placement=Placement(
+                colocate_all=False,
+                colocate_policy_ref=True,
+                policy_num_nodes=4,
+                policy_num_gpus_per_node=GPUS_PER_NODE,
+                ref_num_nodes=4,
+                ref_num_gpus_per_node=GPUS_PER_NODE,
+            ),
+            train_batch_size=32,
+            policy_mini_batch_size=32,
+            micro_train_batch_size_per_gpu=1,
+        ),
+        generator=Generator(
+            num_inference_engines=1,
+            inference_engine_tensor_parallel_size=1,
+            inference_engine_pipeline_parallel_size=1,
+            inference_engine_data_parallel_size=GPUS_PER_NODE,
+            inference_engine_expert_parallel_size=GPUS_PER_NODE,
+            n_samples_per_prompt=4,
+        ),
+    ),
+    model=RecipePatch(
+        trainer=Trainer(
+            eval_batch_size=64,
+            policy=Policy(
+                optimizer_config=PolicyOptimizerConfig(lr=1e-06, max_grad_norm=1.0),
+                megatron_config=PolicyMegatronConfig(
+                    tensor_model_parallel_size=1,
+                    pipeline_model_parallel_size=2,
+                    context_parallel_size=1,
+                    expert_model_parallel_size=8,
+                    expert_tensor_parallel_size=1,
+                ),
+            ),
+        )
+    ),
 )
-TRAINING = OnlineEagleTraining(
+TRAINING = SpeculativeDecoding(
+    method="eagle3",
     num_speculative_tokens=3,
-    interval_steps=4,
-    max_tokens_per_update=131072,
-    max_window_tokens=16384,
-    max_tokens_per_micro_batch=8192,
-    max_sequences_per_prompt_group=2,
-    min_train_sequences=6,
-    holdout_fraction=0.25,
-    min_holdout_sequences=3,
-    epochs_per_update=1,
-    learning_rate=5.0e-5,
-    max_validation_loss_increase=0.05,
-    max_validation_agreement_decrease=0.01,
-    reserved_gpu_memory_gib=12,
+    training=Training(
+        interval_steps=4,
+        max_tokens_per_update=131072,
+        max_window_tokens=16384,
+        max_tokens_per_micro_batch=8192,
+        max_sequences_per_prompt_group=2,
+        min_train_sequences=6,
+        holdout_fraction=0.25,
+        min_holdout_sequences=3,
+        epochs_per_update=1,
+        learning_rate=5e-05,
+        max_validation_loss_increase=0.05,
+        max_validation_agreement_decrease=0.01,
+        reserved_gpu_memory_gib=12,
+    ),
 )
 
 
-def _snowball_draft_sft_plan(preset: _OnlineEaglePreset) -> DraftSftPlan:
-    return draft_sft_plan(
+def _snowball_recipe(preset: _OnlineEaglePreset) -> SkyRLRecipe:
+    return draft_sft_recipe(
         initial_draft=INITIAL_DRAFT_URI,
         initial_draft_identity=INITIAL_DRAFT_REVISION,
         policy=POLICY,
@@ -135,7 +171,7 @@ TARGET_MODEL = ArtifactStep.adopt(
 
 
 def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
-    plan = _snowball_draft_sft_plan(preset)
+    plan = _snowball_recipe(preset)
     name = user_owned_name(f"{ARTIFACT_NAME}{preset.artifact_suffix}")
     version = resolve_version(name, None)
     pool = pool_step(POOL_ARTIFACT_NAME, resolve_version(POOL_ARTIFACT_NAME, None))
@@ -143,8 +179,7 @@ def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=plan.config_yaml,
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            recipe=plan,
             model=ArtifactHfModel(
                 step=TARGET_MODEL,
                 tokenizer_uri=TARGET_TOKENIZER,
@@ -153,12 +188,7 @@ def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
             ),
             train_data=(ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
-            topology=SkyRLTopology(
-                num_nodes=plan.num_nodes,
-                gpus_per_node=GPUS_PER_NODE,
-                gpu_variant=GPU_VARIANT,
-                role_plan=plan.role_plan,
-            ),
+            hardware=SkyRLHardware(gpus_per_node=GPUS_PER_NODE, gpu_variant=GPU_VARIANT),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
         ),

@@ -76,6 +76,7 @@ SKYRL_LAUNCH_DOCUMENT_TEST = "tests/rl/test_rl_launch_documents.py"
 SKYRL_LAUNCH_DOCUMENT_TRIGGERS: tuple[str, ...] = (
     "experiments/post_training/",
     "lib/marin/src/marin/rl/",
+    "lib/marin/src/marin/skyrl_recipe",
     "config/external/MarinSkyRL/",
     "lib/marin/src/marin/external_dependencies.py",
     "config/update-external.py",

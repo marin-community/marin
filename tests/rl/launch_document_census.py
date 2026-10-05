@@ -4,7 +4,7 @@
 import inspect
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from functools import partial
 from itertools import product
 from pathlib import Path
@@ -77,14 +77,16 @@ def _tasktrove_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
     return tasktrove.smoke_step(release)
 
 
-def _probe_step(artifact_root: Path, settings: mismatch.ProbeSettings) -> ArtifactStep[SkyRLRun]:
+def _probe_step(
+    artifact_root: Path, settings: dict[str, int | float | str | tuple[str, ...] | None]
+) -> ArtifactStep[SkyRLRun]:
     # The build-options wrapper displays/runs a graph. Its wrapped Click build body returns that graph.
     builder = inspect.unwrap(mismatch.main.callback)
     return builder(
         model_uri=str(artifact_root / "iceball-sft"),
         data_uri=str(artifact_root / "gsm8k"),
         input_version=VERSION,
-        **asdict(settings),
+        **settings,
     )
 
 
@@ -135,7 +137,7 @@ def launch_builders(
     for cache, replay, updates, resume, reuse in product(
         ("off", "on", "both"), replay_choices, (0, 2), (False, True), (False, True)
     ):
-        settings = mismatch.ProbeSettings(
+        settings: dict[str, int | float | str | tuple[str, ...] | None] = dict(
             seed=17,
             prompt_count=2,
             samples_per_prompt=2,
