@@ -18,4 +18,4 @@ prerelease = "allow"
 
 [tool.uv.sources]
 # The exact campaign revision is retained in uv.lock and advanced deliberately.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "2203bacd03d82e9d4f2a9422f0b3f7e9bb7952cc" }
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "82b45e4506584675012ebf9611302889b62aeb24" }
