@@ -44,6 +44,8 @@ DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
+# Iris copies these from the submitting process into every job unless the job overrides them.
+SUBMITTER_TOKEN_ENV = {"HF_TOKEN": "", "WANDB_API_KEY": ""}
 
 
 class IrisMachine:
@@ -269,7 +271,7 @@ class IrisMachineFactory:
             job = client.submit(
                 entrypoint=Entrypoint.from_command("sleep", "infinity"),
                 name=f"shellbox-{uuid.uuid4().hex}",
-                environment=EnvironmentSpec(setup_scripts=[]),
+                environment=EnvironmentSpec(setup_scripts=[], env_vars=SUBMITTER_TOKEN_ENV),
                 resources=ResourceSpec(
                     cpu=spec.cpus or 1,
                     memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,

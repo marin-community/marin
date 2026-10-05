@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
+from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
@@ -60,7 +61,23 @@ class LocalClient:
         pass
 
 
+class SubmissionRecorded(Exception):
+    """Raised by ``RecordingClient.submit`` so ``create`` stops before polling the task."""
+
+
+class RecordingClient(LocalClient):
+    def __init__(self):
+        self.submitted: dict = {}
+
+    def submit(self, **kwargs):
+        self.submitted = kwargs
+        raise SubmissionRecorded
+
+
 class LocalEndpoint:
+    url = "http://controller"
+    credentials = None
+
     def close(self):
         pass
 
@@ -77,6 +94,17 @@ def local_machine(tmp_path: Path, rpc=None, task: LocalTask | None = None) -> tu
         spec,
     )
     return machine, job
+
+
+def submitted_job(monkeypatch, factory: IrisMachineFactory) -> dict:
+    """Return the keyword arguments ``create`` passes to ``IrisClient.submit``."""
+    client = RecordingClient()
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    with pytest.raises(SubmissionRecorded):
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir="/tmp")))
+    return client.submitted
 
 
 @pytest.mark.parametrize("resource", ["cpus", "storage_mb"])
@@ -124,6 +152,17 @@ def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
         assert (tmp_path / "back.bin").read_bytes() == payload
 
     asyncio.run(scenario())
+
+
+def test_create_keeps_the_submitters_tokens_out_of_the_sandbox(monkeypatch) -> None:
+    monkeypatch.setenv("HF_TOKEN", "submitter-hf-token")
+    monkeypatch.setenv("WANDB_API_KEY", "submitter-wandb-key")
+    factory = IrisMachineFactory(controller_url="http://controller", cluster_network=NetworkPolicy.DENY)
+
+    env_vars = submitted_job(monkeypatch, factory)["environment"].to_proto().env_vars
+
+    assert env_vars["HF_TOKEN"] == ""
+    assert env_vars["WANDB_API_KEY"] == ""
 
 
 def test_create_refuses_a_network_policy_the_cluster_does_not_provide() -> None:
