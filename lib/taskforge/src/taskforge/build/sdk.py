@@ -38,10 +38,9 @@ from taskforge.build.step import (
     Step,
     StepCache,
     StepRole,
-    canonical_json,
     step,
-    value_digest,
 )
+from taskforge.canonical import canonical_json, digest
 from taskforge.ledger.records import EntryKind, Ledger, span
 from taskforge.llm.agent import AgentLedger, AgentRun, AgentTool, run_agent
 from taskforge.llm.agent import shell_tool as agent_shell_tool
@@ -135,7 +134,7 @@ class BuildLLM:
     @property
     def digest(self) -> str:
         """The policy digest that every step key includes."""
-        return value_digest({"model": self.client.endpoint.model, "policy": self.policy})
+        return digest({"model": self.client.endpoint.model, "policy": self.policy})
 
     def _step(self) -> str:
         frame = CURRENT_STEP.get()
@@ -293,7 +292,7 @@ class Build:
         the empty answer): controls are written, not graded; ``validate`` replays them.
         """
         candidate = GradedCandidate(reply=reply, files=tuple(sorted(workspace, key=lambda f: f.path)))
-        self.emit(f"{GRADED_RESOURCE_PREFIX}{value_digest(candidate)}.json", canonical_json(candidate))
+        self.emit(f"{GRADED_RESOURCE_PREFIX}{digest(candidate)}.json", canonical_json(candidate).encode())
         if verifier.kind != VerifierKind.SHELL:
             answer = resolve_verifier(verifier)
             self.check(not workspace, "an answer verifier cannot read workspace files")

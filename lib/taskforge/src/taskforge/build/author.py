@@ -31,7 +31,8 @@ from types import ModuleType
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from taskforge.build.sdk import SDK_EXPORTS, Build, BuildOutput, BuildServices, sdk_reference
-from taskforge.build.step import SDK_VERSION, Step, StepRole, sha256_hex, write_atomic
+from taskforge.build.step import SDK_VERSION, Step, StepRole
+from taskforge.canonical import sha256_hex, write_atomic
 from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion
 from taskforge.llm.policy import Message

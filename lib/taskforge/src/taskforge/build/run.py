@@ -30,7 +30,8 @@ from taskforge.build.sdk import (
     GradedCandidate,
     Grader,
 )
-from taskforge.build.step import SDK_VERSION, CacheStatus, Resource, StepCache, StepRecord, StepRole, write_atomic
+from taskforge.build.step import SDK_VERSION, CacheStatus, Resource, StepCache, StepRecord, StepRole
+from taskforge.canonical import write_atomic
 from taskforge.ledger.records import EntryKind, span
 from taskforge.proposal.model import TaskProposal
 from taskforge.spec.controls import Control, Workspace, controls_json, validate_controls

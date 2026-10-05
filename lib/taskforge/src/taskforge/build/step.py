@@ -26,10 +26,7 @@ the blob store as ``Blob`` references rather than inline in an output.
 
 import contextvars
 import dis
-import hashlib
 import inspect
-import json
-import os
 import types
 import typing
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -39,8 +36,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import TypeAdapter
-from pydantic_core import PydanticSerializationError, to_jsonable_python
+from pydantic_core import PydanticSerializationError
 
+from taskforge.canonical import canonical_json, digest, sha256_hex, write_atomic
 from taskforge.ledger.records import EntryKind, Ledger, check_item_id, span
 
 SDK_VERSION = "taskforge.build/2"
@@ -103,26 +101,6 @@ class StepRecord:
     status: CacheStatus
     output: Blob
     resources: tuple[Resource, ...]
-
-
-def sha256_hex(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
-
-
-def canonical_json(value: object) -> bytes:
-    """Sorted-key compact JSON of ``value``; bytes are base64, dataclasses and models by field."""
-    jsonable = to_jsonable_python(value, bytes_mode="base64")
-    return json.dumps(jsonable, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
-
-
-def value_digest(value: object) -> str:
-    return sha256_hex(canonical_json(value))
-
-
-def write_atomic(path: Path, content: bytes) -> None:
-    temp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    temp.write_bytes(content)
-    temp.replace(path)
 
 
 class BlobStore:
@@ -206,7 +184,7 @@ def _is_data(value: object) -> bool:
 
 def _data_json(name: str, value: object) -> str:
     try:
-        return canonical_json(value).decode()
+        return canonical_json(value)
     except PydanticSerializationError as error:
         raise TypeError(
             f"step code reads {name!r}, a {type(value).__name__} with no JSON form for its memo key"
@@ -303,7 +281,7 @@ class StepKey:
 
     @property
     def digest(self) -> str:
-        return value_digest(self)
+        return digest(self)
 
 
 @dataclass
@@ -328,8 +306,8 @@ class StepCache:
     def key(self, step: Step, arguments: Mapping[str, object], proposal_digest: str, policy_digest: str) -> StepKey:
         return StepKey(
             sdk_version=SDK_VERSION,
-            source_digest=value_digest(step.code),
-            argument_digests={name: value_digest(value) for name, value in arguments.items()},
+            source_digest=digest(step.code),
+            argument_digests={name: digest(value) for name, value in arguments.items()},
             proposal_digest=proposal_digest,
             policy_digest=policy_digest,
         )
@@ -380,8 +358,8 @@ class StepCache:
                 output_blob = self.blobs.put(adapter.dump_json(output))
                 record = StepRecord(step.name, step.role, key.digest, status, output_blob, tuple(frame.resources))
                 directory.mkdir(parents=True, exist_ok=True)
-                write_atomic(directory / "key.json", canonical_json(key))
-                write_atomic(directory / "code.json", canonical_json(step.code))
+                write_atomic(directory / "key.json", canonical_json(key).encode())
+                write_atomic(directory / "code.json", canonical_json(step.code).encode())
                 write_atomic(result_path, _RECORD.dump_json(record, indent=2))
             fields.attrs["cache"] = status
             fields.output_hash = record.output.digest
