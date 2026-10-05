@@ -272,7 +272,7 @@ def _spectral_sphere_updates(params, direction_updates, learning_rate, state: Sp
 _KDA_ATTN_LEAF = re.compile(r"kda_blocks(?:_tail)?\.stacked\.attn\.(\w+)")
 # Low-rank forget gate, per-head A_log, per-channel dt_bias and the zero-init push / erase-gate
 # projections (MuonH cannot move a zero matrix): Adam (no weight decay).
-_KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias", "push_decay", "w_push", "w_erase"})
+_KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias", "push_decay", "w_push", "w_erase", "beta_scale"})
 # Write-strength projection: MuonH at ``kda_beta_lr_mult`` x the MuonH LR.
 _KDA_BETA_LEAF = "w_beta"
 # Low-rank write-strength MLP (``kda_beta_rank``): LR group chosen by ``kda_beta_mlp_group``.
@@ -1410,6 +1410,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Extra LR multiplier for the token-embedding AttnRes query table (``attn_res_token_query``), on top of
     ``attn_res_query_lr_scale``."""
     kda_beta_lr_mult: float = 2.0
+    kda_beta_group: str = "kda_beta"
+    """LR group of the KDA write-strength projection ``w_beta``: ``kda_beta`` (MuonH at ``kda_beta_lr_mult``),
+    ``adamh`` (AdamH at the MuonH LR, like the lm head) or ``adam`` (plain Adam at the Adam LR)."""
     muon_head_dim: int | None = None
     kda_beta_mlp_group: str = "kda_beta"
     """LR group of the low-rank KDA beta MLP: ``kda_beta`` (MuonH at ``kda_beta_lr_mult``) or ``adam``."""
@@ -2023,6 +2026,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError(f"latent_proj_update must be one of {LATENT_PROJ_UPDATES}, got {self.latent_proj_update!r}")
         if self.lm_head_group not in ("adamh", "muonh", "sinkhornh"):
             raise ValueError(f"lm_head_group must be adamh, muonh or sinkhornh, got {self.lm_head_group!r}")
+        if self.kda_beta_group not in ("kda_beta", "adamh", "adam"):
+            raise ValueError(f"kda_beta_group must be kda_beta, adamh or adam, got {self.kda_beta_group!r}")
         if self.kda_beta_mlp_group not in ("kda_beta", "adam"):
             raise ValueError(f"kda_beta_mlp_group must be kda_beta or adam, got {self.kda_beta_mlp_group!r}")
         if self.embed_group not in ("adam", "adamh", "sinkhorn"):
@@ -2090,7 +2095,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "frozen" if self.latent_proj_update == "frozen" else "stiefel"
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
-                return "kda_beta"
+                return self.kda_beta_group
             if kda_leaf in _KDA_BETA_MLP_LEAVES:
                 return self.kda_beta_mlp_group
             if kda_leaf in _KDA_ADAM_LEAVES:

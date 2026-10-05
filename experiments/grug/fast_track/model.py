@@ -1141,6 +1141,12 @@ class GrugModelConfig:
     the paper's (0, 2) negative-eigenvalue range). Runs through the KDA kernels' erase-key path."""
     kda_head_pairing: KdaHeadPairing = KdaHeadPairing.NONE
     """Share one KDA state between adjacent heads (``KdaHeadPairing``); every KDA layer."""
+    init_std_mult_beta: float | None = None
+    """Init-std multiplier of the KDA write-strength projection ``w_beta`` alone (None: ``init_std_mult_gates``).
+    Under MuonH it fixes ``w_beta``'s norm for the whole run."""
+    kda_beta_scale: bool = False
+    """A learned per-head scale (Adam, init 1) on the KDA beta logits, so the write-strength logit scale can grow
+    when ``w_beta``'s norm is pinned by the hyperball."""
     kda_beta_negative: bool = False
     """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
     can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
@@ -2393,6 +2399,14 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         for name in names:
             weight = jax.lax.stop_gradient(getattr(layer.attn, name)).astype(jnp.float32)
             stats[f"attn_res_knob_kv_proj_{name}_norm_L{i}"] = jnp.linalg.norm(weight)
+    if isinstance(layer.attn, KimiDeltaAttention) and layer.attn.w_beta is not None:
+        # The write-strength projection's magnitude: pinned under MuonH, free under Adam.
+        w_beta = jax.lax.stop_gradient(layer.attn.w_beta).astype(jnp.float32)
+        stats[f"attn_res_knob_kda_w_beta_norm_L{i}"] = jnp.linalg.norm(w_beta)
+        if layer.attn.beta_scale is not None:
+            scale = jax.lax.stop_gradient(layer.attn.beta_scale).astype(jnp.float32)
+            stats[f"attn_res_knob_kda_beta_scale_mean_L{i}"] = jnp.mean(scale)
+            stats[f"attn_res_knob_kda_beta_scale_max_L{i}"] = jnp.max(scale)
     router_tok_b = getattr(layer.mlp, "router_tok_b", None)
     if router_tok_b is not None:
         stats[f"attn_res_knob_router_tok_b_norm_L{i}"] = jnp.linalg.norm(
@@ -2698,6 +2712,7 @@ class KimiDeltaAttention(eqx.Module):
     w_beta: Float[Array, "D N"] | None
     w_beta_down: Float[Array, "D R"] | None
     w_beta_up: Float[Array, "R N"] | None
+    beta_scale: Float[Array, " N"] | None  # cfg.kda_beta_scale
     o_norm: "LearnedRMSNorm"
     bias_qkv: Float[Array, "3 NH"] | None
     sconv_q: ShortConv
@@ -2752,8 +2767,16 @@ class KimiDeltaAttention(eqx.Module):
             w_beta=(
                 None
                 if cfg.kda_beta_rank
-                else reshard(_init_weight(k_b, (d, n), std * cfg.init_std_mult_gates), P(None, None))
+                else reshard(
+                    _init_weight(
+                        k_b,
+                        (d, n),
+                        std * (cfg.init_std_mult_gates if cfg.init_std_mult_beta is None else cfg.init_std_mult_beta),
+                    ),
+                    P(None, None),
+                )
             ),
+            beta_scale=jnp.ones((n,)) if cfg.kda_beta_scale else None,
             w_beta_down=(
                 reshard(_init_weight(k_b, (d, cfg.kda_beta_rank), std), P(None, None)) if cfg.kda_beta_rank else None
             ),
@@ -2885,6 +2908,8 @@ class KimiDeltaAttention(eqx.Module):
         else:
             assert self.w_beta is not None
             beta_logits = jnp.einsum("bsd,dn->bsn", x, self.w_beta)
+        if self.beta_scale is not None:
+            beta_logits = beta_logits * unshard(self.beta_scale).astype(beta_logits.dtype)
         if cfg.kda_beta_negative:
             beta = 2.0 * jax.nn.sigmoid(beta_logits.astype(jnp.float32) - math.log(3.0))
         else:
