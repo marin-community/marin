@@ -42,10 +42,9 @@ SHARD = "part-00000-of-00001.parquet"
 SOURCE = "fixture"
 SPLIT = "train"
 
-_PROSE = (
-    "Glaciers carve valleys over millennia, leaving moraines that record each advance and retreat. "
-    "Geologists read these deposits like the pages of a ledger. "
-)
+# Built from the label vocabulary (``w0``..``w22``) so the fixture model's scores vary
+# across documents instead of saturating on unknown tokens.
+_PROSE = " ".join(f"w{(k * 5) % 23}" for k in range(40)) + " "
 # The fixture tokenizer emits roughly one id per character, so lengths in chars are
 # lengths in tokens: the first text needs three 512-token windows, the second takes
 # the tokenizer's >10k-char long-string path.
@@ -165,6 +164,8 @@ def test_quality_output_is_co_partitioned_with_tokenize_and_normalize(
     assert main.column("id").to_pylist() == norm_ids
     scores = np.asarray(main.column("score").to_pylist())
     assert np.all(np.isfinite(scores)) and np.all((scores >= 0.0) & (scores <= 1.0))
+    # The model must separate these documents, or the train == serve check below is vacuous.
+    assert len(set(np.round(scores, 6))) > 1
     assert set(main.column("quality_bucket").to_pylist()) <= set(range(5))
     assert result.counters["ft_quality/scored"] == len(TEXTS)
 

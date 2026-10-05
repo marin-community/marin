@@ -99,7 +99,7 @@ def _check_ids_aligned(tok_path: str, text_path: str) -> None:
     exactly the normalize shard's documents, in order.
 
     Runs before any record of the shard is scored, so a broken input is refused
-    without a model forward or a zephyr retry.
+    without a model forward.
     """
     with StoragePath(tok_path).open("rb") as fh:
         tok = pq.read_table(fh, columns=["id", CHUNK_INDEX_FIELD])
