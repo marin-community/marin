@@ -694,7 +694,7 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
             "heldout_comparison_step",
             lambda *args, **kwargs: pytest.fail("Held-out evaluation started without capability feedback"),
         )
-    if calibration_source not in ("fresh_recovery", "incomplete_recovery"):
+    if calibration_source != "fresh_recovery":
         monkeypatch.setattr(russell_launch, "bootstrap_round_workflow", lambda *args, **kwargs: outputs)
 
     class CapturedPlan(Exception):
@@ -726,7 +726,15 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
     else:
         monkeypatch.setattr(russell_launch, "run", lambda *args: pytest.fail("Resume started GPU work"))
 
+    final_comparisons = []
+
     def resolver(handle):
+        if handle.name == "documents/russell-rsi-final-heldout-comparison":
+            config = handle.build_config(StepContext.for_fingerprint(deps=handle.deps))
+            final_comparisons.append(config["terminal_state"])
+            return Artifact(path="/tmp/final-comparison")
+        if handle.name == "documents/russell-rsi-bootstrap-replay-round-2-replay-v1-train":
+            pytest.fail("Pilot-two replay training was resolved after incomplete calibration")
         if handle is difficulty:
             if calibration_source in ("fresh_recovery", "incomplete_recovery"):
                 return Artifact(path=str(tmp_path / "recovery"))
@@ -795,20 +803,54 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
     if calibration_source in ("fresh_recovery", "incomplete_recovery"):
         recovery_path = tmp_path / "recovery"
         recovery_path.mkdir()
-        rewards = {task.task_id: [1, 0] * 4 for task in bank}
+        calibration_tasks = next_bank_records if calibration_source == "incomplete_recovery" else bank
+        calibration_bank = next_bank if calibration_source == "incomplete_recovery" else seed
+        rewards = {task.task_id: [1, 0] * 4 for task in calibration_tasks}
         if calibration_source == "incomplete_recovery":
-            rewards[bank[0].task_id].pop()
-        (recovery_path / "failure_summary.json").write_text(
-            json.dumps(
-                {
-                    "model_identity": artifact_identity(parent),
-                    "tasks_identity": artifact_identity(seed),
-                    "count": len(bank),
-                    "samples_per_task": 8,
-                    "task_rewards": rewards,
-                }
+            rewards[calibration_tasks[0].task_id].pop()
+        summary = {
+            "model_identity": artifact_identity(parent),
+            "tasks_identity": artifact_identity(calibration_bank),
+            "count": len(calibration_tasks),
+            "samples_per_task": 8,
+            "task_rewards": rewards,
+        }
+        (recovery_path / "failure_summary.json").write_text(json.dumps(summary))
+        if calibration_source == "incomplete_recovery":
+            trace_rows = []
+            for task in calibration_tasks:
+                for reward in rewards[task.task_id]:
+                    trace_rows.append(
+                        {"task_id": task.task_id, "grade": {"reward": reward}, "interrupted_operation": None}
+                    )
+                if task is calibration_tasks[0]:
+                    trace_rows.append(
+                        {
+                            "task_id": task.task_id,
+                            "grade": {"reward": None},
+                            "interrupted_operation": "advance",
+                            "execution_error": {
+                                "type": "QemuTimeout",
+                                "message": "QEMU machine is not running after a timed_out tool result",
+                            },
+                            "steps": [{}, {}, {}, {}, {}],
+                        }
+                    )
+            (recovery_path / "traces.jsonl").write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in trace_rows)
             )
-        )
+            (recovery_path / ".artifact.json").write_text(
+                json.dumps(
+                    {
+                        "provenance": {
+                            "tree_hash": "source-tree-hash",
+                            "base_commit": "source-commit",
+                            "dirty": False,
+                            "source": None,
+                        }
+                    }
+                )
+            )
 
         def allocation_boundary(*handles):
             for handle in graph_handles(list(handles)):
@@ -817,9 +859,12 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
                     allocation_plans.append(frozen_config.plan)
             raise RuntimeError("Training allocation intercepted")
 
-        monkeypatch.setattr(russell_launch, "run", allocation_boundary)
-    else:
+        if calibration_source == "fresh_recovery":
+            monkeypatch.setattr(russell_launch, "run", allocation_boundary)
+    if calibration_source != "fresh_recovery":
         sealed_hash = seal_round(directory, state, plan, result, previous)
+        sealed_path = directory / f"{plan.name}.json"
+        sealed_round_bytes = sealed_path.read_bytes()
         russell_launch.write_once(
             directory / "smoke.json",
             {
@@ -829,7 +874,7 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
                 "retention_baseline_sha256": hashes[2],
             },
         )
-    initial_calibration = None if calibration_source == "normal" else difficulty
+    initial_calibration = None if calibration_source in {"normal", "incomplete_recovery"} else difficulty
     if calibration_source == "changed_recovery":
         initial_calibration = ArtifactStep.adopt(
             "evals/difficulty", "2026.10.04", "/tmp/difficulty", config={"review": "changed"}
@@ -841,8 +886,6 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
     )
     if calibration_source == "fresh_recovery":
         expected = pytest.raises(RuntimeError, match="Training allocation intercepted")
-    elif calibration_source == "incomplete_recovery":
-        expected = pytest.raises(ValueError, match="eight finite grades")
     if review_case == "plan":
         expected = pytest.raises(CapturedPlan)
 
@@ -851,8 +894,9 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
             pytest.fail("Source construction started without capability feedback")
         if review_case == "review_pending":
             return None
-        bank_handle = next_bank if review_case == "plan" else seed
-        supplied_bank = bank_handle if review_case in {"bank", "plan"} else None
+        use_next_bank = review_case == "plan" or calibration_source == "incomplete_recovery"
+        bank_handle = next_bank if use_next_bank else seed
+        supplied_bank = bank_handle if review_case in {"bank", "plan"} or use_next_bank else None
         return russell_launch.ReviewedConstructionInputs(
             reviewed_feedback, (reviewed_path / "capabilities.json").read_bytes(), supplied_bank
         )
@@ -904,14 +948,51 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         )
         assert not (directory / "terminal-state.json").exists()
         return
-    if calibration_source in ("fresh_recovery", "incomplete_recovery"):
+    if calibration_source == "fresh_recovery":
         assert not (directory / "smoke.json").exists()
-        if calibration_source == "fresh_recovery":
-            assert len(allocation_plans) == 1
-            assert allocation_plans[0].calibration_identity == artifact_identity(difficulty)
-            assert len(allocation_plans[0].selected_tasks) == 16
-        else:
-            assert allocation_plans == []
+        assert len(allocation_plans) == 1
+        assert allocation_plans[0].calibration_identity == artifact_identity(difficulty)
+        assert len(allocation_plans[0].selected_tasks) == 16
+        return
+    if calibration_source == "incomplete_recovery":
+        failure_path = directory / "calibration-correctness-failure-pilot-2.json"
+        failure_bytes = failure_path.read_bytes()
+        failure = json.loads(failure_bytes)
+        summary_bytes = (tmp_path / "recovery" / "failure_summary.json").read_bytes()
+        traces_bytes = (tmp_path / "recovery" / "traces.jsonl").read_bytes()
+        trace_rows = [json.loads(line) for line in traces_bytes.splitlines()]
+        first_missing = trace_rows[7]
+        assert restored.completed_pilots == 1
+        assert restored.rounds_without_improvement == 1
+        assert restored.stop_reason is StopReason.CALIBRATION_FAILURE
+        assert restored.working == restored.champion == score
+        assert (directory / f"{plan.name}.json").read_bytes() == sealed_round_bytes
+        assert failure["state"]["completed_pilots"] == 1
+        assert failure["state"]["rounds_without_improvement"] == 1
+        assert failure["last_round_sha256"] == sealed_hash
+        assert failure["grade_count"] == len(next_bank_records) * 8 - 1
+        assert failure["expected_grade_count"] == len(next_bank_records) * 8
+        assert failure["attempt_count"] == len(trace_rows)
+        assert failure["signal_status"] == "undetermined"
+        assert failure["first_interrupted_trace"]["index"] == 7
+        assert failure["first_interrupted_trace"]["task_id"] == first_missing["task_id"]
+        assert (
+            failure["first_interrupted_trace"]["sha256"]
+            == hashlib.sha256((json.dumps(first_missing, sort_keys=True) + "\n").encode()).hexdigest()
+        )
+        assert failure["calibration_summary_sha256"] == hashlib.sha256(summary_bytes).hexdigest()
+        assert failure["calibration_traces_sha256"] == hashlib.sha256(traces_bytes).hexdigest()
+        terminal_record = json.loads((directory / "terminal-state.json").read_text())
+        terminal_bytes = (directory / "terminal-state.json").read_bytes()
+        assert [json.loads(json.dumps(record)) for record in final_comparisons] == [terminal_record]
+        assert terminal_record["state"]["stop_reason"] == StopReason.CALIBRATION_FAILURE.value
+        assert not (directory / "bootstrap-2026.10.04-pilot-2.json").exists()
+        repeated = resume()
+        assert repeated == restored
+        assert failure_path.read_bytes() == failure_bytes
+        assert (directory / "terminal-state.json").read_bytes() == terminal_bytes
+        assert (directory / f"{plan.name}.json").read_bytes() == sealed_round_bytes
+        assert [json.loads(json.dumps(record)) for record in final_comparisons] == [terminal_record, terminal_record]
         return
     if review_case == "raw_empty":
         boundary_path = directory / "feedback-insufficient-after-1.json"

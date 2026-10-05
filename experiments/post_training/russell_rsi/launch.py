@@ -43,9 +43,11 @@ from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.post_training.russell_rsi.adaptive_tasks import AdaptiveTasksConfig, run_adaptive_tasks_in_project
 from experiments.post_training.russell_rsi.bootstrap_loop import (
+    ATTEMPTS_PER_TASK,
     CALIBRATION_TEMPERATURE,
     CheckpointScore,
     FrozenRoundConfig,
+    IncompleteCalibrationError,
     LoopState,
     QualifiedTask,
     RoundResult,
@@ -596,6 +598,80 @@ def stop_for_training_signal(
     return replace(state, stop_reason=StopReason.TRAINING_SIGNAL)
 
 
+CALIBRATION_ERROR_TEXT_LIMIT = 1_024
+
+
+def calibration_failure_record(
+    measured_path: str,
+    summary_bytes: bytes,
+    summary: dict,
+    error: IncompleteCalibrationError,
+    *,
+    pilot_number: int,
+    bank_identity: str,
+    model_identity: str,
+    calibration_identity: str,
+    state: LoopState,
+    previous_sha256: str,
+) -> dict:
+    """Return bounded evidence for an incomplete calibration."""
+    trace_path = StoragePath(prefix_join(measured_path, "traces.jsonl"))
+    traces_digest = hashlib.sha256()
+    trace_count = 0
+    interrupted = None
+    with trace_path.open("rb") as traces:
+        for index, line in enumerate(traces):
+            traces_digest.update(line)
+            trace_count += 1
+            if interrupted is not None:
+                continue
+            record = json.loads(line)
+            if record.get("task_id") not in error.missing_task_ids or record.get("grade", {}).get("reward") is not None:
+                continue
+            execution_error = record.get("execution_error") or {}
+            interrupted = {
+                "index": index,
+                "sha256": hashlib.sha256(line).hexdigest(),
+                "task_id": record["task_id"],
+                "interrupted_operation": record.get("interrupted_operation"),
+                "execution_error": {
+                    key: execution_error[key][:CALIBRATION_ERROR_TEXT_LIMIT]
+                    for key in ("type", "message")
+                    if isinstance(execution_error.get(key), str)
+                },
+                "completed_steps": len(record.get("steps", ())),
+            }
+    if interrupted is None:
+        raise ValueError("Missing calibration grade has no matching ungraded trace")
+
+    metadata_bytes = StoragePath(prefix_join(measured_path, ".artifact.json")).read_bytes()
+    metadata = json.loads(metadata_bytes)
+    provenance = metadata["provenance"]
+    task_rewards = summary["task_rewards"]
+    return {
+        "protocol": "calibration-correctness-failure-v1",
+        "pilot_number": pilot_number,
+        "bank_identity": bank_identity,
+        "model_identity": model_identity,
+        "calibration_identity": calibration_identity,
+        "calibration_summary_sha256": hashlib.sha256(summary_bytes).hexdigest(),
+        "calibration_traces_sha256": traces_digest.hexdigest(),
+        "grade_count": sum(len(group) for group in task_rewards.values()),
+        "attempt_count": trace_count,
+        "expected_grade_count": summary["count"] * ATTEMPTS_PER_TASK,
+        "missing_task_ids": list(error.missing_task_ids),
+        "first_interrupted_trace": interrupted,
+        "source_identity": {
+            "metadata_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
+            "provenance": {key: provenance.get(key) for key in ("tree_hash", "base_commit", "dirty", "source")},
+        },
+        "signal_status": "undetermined",
+        "recovery_decision": "stop_without_replacement",
+        "state": asdict(state),
+        "last_round_sha256": previous_sha256,
+    }
+
+
 def bootstrap_round_workflow(
     training: ArtifactStep[Artifact],
     retention: ArtifactStep[Artifact],
@@ -1004,10 +1080,28 @@ def run_bootstrap_loop(
         measurements = None
         if resumed is None:
             measured = resolve(difficulty)
-            summary = json.loads(StoragePath(prefix_join(measured.path, "failure_summary.json")).read_text())
-            measurements = calibration_measurements(
-                summary, bank, artifact_identity(current), artifact_identity(bank_handle)
-            )
+            summary_bytes = StoragePath(prefix_join(measured.path, "failure_summary.json")).read_bytes()
+            summary = json.loads(summary_bytes)
+            try:
+                measurements = calibration_measurements(
+                    summary, bank, artifact_identity(current), artifact_identity(bank_handle)
+                )
+            except IncompleteCalibrationError as error:
+                failure = calibration_failure_record(
+                    measured.path,
+                    summary_bytes,
+                    summary,
+                    error,
+                    pilot_number=number,
+                    bank_identity=artifact_identity(bank_handle),
+                    model_identity=artifact_identity(current),
+                    calibration_identity=artifact_identity(difficulty),
+                    state=state,
+                    previous_sha256=previous_sha256,
+                )
+                write_once(manifest_directory / f"calibration-correctness-failure-pilot-{number}.json", failure)
+                state = replace(state, stop_reason=StopReason.CALIBRATION_FAILURE)
+                break
         if number >= 2 and resumed is None and measurements is not None:
             signal_failure = calibration_signal_failure(measurements)
             if signal_failure is not None:

@@ -36,6 +36,15 @@ class StopReason(StrEnum):
     REWARD_VARIATION = "reward_variation_failure"
     TASK_SUPPLY = "task_supply_exhausted"
     TRAINING_SIGNAL = "insufficient_training_signal"
+    CALIBRATION_FAILURE = "calibration_correctness_failure"
+
+
+class IncompleteCalibrationError(ValueError):
+    """Calibration has valid evidence, but one or more grades are absent."""
+
+    def __init__(self, missing_task_ids: tuple[str, ...]):
+        self.missing_task_ids = missing_task_ids
+        super().__init__("Calibration is missing one or more task grades")
 
 
 @dataclass(frozen=True)
@@ -78,15 +87,20 @@ def calibration_measurements(
         summary["count"] != len(bank)
         or summary["samples_per_task"] != ATTEMPTS_PER_TASK
         or set(rewards) != {task.task_id for task in bank}
-        or any(
-            len(group) != ATTEMPTS_PER_TASK
+    ):
+        raise ValueError("Calibration requires eight finite grades per qualified task")
+    for group in rewards.values():
+        if (
+            not isinstance(group, list)
+            or len(group) > ATTEMPTS_PER_TASK
             or any(
                 type(reward) not in (int, float) or not math.isfinite(reward) or not 0 <= reward <= 1 for reward in group
             )
-            for group in rewards.values()
-        )
-    ):
-        raise ValueError("Calibration requires eight finite grades per qualified task")
+        ):
+            raise ValueError("Calibration requires eight finite grades per qualified task")
+    missing = tuple(task.task_id for task in bank if len(rewards[task.task_id]) < ATTEMPTS_PER_TASK)
+    if missing:
+        raise IncompleteCalibrationError(missing)
     return tuple(Measurement(model_identity, task.task_sha256, tuple(rewards[task.task_id])) for task in bank)
 
 
