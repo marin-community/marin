@@ -16,7 +16,6 @@ repair request. The accepted source is stored beside the proposal as ``program.p
 """
 
 import builtins
-import dis
 import importlib
 import inspect
 import json
@@ -31,7 +30,7 @@ from types import ModuleType
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 from taskforge.build.sdk import SDK_EXPORTS, Build, BuildOutput, BuildServices, sdk_reference
-from taskforge.build.step import SDK_VERSION, Step, StepRole
+from taskforge.build.step import SDK_VERSION, Step, StepRole, code_names
 from taskforge.canonical import sha256_hex, write_atomic
 from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion
@@ -256,7 +255,7 @@ def _check_program(program: BuildProgram) -> None:
         raise ValueError("the program must define `async def build(b)`")
     unavailable = sorted(
         name
-        for name in _global_loads(compile(program.source, "<program>", "exec"))
+        for name in code_names(compile(program.source, "<program>", "exec"))
         if name in UNSAFE_BUILTINS and name not in vars(module)
     )
     if unavailable:
@@ -265,14 +264,6 @@ def _check_program(program: BuildProgram) -> None:
     for role in (StepRole.GRADER, StepRole.CONTROLS):
         if role not in roles:
             raise ValueError(f"the program must define its own {role.upper()} step")
-
-
-def _global_loads(code: types.CodeType) -> set[str]:
-    names = {i.argval for i in dis.get_instructions(code) if i.opname in ("LOAD_GLOBAL", "LOAD_NAME")}
-    for constant in code.co_consts:
-        if isinstance(constant, types.CodeType):
-            names |= _global_loads(constant)
-    return names
 
 
 @dataclass(frozen=True)

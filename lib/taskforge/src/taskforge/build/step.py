@@ -168,12 +168,12 @@ class Step:
 GLOBAL_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME"})
 
 
-def _code_names(code: types.CodeType) -> set[str]:
+def code_names(code: types.CodeType) -> set[str]:
     """Global names ``code`` and its nested functions load (not attribute names)."""
     names = {i.argval for i in dis.get_instructions(code) if i.opname in GLOBAL_LOADS}
     for constant in code.co_consts:
         if isinstance(constant, types.CodeType):
-            names |= _code_names(constant)
+            names |= code_names(constant)
     return names
 
 
@@ -224,7 +224,7 @@ def step_code(fn: Callable[..., object]) -> dict[str, str]:
             continue
         code[name] = inspect.getsource(value)  # pyrefly: ignore[bad-argument-type]
         body = getattr(value, "__code__", None)
-        referenced = _code_names(body) if body is not None else set(_class_names(value))
+        referenced = code_names(body) if body is not None else set(_class_names(value))
         for other in sorted(referenced):
             if other not in namespace or other in code:
                 continue
@@ -243,7 +243,7 @@ def _class_names(cls: object) -> set[str]:
     for member in vars(cls).values():
         function = getattr(member, "__func__", member)
         if inspect.isfunction(function):
-            names |= _code_names(function.__code__)
+            names |= code_names(function.__code__)
     pending = list(inspect.get_annotations(cls).values())
     while pending:
         annotation = pending.pop()
