@@ -47,7 +47,7 @@ def test_check_worker_group_skips_after_completed_stage(draining_coordinator):
         stage_name="test",
     )
     run = start_test_stage(draining_coordinator, [task], stage_name="last-stage", is_last_stage=True)
-    status, work = draining_coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE, incarnation="i0")
+    status, work = draining_coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
     assert work is not None
     draining_coordinator.report_result(
@@ -83,7 +83,7 @@ def test_check_worker_group_still_aborts_mid_stage(draining_coordinator):
         for shard_idx in range(2)
     ]
     run = start_test_stage(draining_coordinator, tasks, stage_name="mid-stage", is_last_stage=True)
-    status, work = draining_coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE, incarnation="i0")
+    status, work = draining_coordinator.pull_task("worker-0", TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
     assert work is not None
     draining_coordinator.report_result(

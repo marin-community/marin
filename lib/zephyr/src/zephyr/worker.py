@@ -66,6 +66,14 @@ def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
     return detail, summary
 
 
+def attempt_worker_id(group_name: str, index: int, attempt_id: int) -> str:
+    """Iris can start a new attempt of a lost worker task while the old attempt
+    still runs. The attempt number keeps their IDs apart, so each process has
+    its own liveness and the coordinator requeues a dead attempt's shards.
+    """
+    return f"{group_name}-{index}-a{attempt_id}"
+
+
 class ZephyrWorker:
     """Long-lived worker actor with a single poll loop and per-task threads.
 
@@ -106,15 +114,14 @@ class ZephyrWorker:
         # in Python <3.12 don't inherit it).
         self._actor_ctx = current_actor()
         self._host_shutdown_event = self._actor_ctx.shutdown_event
-        self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
-        # Iris can run a new attempt of this task beside a lost one; the coordinator
-        # tells the two apart by this token.
-        self._incarnation = uuid.uuid4().hex
-        self._actor_handle = self._actor_ctx.handle
-        self._stats_writer = StatsWriter.connect(stats_config)
         job_info = get_job_info()
         self._job_id = str(job_info.job_id) if job_info is not None else ""
         self._task_id = job_info.task_id.to_wire() if job_info is not None else ""
+        self._worker_id = attempt_worker_id(
+            self._actor_ctx.group_name, self._actor_ctx.index, job_info.attempt_id if job_info is not None else 0
+        )
+        self._actor_handle = self._actor_ctx.handle
+        self._stats_writer = StatsWriter.connect(stats_config)
 
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
@@ -160,9 +167,7 @@ class ZephyrWorker:
         while not self._stopping():
             try:
                 if future is None:
-                    future = self._coordinator.register_worker.remote(
-                        self._worker_id, self._actor_handle, self._task_id, incarnation=self._incarnation
-                    )
+                    future = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle, self._task_id)
                     request_start = time.monotonic()
                     warned = False
                 future.result(timeout=RPC_POLL_INTERVAL)
@@ -219,7 +224,7 @@ class ZephyrWorker:
             # killing it on slow coordinator deserialization.
             try:
                 if future is None:
-                    future = self._coordinator.pull_task.remote(self._worker_id, avail, incarnation=self._incarnation)
+                    future = self._coordinator.pull_task.remote(self._worker_id, avail)
                     future_start = time.monotonic()
                     warned = False
                 response = future.result(timeout=RPC_POLL_INTERVAL)
@@ -449,7 +454,7 @@ class ZephyrWorker:
         while not self._shutdown_event.is_set():
             try:
                 snapshots = self._heartbeat_counter_snapshots()
-                coordinator.heartbeat.remote(self._worker_id, snapshots, incarnation=self._incarnation).result()
+                coordinator.heartbeat.remote(self._worker_id, snapshots).result()
                 heartbeat_count += 1
                 consecutive_failures = 0
                 if heartbeat_count % 10 == 1:

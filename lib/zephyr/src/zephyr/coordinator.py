@@ -391,11 +391,6 @@ class ZephyrCoordinator:
         # Worker management state (workers self-register via register_worker)
         self._worker_states: dict[str, WorkerState] = {}
         self._last_seen: dict[str, float] = {}
-        # The current process behind each worker_id. Iris can start a new attempt
-        # of a worker task while the old attempt still runs; both use the same
-        # worker_id, so calls from a replaced incarnation must not take shards
-        # or keep the worker alive.
-        self._worker_incarnations: dict[str, str] = {}
         self._chunk_prefix = chunk_prefix
         self._no_workers_timeout = no_workers_timeout
         self._heartbeat_timeout = heartbeat_timeout
@@ -493,16 +488,14 @@ class ZephyrCoordinator:
         """Return the dashboard app that shares the actor endpoint."""
         return self._web_application
 
-    def register_worker(
-        self, worker_id: str, worker_handle: ActorHandle, task_id: str = "", *, incarnation: str
-    ) -> None:
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle, task_id: str = "") -> None:
         """Called by workers when they come online to register with coordinator.
 
-        Handles re-registration from reconstructed workers (e.g. after node
-        preemption) by updating the stale handle and resetting worker state.
+        Handles a worker that registers again under the same ID by updating the
+        stale handle and resetting worker state. A new Iris attempt of a worker
+        task registers under a new ID (see ``attempt_worker_id``).
         """
         with self._lock:
-            self._worker_incarnations[worker_id] = incarnation
             if worker_id in self._worker_handles:
                 logger.info("Worker %s re-registering (likely reconstructed), updating handle", worker_id)
                 self._worker_handles[worker_id] = worker_handle
@@ -527,7 +520,6 @@ class ZephyrCoordinator:
             self._worker_states.pop(worker_id, None)
             self._last_seen.pop(worker_id, None)
             self._worker_task_ids.pop(worker_id, None)
-            self._worker_incarnations.pop(worker_id, None)
             for key in [key for key in self._worker_counters if key[0] == worker_id]:
                 self._worker_counters.pop(key)
 
@@ -853,8 +845,6 @@ class ZephyrCoordinator:
         self,
         worker_id: str,
         available: ZephyrTaskResources,
-        *,
-        incarnation: str,
     ) -> tuple[PullStatus, PullTask | None]:
         """Called by workers to get next task.
 
@@ -867,17 +857,12 @@ class ZephyrCoordinator:
         Args:
             worker_id: Unique ID for this worker.
             available: CPU and memory currently available on the worker.
-            incarnation: The calling process. A replaced incarnation gets
-                ``SHUTDOWN``, so it cannot take a shard under the new one's ID.
 
         Returns:
             ``(status, work)`` where ``work`` is a ``PullTask`` when
             ``status`` is ``RUN_TASK`` and ``None`` for all other statuses.
         """
         with self._lock:
-            if self._is_replaced_incarnation(worker_id, incarnation):
-                logger.warning("Shutting down replaced incarnation of worker %s", worker_id)
-                return PullStatus.SHUTDOWN, None
             self._last_seen[worker_id] = time.monotonic()
             self._worker_states[worker_id] = WorkerState.ACTIVE
 
@@ -907,11 +892,6 @@ class ZephyrCoordinator:
                 return PullStatus.SHUTDOWN, None
 
             return PullStatus.NO_WORK_BACKOFF, None
-
-    def _is_replaced_incarnation(self, worker_id: str, incarnation: str) -> bool:
-        """True when another incarnation registered as ``worker_id`` after this one. Lock held."""
-        current = self._worker_incarnations.get(worker_id)
-        return current is not None and current != incarnation
 
     def _worker_is_releasable_locked(self, worker_id: str) -> bool:
         """True when no further task can be dispatched to this worker. Lock held.
@@ -1086,17 +1066,8 @@ class ZephyrCoordinator:
             self._assert_in_flight_consistent(run, worker_id, shard_idx)
             self._record_shard_failure(run, shard_idx, worker_id, ShardFailureKind.TASK, error_info)
 
-    def heartbeat(
-        self,
-        worker_id: str,
-        counter_snapshots: dict[str, CounterSnapshot] | None = None,
-        *,
-        incarnation: str,
-    ) -> None:
+    def heartbeat(self, worker_id: str, counter_snapshots: dict[str, CounterSnapshot] | None = None) -> None:
         with self._lock:
-            # A replaced incarnation must not keep the current one alive.
-            if self._is_replaced_incarnation(worker_id, incarnation):
-                return
             self._last_seen[worker_id] = time.monotonic()
             for execution_id, counter_snapshot in (counter_snapshots or {}).items():
                 run = self._executions.get(execution_id)
