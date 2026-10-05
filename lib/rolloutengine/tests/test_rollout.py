@@ -29,6 +29,7 @@ from taskcompendium.environment import (
 )
 from taskcompendium.grading import GradeResult, Outcome, numeric_answer
 from taskcompendium.models import (
+    SHELL_CAPABILITY,
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
@@ -48,6 +49,8 @@ from rolloutengine.contracts import (
     RolloutInterrupted,
     RolloutOperation,
     SessionStart,
+    TaskSetupError,
+    TaskSetupTimeout,
     Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
@@ -520,8 +523,62 @@ async def test_machine_setup_failure_releases_resources_and_retains_an_empty_rec
     assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
     assert failure.value.rollout.response_token_ids == ()
     assert failure.value.rollout.steps == ()
+    cause = failure.value.__cause__
+    assert isinstance(cause, TaskSetupError)
+    assert (cause.stage, cause.command, cause.exit_code) == (None, ("false",), 1)
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(("true",)))
+
+
+async def test_environment_healthcheck_failure_reports_task_setup_details():
+    task = file_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                healthcheck=HealthcheckSpec(
+                    command=EnvironmentCommand(argv=("false",), timeout=5),
+                    interval=0,
+                    start_period=0,
+                    start_interval=0,
+                    retries=1,
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(RolloutInterrupted) as failure:
+        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(task)
+
+    assert failure.value.operation == RolloutOperation.START
+    cause = failure.value.__cause__
+    assert isinstance(cause, TaskSetupError)
+    assert (cause.stage, cause.command, cause.exit_code) == (None, ("false",), 1)
+
+
+async def test_missing_task_capability_reports_task_setup_error():
+    task = arithmetic_task().model_copy(
+        update={"environment_requirements": EnvironmentRequirements(capabilities=(SHELL_CAPABILITY,))}
+    )
+
+    with pytest.raises(RolloutInterrupted) as failure:
+        await engine(ReplayModel([]), {}).run(task)
+
+    assert failure.value.operation == RolloutOperation.PREPARE
+    cause = failure.value.__cause__
+    assert isinstance(cause, TaskSetupError)
+    assert (cause.stage, cause.command, cause.exit_code) == (None, None, None)
+
+
+async def test_machine_creation_failure_is_not_a_task_setup_error():
+    class FailedFactory:
+        async def create(self, _spec):
+            raise OSError("scheduler unavailable")
+
+    with pytest.raises(RolloutInterrupted) as failure:
+        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: FailedFactory()}).run(file_task())
+
+    assert failure.value.operation == RolloutOperation.START
+    assert type(failure.value.__cause__) is OSError
 
 
 @pytest.mark.parametrize(
@@ -633,7 +690,11 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
     else:
         with pytest.raises(RolloutInterrupted) as failure:
             await pending
-        assert isinstance(failure.value.__cause__, TimeoutError)
+        assert isinstance(failure.value.__cause__, TaskSetupTimeout if phase == "command_timeout" else TimeoutError)
+        if phase == "command_timeout":
+            cause = failure.value.__cause__
+            assert isinstance(cause, TaskSetupTimeout)
+            assert (cause.stage, cause.command, cause.exit_code) == (None, ("command-timeout",), None)
         assert failure.value.operation == (
             RolloutOperation.START if phase in {"upload", "healthcheck", "command_timeout"} else RolloutOperation.ATTEMPT
         )

@@ -152,6 +152,13 @@ A model failure after a completed turn triggers grading of the completed state.
 `RolloutInterrupted` retains that grade and the exact token evidence.
 Stage setup failures also retain earlier completed stages. The caller's error
 policy determines whether the interrupted record enters training.
+Task-owned setup command, healthcheck, and capability failures have a
+`TaskSetupError` cause. A setup command timeout has a `TaskSetupTimeout` cause,
+which is also a `TaskSetupError`. The cause exposes `stage` (`None` for the task
+environment), `command` (the command argument tuple, if applicable), and
+`exit_code` (when the command returned one). Machine creation failures keep
+their original cause type, so callers can classify task defects without parsing
+error messages.
 
 ## Model and token contract
 

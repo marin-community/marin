@@ -20,7 +20,7 @@ from taskcompendium.grading import GradingFailure, Outcome
 from taskcompendium.importers.harbor import harbor_task
 from taskcompendium.models import Source, TaskSpec
 
-from rolloutengine.contracts import RolloutInterrupted, RolloutOperation
+from rolloutengine.contracts import RolloutInterrupted, RolloutOperation, TaskSetupError
 
 from .test_rollout import ReplayModel, engine
 
@@ -203,6 +203,7 @@ async def test_harbor_package_grades_private_files_after_json_reload(
         ("final", "first", "broken", None, Outcome.INFRA_ERROR, 2),
         ("mean", "first", "setup_failed", None, Outcome.UNAVAILABLE, 2),
         ("final", "first", "setup_failed", None, Outcome.UNAVAILABLE, 2),
+        ("mean", "first", "healthcheck_failed", None, Outcome.UNAVAILABLE, 2),
     ],
 )
 async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
@@ -227,11 +228,12 @@ async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
         'echo \'{"reward": 0.25, "safety": 1}\'; else echo \'{"reward": 0, "safety": 0}\'; fi '
         "> /logs/verifier/reward.json\n"
     )
-    (directory / "steps/second/workdir/setup.sh").write_text(
-        'test "$(cat /workspace/state)" = first && touch /workspace/ready\n'
-        if last_grader != "setup_failed"
-        else "exit 1\n"
-    )
+    setup_script = 'test "$(cat /workspace/state)" = first && touch /workspace/ready\n'
+    if last_grader == "setup_failed":
+        setup_script = "exit 1\n"
+    elif last_grader == "healthcheck_failed":
+        setup_script = "exit 0\n"
+    (directory / "steps/second/workdir/setup.sh").write_text(setup_script)
     (directory / "steps/second/tests/test.sh").write_text(
         'if [ "$(cat /workspace/state)" = second ]; then '
         "echo '{\"reward\": 0.75}'; else echo '{\"reward\": 0}'; fi > /logs/verifier/reward.json\n"
@@ -273,21 +275,25 @@ async def test_harbor_stages_preserve_state_gates_and_exact_training_tokens(
         )
     model = ReplayModel(replies)
     runner = engine(model, {EnvironmentKind.DOCKER: Factory()})
-    if last_grader == "setup_failed":
+    if last_grader in {"setup_failed", "healthcheck_failed"}:
         with pytest.raises(RolloutInterrupted) as caught:
             await runner.run(task)
         result = caught.value.rollout
         assert caught.value.operation == RolloutOperation.PREPARE
-        assert isinstance(caught.value.__cause__, RuntimeError)
+        cause = caught.value.__cause__
+        assert isinstance(cause, TaskSetupError)
+        assert cause.stage == "second"
+        assert cause.command is not None
+        assert cause.exit_code == 1
     else:
         result = await runner.run(task)
     assert (result.grade.status, result.grade.reward) == (status, reward)
     assert len(result.grade.diagnostics["stages"]) == stage_count
     assert len(machines) == 1
-    assert len(model.requests) == (2 if last_grader == "setup_failed" else stage_count * 2)
+    assert len(model.requests) == (2 if last_grader in {"setup_failed", "healthcheck_failed"} else stage_count * 2)
     assert "Write second" not in json.dumps(model.requests[0].messages)
     assert "private helper" not in json.dumps([request.messages for request in model.requests])
-    if stage_count == 2 and last_grader != "setup_failed":
+    if stage_count == 2 and last_grader not in {"setup_failed", "healthcheck_failed"}:
         assert model.requests[2].prefix_token_ids == (10, 11, 20, 90, 91, 21)
         assert model.requests[2].messages[-1]["content"] == "Write second to /workspace/state."
         assert result.response_token_ids == (20, 90, 91, 21, 90, 91, 22, 90, 91, 23)

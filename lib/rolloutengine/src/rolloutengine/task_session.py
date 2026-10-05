@@ -28,7 +28,7 @@ from taskcompendium.submission import (
     submission_request,
 )
 
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
+from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, TaskSetupError, Transition
 from rolloutengine.grading import _grade_rollout
 from rolloutengine.machines import _install_files, _run_setup_commands, _wait_for_healthcheck
 
@@ -94,7 +94,10 @@ class _ShellboxTaskSession:
     async def prepare(self) -> SessionStart:
         available = set() if self.machine is None else {SHELL_CAPABILITY, FILESYSTEM_CAPABILITY}
         if not set(self.task.environment_requirements.capabilities) <= available:
-            raise ValueError("The task environment does not supply its required capabilities")
+            raise TaskSetupError(
+                "The task environment does not supply its required capabilities",
+                stage=None if self.stage is None else self.stage.name,
+            )
         if self.stage is not None:
             assert self.machine is not None
             if self.stage.workdir_files:
@@ -111,9 +114,11 @@ class _ShellboxTaskSession:
                         for file in self.stage.workdir_files
                     ),
                 )
-            await _run_setup_commands(self.machine, self.stage.setup, f"Task stage {self.stage.name} setup")
+            await _run_setup_commands(
+                self.machine, self.stage.setup, f"Task stage {self.stage.name} setup", self.stage.name
+            )
             if self.stage.healthcheck is not None:
-                await _wait_for_healthcheck(self.machine, self.stage.healthcheck)
+                await _wait_for_healthcheck(self.machine, self.stage.healthcheck, self.stage.name)
         return session_start(self.task, self.convention)
 
     async def advance(self, turn: ModelTurn) -> Transition:
