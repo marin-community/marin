@@ -699,6 +699,9 @@ class GrugModelConfig:
     qk_norm: bool = True
     sconv: bool = True
     sconv_kernel: int = 4
+    sconv_impl: str | None = None
+    """``short_conv`` implementation for every SConv: None (the fused Pallas kernel on GPU) or ``triton_gpu``
+    (streams the sequence with the taps in registers, kernel size 4 only; from #9708)."""
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     pooled_transport_capacity_factor: float | None = 1.15
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
@@ -1776,18 +1779,22 @@ class ShortConv(eqx.Module):
 
     weight: Float[Array, "W C"]
     kernel_size: int = eqx.field(static=True)
+    implementation: str | None = eqx.field(static=True, default=None)
+    """``short_conv`` kernel (``sconv_impl``); None is its default (the Pallas kernel on GPU)."""
 
     @staticmethod
-    def init(channels: int, kernel_size: int) -> "ShortConv":
+    def init(channels: int, kernel_size: int, implementation: str | None = None) -> "ShortConv":
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
         # FSDP-shard the channel dim so the grad reduce-scatters instead of all-reducing; the
         # forward gathers the weight back to replicated.
-        return ShortConv(weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size)
+        return ShortConv(
+            weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size, implementation=implementation
+        )
 
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
         # segment_ids zero any tap reaching into a previous document, so the conv never crosses a boundary.
         weight = reshard(self.weight, P(None, None))
-        return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
+        return short_conv(weight, x, segment_ids, implementation=self.implementation, batch_axes=_BATCH_AXES)
 
 
 class InklingRelPos(eqx.Module):
@@ -1897,8 +1904,16 @@ class CausalSelfAttention(eqx.Module):
                 w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
                 attn_gate=attn_gate,
                 attn_gate_up=attn_gate_up,
-                sconv_k=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
-                sconv_q=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "q" in cfg.sconv_sites else None),
+                sconv_k=(
+                    ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl)
+                    if cfg.sconv and "k" in cfg.sconv_sites
+                    else None
+                ),
+                sconv_q=(
+                    ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl)
+                    if cfg.sconv and "q" in cfg.sconv_sites
+                    else None
+                ),
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
                 w_dkv=reshard(_init_weight(k_dkv, (cfg.kv_in_dim, kvl), std), P(_FSDP_AXES, None)),
@@ -1955,7 +1970,9 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
             attn_gate=attn_gate,
             attn_gate_up=attn_gate_up,
-            sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            sconv_k=(
+                ShortConv.init(m * h, cfg.sconv_kernel, cfg.sconv_impl) if cfg.sconv and "k" in cfg.sconv_sites else None
+            ),
             sconv_q=None,
             rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
             w_dkv=None,
@@ -2734,10 +2751,10 @@ class KimiDeltaAttention(eqx.Module):
             ),
             o_norm=_learned_rms_norm(cfg, h, 1e-6, role="kda_o_norm"),
             bias_qkv=jnp.zeros((3, n * h)) if "qkv" in cfg.proj_biases else None,
-            sconv_q=ShortConv.init(n * h, cfg.sconv_kernel),
-            sconv_k=ShortConv.init(n * h, cfg.sconv_kernel),
-            sconv_v=ShortConv.init(n * h, cfg.sconv_kernel),
-            sconv_a=ShortConv.init(r, cfg.sconv_kernel) if cfg.kda_decay_conv else None,
+            sconv_q=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
+            sconv_k=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
+            sconv_v=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
+            sconv_a=ShortConv.init(r, cfg.sconv_kernel, cfg.sconv_impl) if cfg.kda_decay_conv else None,
             vres_lambda=_vres_lambda_init(cfg),
             push_decay=_kda_push_decay_init(cfg, n, h) if cfg.kda_push_buckets else None,
             w_push=(reshard(jnp.zeros((d, n * cfg.kda_push_buckets)), P(None, None)) if cfg.kda_push_buckets else None),
@@ -4542,15 +4559,19 @@ class Block(eqx.Module):
             mlp=mlp,
             shared=shared,
             shadow=shadow,
-            sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if use_attn_sconv else None),
+            sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl) if use_attn_sconv else None),
             sconv_mlp=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl)
+                if cfg.sconv and "mlp" in cfg.sconv_sites
+                else None
             ),
             shared_gate=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.shared_expert_gate else None,
             moe_out_gate_w=jnp.zeros((_MOE_OUT_GATE_DIMS,), jnp.float32) if cfg.moe_out_gate else None,
             moe_out_gate_b=jnp.full((), 5.0, jnp.float32) if cfg.moe_out_gate else None,
             sconv_mlp_in=(
-                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp_in" in cfg.sconv_sites else None
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel, cfg.sconv_impl)
+                if cfg.sconv and "mlp_in" in cfg.sconv_sites
+                else None
             ),
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
