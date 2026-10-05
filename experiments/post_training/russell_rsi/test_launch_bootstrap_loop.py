@@ -6,7 +6,6 @@ import json
 from dataclasses import asdict
 
 import pytest
-from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, artifact_identity
 
 from experiments.post_training.russell_rsi import launch_bootstrap_loop
@@ -147,11 +146,11 @@ def _execute_callback(
         manifest_directory,
         next_construction_inputs,
         initial_calibration=None,
+        predecessor=None,
     ):
-        result.append(next_construction_inputs(raw_feedback, state, 24))
+        result.append(next_construction_inputs(artifact_identity(raw_feedback), raw_bytes, state, 24))
 
     monkeypatch.setattr(launch_bootstrap_loop, "run_bootstrap_loop", run_loop)
-    monkeypatch.setattr(launch_bootstrap_loop, "resolve", lambda handle: Artifact(path=str(raw_dir)))
     launch_bootstrap_loop.execute_loop(config)
     return raw_feedback, state, entry, bank_sha, result[0]
 

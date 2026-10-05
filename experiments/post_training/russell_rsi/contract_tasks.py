@@ -602,6 +602,26 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
             raise ValueError("Prior bank repeats semantic contracts")
         if previous_ids.intersection(row["contract_id"] for row in contracts):
             raise ValueError("Construction attempts an existing behavioral contract")
+        family_by_task = bank.get("family_by_task", {row["task_id"]: row["contract_id"] for row in bank["tasks"]})
+        if set(family_by_task) != {row["task_id"] for row in bank["tasks"]}:
+            raise ValueError("Prior family mapping must identify every bank task")
+        independent_families = {
+            row["contract_id"] for row in bank["tasks"] if row.get("relation") not in {"variant", "replacement", "alias"}
+        }
+        if not set(family_by_task.values()) <= independent_families:
+            raise ValueError("Prior task families must identify independent bank contracts")
+        has_families = "family_by_task" in bank
+        for row in contracts:
+            relation = row.get("relation", "new_contract")
+            if relation not in {"new_contract", "independent", "variant", "replacement", "alias"}:
+                raise ValueError("Unknown contract relation")
+            family = row.get("original_family_id", row["contract_id"])
+            if relation in {"variant", "replacement", "alias"}:
+                if family not in independent_families:
+                    raise ValueError("A contract variant must identify an existing independent family")
+                has_families = True
+            elif family != row["contract_id"]:
+                raise ValueError("A task from an existing family cannot be exported as an independent contract")
         tasks = list(read_tasks(str(evidence / "train.parquet")))
         if {task.id for task in tasks} != {row["task_id"] for row in bank["tasks"]}:
             raise ValueError("Prior bank rows do not match their index")
@@ -828,6 +848,10 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                 "result": result,
                 "evidence_uri": prefix_join(config.output_path, f"contracts/{row['contract_id']}"),
             }
+            if "relation" in row:
+                proof["relation"] = row["relation"]
+            if "original_family_id" in row:
+                proof["original_family_id"] = row["original_family_id"]
             proof_hash = digest(proof)
             target = work / "evidence" / proof_hash / "proposal.json"
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -841,9 +865,12 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
                     "admission_sha256": proof_hash,
                     "capability": ",".join(row["capability_labels"]),
                     "contract_id": row["contract_id"],
-                    "relation": "new_contract",
+                    "relation": row.get("relation", "new_contract"),
                 }
             )
+            family_by_task[task.id] = row.get("original_family_id", row["contract_id"])
+        if has_families:
+            bank["family_by_task"] = family_by_task
         bank["feedback_identity"] = config.capabilities_sha256
         parquet_name = "train.partial.parquet" if errors else "train.parquet"
         bank_name = "bank.partial.json" if errors else "bank.json"

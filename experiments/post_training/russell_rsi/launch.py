@@ -45,11 +45,13 @@ from experiments.post_training.russell_rsi.adaptive_tasks import AdaptiveTasksCo
 from experiments.post_training.russell_rsi.bootstrap_loop import (
     ATTEMPTS_PER_TASK,
     CALIBRATION_TEMPERATURE,
+    MAX_GLM_RESPONSES,
     CheckpointScore,
     FrozenRoundConfig,
     IncompleteCalibrationError,
     LoopState,
     QualifiedTask,
+    ResumedRound,
     RoundResult,
     StopReason,
     advance,
@@ -70,7 +72,10 @@ from experiments.post_training.russell_rsi.coding_eval_feedback import (
     analyze_coding_eval_failures,
     collect_coding_eval_evidence,
 )
-from experiments.post_training.russell_rsi.heldout_evaluation import heldout_comparison_step, heldout_panel_ids
+from experiments.post_training.russell_rsi.heldout_evaluation import (
+    final_evaluation_size,
+    heldout_comparison_step,
+)
 from experiments.post_training.russell_rsi.repair_tasks import (
     QualifiedUnionConfig,
     RepairTasksConfig,
@@ -133,6 +138,13 @@ class ReviewedConstructionInputs:
     feedback: ArtifactStep[Artifact]
     capabilities_bytes: bytes
     bank: ArtifactStep[Artifact] | None
+
+
+@dataclass(frozen=True)
+class LoopPredecessor:
+    round: ResumedRound
+    raw_capabilities: bytes
+    round_file_sha256: str
 
 
 SCALES = {"smoke": Scale(1, 1), "pilot": Scale(4, 7)}
@@ -939,6 +951,8 @@ def final_coding_evaluation(
     checkpoint: ArtifactStep[LevanterCheckpoint],
     label: str,
     version: str,
+    *,
+    items_per_suite: int,
 ) -> ArtifactStep[EvaluationResult]:
     """Build final-only evaluation of the working and held-out coding panels."""
     model = evaluation_model(f"russell-rsi-final-{label}", MODEL, None)
@@ -950,7 +964,7 @@ def final_coding_evaluation(
         resolve_model=lambda ctx: replace(
             model, location=ctx.artifact_path(checkpoint), identity=artifact_identity(checkpoint)
         ),
-        limit=64,
+        limit=items_per_suite,
         accelerator="H100x8",
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
@@ -973,12 +987,13 @@ def run_bootstrap_loop(
     machine_config: dict,
     relay_job: str,
     manifest_directory: StoragePath,
-    next_construction_inputs: Callable[[ArtifactStep[Artifact], LoopState, int], ReviewedConstructionInputs | None],
+    next_construction_inputs: Callable[[str, bytes, LoopState, int], ReviewedConstructionInputs | None],
     initial_calibration: ArtifactStep[Artifact] | None = None,
+    predecessor: LoopPredecessor | None = None,
 ) -> LoopState:
     """Execute bounded artifact rounds with reviewed construction inputs."""
     heldout_manifest = json.loads(pinned_bytes(heldout_manifest_uri, heldout_manifest_sha256))
-    heldout_panel_ids(panel, heldout_manifest)
+    final_size = final_evaluation_size(panel, heldout_manifest)
     heldout = {"manifest_sha256": heldout_manifest_sha256, "development": asdict(panel)}
     write_once(manifest_directory / "panels.json", heldout)
     panel_identity = compact_json_sha256(asdict(panel))
@@ -1024,6 +1039,45 @@ def run_bootstrap_loop(
     smoke_path = manifest_directory / "smoke.json"
     smoke_complete = smoke_path.exists()
     feedback_labels: set[str] = set()
+    if predecessor is not None:
+        state = predecessor.round.state
+        if (
+            state.parent != parent_score
+            or state.working != parent_score
+            or state.champion != parent_score
+            or state.bank != initial_bank
+            or state.completed_pilots < 1
+            or state.stop_reason is not None
+        ):
+            raise ValueError("Continuation requires an active parent-selected round with the pinned baseline and bank")
+        if initial_calibration is not None:
+            raise ValueError("A continuation cannot reuse initial calibration recovery")
+        construction = next_construction_inputs(
+            predecessor.round.result.feedback_identity, predecessor.raw_capabilities, state, MAX_GLM_RESPONSES
+        )
+        if construction is None or construction.bank is None:
+            raise ValueError("Continuation requires reviewed feedback and a qualified successor bank")
+        feedback_labels = {skill["label"] for skill in json.loads(construction.capabilities_bytes)["skills"]}
+        if not feedback_labels:
+            raise ValueError("Continuation requires accepted capability feedback")
+        bank_handle = construction.bank
+        feedback_identity = artifact_identity(construction.feedback)
+        previous_sha256 = predecessor.round.sha256
+        write_once(
+            manifest_directory / "continuation.json",
+            {
+                "predecessor_file_sha256": predecessor.round_file_sha256,
+                "predecessor_round_sha256": previous_sha256,
+                "predecessor_state": asdict(state),
+                "runtime_smoke_policy": "Run a fresh disposable smoke before the continued pilot.",
+                "raw_feedback_identity": predecessor.round.result.feedback_identity,
+                "raw_capabilities_sha256": hashlib.sha256(predecessor.raw_capabilities).hexdigest(),
+                "reviewed_feedback_identity": feedback_identity,
+                "bank_identity": artifact_identity(bank_handle),
+                "runtime_identity": runtime_identity,
+                "heldout_manifest_sha256": heldout_manifest_sha256,
+            },
+        )
     while state.stop_reason is None:
         number = state.completed_pilots + 1
         current = checkpoint_handles[state.working.checkpoint_identity]
@@ -1163,6 +1217,7 @@ def run_bootstrap_loop(
                     frozen_identity=artifact_identity(frozen),
                     parent_identity=state.working.checkpoint_identity,
                     model_identity=artifact_identity(current),
+                    family_by_task=bank_record.get("family_by_task"),
                 )
             else:
                 assert measurements is not None
@@ -1176,6 +1231,7 @@ def run_bootstrap_loop(
                     frozen_identity=artifact_identity(frozen),
                     parent_identity=state.working.checkpoint_identity,
                     model_identity=artifact_identity(current),
+                    family_by_task=bank_record.get("family_by_task"),
                 )
             if not sealed_replay["signal_gate_passed"]:
                 if resumed is not None:
@@ -1342,7 +1398,9 @@ def run_bootstrap_loop(
                     },
                 )
                 return state
-            construction_inputs = next_construction_inputs(capabilities, state, 24)
+            construction_inputs = next_construction_inputs(
+                artifact_identity(capabilities), capabilities_bytes, state, MAX_GLM_RESPONSES
+            )
             if construction_inputs is None:
                 write_once(
                     manifest_directory / f"review-required-after-{state.completed_pilots}.json",
@@ -1353,7 +1411,7 @@ def run_bootstrap_loop(
                         "raw_feedback_identity": artifact_identity(capabilities),
                         "raw_capabilities_uri": prefix_join(capability_artifact.path, "capabilities.json"),
                         "raw_capabilities_sha256": hashlib.sha256(capabilities_bytes).hexdigest(),
-                        "response_cap": 24,
+                        "response_cap": MAX_GLM_RESPONSES,
                     },
                 )
                 return state
@@ -1395,11 +1453,11 @@ def run_bootstrap_loop(
     }
     write_once(manifest_directory / "terminal-state.json", terminal)
     champion = checkpoint_handles[state.champion.checkpoint_identity]
-    parent_final = final_coding_evaluation(parent, "parent", version)
+    parent_final = final_coding_evaluation(parent, "parent", version, items_per_suite=final_size)
     champion_final = (
         parent_final
         if artifact_identity(champion) == artifact_identity(parent)
-        else final_coding_evaluation(champion, "champion", version)
+        else final_coding_evaluation(champion, "champion", version, items_per_suite=final_size)
     )
     comparison = heldout_comparison_step(
         parent_final,

@@ -29,6 +29,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     RoundResult,
     StopReason,
     advance,
+    restored_round,
     round_plan,
     seal_round,
 )
@@ -582,6 +583,7 @@ def test_bootstrap_driver_freezes_holdout_and_stops_before_gpu_work_for_twelve_c
         ("construction_pending", "fresh_recovery"),
         ("construction_pending", "incomplete_recovery"),
         ("plan", "normal"),
+        ("continuation", "normal"),
     ],
 )
 def test_driver_validates_calibration_and_feedback_before_training_or_resume(
@@ -701,7 +703,7 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         pass
 
     captured_plan = {}
-    if review_case == "plan":
+    if review_case in {"plan", "continuation"}:
         calibration_path = tmp_path / "next-calibration"
         calibration_path.mkdir()
         (calibration_path / "failure_summary.json").write_text(
@@ -738,7 +740,7 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         if handle is difficulty:
             if calibration_source in ("fresh_recovery", "incomplete_recovery"):
                 return Artifact(path=str(tmp_path / "recovery"))
-            if review_case == "plan":
+            if review_case in {"plan", "continuation"}:
                 return Artifact(path=str(calibration_path))
             pytest.fail("Resume repeated calibration")
         if handle is seed:
@@ -886,7 +888,7 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
     )
     if calibration_source == "fresh_recovery":
         expected = pytest.raises(RuntimeError, match="Training allocation intercepted")
-    if review_case == "plan":
+    if review_case in {"plan", "continuation"}:
         expected = pytest.raises(CapturedPlan)
 
     def next_construction_inputs(*args):
@@ -894,12 +896,23 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
             pytest.fail("Source construction started without capability feedback")
         if review_case == "review_pending":
             return None
-        use_next_bank = review_case == "plan" or calibration_source == "incomplete_recovery"
+        use_next_bank = review_case in {"plan", "continuation"} or calibration_source == "incomplete_recovery"
         bank_handle = next_bank if use_next_bank else seed
-        supplied_bank = bank_handle if review_case in {"bank", "plan"} or use_next_bank else None
+        supplied_bank = bank_handle if review_case in {"bank", "plan", "continuation"} or use_next_bank else None
         return russell_launch.ReviewedConstructionInputs(
             reviewed_feedback, (reviewed_path / "capabilities.json").read_bytes(), supplied_bank
         )
+
+    predecessor = None
+    version = "2026.10.04"
+    if review_case == "continuation":
+        predecessor = russell_launch.LoopPredecessor(
+            restored_round(json.loads(sealed_round_bytes)),
+            (capabilities_path / "capabilities.json").read_bytes(),
+            hashlib.sha256(sealed_round_bytes).hexdigest(),
+        )
+        directory = StoragePath(str(tmp_path / "continuation-manifests"))
+        version = "2026.10.05.1"
 
     def resume():
         return russell_launch.run_bootstrap_loop(
@@ -913,13 +926,14 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
             hashes[1],
             str(retained),
             hashes[2],
-            "2026.10.04",
+            version,
             runtime,
             {"backend": "qemu"},
             "relay",
             directory,
             next_construction_inputs,
             initial_calibration=initial_calibration,
+            predecessor=predecessor,
         )
 
     with expected:
@@ -935,17 +949,26 @@ def test_driver_validates_calibration_and_feedback_before_training_or_resume(
         assert not (directory / "reviewed-construction-required-after-1.json").exists()
         assert not (directory / "terminal-state.json").exists()
         return
-    if review_case == "plan":
+    if review_case in {"plan", "continuation"}:
         captured = captured_plan["plan"]
         assert tuple(captured.feedback_labels) == (CodingSkill.TYPES.value,)
         assert captured.feedback_identity == artifact_identity(reviewed_feedback)
         selected_contracts = {task.contract_id for task in captured.selected_tasks}
         assert "reviewed-contract" in selected_contracts
         assert "raw-contract" not in selected_contracts
-        sealed_path = directory / f"{plan.name}.json"
+        assert sealed_path.read_bytes() == sealed_round_bytes
         assert json.loads(sealed_path.read_text())["payload"]["result"]["feedback_identity"] == artifact_identity(
             capabilities
         )
+        if review_case == "continuation":
+            continuation = json.loads((directory / "continuation.json").read_text())
+            assert continuation["predecessor_state"]["completed_pilots"] == 1
+            assert continuation["predecessor_state"]["rounds_without_improvement"] == 1
+            assert continuation["predecessor_round_sha256"] == sealed_hash
+            assert captured.name == "bootstrap-2026.10.05.1-pilot-2"
+            assert captured.bank_identity == artifact_identity(next_bank)
+            assert not (directory / f"{plan.name}.json").exists()
+            assert not (directory / "smoke.json").exists()
         assert not (directory / "terminal-state.json").exists()
         return
     if calibration_source == "fresh_recovery":

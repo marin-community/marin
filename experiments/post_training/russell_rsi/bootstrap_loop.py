@@ -371,13 +371,21 @@ class ResumedRound:
 def load_round(path: StoragePath, expected_inputs: dict, previous_sha256: str) -> ResumedRound:
     """Verify known inputs before calibration and restore the sealed selected dataset."""
     record = json.loads(path.read_text())
+    restored = restored_round(record)
     payload = record["payload"]
-    if record["sha256"] != compact_json_sha256(payload):
-        raise ValueError("Round manifest digest mismatch")
     expected = json.loads(json.dumps(expected_inputs))
     plan_value = payload["plan"]
     if payload["previous_sha256"] != previous_sha256 or any(plan_value[key] != value for key, value in expected.items()):
         raise ValueError("Round resume input mismatch")
+    return restored
+
+
+def restored_round(record: dict) -> ResumedRound:
+    """Restore a round after validation of its sealed payload digest."""
+    payload = record["payload"]
+    if record["sha256"] != compact_json_sha256(payload):
+        raise ValueError("Round manifest digest mismatch")
+    plan_value = payload["plan"]
     plan = RoundPlan(
         **{
             **plan_value,

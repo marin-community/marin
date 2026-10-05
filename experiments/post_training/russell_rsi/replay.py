@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -75,6 +75,15 @@ def calibration_signal_failure(measurements: tuple[Measurement, ...]) -> str | N
     return None
 
 
+def _family_groups(
+    tasks: tuple[QualifiedTask, ...], family_by_task: dict[str, str]
+) -> tuple[tuple[QualifiedTask, ...], ...]:
+    families = defaultdict(list)
+    for task in tasks:
+        families[family_by_task[task.task_id]].append(task)
+    return tuple(tuple(families[key]) for key in sorted(families))
+
+
 def replay_plan(
     plan: RoundPlan,
     measurements: tuple[Measurement, ...],
@@ -86,6 +95,7 @@ def replay_plan(
     frozen_identity: str,
     parent_identity: str,
     model_identity: str,
+    family_by_task: dict[str, str] | None = None,
 ) -> dict:
     """Seal four 12/2/2 schedules and their calibration signal estimate."""
     if pilot_number < 2 or pilot_number > MAX_PILOTS:
@@ -95,25 +105,82 @@ def replay_plan(
         raise ValueError("Replay calibration must measure the complete qualified bank")
     if any(reward not in (0, 1, 0.0, 1.0) for item in measurements for reward in item.rewards):
         raise ValueError("Replay q4 requires binary calibration rewards")
+    if any(len(item.rewards) != ATTEMPTS_PER_TASK for item in measurements):
+        raise ValueError("Replay q4 requires eight calibration attempts per task")
     successes = {key: sum(reward > 0 for reward in item.rewards) for key, item in measured.items()}
     q4 = {key: mixed_group_probability(count) for key, count in successes.items()}
     replay_pool = tuple(task for task in plan.task_bank if 1 <= successes[task.task_sha256] <= ATTEMPTS_PER_TASK - 1)
     targeted = tuple(targeted_tasks)
     if len({task.contract_id for task in targeted}) != len(targeted):
         raise ValueError("Targeted replay tasks require distinct independent contracts")
-    if any(task.task_sha256 not in measured for task in targeted):
+    if any(task not in plan.task_bank for task in targeted):
         raise ValueError("Targeted replay tasks must belong to the calibrated bank")
+    if not replay_pool or not targeted:
+        raise ValueError("Replay requires eligible replay tasks and independent targeted additions")
+    if any(task.relation in {"variant", "replacement", "alias"} for task in targeted):
+        raise ValueError("Targeted replay tasks must be independent contract additions")
+    family_groups = {}
+    probabilities = {}
+    if family_by_task is not None:
+        if set(family_by_task) != {task.task_id for task in plan.task_bank}:
+            raise ValueError("Family sampling must identify every calibrated task")
+        roots = {task.contract_id for task in plan.task_bank if task.relation not in {"variant", "replacement", "alias"}}
+        if not set(family_by_task.values()) <= roots or any(
+            family_by_task[task.task_id] != task.contract_id
+            for task in plan.task_bank
+            if task.relation not in {"variant", "replacement", "alias"}
+        ):
+            raise ValueError("Task families must identify their original independent contracts")
+        if len({family_by_task[task.task_id] for task in targeted}) != len(targeted):
+            raise ValueError("Targeted additions must belong to distinct independent families")
+        family_groups = {
+            "replay": _family_groups(replay_pool, family_by_task),
+            "exploration": _family_groups(plan.task_bank, family_by_task),
+        }
+        probabilities = {
+            category: {task.task_id: 1 / len(groups) / len(family) for family in groups for task in family}
+            for category, groups in family_groups.items()
+        }
+        probabilities["targeted"] = {task.task_id: 1 / len(targeted) for task in targeted}
+    elif any(task.relation in {"variant", "replacement", "alias"} for task in plan.task_bank):
+        raise ValueError("A bank with variants requires an explicit original family mapping")
+
+    family_expected_q4 = None
+    if family_by_task is not None:
+        q4_by_id = {task.task_id: q4[task.task_sha256] for task in plan.task_bank}
+        family_expected_q4 = (
+            sum(
+                allocation
+                * sum(probability * q4_by_id[task_id] for task_id, probability in probabilities[category].items())
+                for category, allocation in (
+                    ("replay", REPLAY_GROUPS),
+                    ("targeted", TARGETED_GROUPS),
+                    ("exploration", EXPLORATION_GROUPS),
+                )
+            )
+            / GROUPS_PER_UPDATE
+        )
 
     rng = random.Random(REPLAY_SEED)
     occurrences: list[ReplayOccurrence] = []
     update_q4: list[float] = []
     for update in range(1, PILOT_UPDATES + 1):
         selected_targeted = [targeted[0], targeted[0]] if len(targeted) == 1 else rng.sample(targeted, TARGETED_GROUPS)
-        groups = [
-            *(("replay", rng.choice(replay_pool)) for _ in range(REPLAY_GROUPS)),
-            *(("targeted", task) for task in selected_targeted),
-            *(("exploration", rng.choice(plan.task_bank)) for _ in range(EXPLORATION_GROUPS)),
-        ]
+        if family_by_task is not None:
+            groups = [
+                *(("replay", rng.choice(rng.choice(family_groups["replay"]))) for _ in range(REPLAY_GROUPS)),
+                *(("targeted", task) for task in selected_targeted),
+                *(
+                    ("exploration", rng.choice(rng.choice(family_groups["exploration"])))
+                    for _ in range(EXPLORATION_GROUPS)
+                ),
+            ]
+        else:
+            groups = [
+                *(("replay", rng.choice(replay_pool)) for _ in range(REPLAY_GROUPS)),
+                *(("targeted", task) for task in selected_targeted),
+                *(("exploration", rng.choice(plan.task_bank)) for _ in range(EXPLORATION_GROUPS)),
+            ]
         for group, (category, task) in enumerate(groups, start=1):
             occurrences.append(
                 ReplayOccurrence(
@@ -130,14 +197,18 @@ def replay_plan(
                     q4=q4[task.task_sha256],
                 )
             )
-        update_q4.append(
-            (
-                REPLAY_GROUPS * sum(q4[task.task_sha256] for task in replay_pool) / len(replay_pool)
-                + sum(q4[task.task_sha256] for task in selected_targeted)
-                + EXPLORATION_GROUPS * sum(q4.values()) / len(plan.task_bank)
+        if family_expected_q4 is not None:
+            update_q4.append(family_expected_q4)
+        else:
+            # Preserve the estimate and random draw order of sealed v1 cohorts.
+            update_q4.append(
+                (
+                    REPLAY_GROUPS * sum(q4[task.task_sha256] for task in replay_pool) / len(replay_pool)
+                    + sum(q4[task.task_sha256] for task in selected_targeted)
+                    + EXPLORATION_GROUPS * sum(q4.values()) / len(plan.task_bank)
+                )
+                / GROUPS_PER_UPDATE
             )
-            / GROUPS_PER_UPDATE
-        )
 
     counts = Counter((entry.task_id, entry.category) for entry in occurrences)
     sampling_spec = {
@@ -154,6 +225,10 @@ def replay_plan(
         "max_staleness_steps": REPLAY_MAX_STALENESS_STEPS,
         "signal_gate_weighted_q4": REQUIRED_WEIGHTED_Q4,
     }
+    if family_by_task is not None:
+        sampling_spec["selection"] = "uniform_original_family_then_uniform_eligible_member"
+        sampling_spec["task_probabilities"] = probabilities
+        sampling_spec["targeted_task_ids"] = [task.task_id for task in targeted]
     payload = {
         "protocol": "pilot2-calibrated-replay-v1",
         "pilot_number": pilot_number,
@@ -194,12 +269,15 @@ def replay_plan(
             "This curriculum amendment does not support a causal comparison with pilot one.",
         ],
     }
+    if family_by_task is not None:
+        payload["protocol"] = "pilot2-calibrated-family-replay-v2"
+        payload["family_by_task"] = dict(sorted(family_by_task.items()))
     payload["schedule_sha256"] = compact_json_sha256(payload)
     return payload
 
 
 def validate_replay_plan(
-    replay_plan: dict,
+    sealed_plan: dict,
     round_plan: RoundPlan,
     *,
     pilot_number: int,
@@ -208,9 +286,10 @@ def validate_replay_plan(
     frozen_identity: str,
     parent_identity: str,
     model_identity: str,
+    family_by_task: dict[str, str] | None = None,
 ) -> None:
     """Verify that a resumed schedule still identifies its frozen inputs."""
-    value = dict(replay_plan)
+    value = dict(sealed_plan)
     schedule_sha256 = value.pop("schedule_sha256")
     if schedule_sha256 != compact_json_sha256(value):
         raise ValueError("Replay schedule digest mismatch")
@@ -223,8 +302,33 @@ def validate_replay_plan(
         "model_identity": model_identity,
         "round_plan_sha256": compact_json_sha256(asdict(round_plan)),
     }
-    if any(replay_plan[key] != expected_value for key, expected_value in expected.items()):
+    if any(sealed_plan[key] != expected_value for key, expected_value in expected.items()):
         raise ValueError("Resumed replay schedule input identity changed")
+    if family_by_task is None:
+        if "family_by_task" in sealed_plan:
+            raise ValueError("Resumed family replay requires the declared family mapping")
+        return
+    if sealed_plan.get("family_by_task") != family_by_task:
+        raise ValueError("Resumed replay task families changed")
+    targeted_ids = sealed_plan["sampling_spec"]["targeted_task_ids"]
+    by_id = {task.task_id: task for task in round_plan.task_bank}
+    reconstructed = replay_plan(
+        round_plan,
+        tuple(
+            Measurement(
+                model_identity,
+                task.task_sha256,
+                (1.0,) * sealed_plan["successes_by_task"][task.task_id]
+                + (0.0,) * (ATTEMPTS_PER_TASK - sealed_plan["successes_by_task"][task.task_id]),
+            )
+            for task in round_plan.task_bank
+        ),
+        tuple(by_id[task_id] for task_id in targeted_ids),
+        **{key: item for key, item in expected.items() if key != "round_plan_sha256"},
+        family_by_task=family_by_task,
+    )
+    if reconstructed != sealed_plan:
+        raise ValueError("Resumed family replay differs from its declared sampling protocol")
 
 
 @dataclass(frozen=True)
@@ -249,6 +353,7 @@ def freeze_replay_dataset(config: ReplayDatasetConfig) -> None:
         raise ValueError("The qualified bank contains duplicate task IDs")
     evidence_by_id = {task.task_id: task for task in config.tasks}
     output = []
+    families = config.replay_plan.get("family_by_task")
     for row_index, entry in enumerate(config.replay_plan["schedule"]):
         if entry["row_index"] != row_index:
             raise ValueError("Replay occurrence UID differs from its row index")
@@ -268,6 +373,11 @@ def freeze_replay_dataset(config: ReplayDatasetConfig) -> None:
         report = json.loads(admission)
         if report["task_sha256"] != task_record.task_sha256 or report["source_group"] != task_record.source_id:
             raise ValueError("Replay task differs from its sealed admission evidence")
+        if families is not None and (
+            families[task.id] != report.get("original_family_id", task_record.contract_id)
+            or report.get("relation", task_record.relation) != task_record.relation
+        ):
+            raise ValueError("Replay task family differs from its sealed admission evidence")
         output.append(task)
     occurrences = config.replay_plan["schedule"]
     if len(output) != REPLAY_ROWS or len({entry["occurrence_id"] for entry in occurrences}) != REPLAY_ROWS:

@@ -13,20 +13,21 @@ from fray.types import ResourceConfig
 from iris.client.context_state import has_current_context
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, artifact_identity, resolve
+from marin.execution.lazy import ArtifactStep, artifact_identity
 from marin.execution.remote import remote
 from marin.experiment.cli import build_options
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle
 
-from experiments.post_training.russell_rsi.bootstrap_loop import LoopState
+from experiments.post_training.russell_rsi.bootstrap_loop import LoopState, restored_round
 from experiments.post_training.russell_rsi.calibration_recovery import calibration_recovery_step
 from experiments.post_training.russell_rsi.coding_eval_feedback import CodingPanel, PanelItem
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.launch import (
     MODEL,
     MODEL_REVISION,
+    LoopPredecessor,
     ReviewedConstructionInputs,
     run_bootstrap_loop,
 )
@@ -73,16 +74,14 @@ def execute_loop(config: dict) -> None:
     )
 
     def next_construction_inputs(
-        feedback: ArtifactStep[Artifact], state: LoopState, response_cap: int
+        feedback_identity: str, raw_bytes: bytes, state: LoopState, response_cap: int
     ) -> ReviewedConstructionInputs | None:
         supplied = reviewed_feedback_by_pilot.get(str(state.completed_pilots))
         if supplied is None:
             return None
         prior = compact_json_sha256({"tasks": [asdict(task) for task in state.bank]})
-        if supplied["raw_feedback_identity"] != artifact_identity(feedback):
+        if supplied["raw_feedback_identity"] != feedback_identity:
             raise ValueError("Reviewed feedback does not identify this raw coding feedback")
-        feedback_result = resolve(feedback)
-        raw_bytes = StoragePath(prefix_join(feedback_result.path, "capabilities.json")).read_bytes()
         raw_sha256 = hashlib.sha256(raw_bytes).hexdigest()
         if supplied["raw_capabilities_sha256"] != raw_sha256:
             raise ValueError("Reviewed feedback does not identify the raw capability bytes")
@@ -104,7 +103,7 @@ def execute_loop(config: dict) -> None:
             reviewed["uri"],
             config={
                 **reviewed["identity_config"],
-                "raw_feedback_identity": artifact_identity(feedback),
+                "raw_feedback_identity": feedback_identity,
                 "raw_capabilities_sha256": raw_sha256,
                 "reviewed_capabilities_sha256": reviewed["capabilities_sha256"],
                 "review_record_uri": reviewed["review_record_uri"],
@@ -133,6 +132,16 @@ def execute_loop(config: dict) -> None:
         )
         return ReviewedConstructionInputs(reviewed_feedback, reviewed_bytes, bank)
 
+    predecessor_value = config.get("predecessor")
+    predecessor = None
+    if predecessor_value is not None:
+        predecessor = LoopPredecessor(
+            restored_round(
+                json.loads(pinned_bytes(predecessor_value["round_uri"], predecessor_value["round_file_sha256"]))
+            ),
+            pinned_bytes(predecessor_value["raw_capabilities_uri"], predecessor_value["raw_capabilities_sha256"]),
+            predecessor_value["round_file_sha256"],
+        )
     run_bootstrap_loop(
         seed,
         parent,
@@ -151,6 +160,7 @@ def execute_loop(config: dict) -> None:
         StoragePath(config["manifest_prefix"]),
         next_construction_inputs,
         initial_calibration=initial_calibration,
+        predecessor=predecessor,
     )
 
 

@@ -292,8 +292,9 @@ def test_retry_cannot_replace_frozen_reference_values(tmp_path, monkeypatch, sou
 @pytest.mark.parametrize(
     "method", [contract_tasks.TEACHER_METHOD, contract_tasks.RENDERED_METHOD, contract_tasks.FRESH_RENDERED_METHOD]
 )
+@pytest.mark.parametrize("relation", ["undeclared", "variant"])
 def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs(
-    tmp_path, monkeypatch, provider, source, contract, method
+    tmp_path, monkeypatch, provider, source, contract, method, relation
 ):
     artifact = tmp_path / "input"
     artifact.mkdir()
@@ -365,6 +366,8 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
         },
     }
     manifest_file = tmp_path / "manifest.json"
+    if relation == "variant":
+        manifest["contracts"][0].update(relation="variant", original_family_id="math.prior")
     manifest_file.write_text(json.dumps(manifest))
     capabilities = tmp_path / "capabilities.json"
     capabilities.write_text(json.dumps({"skills": []}))
@@ -394,6 +397,19 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
         observation_source_manifest_uri="",
         observation_source_manifest_sha256="",
     )
+    if relation == "variant":
+        forged_manifest = {**manifest, "contracts": [{**manifest["contracts"][0], "relation": "new_contract"}]}
+        forged_file = tmp_path / "forged-manifest.json"
+        forged_file.write_text(json.dumps(forged_manifest))
+        with pytest.raises(ValueError, match="cannot be exported as an independent contract"):
+            contract_tasks.prepare_contract_tasks(
+                replace(
+                    config,
+                    manifest_uri=str(forged_file),
+                    manifest_sha256=hashlib.sha256(forged_file.read_bytes()).hexdigest(),
+                    output_path=str(tmp_path / "forged-prepare"),
+                )
+            )
     if method != contract_tasks.FRESH_RENDERED_METHOD:
         contract_tasks.prepare_contract_tasks(config)
     expected_statement = {
@@ -510,6 +526,13 @@ def test_wrapper_prepares_then_admits_into_distinct_output_with_inherited_proofs
     new_proof_path = tmp_path / "admit" / "evidence" / new["admission_sha256"] / "proposal.json"
     assert hashlib.sha256(new_proof_path.read_bytes()).hexdigest() == new["admission_sha256"]
     new_proof = json.loads(new_proof_path.read_text())
+    assert new["relation"] == ("variant" if relation == "variant" else "new_contract")
+    if relation == "variant":
+        assert new_proof["relation"] == "variant"
+        assert new_proof["original_family_id"] == "math.prior"
+        assert result_bank["family_by_task"] == {prior.id: "math.prior", new["task_id"]: "math.prior"}
+    else:
+        assert "family_by_task" not in result_bank
     assert new_proof["source_group"] == source_group_id(source)
     assert new_proof["task_sha256"] == digest(actual_tasks[new["task_id"]].model_dump(mode="json"))
     controls = json.loads(
