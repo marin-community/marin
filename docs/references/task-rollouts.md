@@ -133,13 +133,18 @@ The engine removes shared private grader files before the next stage starts.
 `StageVerifierSpec.strategy` selects `mean` or `final`. The mean includes only
 stages with valid grades. Missing reward keys count as zero in that mean.
 JSON reward files can supply multiple numeric keys, such as `reward` and `safety`.
-The final strategy uses the last attempted stage, including a failed grader.
+The final strategy uses the last attempted stage.
+
+If a stage fails, the aggregate retains that stage's outcome, failure details,
+and diagnostics. A skipped stage is not a failure.
 A stage's `minimum_rewards` maps each key to a minimum value. A missing key or
 a value below its minimum stops execution before the next stage.
-The engine assigns the aggregate reward to the last action with a valid grade.
+When the aggregate is graded, the engine assigns its reward to the last action
+with a valid grade.
+
 All other actions receive zero optimization reward and retain their stage grades.
 The engine masks tokens from a stage without a valid grade.
-If no stage has a valid grade, the result retains the last stage's failure.
+Earlier valid stages keep their token evidence and masks, with zero optimization reward after a later stage fails.
 When the aggregate has no grade, the caller decides if earlier valid stages can enter training.
 
 A model failure after a completed turn triggers grading of the completed state.
