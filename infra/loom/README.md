@@ -293,8 +293,8 @@ retain their original cadence after downtime. Cron uses five fields and an IANA
 time zone; missing local times are skipped and repeated local times fire once.
 Loom validates the complete cron expression when applying the manifest.
 
-The `scheduled-message` profile uses low effort, a one-turn budget, and only
-the watch messaging and memory tools. Use `ops` for job inspection that needs
+The `scheduled-message` profile uses low effort, a one-turn budget, and the
+watch messaging and memory MCP tools. Use `ops` for job inspection that needs
 operator tools.
 
 Messages are agent actions. Add channel IDs to `slackChannels` and name the

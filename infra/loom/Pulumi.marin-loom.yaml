@@ -60,7 +60,7 @@ config:
       idleArchiveSeconds: 60
       prelude: weaver
       instructionsFile: profiles/scheduled-message/AGENTS.md
-      restricted: true
+      restricted: false
       githubRepositories:
         - marin-community/marin
       allowedTools:

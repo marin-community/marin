@@ -9,6 +9,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -63,7 +64,7 @@ REMOTE_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 REMOTE_MCP_AUTH_NONE = "none"
 REMOTE_MCP_AUTH_ENVIRONMENT = "environment"
 REMOTE_MCP_AUTH_IAP = "iap"
-WATCH_MAX_SECONDS = 24 * 60 * 60
+WATCH_MAX_EXECUTION_SECONDS = 24 * 60 * 60
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -92,16 +93,38 @@ def _git_context_at_revision(revision: str) -> str:
 SECRET_REF = re.compile(r"^projects/[a-z0-9-]+/secrets/[A-Za-z0-9_-]+/versions/(?:latest|[0-9]+)$")
 
 
+class MisfirePolicy(StrEnum):
+    SKIP = "skip"
+    COALESCE = "coalesce"
+
+
+@dataclass(frozen=True)
+class CronWatchSchedule:
+    cron: str
+    timezone: str
+
+    def manifest(self) -> dict[str, str]:
+        return {"cron": self.cron, "timezone": self.timezone}
+
+
+@dataclass(frozen=True)
+class IntervalWatchSchedule:
+    every: str
+
+    def manifest(self) -> dict[str, str]:
+        return {"every": self.every}
+
+
 @dataclass(frozen=True)
 class AgentWatchConfig:
     name: str
     profile: str
     repo: str
     prompt: str
-    trigger: dict[str, str]
+    trigger: CronWatchSchedule | IntervalWatchSchedule
     slack_channels: tuple[str, ...]
     enabled: bool
-    misfire_policy: str
+    misfire_policy: MisfirePolicy
     late_grace_secs: int
     run_timeout_secs: int
 
@@ -114,17 +137,7 @@ class AgentWatchConfig:
         inline, source = value.get("prompt"), value.get("promptFile")
         if (inline is None) == (source is None):
             raise ValueError(f"watch {name!r} requires exactly one of prompt or promptFile")
-        if source is not None:
-            if not isinstance(source, str) or not source.strip():
-                raise ValueError("promptFile must be a relative path")
-            path = (ROOT / source).resolve()
-            if not path.is_relative_to(ROOT) or not path.is_file():
-                raise ValueError("promptFile must name a file under infra/loom")
-            prompt = path.read_text().strip()
-        else:
-            if not isinstance(inline, str):
-                raise ValueError("watch prompt must be a string")
-            prompt = inline.strip()
+        prompt = _instruction_text(inline, source, f"watch {name!r}")
         if not prompt or len(prompt.encode()) > 65536:
             raise ValueError("watch prompt must be 1..65536 bytes")
         cron, every = value.get("cron"), value.get("every")
@@ -135,12 +148,12 @@ class AgentWatchConfig:
                 raise ValueError("cron requires five fields")
             timezone = str(value.get("timezone", "UTC"))
             ZoneInfo(timezone)
-            trigger = {"cron": cron, "timezone": timezone}
+            trigger: CronWatchSchedule | IntervalWatchSchedule = CronWatchSchedule(cron, timezone)
         else:
             match = re.fullmatch(r"([0-9]+)([smh])", str(every))
             if match is None or not 1 <= int(match[1]) * {"s": 1, "m": 60, "h": 3600}[match[2]] <= 31622400:
                 raise ValueError("every must be positive, use s/m/h, and be at most 366 days")
-            trigger = {"every": str(every)}
+            trigger = IntervalWatchSchedule(str(every))
         channels = value.get("slackChannels", [])
         if (
             not isinstance(channels, list)
@@ -152,15 +165,17 @@ class AgentWatchConfig:
         ):
             raise ValueError("slackChannels must contain at most 32 Slack channel IDs")
         enabled = value.get("enabled", False)
-        policy = str(value.get("misfirePolicy", "coalesce"))
-        if not isinstance(enabled, bool) or policy not in {"skip", "coalesce"}:
-            raise ValueError("enabled must be boolean and misfirePolicy must be skip or coalesce")
+        policy = MisfirePolicy(str(value.get("misfirePolicy", MisfirePolicy.COALESCE)))
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be boolean")
         grace, timeout = value.get("lateGraceSeconds", 600), value.get("runTimeoutSeconds", 300)
         if (
-            type(grace) is not int
-            or not 0 <= grace <= WATCH_MAX_SECONDS
-            or type(timeout) is not int
-            or not 1 <= timeout <= WATCH_MAX_SECONDS
+            not isinstance(grace, int)
+            or isinstance(grace, bool)
+            or not 0 <= grace <= WATCH_MAX_EXECUTION_SECONDS
+            or not isinstance(timeout, int)
+            or isinstance(timeout, bool)
+            or not 1 <= timeout <= WATCH_MAX_EXECUTION_SECONDS
         ):
             raise ValueError("invalid watch late grace or run timeout")
         return cls(name.strip(), profile, repo, prompt, trigger, tuple(channels), enabled, policy, grace, timeout)
@@ -168,7 +183,7 @@ class AgentWatchConfig:
     def manifest(self) -> dict[str, object]:
         return {
             "name": self.name,
-            "trigger": self.trigger,
+            "trigger": self.trigger.manifest(),
             "enabled": self.enabled,
             "agent": {
                 "profile": self.profile,
@@ -176,7 +191,7 @@ class AgentWatchConfig:
                 "prompt": self.prompt,
                 "slack_channels": list(self.slack_channels),
             },
-            "misfire_policy": self.misfire_policy,
+            "misfire_policy": self.misfire_policy.value,
             "late_grace_secs": self.late_grace_secs,
             "run_timeout_secs": self.run_timeout_secs,
         }
@@ -375,22 +390,20 @@ def _optional_int(value: object, field: str, profile: str) -> int | None:
     return value
 
 
-def _profile_instructions(value: Mapping[str, object], profile: str) -> str:
-    inline = value.get("instructions")
-    source = value.get("instructionsFile")
+def _instruction_text(inline: object, source: object, owner: str) -> str:
     if inline is not None and source is not None:
-        raise ValueError(f"profile {profile!r} must use only one of instructions or instructionsFile")
+        raise ValueError(f"{owner} must use only one inline instruction or instruction file")
     if source is None:
         if inline is None:
             return ""
         if not isinstance(inline, str):
-            raise ValueError(f"profile {profile!r} instructions must be a string")
+            raise ValueError(f"{owner} instructions must be a string")
         return inline.strip()
     if not isinstance(source, str) or not source.strip():
-        raise ValueError(f"profile {profile!r} instructionsFile must be a relative path")
+        raise ValueError(f"{owner} instruction file must be a relative path")
     path = (ROOT / source).resolve()
     if not path.is_relative_to(ROOT) or not path.is_file():
-        raise ValueError(f"profile {profile!r} instructionsFile must name a file under {ROOT}")
+        raise ValueError(f"{owner} instruction file must name a file under {ROOT}")
     return path.read_text().strip()
 
 
@@ -468,7 +481,9 @@ class ProfileConfig:
             max_concurrent=int(value.get("maxConcurrent", 0)),
             turn_budget=_optional_int(value.get("turnBudget"), "turnBudget", name),
             prelude=str(value.get("prelude", "weaver")),
-            instructions=_profile_instructions(value, name),
+            instructions=_instruction_text(
+                value.get("instructions"), value.get("instructionsFile"), f"profile {name!r}"
+            ),
             restricted=bool(value.get("restricted", False)),
             github_repositories=_string_tuple(value.get("githubRepositories", []), "githubRepositories", name),
             allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
