@@ -20,7 +20,7 @@ import subprocess
 
 import sqlalchemy
 from google.cloud.sql.connector import Connector
-from marina.database_setup import applet_provisioning_statements
+from marina.database_setup import LOOM_DATABASE_USER, applet_provisioning_statements
 
 PROJECT = "hai-gcp-models"
 CONNECTION_NAME = f"{PROJECT}:us-central1:marin-metadata"
@@ -35,10 +35,10 @@ GRANTS = {
         *applet_provisioning_statements(MARINA_SERVICE_ROLE),
     ],
     "context": [
-        'GRANT CREATE ON SCHEMA public TO "loom-vm@hai-gcp-models.iam"',
-        """DO $$ BEGIN
+        f'GRANT CREATE ON SCHEMA public TO "{LOOM_DATABASE_USER}"',
+        f"""DO $$ BEGIN
             IF to_regclass('public.codehealth_lint_findings') IS NOT NULL THEN
-                GRANT DELETE ON TABLE public.codehealth_lint_findings TO "loom-vm@hai-gcp-models.iam";
+                GRANT DELETE ON TABLE public.codehealth_lint_findings TO "{LOOM_DATABASE_USER}";
             END IF;
         END $$""",
     ],
