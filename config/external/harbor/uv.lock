@@ -803,7 +803,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?branch=bfcl-rl%2Fcampaign-20261003#1cc16df5229013f7ab4fa1178a6f83550cfb80e8" }
+source = { git = "https://github.com/marin-community/harbor.git?branch=bfcl-rl%2Fcampaign-20261003#737e97cbd9398eae1c0f1690b1883bbcf42a31e2" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },

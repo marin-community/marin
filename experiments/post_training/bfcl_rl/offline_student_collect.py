@@ -40,6 +40,7 @@ def native_student_collection_step(
     generator["model_loading"] = "stage_local"
     generator["engine_init_kwargs"]["model_loader_extra_config"] = {"concurrency": 4}
     recipe["trainer"]["seed"] = seed
+    recipe["trainer"]["eval_batch_size"] = 128
     policy = replace(
         recovered_model(recovery_version, policy_export_version), relative_path=f"hf/step-{policy_checkpoint_step}"
     )
