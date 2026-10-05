@@ -32,6 +32,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     Measurement,
     RoundPlan,
     StopReason,
+    promotes,
     restored_round,
 )
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
@@ -120,11 +121,7 @@ def freeze_dose_dataset(config: ReplayDatasetConfig) -> None:
 
 def selected_dose(four: CheckpointScore, eight: CheckpointScore) -> CheckpointScore:
     """Select eight only with retained scores and a strict coding improvement."""
-    if (
-        eight.retention >= four.retention
-        and all(after >= before for before, after in zip(four.development, eight.development, strict=True))
-        and any(after > before for before, after in zip(four.development, eight.development, strict=True))
-    ):
+    if promotes(eight, four):
         return eight
     return four
 

@@ -34,7 +34,7 @@ from taskcompendium.environment import EnvironmentKind
 from taskcompendium.parquet import read_tasks
 
 from experiments.post_training.glm import resolve_glm_base_url
-from experiments.post_training.russell_rsi.bootstrap_loop import checkpoint_score, write_once
+from experiments.post_training.russell_rsi.bootstrap_loop import checkpoint_score, promotes, write_once
 from experiments.post_training.russell_rsi.launch_dose_comparison import selected_dose
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.rollout_eval import qemu_factory
@@ -75,10 +75,7 @@ def require_teacher_condition(config: TeacherCollectionConfig) -> dict:
     selected = selected_dose(checkpoint_score(decision["four"]), checkpoint_score(decision["eight"]))
     if candidate != selected or parent.checkpoint_identity != config.parent_identity:
         raise ValueError("Teacher condition differs from the frozen dose choice or parent")
-    nonregression = candidate.retention >= parent.retention and all(
-        new >= old for new, old in zip(candidate.development, parent.development, strict=True)
-    )
-    if nonregression and any(new > old for new, old in zip(candidate.development, parent.development, strict=True)):
+    if promotes(candidate, parent):
         raise ValueError("Dose improved the parent; the conditional teacher experiment cannot start")
     return decision
 

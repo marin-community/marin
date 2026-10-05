@@ -110,6 +110,15 @@ class CheckpointScore:
     retention: float
 
 
+def promotes(candidate: CheckpointScore, parent: CheckpointScore) -> bool:
+    """Require retained scores and a strict coding gain."""
+    return (
+        candidate.retention >= parent.retention
+        and all(new >= old for new, old in zip(candidate.development, parent.development, strict=True))
+        and any(new > old for new, old in zip(candidate.development, parent.development, strict=True))
+    )
+
+
 @dataclass(frozen=True)
 class LoopState:
     parent: CheckpointScore
@@ -300,11 +309,7 @@ def advance(state: LoopState, plan: RoundPlan, result: RoundResult) -> LoopState
     working_ok = retention_ok and all(
         new >= previous for new, previous in zip(candidate.development, state.working.development, strict=True)
     )
-    improved = (
-        retention_ok
-        and all(new >= previous for new, previous in zip(candidate.development, state.champion.development, strict=True))
-        and any(new > previous for new, previous in zip(candidate.development, state.champion.development, strict=True))
-    )
+    improved = retention_ok and promotes(candidate, state.champion)
     champion = candidate if improved else state.champion
     working = candidate if working_ok else champion
     count = state.completed_pilots + 1

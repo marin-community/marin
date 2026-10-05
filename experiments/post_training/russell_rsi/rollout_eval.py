@@ -37,6 +37,7 @@ from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 DEVELOPMENT_MAX_TURNS = 16
 DEVELOPMENT_COMMAND_TIMEOUT = 120
+SUPPLEMENTARY_TASKS = 4
 
 
 @dataclass(frozen=True)
@@ -83,10 +84,10 @@ def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> E
         config.checkpoint_index not in (0, 1)
         or len(config.model_identities) != 2
         or evaluation.model_identity != config.model_identities[config.checkpoint_index]
-        or len({task.id for task in tasks}) != 4
+        or len({task.id for task in tasks}) != SUPPLEMENTARY_TASKS
         or evaluation.require_reward_variation
-        or evaluation.limit != 4
-        or len(tasks) != 4
+        or evaluation.limit != SUPPLEMENTARY_TASKS
+        or len(tasks) != SUPPLEMENTARY_TASKS
         or evaluation.samples_per_task != 1
         or evaluation.temperature != 0.0
         or evaluation.startup_attempts != 3
