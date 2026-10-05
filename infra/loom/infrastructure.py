@@ -63,6 +63,7 @@ REMOTE_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 REMOTE_MCP_AUTH_NONE = "none"
 REMOTE_MCP_AUTH_ENVIRONMENT = "environment"
 REMOTE_MCP_AUTH_IAP = "iap"
+BUILTIN_WATCH_PROFILE = "watch"
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -115,6 +116,23 @@ class AgentWatchTarget:
     prompt: str
     slack_channels: tuple[str, ...]
 
+    @classmethod
+    def parse(cls, name: str, value: Mapping[str, object]) -> AgentWatchTarget:
+        profile = str(value.get("profile", "")).strip()
+        repo = str(value.get("repo", "")).strip()
+        if not profile or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            raise ValueError("agent watches require a profile and owner/name repository")
+        inline, source = value.get("prompt"), value.get("promptFile")
+        if (inline is None) == (source is None):
+            raise ValueError(f"watch {name!r} requires exactly one of prompt or promptFile")
+        prompt = _instruction_text(inline, source, f"watch {name!r}")
+        if not prompt or len(prompt.encode()) > 65536:
+            raise ValueError("watch prompt must be 1..65536 bytes")
+        channels = _string_tuple(value.get("slackChannels", []), "slackChannels", f"watch {name!r}")
+        if len(channels) > 32 or any(not re.fullmatch(r"[CG][A-Za-z0-9]{1,63}", channel) for channel in channels):
+            raise ValueError("slackChannels must contain at most 32 Slack channel IDs")
+        return cls(profile, repo, prompt, channels)
+
     def manifest(self) -> dict[str, object]:
         return {
             "agent": {
@@ -134,6 +152,24 @@ class ScriptWatchTarget:
     scope: Mapping[str, object]
     capabilities: tuple[str, ...]
 
+    @classmethod
+    def parse(cls, name: str, value: Mapping[str, object]) -> ScriptWatchTarget:
+        if any(field in value for field in ("prompt", "promptFile", "repo", "slackChannels")):
+            raise ValueError("script watches use program, params, and scope; agent fields do not apply")
+        program = value.get("program")
+        if not isinstance(program, str) or not (program.startswith("builtin:") or Path(program).is_absolute()):
+            raise ValueError("script program must be builtin:name or an absolute server path")
+        params, scope = value.get("params", {}), value.get("scope", {})
+        if not isinstance(params, dict) or not isinstance(scope, dict):
+            raise ValueError("script params and scope must be objects")
+        capabilities = _string_tuple(value.get("capabilities", ["observe"]), "capabilities", f"watch {name!r}")
+        if any(
+            capability not in {"observe", "mark", "escalate", "nudge", "interrupt", "launch", "judge"}
+            for capability in capabilities
+        ):
+            raise ValueError("script capabilities must be known watch capabilities")
+        return cls(program, str(value.get("profile", BUILTIN_WATCH_PROFILE)).strip(), params, scope, capabilities)
+
     def manifest(self) -> dict[str, object]:
         return {
             "program": self.program,
@@ -145,43 +181,9 @@ class ScriptWatchTarget:
 
 
 def _watch_target(name: str, value: Mapping[str, object]) -> AgentWatchTarget | ScriptWatchTarget:
-    program = value.get("program")
-    inline, source = value.get("prompt"), value.get("promptFile")
-    if program is not None:
-        if inline is not None or source is not None or "repo" in value or "slackChannels" in value:
-            raise ValueError("script watches use program, params, and scope; agent fields do not apply")
-        if not isinstance(program, str) or not (program.startswith("builtin:") or Path(program).is_absolute()):
-            raise ValueError("script program must be builtin:name or an absolute server path")
-        params, scope = value.get("params", {}), value.get("scope", {})
-        capabilities = value.get("capabilities", ["observe"])
-        if not isinstance(params, dict) or not isinstance(scope, dict):
-            raise ValueError("script params and scope must be objects")
-        if not isinstance(capabilities, list) or any(
-            not isinstance(capability, str)
-            or capability not in {"observe", "mark", "escalate", "nudge", "interrupt", "launch", "judge"}
-            for capability in capabilities
-        ):
-            raise ValueError("script capabilities must be known watch capabilities")
-        return ScriptWatchTarget(program, str(value.get("profile", "watch")).strip(), params, scope, tuple(capabilities))
-    profile = str(value.get("profile", "")).strip()
-    repo = str(value.get("repo", "")).strip()
-    if not profile or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-        raise ValueError("agent watches require a profile and owner/name repository")
-    if (inline is None) == (source is None):
-        raise ValueError(f"watch {name!r} requires exactly one of prompt or promptFile")
-    prompt = _instruction_text(inline, source, f"watch {name!r}")
-    if not prompt or len(prompt.encode()) > 65536:
-        raise ValueError("watch prompt must be 1..65536 bytes")
-    channels = value.get("slackChannels", [])
-    if (
-        not isinstance(channels, list)
-        or len(channels) > 32
-        or any(
-            not isinstance(channel, str) or not re.fullmatch(r"[CG][A-Za-z0-9]{1,63}", channel) for channel in channels
-        )
-    ):
-        raise ValueError("slackChannels must contain at most 32 Slack channel IDs")
-    return AgentWatchTarget(profile, repo, prompt, tuple(channels))
+    if "program" in value:
+        return ScriptWatchTarget.parse(name, value)
+    return AgentWatchTarget.parse(name, value)
 
 
 @dataclass(frozen=True)
@@ -214,10 +216,8 @@ class WatchConfig:
         enabled = value.get("enabled", False)
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be boolean")
-        timeout = value.get("runTimeoutSeconds")
-        if timeout is not None and (
-            not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 86400
-        ):
+        timeout = _optional_int(value.get("runTimeoutSeconds"), "runTimeoutSeconds", f"watch {name!r}")
+        if timeout is not None and (isinstance(timeout, bool) or not 1 <= timeout <= 86400):
             raise ValueError("runTimeoutSeconds must be 1..86400 seconds")
         return cls(name.strip(), trigger, target, enabled, timeout)
 
@@ -410,17 +410,17 @@ def _parse_profile_env(name: str, value: object, profile: str) -> ProfileEnvConf
     return ProfileSecretConfig(name, secret_ref)
 
 
-def _string_tuple(value: object, field: str, profile: str) -> tuple[str, ...]:
+def _string_tuple(value: object, field: str, owner: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"profile {profile!r} {field} must be a list of strings")
+        raise ValueError(f"{owner} {field} must be a list of strings")
     return tuple(value)
 
 
-def _optional_int(value: object, field: str, profile: str) -> int | None:
+def _optional_int(value: object, field: str, owner: str) -> int | None:
     if value is None:
         return None
     if not isinstance(value, int):
-        raise ValueError(f"profile {profile!r} {field} must be an integer")
+        raise ValueError(f"{owner} {field} must be an integer")
     return value
 
 
@@ -451,7 +451,7 @@ class McpAccessConfig:
         if not isinstance(value, dict):
             raise ValueError(f"profile {profile!r} mcpAccess must be an object")
         mode = str(value.get("mode", MCP_ACCESS_NONE)).strip()
-        groups = _string_tuple(value.get("groups", []), "mcpAccess.groups", profile)
+        groups = _string_tuple(value.get("groups", []), "mcpAccess.groups", f"profile {profile!r}")
         if mode not in MCP_ACCESS_MODES:
             raise ValueError(f"profile {profile!r} mcpAccess.mode must be none, all, or groups")
         if mode != MCP_ACCESS_GROUPS and groups:
@@ -510,17 +510,19 @@ class ProfileConfig:
             session_class=str(value.get("class", "interactive")),
             strict=bool(value.get("strict", False)),
             env_clear=bool(value.get("envClear", False)),
-            ambient_allowlist=_string_tuple(value.get("ambientAllowlist", []), "ambientAllowlist", name),
-            idle_archive_secs=_optional_int(value.get("idleArchiveSeconds"), "idleArchiveSeconds", name),
+            ambient_allowlist=_string_tuple(value.get("ambientAllowlist", []), "ambientAllowlist", f"profile {name!r}"),
+            idle_archive_secs=_optional_int(value.get("idleArchiveSeconds"), "idleArchiveSeconds", f"profile {name!r}"),
             max_concurrent=int(value.get("maxConcurrent", 0)),
-            turn_budget=_optional_int(value.get("turnBudget"), "turnBudget", name),
+            turn_budget=_optional_int(value.get("turnBudget"), "turnBudget", f"profile {name!r}"),
             prelude=str(value.get("prelude", "weaver")),
             instructions=_instruction_text(
                 value.get("instructions"), value.get("instructionsFile"), f"profile {name!r}"
             ),
             restricted=bool(value.get("restricted", False)),
-            github_repositories=_string_tuple(value.get("githubRepositories", []), "githubRepositories", name),
-            allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
+            github_repositories=_string_tuple(
+                value.get("githubRepositories", []), "githubRepositories", f"profile {name!r}"
+            ),
+            allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", f"profile {name!r}"),
             mcp_access=McpAccessConfig.parse(value.get("mcpAccess", {}), name),
             env=env,
         )
@@ -676,12 +678,12 @@ class DeploymentConfig:
         profile_names = {profile.name for profile in self.profiles}
         watch_names: set[str] = set()
         for watch in self.watches:
-            if isinstance(watch.target, ScriptWatchTarget) and watch.target.profile == "watch":
-                if watch.name in watch_names:
-                    raise ValueError(f"duplicate watch {watch.name!r}")
-                watch_names.add(watch.name)
+            profiles = (
+                profile_names | {BUILTIN_WATCH_PROFILE} if isinstance(watch.target, ScriptWatchTarget) else profile_names
+            )
+            _validate_profile_reference("watch", watch.name, watch.target.profile, watch_names, profiles)
+            if isinstance(watch.target, ScriptWatchTarget) and watch.target.profile == BUILTIN_WATCH_PROFILE:
                 continue
-            _validate_profile_reference("watch", watch.name, watch.target.profile, watch_names, profile_names)
             profile = next(profile for profile in self.profiles if profile.name == watch.target.profile)
             if (
                 profile.session_class != "automation"
