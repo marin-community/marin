@@ -334,6 +334,12 @@ jobs:
       - name: Test rollout execution and private grading
         run: uv run --project lib/rolloutengine --frozen --group test pytest lib/rolloutengine/tests -q
 
+      - name: Test Docker command interruption
+        run: |
+          docker pull busybox:1.36
+          uv run --project lib/rolloutengine --frozen --group test pytest \
+            -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py -m docker -q
+
       - name: Type-check RolloutEngine
         working-directory: lib/rolloutengine
         run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
