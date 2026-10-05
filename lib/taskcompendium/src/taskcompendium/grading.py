@@ -11,7 +11,6 @@ from pydantic import JsonValue
 from verifyit.candidate import (
     CandidateSpec,
     grade_text_candidate,
-    supports_candidate_mode,
 )
 from verifyit.json_comparison import NumericTypePolicy
 from verifyit.modes.grade_predicted_action import grade_predicted_action_candidate
@@ -41,7 +40,6 @@ from taskcompendium.grading_contract import (
 )
 from taskcompendium.models import (
     AssistantToolCalls,
-    EnvironmentRequirements,
     TaskSpec,
     VerifierSpec,
 )
@@ -63,15 +61,6 @@ class GradeResult:
 
 def validate_verifier(specification: VerifierSpec) -> None:
     resolve_verifier(specification)
-
-
-def supports_verifier(specification: VerifierSpec) -> bool:
-    if specification.environment_requirements != EnvironmentRequirements() or not supports_candidate_mode(
-        specification.kind
-    ):
-        return False
-    validate_verifier(specification)
-    return True
 
 
 def _grade_submission(verifier: CandidateSpec, submission: Submission) -> GradeResult:
