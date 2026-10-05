@@ -35,6 +35,7 @@ from marin.evaluation.lm_eval_samples import (
     sample_from_lm_eval,
     samples_from_lm_eval,
     summarize_native_eval_samples,
+    task_coverage_and_metrics,
 )
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
@@ -909,6 +910,37 @@ def test_declared_aggregate_metric_uses_its_per_sample_base_metric(tmp_path):
 
     [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(stored).grading.metric == "accuracy"
+
+
+@pytest.mark.parametrize("metric", ["pass@1", "pass_at_1", "input_pass@1", "output_pass@1"])
+def test_rebuild_reads_sandbox_pass_rates_for_declared_pass_at_one(tmp_path, metric):
+    results = tmp_path / "results"
+    directory = results / "cruxeval" / "native"
+    directory.mkdir(parents=True)
+    rows = [_lm_eval_row(index, "none", score, "4") for index, score in enumerate((1.0, 0.0))]
+    for row in rows:
+        row["pass_rate"] = row.pop("exact_match")
+    source = directory / "samples_CruxEval_native.jsonl"
+    source.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"CruxEval": {metric: 0.5}},
+                **_result_contract("CruxEval", metric, metric, 0.5, n_benchmark=2, n_attempted=2),
+            }
+        )
+    )
+    task = EvalTaskConfig("CruxEval", 0, task_alias="cruxeval")
+    exported = export_lm_eval_samples(str(results), tasks=(task,))
+    source.unlink()
+
+    assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 2
+    samples = [sample_from_archive_row(row) for row in ReadView(str(results)).scan("samples").to_pylist()]
+    coverage, _ = task_coverage_and_metrics(samples, n_benchmark=2, n_attempted=2)
+    assert coverage == TaskCoverage(n_benchmark=2, n_attempted=2, n_scored=2, n_correct=1, n_unanswered=0)
+    assert [sample.correct for sample in samples] == [True, False]
+    assert all(sample.grading.metric == "pass_rate" for sample in samples)
+    assert exported.canonical_metrics == {"cruxeval": {metric: 0.5}}
 
 
 def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
