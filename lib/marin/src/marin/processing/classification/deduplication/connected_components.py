@@ -286,7 +286,7 @@ def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
 def _emit_messages(node: CCNode) -> Iterator[dict]:
     """
     1. Emit the node structure to itself (to preserve graph topology).
-    2. Emit the current component ID to all neighbors.
+    2. Emit the current component ID to all neighbors when it changed last iteration.
     """
     # 1. Preserve structure (self-message carries all node fields)
     yield {
