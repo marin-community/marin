@@ -249,6 +249,8 @@ def _pgle_disabled():
 
 
 TRAIN_LOADER_BUFFER_SIZE = 512
+# Models with at most this many experts log each expert's QB bias (``moe_bias/qb_beta_L*_E*``).
+_LOGGED_QB_BETA_MAX_EXPERTS = 16
 
 
 @dataclass(frozen=True)
@@ -1695,6 +1697,11 @@ def _make_train_step(
             pending_qb_betas=_next_qb_betas(state, metrics.get("qb_beta_per_layer", state.pending_qb_betas)),
             newton_muon=newton_muon,
         )
+        if next_state.pending_qb_betas.shape[-1] <= _LOGGED_QB_BETA_MAX_EXPERTS:
+            # Few experts (the specialization study models): log every expert's QB balancing bias.
+            for layer in range(next_state.pending_qb_betas.shape[0]):
+                for expert in range(next_state.pending_qb_betas.shape[1]):
+                    metrics[f"moe_bias/qb_beta_L{layer}_E{expert}"] = next_state.pending_qb_betas[layer, expert]
 
         return next_state, metrics, watch_stats
 

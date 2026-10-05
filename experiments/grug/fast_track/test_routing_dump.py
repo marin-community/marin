@@ -4,6 +4,8 @@
 """Expert-specialization tooling on a top-1-of-8 model: the routing-count dump, its analysis report, the
 router-embedding tie (single-token and centroid, and its release) and the router bias seed."""
 
+import json
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -14,7 +16,7 @@ from levanter.grug.attention import AttentionMask
 
 import experiments.grug.fast_track.test_kda_local as t
 from experiments.grug.fast_track.analyze_routing import build_report, load_dump
-from experiments.grug.fast_track.launch import RouterTieClass, router_tie_class_ids
+from experiments.grug.fast_track.launch import RouterTieClass, router_tie_class_ids, router_tie_cluster_specs
 from experiments.grug.fast_track.model import RouterCombine, _routers_by_layer, tie_routers
 from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
 from experiments.grug.fast_track.train import (
@@ -203,3 +205,11 @@ def test_router_tie_classes():
     assert ids[RouterTieClass.DIGITS] == (1, 2)
     assert ids[RouterTieClass.LATEX] == (3, 4, 5, 6)
     assert ids[RouterTieClass.NEWLINE] == (7, 8)
+
+
+def test_router_tie_cluster_specs_tie_expert_e_to_cluster_e(tmp_path):
+    path = tmp_path / "clusters.json"
+    path.write_text(json.dumps([[5, 7], [1], [2, 3, 4]]))
+    specs = router_tie_cluster_specs(f"*:{path}")
+    assert specs == ("*:0:5|7", "*:1:1", "*:2:2|3|4")
+    assert router_tie_cluster_specs(None) == ()

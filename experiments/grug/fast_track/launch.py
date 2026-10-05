@@ -10,6 +10,7 @@ data-matches or compute-matches it (``--match``, default data), or sets ``--batc
 """
 
 import dataclasses
+import json
 import math
 import os
 import shlex
@@ -189,6 +190,20 @@ def router_tie_class_specs(items: tuple[str, ...], tokenizer: str, vocab_size: i
         click.echo(f"router tie class {name!r} at {layer}:{expert}: {len(ids)} tokens", err=True)
         specs.append(f"{layer}:{expert}:" + "|".join(str(v) for v in ids))
     return tuple(specs)
+
+
+def router_tie_cluster_specs(item: str | None) -> tuple[str, ...]:
+    """``router_embed_tie`` centroid specs for ``--router-tie-clusters L:PATH``: expert ``e`` of layer ``L`` (``*``:
+    every layer) ties to the centroid of ``json.load(PATH)[e]``, a list of token ids."""
+    if not item:
+        return ()
+    layer, sep, path = item.partition(":")
+    if not sep:
+        raise click.BadParameter(f"--router-tie-clusters expects 'L:PATH', got {item!r}")
+    with open(path) as f:
+        clusters = json.load(f)
+    click.echo(f"router tie clusters at layer {layer}: sizes {[len(c) for c in clusters]}", err=True)
+    return tuple(f"{layer}:{expert}:" + "|".join(str(int(v)) for v in ids) for expert, ids in enumerate(clusters))
 
 
 # Model geometry shared across rungs.
@@ -955,6 +970,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Train-size batches of held-out sequences per routing dump.",
 )
 @click.option(
+    "--router-tie-clusters",
+    default=None,
+    help="'L:PATH': tie layer L's (or '*': every layer's) router column e to the embedding centroid of the e-th "
+    "token list in the JSON file PATH (a list of token-id lists, e.g. vocab k-means clusters).",
+)
+@click.option(
     "--router-tie-class",
     multiple=True,
     help="Tie layer L's (or '*': every layer's) router column E to the embedding centroid of a token class, "
@@ -1047,6 +1068,7 @@ def main(
     fact_probe_every: int,
     fact_probe_ema_every: int,
     router_tie_class: tuple[str, ...],
+    router_tie_clusters: str | None,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -1059,6 +1081,7 @@ def main(
         _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
     # In the job: the tokenizer is staged from the cluster's mirror; the class sizes print in the job log.
     router_tie_specs = router_tie_class_specs(router_tie_class, V16384_TOKENIZER, V16384_VOCAB)
+    router_tie_specs += router_tie_cluster_specs(router_tie_clusters)
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
