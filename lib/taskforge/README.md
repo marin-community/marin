@@ -13,6 +13,7 @@ path dependencies on the sibling `lib/` packages.
 
 ```
 src/taskforge/
+  canonical.py  canonical JSON, sha256 digests, atomic file replacement
   llm/        GLM-5.3 transport, structured calls, call cache, agent loop, web tools, RolloutEngine model
   ledger/     timed spans to per-item JSONL and, on Iris, Finelog
   spec/       TaskSpec assembly and fixed controls
@@ -26,9 +27,9 @@ scripts/      Iris image builder, cluster probes, ledger summary
 ```
 
 Imports point down: `build`, `validate`, `triage` and `proposal` use `llm`, `sandbox`, `spec` and
-`ledger`, which use only external packages. Stage packages do not import each other, with one
-exception: `proposal.model` defines the seam type `TaskProposal`, and `triage` and `build` import
-it.
+`ledger`, which use only `canonical` and external packages. Stage packages do not import each
+other, with one exception: `proposal.model` defines the seam type `TaskProposal`, and `triage` and
+`build` import it.
 
 ## Seams
 
