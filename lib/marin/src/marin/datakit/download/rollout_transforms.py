@@ -15,7 +15,7 @@ from openai_harmony import Author, Message, Role
 from rigging.filesystem.factory import open_url
 from zephyr import counters
 
-from marin.datakit.chat_normalize import ChatChannel, message_text
+from marin.datakit.chat_normalize import ChatChannel, InvalidToolCallPolicy, message_text
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +108,30 @@ def normalize_reasoning_tokens(text: str) -> str:
 
 
 def _assistant_messages(
-    message: dict, author: Author, content: str | None, reasoning: str, index: int, assistant_prefill: str
+    message: dict,
+    author: Author,
+    content: str | None,
+    reasoning: str,
+    index: int,
+    assistant_prefill: str,
+    invalid_tool_call_policy: InvalidToolCallPolicy,
 ) -> tuple[list[Message], dict[str, str]]:
     output: list[Message] = []
     pending: dict[str, str] = {}
+    if "unparsed_content" in message:
+        literal = message["unparsed_content"]
+        if (
+            invalid_tool_call_policy != InvalidToolCallPolicy.RETAIN
+            or content
+            or reasoning
+            or message.get("tool_calls")
+            or message.get("function_call")
+            or not isinstance(literal, str)
+            or not literal.strip()
+        ):
+            raise ValueError("Retained unparsed assistant text requires an otherwise empty parsed message")
+        _check_source_markup(literal)
+        return [Message.from_author_and_content(author, literal).with_channel(ChatChannel.FINAL)], pending
     content = content or ""
     if (
         assistant_prefill
@@ -154,15 +174,32 @@ def _assistant_messages(
             raise ValueError("Each tool call requires a function object")
         function = call["function"]
         tool_name = function.get("name")
-        if not isinstance(tool_name, str) or re.fullmatch(r"[A-Za-z0-9_.:-]+", tool_name) is None:
+        if (
+            not isinstance(tool_name, str)
+            or not tool_name
+            or (
+                invalid_tool_call_policy == InvalidToolCallPolicy.REJECT
+                and re.fullmatch(r"[A-Za-z0-9_.:-]+", tool_name) is None
+            )
+        ):
             raise ValueError("Each tool call requires a valid function name")
+        _check_source_markup(tool_name)
         call_id = call.get("id") or f"call_{index}_{call_index}"
         if not isinstance(call_id, str) or call_id in pending:
             raise ValueError("Source tool-call IDs must be unique strings")
         arguments = function.get("arguments")
         if isinstance(arguments, str):
-            arguments = json.loads(arguments)
-        if not isinstance(arguments, dict):
+            try:
+                decoded = json.loads(arguments)
+            except json.JSONDecodeError:
+                if invalid_tool_call_policy == InvalidToolCallPolicy.REJECT:
+                    raise
+            else:
+                if isinstance(decoded, dict) or invalid_tool_call_policy == InvalidToolCallPolicy.REJECT:
+                    arguments = decoded
+        if not isinstance(arguments, dict) and not (
+            invalid_tool_call_policy == InvalidToolCallPolicy.RETAIN and isinstance(arguments, str)
+        ):
             raise ValueError("Tool-call arguments must be JSON objects")
         _check_source_markup(arguments)
         output.append(
@@ -176,7 +213,12 @@ def _assistant_messages(
     return output, pending
 
 
-def openai_chat_messages(messages: list[dict], *, assistant_prefill: str = "") -> list[Message]:
+def openai_chat_messages(
+    messages: list[dict],
+    *,
+    assistant_prefill: str = "",
+    invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT,
+) -> list[Message]:
     """Normalize OpenAI-style source turns directly into Harmony messages.
 
     Interpret source role aliases, reasoning tags, and function calls here.
@@ -184,6 +226,8 @@ def openai_chat_messages(messages: list[dict], *, assistant_prefill: str = "") -
     are emitted in call order, including repeated calls to the same function.
     An explicit template prefill restores a reasoning opener absent from the
     sampled completion; malformed reasoning remains rejected.
+    RETAIN preserves malformed argument strings and undeclared call names for
+    offline preferences. Unparsed assistant text must be supplied explicitly.
     """
     output: list[Message] = []
     pending: dict[str, str] = {}
@@ -252,8 +296,19 @@ def openai_chat_messages(messages: list[dict], *, assistant_prefill: str = "") -
                 else:
                     output.append(Message.from_author_and_content(author, content))
             case Role.ASSISTANT:
+                if (
+                    pending
+                    and not content
+                    and not reasoning
+                    and not message.get("tool_calls")
+                    and not message.get("function_call")
+                    and "unparsed_content" not in message
+                ):
+                    # Responses can include an empty text item after a call.
+                    # It has no sampled text and leaves the tool handoff pending.
+                    continue
                 assistant_messages, calls = _assistant_messages(
-                    message, author, content, reasoning, index, assistant_prefill
+                    message, author, content, reasoning, index, assistant_prefill, invalid_tool_call_policy
                 )
                 if seen_call_ids.intersection(calls):
                     raise ValueError("Source tool-call IDs must be unique strings")
@@ -285,10 +340,23 @@ def chat_document(messages: list[Message], source: str, **metadata: object) -> d
     return {"id": hashlib.sha256(encoded).hexdigest(), "messages": serialized, "source": source, **metadata}
 
 
-def openai_chat_document(messages: list[dict], source: str, *, assistant_prefill: str = "", **metadata: object) -> dict:
+def openai_chat_document(
+    messages: list[dict],
+    source: str,
+    *,
+    assistant_prefill: str = "",
+    invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT,
+    **metadata: object,
+) -> dict:
     """Build a Harmony artifact from an OpenAI-style source conversation."""
     _check_source_markup(metadata)
-    return chat_document(openai_chat_messages(messages, assistant_prefill=assistant_prefill), source, **metadata)
+    return chat_document(
+        openai_chat_messages(
+            messages, assistant_prefill=assistant_prefill, invalid_tool_call_policy=invalid_tool_call_policy
+        ),
+        source,
+        **metadata,
+    )
 
 
 def checked_openai_chat_document(

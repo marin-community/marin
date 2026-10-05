@@ -51,8 +51,8 @@ def _inference_message(message: Message) -> dict:
             if message.channel != ChatChannel.COMMENTARY or recipient is None or not recipient.startswith("functions."):
                 raise ValueError("Tool calls require commentary addressed to functions.<name>")
             arguments = json.loads(text)
-            if not isinstance(arguments, dict):
-                raise ValueError("Tool-call arguments must be a JSON object")
+            if not isinstance(arguments, (dict, str)):
+                raise ValueError("Tool-call arguments must be a JSON object or retained literal argument text")
             name = recipient.removeprefix("functions.")
             return {
                 "role": "assistant",

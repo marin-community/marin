@@ -14,7 +14,7 @@ from fray.types import ResourceConfig
 from levanter.data.text.formats import ChatProcessor
 from levanter.store.cache import TreeCache, write_levanter_cache
 from levanter.tokenizers import load_tokenizer
-from marin.datakit.chat_normalize import RepeatedToolCallPolicy, normalize_chat_to_parquet
+from marin.datakit.chat_normalize import InvalidToolCallPolicy, RepeatedToolCallPolicy, normalize_chat_to_parquet
 from marin.datakit.chat_render import chat_training_record
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.normalize import DedupMode
@@ -117,6 +117,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
                         literal_entries=evidence.literal_entries,
                         partition=partition,
                         assistant_prefill="<think>\n",
+                        model_tokenizer=f"{source.model.model}@{source.model.revision}",
                     )
                     initial_prompt = trace.initial_prompt_sha256
                     if evidence.identity.harness.startswith("opencode@"):
@@ -162,6 +163,7 @@ def build_native_preference_cache(config: NativePreferenceConfig, partition: BFC
         max_workers=config.max_workers,
         dedup_mode=DedupMode.NONE,
         repeated_tool_call_policy=RepeatedToolCallPolicy.RETAIN,
+        invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
     )
     processor = ChatProcessor(
         load_tokenizer(config.student_tokenizer),

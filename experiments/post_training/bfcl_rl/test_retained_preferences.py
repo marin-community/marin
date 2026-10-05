@@ -31,6 +31,7 @@ from experiments.post_training.bfcl_rl.offline_curate import (
 from experiments.post_training.bfcl_rl.offline_data import (
     NativeModelTrace,
     build_verified_sft_store,
+    native_chat_document,
     native_model_trace,
     verifier_selected_chat,
 )
@@ -158,6 +159,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         literal_entries=[foreign, auxiliary, *reversed(entries)],
         partition=PARTITION,
         assistant_prefill="<think>\n",
+        model_tokenizer="unused-model",
     )
     assert trace.messages == messages
     assert trace.initial_messages == messages[:2]
@@ -181,6 +183,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         literal_entries=entries,
         partition=PARTITION,
         assistant_prefill="<think>\n",
+        model_tokenizer="unused-model",
     )
     assert continuation.messages == messages
     assert continuation.initial_prompt_sha256 == trace.initial_prompt_sha256
@@ -198,6 +201,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         literal_entries=[changed_root, entries[1]],
         partition=PARTITION,
         assistant_prefill="<think>\n",
+        model_tokenizer="unused-model",
     )
     assert unmatched.initial_messages == messages[:-1]
     assert unmatched.initial_prompt_sha256 != trace.initial_prompt_sha256
@@ -212,6 +216,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
             literal_entries=[entries[-1]],
             partition=PARTITION,
             assistant_prefill="<think>\n",
+            model_tokenizer="unused-model",
         )
     duplicate = replace(
         trace,
@@ -235,6 +240,16 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     )
     hf_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
     hf_tokenizer.save_pretrained(tokenizer_path)
+    raw_loop = "<tool_call>\n" + "RAW_LOOP " * 20
+    captured = tuple([*hf_tokenizer.encode(raw_loop, add_special_tokens=False), hf_tokenizer.eos_token_id])
+    unparsed = replace(
+        trace,
+        messages=[*trace.messages[:-1], {"role": "assistant", "content": ""}],
+        final_completion_token_ids=captured,
+        model_tokenizer=str(tokenizer_path),
+    )
+    literal_document = native_chat_document(unparsed)
+    assert literal_document["messages"][-1]["content"] == [{"type": "text", "text": raw_loop}]
     with set_current_client(LocalClient()):
         store = build_verified_sft_store(
             [trace, duplicate, incorrect],
@@ -280,6 +295,8 @@ def test_teacher_harmony_curation_rejects_parity_before_adapting_messages():
         [],
         [],
         "initial-prompt",
+        (),
+        "unused-model",
     )
     with pytest.raises(ValueError, match="outside the BFCL training complement"):
         verifier_selected_chat(trace, PARTITION)
@@ -621,6 +638,11 @@ def _native_pair_collection(
                     "content": f"{model.upper()}_TOOL_OBSERVATION",
                 }
                 final = {"role": "assistant", "content": f"{model.upper()}_FINAL_{index}"}
+                if model == "student" and index == 0 and fault == "malformed_calls":
+                    assistant["tool_calls"][0]["function"] = {
+                        "name": "hallucinated_tool",
+                        "arguments": '{"key": "STUDENT_ARGUMENT',
+                    }
                 messages = [user, assistant, observation, final]
                 if profile["name"] == "opencode":
                     identity_line = (
@@ -681,7 +703,7 @@ def _native_pair_tokenizer(path: Path) -> None:
     hf.save_pretrained(path)
 
 
-@pytest.mark.parametrize("fault", ["none", "context", "negative_tokens", "agent_error"])
+@pytest.mark.parametrize("fault", ["none", "context", "negative_tokens", "agent_error", "malformed_calls"])
 def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_semantics(tmp_path: Path, fault: str):
     tasks = tuple(TaskIdentity(f"bfcl-simple-python-{i}", f"simple_python_{i}", f"digest-{i}") for i in range(13, 18))
     partition = replace(PARTITION, complement=tasks)

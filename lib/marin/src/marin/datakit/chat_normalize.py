@@ -87,6 +87,11 @@ class RepeatedToolCallPolicy(StrEnum):
     RETAIN = "retain"
 
 
+class InvalidToolCallPolicy(StrEnum):
+    REJECT = "reject"
+    RETAIN = "retain"
+
+
 class _ToolCall(NamedTuple):
     position: int
     recipient: str
@@ -157,7 +162,9 @@ def has_stalled_tool_call(messages: list[Message]) -> bool:
     return turn_has_repetition()
 
 
-def validate_chat_messages(messages: list[Message]) -> None:
+def validate_chat_messages(
+    messages: list[Message], invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT
+) -> None:
     """Validate Harmony channels, conversation order, and function handoffs."""
     if not messages:
         raise ValueError("A chat record must contain messages")
@@ -203,11 +210,17 @@ def validate_chat_messages(messages: list[Message]) -> None:
                     if channel != ChatChannel.COMMENTARY or not message.recipient.startswith("functions."):
                         raise ValueError("Function calls require commentary and a functions.<name> recipient")
                     name = message.recipient.removeprefix("functions.")
-                    if _SAFE_TOOL_IDENTIFIER.fullmatch(name) is None:
+                    if (
+                        _SAFE_TOOL_IDENTIFIER.fullmatch(name) is None
+                        and invalid_tool_call_policy == InvalidToolCallPolicy.REJECT
+                    ):
                         raise ValueError("Function calls require a valid tool name")
                     if pending and previous is not None and previous.author.role == Role.TOOL:
                         raise ValueError("Every pending tool call must receive an observation before another call")
-                    if not isinstance(json.loads(text), dict):
+                    arguments = json.loads(text)
+                    if not isinstance(arguments, dict) and not (
+                        invalid_tool_call_policy == InvalidToolCallPolicy.RETAIN and isinstance(arguments, str)
+                    ):
                         raise ValueError("Tool-call arguments must encode a JSON object")
                     pending.append(message.recipient)
                 elif pending:
@@ -225,7 +238,11 @@ def validate_chat_messages(messages: list[Message]) -> None:
         raise ValueError("A chat training record must end with a final answer or tool call")
 
 
-def validate_tool_definitions(tools: list[dict], messages: list[Message]) -> None:
+def validate_tool_definitions(
+    tools: list[dict],
+    messages: list[Message],
+    invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT,
+) -> None:
     """Require explicit definitions for calls without rewriting their arguments."""
     names: set[str] = set()
     for tool in tools:
@@ -246,7 +263,7 @@ def validate_tool_definitions(tools: list[dict], messages: list[Message]) -> Non
     for message in messages:
         if message.author.role == Role.ASSISTANT and message.recipient is not None:
             name = message.recipient.removeprefix("functions.")
-            if name not in names:
+            if name not in names and invalid_tool_call_policy == InvalidToolCallPolicy.REJECT:
                 raise ValueError(f"Tool call {name!r} has no explicit definition")
 
 
@@ -255,6 +272,7 @@ def _normalize_chat_record(
     messages_field: str,
     id_field: str,
     repeated_tool_call_policy: RepeatedToolCallPolicy = RepeatedToolCallPolicy.FILTER,
+    invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT,
 ) -> dict[str, Any]:
     messages_value = record[messages_field]
     if not isinstance(messages_value, list):
@@ -275,7 +293,7 @@ def _normalize_chat_record(
         if {"tool_calls", "tool_call_id", "reasoning_content", "function_call"} & message.keys():
             raise ValueError("Source adapters must emit Harmony channels and recipients")
     messages = [Message.from_dict(message) for message in messages_value]
-    validate_chat_messages(messages)
+    validate_chat_messages(messages, invalid_tool_call_policy)
 
     raw_kwargs = record.get("chat_template_kwargs") or {}
     if isinstance(raw_kwargs, str):
@@ -291,7 +309,7 @@ def _normalize_chat_record(
     tools = kwargs.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")
-    validate_tool_definitions(tools, messages)
+    validate_tool_definitions(tools, messages, invalid_tool_call_policy)
     if repeated_tool_call_policy == RepeatedToolCallPolicy.FILTER and has_stalled_tool_call(messages):
         raise RepeatedToolCallError("A tool call repeated after two identical tool replies")
     serialized_messages = [message.to_dict() for message in messages]
@@ -324,10 +342,13 @@ def _build_chat_pipeline(
     dedup_mode: DedupMode,
     output_schema: pa.Schema,
     repeated_tool_call_policy: RepeatedToolCallPolicy,
+    invalid_tool_call_policy: InvalidToolCallPolicy,
 ) -> Dataset:
     def normalize_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         try:
-            normalized = _normalize_chat_record(record, messages_field, id_field, repeated_tool_call_policy)
+            normalized = _normalize_chat_record(
+                record, messages_field, id_field, repeated_tool_call_policy, invalid_tool_call_policy
+            )
         except RepeatedToolCallError:
             counters.pipeline.update_counter("normalize_chat/repeated_tool_calls_filtered", 1)
             return []
@@ -390,8 +411,13 @@ def normalize_chat_to_parquet(
     dedup_mode: DedupMode = DedupMode.EXACT,
     output_schema: pa.Schema = CHAT_SCHEMA,
     repeated_tool_call_policy: RepeatedToolCallPolicy = RepeatedToolCallPolicy.FILTER,
+    invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT,
 ) -> NormalizedData:
-    """Normalize source conversations into deduplicated Harmony-message Parquet."""
+    """Normalize source conversations into deduplicated Harmony-message Parquet.
+
+    Invalid calls are rejected unless explicitly retained for offline preferences;
+    retention preserves their argument text and the original tool definitions.
+    """
     resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
     file_sizes = _discover_files(input_path, file_extensions=file_extensions)
     if not file_sizes:
@@ -406,6 +432,7 @@ def normalize_chat_to_parquet(
         dedup_mode,
         output_schema,
         repeated_tool_call_policy,
+        invalid_tool_call_policy,
     )
     outcome = ZephyrContext(name="normalize-chat", resources=resources, max_workers=max_workers).execute(pipeline)
     counters_dict = dict(outcome.counters)
@@ -442,6 +469,7 @@ def normalize_chat_step(
     dedup_mode: DedupMode = DedupMode.EXACT,
     output_schema: pa.Schema = CHAT_SCHEMA,
     repeated_tool_call_policy: RepeatedToolCallPolicy = RepeatedToolCallPolicy.FILTER,
+    invalid_tool_call_policy: InvalidToolCallPolicy = InvalidToolCallPolicy.REJECT,
 ) -> StepSpec:
     """Create a versioned Harmony-message normalization step."""
     hash_attrs = {
@@ -453,6 +481,7 @@ def normalize_chat_step(
         "dedup_mode": dedup_mode,
         "output_schema": str(output_schema),
         "repeated_tool_call_policy": repeated_tool_call_policy,
+        "invalid_tool_call_policy": invalid_tool_call_policy,
     }
     return StepSpec(
         name=name,
@@ -468,6 +497,7 @@ def normalize_chat_step(
             dedup_mode=dedup_mode,
             output_schema=output_schema,
             repeated_tool_call_policy=repeated_tool_call_policy,
+            invalid_tool_call_policy=invalid_tool_call_policy,
         ),
         deps=[download],
         hash_attrs=hash_attrs,

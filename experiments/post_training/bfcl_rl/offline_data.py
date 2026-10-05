@@ -11,7 +11,8 @@ from dataclasses import asdict, dataclass
 from itertools import pairwise
 from typing import Any
 
-from marin.datakit.chat_normalize import normalize_chat_to_parquet
+from levanter.tokenizers import load_tokenizer
+from marin.datakit.chat_normalize import InvalidToolCallPolicy, normalize_chat_to_parquet
 from marin.datakit.chat_render import render_marin_chat
 from marin.datakit.download.rollout_transforms import openai_chat_document, openai_chat_messages
 from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store
@@ -39,11 +40,15 @@ class NativeModelTrace:
     initial_messages: list[dict]
     initial_tools: list[dict]
     initial_prompt_sha256: str
+    final_completion_token_ids: tuple[int, ...]
+    model_tokenizer: str
 
 
 def native_prompt_sha256(messages: list[dict], tools: list[dict], assistant_prefill: str) -> str:
     prompt = render_marin_chat(
-        openai_chat_messages(messages, assistant_prefill=assistant_prefill),
+        openai_chat_messages(
+            messages, assistant_prefill=assistant_prefill, invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN
+        ),
         tools=tools,
         enable_thinking=STUDENT_REASONING_MODE,
         add_generation_prompt=True,
@@ -62,6 +67,7 @@ def native_model_trace(
     literal_entries: Iterable[Mapping[str, Any]],
     partition: BFCLPartition,
     assistant_prefill: str,
+    model_tokenizer: str,
 ) -> NativeModelTrace:
     """Join a scored native branch's parsed messages to its exact model-token evidence."""
     retained = retained_rollout(retained_record, identity=identity, partition=partition, trajectory_uri=retained_uri)
@@ -147,16 +153,27 @@ def native_model_trace(
         initial["messages"],
         initial.get("tools") or [],
         native_prompt_sha256(initial["messages"], initial.get("tools") or [], assistant_prefill),
+        tuple(final["literal"]["completion_token_ids"]),
+        model_tokenizer,
     )
 
 
 def native_chat_document(trace: NativeModelTrace) -> dict:
     """Adapt a native model branch using the shared OpenAI-to-Harmony conversion."""
+    final = trace.messages[-1]
+    messages = trace.messages
+    if not any(final.get(field) for field in ("content", "reasoning_content", "tool_calls", "function_call")):
+        tokenizer = load_tokenizer(trace.model_tokenizer)
+        tokens = list(trace.final_completion_token_ids)
+        while tokens and tokens[-1] == tokenizer.eos_token_id:
+            tokens.pop()
+        messages = [*messages[:-1], {**final, "unparsed_content": tokenizer.decode(tokens)}]
     return openai_chat_document(
-        trace.messages,
+        messages,
         f"bfcl-complement/{trace.identity.harness}",
         source_id=f"{trace.identity.run_id}/{trace.retained_record['record_id']}",
         assistant_prefill=trace.assistant_prefill,
+        invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
         chat_template_kwargs={"tools": trace.tools, "enable_thinking": STUDENT_REASONING_MODE},
     )
 

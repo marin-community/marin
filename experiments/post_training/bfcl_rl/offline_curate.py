@@ -210,6 +210,7 @@ def collection_teacher_traces(
             literal_entries=evidence.literal_entries,
             partition=partition,
             assistant_prefill="<think>\n",
+            model_tokenizer=f"{collection.model.model}@{collection.model.revision}",
         )
 
 

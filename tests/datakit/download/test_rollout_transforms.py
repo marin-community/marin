@@ -4,12 +4,50 @@
 import json
 
 import pytest
+from marin.datakit.chat_normalize import InvalidToolCallPolicy, _normalize_chat_record
+from marin.datakit.chat_render import chat_training_record, render_chat_record
 from marin.datakit.download.rollout_transforms import (
+    openai_chat_document,
     openai_chat_messages,
     render_tool_call,
     render_tool_message,
 )
 from openai_harmony import Role
+
+
+@pytest.mark.parametrize("name", ["apply_patch", "cat /app/result.json"])
+def test_offline_negative_calls_preserve_malformed_arguments_and_unparsed_text(name: str):
+    tools = [{"type": "function", "function": {"name": "exec_command", "parameters": {"type": "object"}}}]
+    malformed = '{"patch": "UNFINISHED'
+    loop = "<tool_call>\n$LANG$LANG$LANG"
+    messages = [
+        {"role": "user", "content": "Write the answer."},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "bad", "function": {"name": name, "arguments": malformed}}],
+        },
+        {"role": "tool", "tool_call_id": "bad", "content": "Unknown tool apply_patch"},
+        {"role": "assistant", "content": "", "unparsed_content": loop},
+    ]
+    with pytest.raises(ValueError):
+        openai_chat_document(messages, "negative", chat_template_kwargs={"tools": tools})
+    document = openai_chat_document(
+        messages,
+        "negative",
+        invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
+        chat_template_kwargs={"tools": tools},
+    )
+    normalized = _normalize_chat_record(
+        document, "messages", "id", invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN
+    )
+    chat = chat_training_record(normalized)
+    assert chat["chat_template_kwargs"]["tools"] == tools
+    assert chat["messages"][1]["tool_calls"][0]["function"] == {"name": name, "arguments": malformed}
+    assert chat["messages"][-1]["content"] == loop
+    rendered = render_chat_record(normalized)["text"]
+    assert malformed in rendered and loop in rendered and "Unknown tool apply_patch" in rendered
+    with pytest.raises(ValueError, match=r"Tool-call arguments must encode a JSON object|valid tool name"):
+        _normalize_chat_record(document, "messages", "id")
 
 
 def test_source_aliases_and_tool_results_become_harmony_messages():
@@ -98,6 +136,7 @@ def test_response_text_item_before_tool_observation_stays_in_same_assistant_turn
                 "tool_calls": [{"id": "one", "function": {"name": "read", "arguments": {"path": "a.py"}}}],
             },
             {"role": "assistant", "content": "Check the file.</think>Reading now."},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}]},
             {"role": "tool", "tool_call_id": "one", "content": "File contents."},
             {"role": "assistant", "content": "Done."},
         ],
