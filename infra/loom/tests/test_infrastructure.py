@@ -13,6 +13,7 @@ from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
     ROOT,
+    AgentWatchConfig,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
@@ -472,3 +473,35 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
         assert mapping["profiles"] == ["ops"]
 
     return infrastructure.instance.id.apply(check)
+
+
+def test_agent_watch_manifest_and_profile_reference() -> None:
+    watch = AgentWatchConfig.parse(
+        "daily",
+        {
+            "cron": "0 9 * * 1-5",
+            "timezone": "America/Los_Angeles",
+            "profile": "ops",
+            "repo": "marin-community/marin",
+            "promptFile": "watches/weekday-job-check.md",
+            "slackChannels": ["C12345"],
+        },
+    )
+    config = replace(deployment_config(), watches=(watch,))
+    manifest = json.loads(_deployment_manifest(config, [], []))
+    assert manifest["watches"][0]["agent"]["slack_channels"] == ["C12345"]
+    assert manifest["watches"][0]["agent"]["prompt"] == (ROOT / "watches/weekday-job-check.md").read_text().strip()
+    assert manifest["watches"][0]["enabled"] is False
+    with pytest.raises(ValueError, match="unknown profile"):
+        replace(config, profiles=(), workloads=())
+
+
+def test_agent_watch_prompt_file_cannot_escape_configuration_root() -> None:
+    value = {
+        "cron": "0 9 * * *",
+        "profile": "ops",
+        "repo": "marin-community/marin",
+        "promptFile": "../pulumi.md",
+    }
+    with pytest.raises(ValueError):
+        AgentWatchConfig.parse("daily", value)

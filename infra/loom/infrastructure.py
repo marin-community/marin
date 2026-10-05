@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import pulumi
 import pulumi_cloudflare as cloudflare
@@ -88,6 +89,91 @@ def _git_context_at_revision(revision: str) -> str:
 
 
 SECRET_REF = re.compile(r"^projects/[a-z0-9-]+/secrets/[A-Za-z0-9_-]+/versions/(?:latest|[0-9]+)$")
+
+
+@dataclass(frozen=True)
+class AgentWatchConfig:
+    name: str
+    profile: str
+    repo: str
+    prompt: str
+    trigger: dict[str, str]
+    slack_channels: tuple[str, ...]
+    enabled: bool
+    misfire_policy: str
+    late_grace_secs: int
+    run_timeout_secs: int
+
+    @classmethod
+    def parse(cls, name: str, value: Mapping[str, object]) -> AgentWatchConfig:
+        profile = str(value.get("profile", "")).strip()
+        repo = str(value.get("repo", "")).strip()
+        if not name.strip() or not profile or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            raise ValueError("watches require a name, profile, and owner/name repository")
+        inline, source = value.get("prompt"), value.get("promptFile")
+        if (inline is None) == (source is None):
+            raise ValueError(f"watch {name!r} requires exactly one of prompt or promptFile")
+        if source is not None:
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError("promptFile must be a relative path")
+            path = (ROOT / source).resolve()
+            if not path.is_relative_to(ROOT) or not path.is_file():
+                raise ValueError("promptFile must name a file under infra/loom")
+            prompt = path.read_text().strip()
+        else:
+            if not isinstance(inline, str):
+                raise ValueError("watch prompt must be a string")
+            prompt = inline.strip()
+        if not prompt or len(prompt.encode()) > 65536:
+            raise ValueError("watch prompt must be 1..65536 bytes")
+        cron, every = value.get("cron"), value.get("every")
+        if (cron is None) == (every is None):
+            raise ValueError("watch requires exactly one of cron or every")
+        if cron is not None:
+            if not isinstance(cron, str) or len(cron.split()) != 5:
+                raise ValueError("cron requires five fields")
+            timezone = str(value.get("timezone", "UTC"))
+            ZoneInfo(timezone)
+            trigger = {"cron": cron, "timezone": timezone}
+        else:
+            match = re.fullmatch(r"([0-9]+)([smh])", str(every))
+            if match is None or not 1 <= int(match[1]) * {"s": 1, "m": 60, "h": 3600}[match[2]] <= 31622400:
+                raise ValueError("every must be positive, use s/m/h, and be at most 366 days")
+            trigger = {"every": str(every)}
+        channels = value.get("slackChannels", [])
+        if (
+            not isinstance(channels, list)
+            or len(channels) > 32
+            or any(
+                not isinstance(channel, str) or not re.fullmatch(r"[CG][A-Za-z0-9]{1,63}", channel)
+                for channel in channels
+            )
+        ):
+            raise ValueError("slackChannels must contain at most 32 Slack channel IDs")
+        enabled = value.get("enabled", False)
+        policy = str(value.get("misfirePolicy", "coalesce"))
+        if not isinstance(enabled, bool) or policy not in {"skip", "coalesce"}:
+            raise ValueError("enabled must be boolean and misfirePolicy must be skip or coalesce")
+        grace, timeout = value.get("lateGraceSeconds", 600), value.get("runTimeoutSeconds", 300)
+        if type(grace) is not int or not 0 <= grace <= 86400 or type(timeout) is not int or not 1 <= timeout <= 86400:
+            raise ValueError("invalid watch late grace or run timeout")
+        return cls(name.strip(), profile, repo, prompt, trigger, tuple(channels), enabled, policy, grace, timeout)
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "trigger": self.trigger,
+            "enabled": self.enabled,
+            "agent": {
+                "profile": self.profile,
+                "repo": self.repo,
+                "prompt": self.prompt,
+                "slack_channels": list(self.slack_channels),
+            },
+            "misfire_policy": self.misfire_policy,
+            "late_grace_secs": self.late_grace_secs,
+            "run_timeout_secs": self.run_timeout_secs,
+        }
 
 
 @dataclass(frozen=True)
@@ -509,6 +595,7 @@ class DeploymentConfig:
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
+    watches: tuple[AgentWatchConfig, ...] = ()
 
     def __post_init__(self) -> None:
         if self.domain != self.domain.strip().rstrip(".") or "://" in self.domain or "/" in self.domain:
@@ -532,6 +619,17 @@ class DeploymentConfig:
                 raise ValueError(f"duplicate remote MCP identity {remote.identity!r}")
             remote_identities.add(remote.identity)
         profile_names = {profile.name for profile in self.profiles}
+        watch_names: set[str] = set()
+        for watch in self.watches:
+            _validate_profile_reference("watch", watch.name, watch.profile, watch_names, profile_names)
+            profile = next(profile for profile in self.profiles if profile.name == watch.profile)
+            if (
+                profile.session_class != "automation"
+                or not profile.strict
+                or not profile.env_clear
+                or profile.protocol != "acp"
+            ):
+                raise ValueError(f"watch {watch.name!r} profile must be automation-safe ACP")
         workload_names: set[str] = set()
         for workload in self.workloads:
             _validate_profile_reference("workload", workload.name, workload.profile, workload_names, profile_names)
@@ -541,7 +639,12 @@ class DeploymentConfig:
                 "GitHub federation", federation.name, federation.profile, federation_names, profile_names
             )
         if self.prune_deployment and not (
-            self.settings or self.remote_mcps or self.profiles or self.workloads or self.github_federations
+            self.settings
+            or self.remote_mcps
+            or self.profiles
+            or self.workloads
+            or self.github_federations
+            or self.watches
         ):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 
@@ -562,6 +665,14 @@ class DeploymentConfig:
                 raise ValueError(f"buildContext does not contain a Dockerfile: {local_source}")
             source = str(local_source)
         region = config.require("region")
+        raw_watches = config.get_object("watches") or {}
+        if not isinstance(raw_watches, dict):
+            raise ValueError("watches must be an object")
+        watches = []
+        for name, value in raw_watches.items():
+            if not isinstance(value, dict):
+                raise ValueError(f"watch {name!r} must be an object")
+            watches.append(AgentWatchConfig.parse(str(name), value))
         raw_profiles = config.get_object("profiles") or {}
         if not isinstance(raw_profiles, dict):
             raise ValueError("profiles must be an object")
@@ -627,6 +738,7 @@ class DeploymentConfig:
             profiles=tuple(profiles),
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
+            watches=tuple(watches),
         )
 
 
@@ -834,6 +946,7 @@ def _deployment_manifest(
 ) -> str:
     return json.dumps(
         {
+            "watches": [watch.manifest() for watch in sorted(config.watches, key=lambda watch: watch.name)],
             "settings": dict(config.settings),
             "remote_mcps": [remote.manifest() for remote in config.remote_mcps],
             "profiles": profiles,

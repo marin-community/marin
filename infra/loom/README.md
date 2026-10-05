@@ -265,3 +265,46 @@ update. The separately managed root disk is protected, retained if removed from
 Pulumi, and not auto-deleted with the VM. A replacement root disk must use an
 explicit `bootDiskSnapshot`; keep that source snapshot until a newer rollback
 point has been verified.
+
+## Scheduled agents
+
+The `watches` mapping declares cron or interval tasks. Each occurrence launches
+an automation-safe ACP profile with the declared prompt. `promptFile` reads a
+file below `infra/loom`; Pulumi sends its contents, so Loom does not need the
+Marin checkout at runtime. Use either `prompt` or `promptFile`.
+
+```yaml
+marin-loom:watches:
+  weekday-job-check:
+    enabled: false
+    cron: "0 9 * * 1-5"
+    timezone: America/Los_Angeles
+    profile: ops
+    repo: marin-community/marin
+    promptFile: watches/weekday-job-check.md
+    slackChannels: []
+    misfirePolicy: coalesce
+    lateGraceSeconds: 600
+    runTimeoutSeconds: 300
+```
+
+For an interval, replace `cron` and `timezone` with `every: 30m`. Intervals
+retain their original cadence after downtime. Cron uses five fields and an IANA
+time zone; missing local times are skipped and repeated local times fire once.
+Loom validates the complete cron expression when applying the manifest.
+
+The `scheduled-message` profile uses low effort, a one-turn budget, and only
+the watch messaging and memory tools. Use `ops` for job inspection that needs
+operator tools.
+
+Messages are agent actions. Add channel IDs to `slackChannels` and name the
+message and destination in the prompt. The agent uses `slack_post` with a stable
+action key; Loom keeps the bot token on the server and refuses other channels.
+An uncertain Slack response is recorded for inspection and is not reposted.
+
+Reconciliation keeps watch IDs, history, memory, and the next scheduled time
+when the cadence is unchanged. A watch paused in Loom stays paused through
+rollouts; enable it explicitly in Loom to resume. Pruning pauses omitted
+managed watches and preserves their history. Operator-created watches are
+outside deployment ownership. Deploy a Loom release with scheduled watch support
+before applying a manifest containing `watches`.
