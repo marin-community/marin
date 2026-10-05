@@ -173,9 +173,17 @@ def test_laptop_without_docker_reports_and_omits_the_docker_factory(monkeypatch)
     try:
         docker = factory_capabilities(MachineHost.LAPTOP)[EnvironmentKind.DOCKER]
         assert docker.unavailable == "docker CLI not found on PATH"
-        assert EnvironmentKind.DOCKER not in machine_factories(MachineHost.LAPTOP)
+        assert EnvironmentKind.DOCKER not in machine_factories(MachineHost.LAPTOP, controller_url=None)
     finally:
         factories.local_docker.cache_clear()
+
+
+def test_iris_docker_factory_submits_to_the_given_controller():
+    docker = machine_factories(MachineHost.IRIS, controller_url="http://controller.example:10000")[
+        EnvironmentKind.DOCKER
+    ]
+    assert isinstance(docker, IrisMachineFactory)
+    assert docker.controller_url == "http://controller.example:10000"
 
 
 SOURCES = {"registry": ShellboxRegistryImage("busybox:1"), "build": DockerfileSource(Path("/c"), Path("/c/Dockerfile"))}
