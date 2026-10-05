@@ -13,12 +13,11 @@ it does not and cannot cover is whether the kernel *lowers* on a given GPU archi
 The bar is bitwise: the forward and `dx` must be bit-identical to the pad-and-shift
 reference, because a fused conv changes only *when* bytes cross HBM, never the
 arithmetic. `dw` is a reduction over 65,536 tokens whose association order XLA does not
-define, so it is checked against a float64 oracle instead -- the Pallas kernel must be at
-least as accurate as the reference, not identical to it, and the Triton kernel must be
-within the error of an fp32 sum rounded once to bf16.
+define, so it is checked against a float64 oracle instead -- the kernel must be at least
+as accurate as the reference and within the error of an fp32 sum rounded once to bf16.
 
 The whole module is scoped to the backends this Triton kernel targets. `dx` is bitwise
-only because `_dx_body` accumulates in the order XLA's transpose of the pad-and-shift
+only because `_dx_row` accumulates in the order XLA's transpose of the pad-and-shift
 forward emits, and that order is a property of the backend's transpose, not of the
 algorithm: on TPU the multi-tap shapes disagree in the last bit or two while `W=1`, which
 has no accumulation to associate, still matches exactly. Running the interpreter on TPU
@@ -33,6 +32,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.kernels.pallas.short_conv import (
     ShortConvBlockSizes,
+    ShortConvTiles,
     short_conv,
     short_conv_reference,
 )
@@ -55,6 +55,14 @@ SHAPES = [
     (1, 64, 8, 1, 32, 8),
     (2, 128, 16, 4, 128, 16),  # a single sequence block: no neighbour view is in range
 ]
+SEGMENT_KINDS = ["unpacked", "packed", "short_runs", "padded"]
+
+
+def _blocks(s_block, c_block):
+    """The same launch shape in both directions. Two rows per step, so every sequence block
+    takes several steps and each step's rows reach back into the previous step's."""
+    tiles = ShortConvTiles(s_block_size=s_block, c_block_size=c_block, num_warps=4, rows_per_step=min(2, s_block))
+    return ShortConvBlockSizes(forward=tiles, backward=tiles)
 
 
 def _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=None):
@@ -69,6 +77,26 @@ def _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=None):
             pos += run
             sid += 1
     return jnp.asarray(out)
+
+
+def _segment_ids(kind, batch, seq_len, rng):
+    if kind == "unpacked":
+        return None
+    if kind == "packed":
+        return _packed_segment_ids(rng, batch, seq_len)
+    if kind == "short_runs":
+        # Documents of one to three tokens: every tap can cross a boundary, including the
+        # boundaries between the rows a program walks and the halo rows it reloads.
+        return _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=3)
+    if kind == "padded":
+        # Two documents, then padding carrying the out-of-range segment id.
+        seg = np.full((batch, seq_len), -1, np.int32)
+        for b in range(batch):
+            valid = int(rng.integers(seq_len // 2, seq_len))
+            seg[b, : valid // 3] = 0
+            seg[b, valid // 3 : valid] = 1
+        return jnp.asarray(seg)
+    raise ValueError(kind)
 
 
 def _segment_start_mask(segment_ids, width):
@@ -136,13 +164,14 @@ def _inputs(batch, seq_len, channels, width, seed, dtype, packed):
 
 
 @pytest.mark.parametrize("shape", SHAPES, ids=lambda s: "x".join(str(v) for v in s))
-@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
-def test_forward_and_dx_are_bitwise_identical_to_reference(shape, packed):
+@pytest.mark.parametrize("segments", SEGMENT_KINDS)
+def test_forward_and_dx_are_bitwise_identical_to_reference(shape, segments):
     batch, seq_len, channels, width, s_block, c_block = shape
-    weight, x, segment_ids, cotangent = _inputs(
-        batch, seq_len, channels, width, seed=hash(shape) % 2**16, dtype=jnp.bfloat16, packed=packed
+    weight, x, _, cotangent = _inputs(
+        batch, seq_len, channels, width, seed=hash(shape) % 2**16, dtype=jnp.bfloat16, packed=False
     )
-    blocks = ShortConvBlockSizes(s_block_size=s_block, c_block_size=c_block)
+    segment_ids = _segment_ids(segments, batch, seq_len, np.random.default_rng(hash(shape) % 2**16 + 1))
+    blocks = _blocks(s_block, c_block)
     (got, got_dx, _), (want, want_dx, _) = _run_both(weight, x, segment_ids, cotangent, blocks)
 
     np.testing.assert_array_equal(_bits(got), _bits(want), err_msg="forward is not bit-identical")
@@ -160,7 +189,7 @@ def test_segment_boundaries_and_segment_starts_match_exactly(shape):
     weight, x, segment_ids, cotangent = _inputs(
         batch, seq_len, channels, width, seed=99, dtype=jnp.bfloat16, packed=True
     )
-    blocks = ShortConvBlockSizes(s_block_size=s_block, c_block_size=c_block)
+    blocks = _blocks(s_block, c_block)
     (got, got_dx, _), (want, want_dx, _) = _run_both(weight, x, segment_ids, cotangent, blocks)
 
     mask = _segment_start_mask(segment_ids, width)
@@ -185,7 +214,7 @@ def test_dw_is_at_least_as_accurate_as_the_reference(shape):
     weight, x, segment_ids, cotangent = _inputs(
         batch, seq_len, channels, width, seed=5, dtype=jnp.bfloat16, packed=True
     )
-    blocks = ShortConvBlockSizes(s_block_size=s_block, c_block_size=c_block)
+    blocks = _blocks(s_block, c_block)
     (_, _, got_dw), (_, _, want_dw) = _run_both(weight, x, segment_ids, cotangent, blocks)
 
     oracle = _dw_oracle(x, segment_ids, cotangent, width)
@@ -200,7 +229,7 @@ def test_dw_is_at_least_as_accurate_as_the_reference(shape):
 def test_float32_gradients_match_to_float32_tolerance():
     """fp32 inputs: the pad/shift chain and the kernel differ only by fp32 reassociation."""
     weight, x, segment_ids, cotangent = _inputs(2, 64, 16, 4, seed=17, dtype=jnp.float32, packed=True)
-    blocks = ShortConvBlockSizes(s_block_size=16, c_block_size=8)
+    blocks = _blocks(16, 8)
     (got, got_dx, got_dw), (want, want_dx, want_dw) = _run_both(weight, x, segment_ids, cotangent, blocks)
     for name, a, b in (("y", got, want), ("dx", got_dx, want_dx), ("dw", got_dw, want_dw)):
         np.testing.assert_allclose(
@@ -211,7 +240,7 @@ def test_float32_gradients_match_to_float32_tolerance():
 def test_explicit_implementation_fails_fast_when_unsupported():
     """An explicitly requested backend must raise, never silently fall back (api-patterns)."""
     weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=1, dtype=jnp.bfloat16, packed=True)
-    bad_blocks = ShortConvBlockSizes(s_block_size=7, c_block_size=8)  # 32 % 7 != 0
+    bad_blocks = _blocks(7, 8)  # 32 % 7 != 0
     with interpret_mode():
         with pytest.raises(RuntimeError, match="not divisible"):
             short_conv(weight, x, segment_ids, implementation="pallas_gpu", block_sizes=bad_blocks)
@@ -219,7 +248,7 @@ def test_explicit_implementation_fails_fast_when_unsupported():
 
 def test_ordered_implementation_sequence_falls_back_with_a_warning():
     weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=1, dtype=jnp.bfloat16, packed=True)
-    bad_blocks = ShortConvBlockSizes(s_block_size=7, c_block_size=8)
+    bad_blocks = _blocks(7, 8)
     with interpret_mode():
         with pytest.warns(UserWarning, match="falling back"):
             got = short_conv(
@@ -249,7 +278,7 @@ def test_kernel_call_is_wrapped_in_a_shard_map_under_a_mesh():
         axis_types=(jax.sharding.AxisType.Explicit,) * 4,
     )
     weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=3, dtype=jnp.bfloat16, packed=True)
-    blocks = ShortConvBlockSizes(s_block_size=8, c_block_size=8)
+    blocks = _blocks(8, 8)
 
     def fn(w, xx, seg):
         return short_conv(w, xx, seg, implementation="pallas_gpu", block_sizes=blocks)
@@ -263,73 +292,24 @@ def test_kernel_call_is_wrapped_in_a_shard_map_under_a_mesh():
         assert banned not in text, f"short_conv lowered through an unexpected {banned}"
 
 
-def test_pallas_short_conv_matches_reference_on_gpu():
-    """The compiled kernel, not the interpreter. Only meaningful with a GPU present."""
-    if jax.default_backend() != "gpu":
-        pytest.skip("requires the JAX GPU backend")
-    weight, x, segment_ids, cotangent = _inputs(2, 512, 256, 4, seed=21, dtype=jnp.bfloat16, packed=True)
-    blocks = ShortConvBlockSizes(s_block_size=128, c_block_size=128)
-
-    def kernel_fn(w, xx):
-        return short_conv(w, xx, segment_ids, implementation="pallas_gpu", block_sizes=blocks)
-
-    def reference_fn(w, xx):
-        return short_conv_reference(w, xx, segment_ids)
-
-    got = jax.jit(kernel_fn)(weight, x)
-    _, kernel_vjp = jax.vjp(kernel_fn, weight, x)
-    got_dw, got_dx = jax.jit(kernel_vjp)(cotangent)
-
-    want = jax.jit(reference_fn)(weight, x)
-    _, reference_vjp = jax.vjp(reference_fn, weight, x)
-    want_dw, want_dx = jax.jit(reference_vjp)(cotangent)
-
-    np.testing.assert_array_equal(_bits(got), _bits(want))
-    np.testing.assert_array_equal(_bits(got_dx), _bits(want_dx))
-    np.testing.assert_allclose(
-        jax.device_get(got_dw).astype(np.float32),
-        jax.device_get(want_dw).astype(np.float32),
-        rtol=5e-2,
-        atol=5e-2,
-    )
-
-
-def _triton_segment_ids(kind, batch, seq_len, rng):
-    if kind == "unpacked":
-        return None
-    if kind == "packed":
-        return _packed_segment_ids(rng, batch, seq_len)
-    if kind == "short_runs":
-        # Documents of one to three tokens: every tap can cross a boundary, including the
-        # boundaries between the rows a program walks and the halo rows it reloads.
-        return _packed_segment_ids(rng, batch, seq_len, min_run=1, max_run=3)
-    if kind == "padded":
-        # Two documents, then padding carrying the out-of-range segment id.
-        seg = np.full((batch, seq_len), -1, np.int32)
-        for b in range(batch):
-            valid = int(rng.integers(seq_len // 2, seq_len))
-            seg[b, : valid // 3] = 0
-            seg[b, valid // 3 : valid] = 1
-        return jnp.asarray(seg)
-    raise ValueError(kind)
-
-
-@pytest.mark.parametrize("segments", ["unpacked", "packed", "short_runs", "padded"])
+@pytest.mark.parametrize("segments", SEGMENT_KINDS)
 @pytest.mark.parametrize("shape", [(2, 512, 256), (1, 256, 1536)], ids=lambda s: "x".join(str(v) for v in s))
-def test_triton_short_conv_matches_reference_on_gpu(shape, segments):
-    """Streaming Triton kernels: forward and ``dx`` bitwise, ``dw`` within fp32-accumulation error.
+def test_pallas_short_conv_matches_reference_on_gpu(shape, segments):
+    """The compiled kernels at their default launch shapes, not the interpreter: forward and ``dx``
+    bitwise, ``dw`` within fp32-accumulation error. Only meaningful with a GPU present.
 
-    512 rows span several of the kernel's sequence chunks, and 1536 channels span several
-    channel blocks, so chunk halos and block edges are both exercised.
+    512 rows span several sequence blocks in both directions, and 1536 channels span several
+    channel blocks, so block halos and channel edges are both exercised. 256 channels narrow
+    the forward's channel block below its default.
     """
     if jax.default_backend() != "gpu":
         pytest.skip("requires the JAX GPU backend")
     batch, seq_len, channels = shape
     weight, x, _, cotangent = _inputs(batch, seq_len, channels, 4, seed=31, dtype=jnp.bfloat16, packed=False)
-    segment_ids = _triton_segment_ids(segments, batch, seq_len, np.random.default_rng(32))
+    segment_ids = _segment_ids(segments, batch, seq_len, np.random.default_rng(32))
 
     def kernel_fn(w, xx):
-        return short_conv(w, xx, segment_ids, implementation="triton_gpu")
+        return short_conv(w, xx, segment_ids, implementation="pallas_gpu")
 
     def reference_fn(w, xx):
         return short_conv_reference(w, xx, segment_ids)
@@ -356,17 +336,6 @@ def test_triton_short_conv_matches_reference_on_gpu(shape, segments):
     assert np.all(error <= bound), f"dw error is up to {np.max(error / bound):.2f}x its bound"
 
 
-def test_triton_implementation_fails_fast_when_unsupported():
-    """Off GPU the backend is missing; on GPU a kernel width other than 4 is unsupported."""
-    width = 3 if jax.default_backend() == "gpu" else 4
-    weight, x, segment_ids, _ = _inputs(2, 64, 8, width, seed=3, dtype=jnp.bfloat16, packed=True)
-    with pytest.raises(RuntimeError, match="'triton_gpu' is unusable"):
-        short_conv(weight, x, segment_ids, implementation="triton_gpu")
-    with pytest.warns(UserWarning, match="falling back from 'triton_gpu'"):
-        got = short_conv(weight, x, segment_ids, implementation=("triton_gpu", "reference"))
-    np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
-
-
 @pytest.mark.parametrize(
     ("model_size", "should_reject"),
     [(1, False), (2, True)],
@@ -390,7 +359,7 @@ def test_channel_axis_gate_consults_the_mesh_not_just_the_spec(model_size, shoul
         axis_types=(jax.sharding.AxisType.Explicit,) * 4,
     )
     weight, x, segment_ids, _ = _inputs(4, 32, 8, 4, seed=11, dtype=jnp.bfloat16, packed=True)
-    blocks = ShortConvBlockSizes(s_block_size=8, c_block_size=8)
+    blocks = _blocks(8, 8)
 
     def fn(w, xx, seg):
         # Reproduce the hero's k_flat sharding: batch over the FSDP pair, channel named "model".
@@ -494,7 +463,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.kernels.pallas.short_conv import ShortConvBlockSizes, short_conv, short_conv_reference
+from levanter.kernels.pallas.short_conv import ShortConvBlockSizes, ShortConvTiles, short_conv, short_conv_reference
 from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
 
 IMPLEMENTATION = "__IMPLEMENTATION__"
@@ -523,13 +492,14 @@ def inputs(width, packed, dtype):
 def check(context, packed, width):
     # `data` splits the batch; what is left goes on an axis nothing names, so every device is in
     # the mesh. Blocks are small so the padded local block spans several sequence tiles with a
-    # ragged tail, and just wide enough for the kernel's `s_block_size >= kernel_size - 1` rule.
+    # ragged tail; with 17 taps the halo reaches two blocks back.
     mesh = Mesh(
         DEVICES.reshape(BATCH, context, 8 // (BATCH * context)),
         ("data", "context", "spare"),
         axis_types=(AxisType.Explicit,) * 3,
     )
-    blocks = ShortConvBlockSizes(s_block_size=max(8, width - 1), c_block_size=8)
+    tiles = ShortConvTiles(s_block_size=8, c_block_size=8, num_warps=4, rows_per_step=2)
+    blocks = ShortConvBlockSizes(forward=tiles, backward=tiles)
 
     def conv(w, xx, seg):
         return short_conv(w, xx, seg, implementation=IMPLEMENTATION, block_sizes=blocks, batch_axes=("data",))
@@ -585,7 +555,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.kernels.pallas.short_conv import ShortConvBlockSizes, short_conv
+from levanter.kernels.pallas.short_conv import ShortConvBlockSizes, ShortConvTiles, short_conv
 from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
 
 # A concrete array on an Auto-axis mesh shows its placement only on `array.sharding`; the
@@ -595,7 +565,8 @@ weight = jnp.ones((4, 8), jnp.bfloat16)
 x = jax.device_put(jnp.ones((2, 32, 8), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
 with jax.set_mesh(mesh), interpret_mode():
     try:
-        short_conv(weight, x, implementation="pallas_gpu", block_sizes=ShortConvBlockSizes(8, 8))
+        tiles = ShortConvTiles(s_block_size=8, c_block_size=8, num_warps=4, rows_per_step=2)
+        short_conv(weight, x, implementation="pallas_gpu", block_sizes=ShortConvBlockSizes(tiles, tiles))
     except ValueError as error:
         assert "unsharded channel axis" in str(error), error
     else:
@@ -619,8 +590,8 @@ def test_context_parallel_pallas_matches_reference(width):
         pytest.skip("requires four GPUs for context-parallel Pallas convolution")
     mesh = Mesh(np.asarray(jax.devices()[:4]), ("context",), axis_types=(AxisType.Explicit,))
     weight, x, segment_ids, cotangent = _inputs(1, 256, 128, width, seed=17, dtype=jnp.float32, packed=True)
-    # local_seq 64 + halo rounds to 128: two sequence blocks, so the general programs run too.
-    blocks = ShortConvBlockSizes(s_block_size=64, c_block_size=128)
+    # local_seq 64 + halo rounds to 128: two sequence blocks, so one block's halo is the other's rows.
+    blocks = _blocks(64, 128)
 
     def reference_loss(w, xx):
         return jnp.sum(short_conv_reference(w, xx, segment_ids) * cotangent)

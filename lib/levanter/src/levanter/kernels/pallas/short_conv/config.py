@@ -12,39 +12,53 @@ OOB_SEGMENT = -1
 
 
 @dataclass(frozen=True, slots=True)
-class ShortConvBlockSizes:
-    """Tile sizes for the GPU Pallas short-conv kernels.
+class ShortConvTiles:
+    """Launch shape of one direction's GPU Pallas short-conv kernel.
 
-    ``s_block_size`` tiles the sequence axis and ``c_block_size`` the channel axis. Both
-    must be powers of two -- a Pallas Triton lowering constraint on tile shapes, not a
-    preference.
-
-    Defaults are the measured winner of a six-point sweep on one GB200 at the EP64 hero
-    per-layer shapes (65,536 tokens x {1536, 6144} channels, bf16, kernel 4):
-
-    ==========================  ==================  =================
-    tile (s, c, warps)          hero-scaled ms/step  vs reference
-    ==========================  ==================  =================
-    reference (pad-and-shift)               427.2   --
-    **64, 64, 4**                           **231.8**  **-195.4 ms**
-    32, 64, 4                               234.1   -193.1 ms
-    64, 128, 8                              237.8   -189.4 ms
-    32, 128, 4                              244.6   -182.5 ms
-    128, 64, 4                              244.9   -182.3 ms
-    64, 128, 4                              284.1   -143.0 ms
-    ==========================  ==================  =================
-
-    The gradient is shallow across the good configs and steeply bad above ``c_block_size``
-    128 with large ``s_block_size`` (256x256 was 19x slower than the reference): each
-    program holds up to ``kernel_size`` live ``[s, c]`` tiles plus an fp32 accumulator, so
-    big tiles spill and occupancy collapses. Small tiles win because the kernel is
-    bandwidth-bound and wants occupancy, not reuse.
+    Attributes:
+      s_block_size: rows of one sequence block, which a program walks in order. A power of
+        two dividing the sequence length.
+      c_block_size: channels per program, a power of two. It is halved until it divides the
+        channel count.
+      num_warps: warps per program.
+      rows_per_step: rows a program loads together before it stores any, a power of two no
+        larger than ``s_block_size``.
+      num_stages: Triton software-pipelining depth of the row loop.
     """
 
-    s_block_size: int = 64
-    c_block_size: int = 64
-    num_warps: int = 4
-    num_stages: int = 2
+    s_block_size: int
+    c_block_size: int
+    num_warps: int
+    rows_per_step: int
+    num_stages: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ShortConvBlockSizes:
+    """Launch shapes of the forward and backward GPU Pallas short-conv kernels.
+
+    Defaults are the measured winners of a sweep on one GB200 at the EP64 hero per-layer
+    shapes (``[16, 4096, C]`` bf16, kernel 4), in kernel microseconds at C = 6144 / 1536:
+
+    ===========  ===========================  =================
+    direction    tile (s, c, warps, rows)     us
+    ===========  ===========================  =================
+    forward      **32, 512, 4, 16**           **229.6 / 59.7**
+    forward      32, 512, 4, 8                233.0 / 61.0
+    forward      32, 512, 4, 32               283.1 / 73.4
+    backward     **128, 256, 2, 8**           **403.7 / 111.0**
+    backward     64, 256, 2, 8                417.8 / 109.0
+    backward     128, 256, 2, 4               449.7 / 122.4
+    backward     128, 256, 2, 16              460.4 / 127.6
+    ===========  ===========================  =================
+
+    More rows per step put more loads in flight until the registers they hold cut occupancy.
+    The backward carries twice the forward's rows and four fp32 ``dw`` accumulators, so it
+    takes half as many.
+    """
+
+    forward: ShortConvTiles = ShortConvTiles(s_block_size=32, c_block_size=512, num_warps=4, rows_per_step=16)
+    backward: ShortConvTiles = ShortConvTiles(s_block_size=128, c_block_size=256, num_warps=2, rows_per_step=8)
 
     @classmethod
     def get_default(cls) -> "ShortConvBlockSizes":

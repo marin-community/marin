@@ -28,26 +28,33 @@ against a read-one-write-one stream calibrated on the same tensor:
 =========================  ===============  ===============
 floor                      2.0 passes       3.0 passes
 pad-and-shift reference    4.5 passes       14.3 passes
-this kernel                3.0 passes        6.7 passes
+this kernel                2.0 passes        3.6 passes
 =========================  ===============  ===============
 
-Each tap is a separate offset read of the whole tensor that the cache does not fully
-absorb, and the reference's VJP additionally launches five fusions that each re-read their
-inputs. The kernel collapses those to one launch per direction, so the forward drops from
-0.811 ms to 0.547 ms and the backward from 2.558 ms to 1.200 ms at C=6144 -- 1.5x and 2.1x.
-The residual gap to the floor is the same offset-read problem: Pallas Triton cannot slice
-a register tile (no ``lax.slice`` lowering) and requires power-of-2 tile shapes, so the
-kernel still issues ``W`` overlapping loads per tile rather than loading once and shifting
-in registers the way ``Dao-AILab/causal-conv1d`` does with an SMEM ring carry.
+Each tap of the reference is a separate offset read of the whole tensor that the cache does
+not fully absorb, and its VJP additionally launches five fusions that each re-read their
+inputs. This kernel streams instead, the way ``Dao-AILab/causal-conv1d`` does: a program owns
+one channel block of one sequence block and walks its rows in order, carrying the previous
+``W - 1`` rows of ``x`` (backward: also the next ``W - 1`` rows of ``dy``) and their segment
+ids in registers as ``fori_loop`` values, so each row crosses HBM once plus a halo of
+``W - 1`` rows per block. Pallas Triton cannot slice a register tile, so the kernel never
+builds a multi-row tile: every load and store is one ``[c_block]`` row, ``rows_per_step`` of
+them loaded together before any is stored. At C=6144 the forward takes 0.230 ms and the
+backward 0.404 ms; the previous version of this kernel, which re-read a shifted
+``[s_block, c_block]`` window per tap (3.7 and 9.2 passes), took 0.420 ms and 1.024 ms.
 
-Closing that last gap needs a register/SMEM carry, which needs CUDA or a Mosaic backend
-that lowers here. Neither is available today; see "Backend" below.
+The backward runs close to the instruction-issue limit, so its code matters as much as its
+traffic. The bf16 multiplies and adds are packed PTX (``_bf16x2``); ``dw`` accumulates with an
+explicit fused multiply-add, which XLA's Triton pipeline otherwise never forms; program ids
+are clamped to the grid so the int32 offsets provably do not overflow and each row's offset
+folds into a load immediate (``_bounded``); and a step whose rows all sit in one document
+skips the segment masks (``_branch_on_segments``).
 
 ``dw`` never touches HBM as a full-size tensor. It is accumulated in fp32 registers per
 program and emitted as a ``[batch * num_s_blocks, W, C]`` partial that a cheap outer
 ``sum(0)`` folds down -- the deterministic reduction that FLA's Triton conv uses, rather
-than ``atomicAdd``. It costs ``2 * W * 4 / (s_block_size * itemsize)`` of a pass (3% at the
-default tile) and is bit-reproducible run to run.
+than ``atomicAdd``. It costs ``2 * W * 4 / (s_block_size * itemsize)`` of a pass (12.5% at the
+default backward block) and is bit-reproducible run to run.
 
 Backend
 -------
@@ -56,25 +63,13 @@ kernels; measured on GB200/SM100 with JAX 0.11, Mosaic's layout inference fails 
 kernel and on a trivial ``o = w * x`` body alike ("Layout inference failed to find a
 solution"). Triton lowers both. Revisit when Mosaic's layout inference improves.
 
-Triton imposes one hard constraint that shapes the whole design: **every intermediate tile
-must have a power-of-2 shape.** Arbitrary *offsets* are fine; only *sizes* are
-constrained. That rules out the obvious halo construction -- concatenating the ``lag``
-rows carried over from the previous block onto this block's first ``BS-lag`` rows -- since
-``BS-lag`` is never a power of two. Confirmed on hardware: it fails with "Encountered an
-array of shape (127, 128)".
-
 Halo handling
 -------------
-So every shifted tile is a single ``pl.ds(start, BS)`` read at an arbitrary offset out of a
-whole-sequence window. That is exact and power-of-2 for every block except the ones at the
-ends of the sequence, where ``start`` would run off the array. Rather than rely on an
-out-of-bounds read being masked -- which happens to work on Triton but is *wrong* under
-Pallas's own interpreter, where the clamp silently misaligns the tile and would make the
-CPU tests disagree with the GPU -- the kernel takes a small pre-padded **head block**
-(``[B, BS+W-1, C]``: ``W-1`` zero rows then the first ``BS`` rows of ``x``) and, in the
-backward, a matching **tail block** for the anti-causal direction. ``pl.when`` routes the
-edge programs to them. Building both touches ``~2*BS/S`` of the tensor, under 7% of a
-pass, and every read in the kernel is then unconditionally in bounds.
+The ``W - 1`` rows before a sequence (and, backward, after it) are read with masked
+single-row loads that return a zero row and ``OOB_SEGMENT`` (``_edge_row``). A masked load
+of a multi-row window would be *wrong* under Pallas's own interpreter, whose clamp silently
+misaligns the window, but a single row is kept or discarded whole, so the CPU interpreter
+and the GPU agree.
 
 Numerics
 --------
@@ -85,10 +80,12 @@ left-nested over ascending lags, and JAX transposes it by walking the jaxpr in r
 ``dx`` accumulates over *descending* lags. Matching both makes the forward and ``dx``
 bit-identical to the reference; under sequence sharding the boundary tokens' ``dx`` is the
 sum of two separately rounded partials (see ``short_conv``), so only the forward stays
-bitwise there. ``dw`` is a reduction over 65,536 tokens whose association
-order XLA does not define, so it agrees to fp32 reassociation error and is validated
-against a float64 oracle instead. Setting the flag to ``False`` keeps a single fp32
-accumulator across taps: strictly more accurate, no longer bit-comparable.
+bitwise there. On the GPU the bf16 ops are ``mul.rn.bf16x2`` and ``add.rn.bf16x2``, which
+round exactly as the reference's f32 op followed by a bf16 cast; the interpreter, and other
+dtypes, take that f32 round trip literally. ``dw`` is a reduction over 65,536 tokens whose
+association order XLA does not define, so it agrees to fp32 reassociation error and is
+validated against a float64 oracle instead. Setting the flag to ``False`` keeps a single
+fp32 accumulator across taps: strictly more accurate, no longer bit-comparable.
 """
 
 import contextlib
@@ -102,7 +99,7 @@ from jaxtyping import Array, Float, Int
 
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
-from .config import OOB_SEGMENT, ShortConvBlockSizes
+from .config import OOB_SEGMENT, ShortConvBlockSizes, ShortConvTiles
 from .reference import short_conv_reference
 
 try:  # pragma: no cover - import guard, exercised only by environment
@@ -121,10 +118,10 @@ def interpret_mode():
     """Run the kernels through Pallas's reference interpreter.
 
     This is the only way these kernels get CPU coverage: a Pallas GPU kernel cannot execute
-    on CPU, but the interpreter executes the *kernel body* -- grid, block specs, head/tail
-    routing, register accumulation and all -- with plain XLA ops. It exercises the real
-    algorithm, not a paraphrase. It says nothing about whether the kernel *lowers* on a
-    given GPU architecture; that needs a GPU.
+    on CPU, but the interpreter executes the *kernel body* -- grid, block specs, the row
+    loop and its carried window, edge masking and all -- with plain XLA ops. It exercises
+    the real algorithm, not a paraphrase. It says nothing about whether the kernel *lowers*
+    on a given GPU architecture; that needs a GPU.
     """
     global _FORCE_INTERPRET
     previous = _FORCE_INTERPRET
@@ -136,14 +133,37 @@ def interpret_mode():
 
 
 def pallas_short_conv_available() -> bool:
-    """True when the Pallas Triton backend imported and we are on a GPU."""
-    if _FORCE_INTERPRET:
-        return True
-    return _HAS_PALLAS_TRITON and jax.default_backend() == "gpu"
+    """True when the Pallas Triton backend imported and we are on a GPU or interpreting.
+
+    The kernels' masked edge loads are Pallas Triton primitives even under the interpreter.
+    """
+    return _HAS_PALLAS_TRITON and (_FORCE_INTERPRET or jax.default_backend() == "gpu")
 
 
 def _is_pow2(value: int) -> bool:
     return value > 0 and (value & (value - 1)) == 0
+
+
+def _channel_block(channels: int, c_block_size: int) -> int:
+    """The widest power-of-two channel block no wider than ``c_block_size`` that divides ``channels``."""
+    block = c_block_size
+    while channels % block:
+        block //= 2
+    return block
+
+
+def _tiles_supported(name: str, seq_len: int, tiles: ShortConvTiles) -> str | None:
+    bs, rows = tiles.s_block_size, tiles.rows_per_step
+    if seq_len % bs:
+        return f"seq_len {seq_len} not divisible by {name} s_block_size {bs}"
+    if not _is_pow2(bs):
+        return f"{name} s_block_size {bs} must be a power of 2"
+    # Pallas Triton requires power-of-2 tile shapes; every read in the kernel is one row.
+    if not _is_pow2(tiles.c_block_size):
+        return f"{name} c_block_size {tiles.c_block_size} must be a power of 2 (Pallas Triton tile constraint)"
+    if not _is_pow2(rows) or rows > bs:
+        return f"{name} rows_per_step {rows} must be a power of 2 no larger than s_block_size {bs}"
+    return None
 
 
 def short_conv_shapes_supported(
@@ -151,7 +171,7 @@ def short_conv_shapes_supported(
     x_shape: tuple[int, ...],
     block_sizes: ShortConvBlockSizes,
 ) -> str | None:
-    """Returns None when the kernel can run these shapes, else a human-readable reason."""
+    """Returns None when the kernels can run these shapes, else a human-readable reason."""
     if len(x_shape) != 3 or len(weight_shape) != 2:
         return f"expected weight [W, C] and x [B, S, C], got {weight_shape} and {x_shape}"
     width, weight_channels = weight_shape
@@ -160,36 +180,112 @@ def short_conv_shapes_supported(
         return f"weight channel dim {weight_channels} != x channel dim {channels}"
     if width < 1:
         return f"kernel_size must be >= 1, got {width}"
-    bs, bc = block_sizes.s_block_size, block_sizes.c_block_size
-    if seq_len % bs:
-        return f"seq_len {seq_len} not divisible by s_block_size {bs}"
-    if channels % bc:
-        return f"channels {channels} not divisible by c_block_size {bc}"
-    # Pallas Triton requires power-of-2 tile shapes; every read in the kernel is [bs, bc].
-    if not _is_pow2(bs):
-        return f"s_block_size {bs} must be a power of 2 (Pallas Triton tile constraint)"
-    if not _is_pow2(bc):
-        return f"c_block_size {bc} must be a power of 2 (Pallas Triton tile constraint)"
-    if bs < width - 1:
-        return f"s_block_size {bs} must be >= kernel_size - 1 = {width - 1}"
-    return None
+    return _tiles_supported("forward", seq_len, block_sizes.forward) or _tiles_supported(
+        "backward", seq_len, block_sizes.backward
+    )
 
 
-def _mul_round(weight_row: jax.Array, tile: jax.Array, dtype, exact: bool) -> jax.Array:
-    """``weight_row[None, :] * tile`` with the reference's rounding."""
-    product = weight_row[None, :].astype(jnp.float32) * tile.astype(jnp.float32)
+def _bf16x2(op: str, a: jax.Array, b: jax.Array) -> jax.Array:
+    """``a op b`` on bfloat16 as packed PTX, two elements per instruction. It rounds exactly
+    as the f32 op and bf16 cast of ``_mul_round``/``_add_round``, without the conversions."""
+    [out] = pltriton.elementwise_inline_asm(
+        f"{op}.rn.bf16x2 $0, $1, $2;",
+        args=[a, b],
+        constraints="=r,r,r",
+        pack=2,
+        result_shape_dtypes=[jax.ShapeDtypeStruct(a.shape, jnp.bfloat16)],
+    )
+    return out
+
+
+def _fma(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
+    """``a * b + c`` in fp32, fused on the GPU, where XLA's Triton pipeline never contracts a
+    multiply and an add."""
+    if _FORCE_INTERPRET:
+        return a * b + c
+    [out] = pltriton.elementwise_inline_asm(
+        "fma.rn.f32 $0, $1, $2, $3;",
+        args=[a, b, c],
+        constraints="=f,f,f,f",
+        pack=1,
+        result_shape_dtypes=[jax.ShapeDtypeStruct(a.shape, jnp.float32)],
+    )
+    return out
+
+
+def _use_asm(dtype, exact: bool) -> bool:
+    return exact and not _FORCE_INTERPRET and jnp.dtype(dtype) == jnp.dtype(jnp.bfloat16)
+
+
+def _mul_round(weight_row: jax.Array, row: jax.Array, dtype, exact: bool) -> jax.Array:
+    """``weight_row * row`` with the reference's rounding."""
+    if _use_asm(dtype, exact):
+        return _bf16x2("mul", weight_row, row)
+    product = weight_row.astype(jnp.float32) * row.astype(jnp.float32)
     return product.astype(dtype) if exact else product
 
 
 def _add_round(acc, term, dtype, exact: bool) -> jax.Array:
     if acc is None:
         return term
+    if _use_asm(dtype, exact):
+        return _bf16x2("add", acc, term)
     total = acc.astype(jnp.float32) + term.astype(jnp.float32)
     return total.astype(dtype) if exact else total
 
 
-def _keep(seg_shifted: jax.Array, seg_cur: jax.Array, tile: jax.Array) -> jax.Array:
-    return jnp.where((seg_shifted == seg_cur)[:, None], tile, jnp.zeros_like(tile))
+def _keep(seg_shifted: jax.Array, seg_cur: jax.Array, row: jax.Array, masked: bool) -> jax.Array:
+    if not masked:
+        return row
+    return jnp.where(seg_shifted == seg_cur, row, jnp.zeros_like(row))
+
+
+def _one_segment(segs) -> jax.Array:
+    """Whether all of ``segs`` are equal, so no tap of the rows they cover crosses a document."""
+    first, *rest = segs
+    same = jnp.bool_(True)
+    for seg in rest:
+        same = same & (seg == first)
+    return same
+
+
+def _edge_row(vals_ref, segs_ref, row, seq_len: int):
+    """Row ``row`` of a whole-sequence view and its segment id; a zero row with ``OOB_SEGMENT``
+    outside ``[0, seq_len)``.
+
+    One row is masked as a whole, so the interpreter's clamped read of an out-of-range row is
+    discarded rather than misaligned, and the interpreter and the GPU agree.
+    """
+    inside = (row >= 0) & (row < seq_len)
+    # An array index, not a literal 0: the interpreter's masked-load rule needs a shape on it.
+    first = jnp.zeros((), jnp.int32)
+    vals = pltriton.load(vals_ref.at[first, row, :], mask=inside, other=0)
+    return vals, pltriton.load(segs_ref.at[first, row], mask=inside, other=OOB_SEGMENT)
+
+
+def _bounded(index: jax.Array, size: int) -> jax.Array:
+    """``index``, which the grid already keeps below ``size``, clamped so the compiler knows it.
+
+    Pallas computes element offsets in int32. Without a bound on the program ids, LLVM cannot
+    rule out overflow, so it materializes a 64-bit address for every row a program reads;
+    bounded, it folds each row's offset into the load's immediate.
+    """
+    return jnp.minimum(index, size - 1)
+
+
+def _chunk_start(chunk: int):
+    return _bounded(pl.program_id(1), pl.num_programs(1)) * chunk
+
+
+def _branch_on_segments(segs, compute, *operands):
+    """``compute(masked, *operands)``, skipping the masks when every row of the step is in one document.
+
+    The unmasked branch computes exactly what the masked one would, since every mask is
+    true there; it only saves the selects, about a third of the backward's instructions.
+    """
+    return jax.lax.cond(
+        _one_segment(segs), functools.partial(compute, False), functools.partial(compute, True), *operands
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -197,39 +293,42 @@ def _keep(seg_shifted: jax.Array, seg_cur: jax.Array, tile: jax.Array) -> jax.Ar
 # --------------------------------------------------------------------------------------
 
 
-def _fwd_body(
-    vals_ref, segs_ref, w_ref, out_ref, base: int | jax.Array, block_seq: int, kernel_size: int, exact: bool
-) -> None:
-    """One block's forward, reading taps at ``base - lag`` out of ``vals_ref``.
-
-    ``base`` is the row in ``vals_ref`` corresponding to this block's first output row, so
-    the general path passes ``si * BS`` into the whole-sequence view and the first-block
-    path passes ``W - 1`` into the pre-padded head view. Both then read identically.
-    """
-    seg_cur = segs_ref[0, pl.ds(base, block_seq)]
-    tile = vals_ref[0, pl.ds(base, block_seq), :]
-    dtype = tile.dtype
+def _conv_row(window, weights, dtype, exact: bool, masked: bool) -> jax.Array:
+    """One output row from ``window[lag]``, the ``(x, segment id)`` of row ``t - lag``."""
+    x_cur, seg_cur = window[0]
     # Ascending lags, left-nested, rounding after every op: the reference's exact order.
-    acc = _mul_round(w_ref[0], tile, dtype, exact)
-    for lag in range(1, kernel_size):
-        shifted = vals_ref[0, pl.ds(base - lag, block_seq), :]
-        seg_shifted = segs_ref[0, pl.ds(base - lag, block_seq)]
-        shifted = _keep(seg_shifted, seg_cur, shifted)
-        acc = _add_round(acc, _mul_round(w_ref[lag], shifted, dtype, exact), dtype, exact)
-    out_ref[0] = acc.astype(dtype)
+    acc = _mul_round(weights[0], x_cur, dtype, exact)
+    for lag in range(1, len(window)):
+        shifted, seg_shifted = window[lag]
+        term = _mul_round(weights[lag], _keep(seg_shifted, seg_cur, shifted, masked), dtype, exact)
+        acc = _add_round(acc, term, dtype, exact)
+    return acc.astype(dtype)
 
 
-def _fwd_kernel(x_ref, xh_ref, seg_ref, segh_ref, w_ref, out_ref, *, kernel_size: int, exact: bool):
-    block_seq = out_ref.shape[1]
-    si = pl.program_id(1)
+def _fwd_kernel(x_ref, seg_ref, w_ref, out_ref, *, kernel_size: int, rows: int, exact: bool):
+    seq_len, chunk = x_ref.shape[1], out_ref.shape[1]
+    start = _chunk_start(chunk)
+    weights = [w_ref[lag] for lag in range(kernel_size)]
+    # ring[k] is row t-1-k of x with its segment id.
+    ring = [_edge_row(x_ref, seg_ref, start - 1 - k, seq_len) for k in range(kernel_size - 1)]
 
-    @pl.when(si == 0)
-    def _first():
-        _fwd_body(xh_ref, segh_ref, w_ref, out_ref, kernel_size - 1, block_seq, kernel_size, exact)
+    def step(i, ring):
+        local = i * rows
+        loaded = [(x_ref[0, start + local + j, :], seg_ref[0, start + local + j]) for j in range(rows)]
+        segs = [seg for _, seg in (*ring, *loaded)]
+        windows = []
+        for row in loaded:
+            windows.append([row, *ring])
+            ring = windows[-1][: kernel_size - 1]
 
-    @pl.when(si != 0)
-    def _general():
-        _fwd_body(x_ref, seg_ref, w_ref, out_ref, si * block_seq, block_seq, kernel_size, exact)
+        def store(masked):
+            for j, window in enumerate(windows):
+                out_ref[0, local + j, :] = _conv_row(window, weights, out_ref.dtype, exact, masked)
+
+        _branch_on_segments(segs, store)
+        return ring
+
+    jax.lax.fori_loop(0, chunk // rows, step, ring)
 
 
 # --------------------------------------------------------------------------------------
@@ -237,133 +336,80 @@ def _fwd_kernel(x_ref, xh_ref, seg_ref, segh_ref, w_ref, out_ref, *, kernel_size
 # --------------------------------------------------------------------------------------
 
 
-def _dx_body(dy_ref, segs_ref, w_ref, dx_ref, base, block_seq: int, kernel_size: int, exact: bool) -> None:
-    """``dx[t] = sum_lag w[lag] * [seg[t] == seg[t+lag]] * dy[t+lag]``.
+def _dx_row(window, weights, dtype, exact: bool, masked: bool) -> jax.Array:
+    """``dx[t] = sum_lag w[lag] * [seg[t] == seg[t+lag]] * dy[t+lag]`` from ``window[lag]``, the
+    ``(dy, segment id)`` of row ``t + lag``.
 
     Descending lags then tap 0, because that is the order JAX's transpose of the forward
     produces and matching it is what makes ``dx`` bit-identical rather than merely close.
     """
-    seg_cur = segs_ref[0, pl.ds(base, block_seq)]
-    dy = dy_ref[0, pl.ds(base, block_seq), :]
-    dtype = dy.dtype
+    dy_cur, seg_cur = window[0]
     acc = None
-    for lag in range(kernel_size - 1, 0, -1):
-        dy_ahead = dy_ref[0, pl.ds(base + lag, block_seq), :]
-        seg_ahead = segs_ref[0, pl.ds(base + lag, block_seq)]
-        term = _mul_round(w_ref[lag], dy_ahead, dtype, exact)
-        acc = _add_round(acc, _keep(seg_ahead, seg_cur, term), dtype, exact)
-    dx_ref[0] = _add_round(acc, _mul_round(w_ref[0], dy, dtype, exact), dtype, exact).astype(dtype)
+    for lag in range(len(window) - 1, 0, -1):
+        dy_ahead, seg_ahead = window[lag]
+        term = _mul_round(weights[lag], dy_ahead, dtype, exact)
+        acc = _add_round(acc, _keep(seg_ahead, seg_cur, term, masked), dtype, exact)
+    return _add_round(acc, _mul_round(weights[0], dy_cur, dtype, exact), dtype, exact).astype(dtype)
 
 
-def _dw_body(x_ref, segs_ref, dy, dw_ref, base, block_seq: int, kernel_size: int) -> None:
-    """``dw[lag] = sum_t dy[t] * [seg[t-lag] == seg[t]] * x[t-lag]``, fp32, in registers.
-
-    The shifted-``x`` construction is the forward's, so the mask semantics are shared by
-    construction rather than by a comment asking you to keep them in sync.
-    """
-    seg_cur = segs_ref[0, pl.ds(base, block_seq)]
-    dy_f32 = dy.astype(jnp.float32)
-    for lag in range(kernel_size):
-        shifted = x_ref[0, pl.ds(base - lag, block_seq), :]
+def _dw_accumulate(dw, dy_cur: jax.Array, window, masked: bool):
+    """``dw[lag] += dy[t] * [seg[t-lag] == seg[t]] * x[t-lag]`` in fp32, from ``window[lag]``, the
+    ``(x, segment id)`` of row ``t - lag``."""
+    seg_cur = window[0][1]
+    dy_f32 = dy_cur.astype(jnp.float32)
+    out = []
+    for lag, (acc, (shifted, seg_shifted)) in enumerate(zip(dw, window)):
         if lag:
-            shifted = _keep(segs_ref[0, pl.ds(base - lag, block_seq)], seg_cur, shifted)
-        partial = jnp.sum(dy_f32 * shifted.astype(jnp.float32), axis=0)
-        # Store per tap rather than stacking: Triton's `stack` lowering takes exactly two
-        # operands, and a W-way stack would build non-power-of-2 intermediates anyway.
-        dw_ref[0, pl.ds(lag, 1), :] = partial[None, :]
+            shifted = _keep(seg_shifted, seg_cur, shifted, masked)
+        out.append(_fma(dy_f32, shifted.astype(jnp.float32), acc))
+    return out
 
 
-def _bwd_kernel(
-    x_ref,
-    xh_ref,
-    seg_ref,
-    segh_ref,
-    dy_ref,
-    dyt_ref,
-    segt_ref,
-    w_ref,
-    dx_ref,
-    dw_partial_ref,
-    *,
-    kernel_size: int,
-    exact: bool,
-):
-    block_seq = dx_ref.shape[1]
-    si = pl.program_id(1)
-    last = pl.num_programs(1) - 1
+def _bwd_kernel(x_ref, seg_ref, dy_ref, w_ref, dx_ref, dw_partial_ref, *, kernel_size: int, rows: int, exact: bool):
+    seq_len, chunk = x_ref.shape[1], dx_ref.shape[1]
+    start = _chunk_start(chunk)
+    halo = kernel_size - 1
+    weights = [w_ref[lag] for lag in range(kernel_size)]
+    # behind[k] is row t-1-k of x and ahead[k] row t+k of dy, each with its segment id.
+    behind = [_edge_row(x_ref, seg_ref, start - 1 - k, seq_len) for k in range(halo)]
+    ahead = [_edge_row(dy_ref, seg_ref, start + k, seq_len) for k in range(halo)]
+    dw = [jnp.zeros(dw_partial_ref.shape[2:], jnp.float32) for _ in range(kernel_size)]
 
-    # dx reads dy *ahead* of this block, so only the final block needs the tail view.
-    @pl.when(si != last)
-    def _dx_general():
-        _dx_body(dy_ref, seg_ref, w_ref, dx_ref, si * block_seq, block_seq, kernel_size, exact)
+    def step(i, carry):
+        behind, ahead, dw = carry
+        local = i * rows
+        # dy runs `halo` rows ahead of x, past the end of the sequence in the last chunk.
+        dy_rows = [_edge_row(dy_ref, seg_ref, start + local + halo + j, seq_len) for j in range(rows)]
+        x_rows = [x_ref[0, start + local + j, :] for j in range(rows)]
+        segs = [seg for _, seg in (*behind, *ahead, *dy_rows)]
+        dy_windows, x_windows = [], []
+        for j in range(rows):
+            dy_windows.append([*ahead, dy_rows[j]])
+            x_windows.append([(x_rows[j], dy_windows[-1][0][1]), *behind])
+            ahead, behind = dy_windows[-1][1:], x_windows[-1][:halo]
 
-    @pl.when(si == last)
-    def _dx_last():
-        _dx_body(dyt_ref, segt_ref, w_ref, dx_ref, 0, block_seq, kernel_size, exact)
+        def accumulate(masked, dw):
+            for j in range(rows):
+                dx_ref[0, local + j, :] = _dx_row(dy_windows[j], weights, dx_ref.dtype, exact, masked)
+                dw = _dw_accumulate(dw, dy_windows[j][0][0], x_windows[j], masked)
+            return dw
 
-    # dw reads x *behind* this block, so only the first block needs the head view.
-    @pl.when(si != 0)
-    def _dw_general():
-        _dw_body(
-            x_ref,
-            seg_ref,
-            dy_ref[0, pl.ds(si * block_seq, block_seq), :],
-            dw_partial_ref,
-            si * block_seq,
-            block_seq,
-            kernel_size,
-        )
+        return behind, ahead, _branch_on_segments(segs, accumulate, dw)
 
-    @pl.when(si == 0)
-    def _dw_first():
-        _dw_body(
-            xh_ref,
-            segh_ref,
-            dy_ref[0, pl.ds(0, block_seq), :],
-            dw_partial_ref,
-            kernel_size - 1,
-            block_seq,
-            kernel_size,
-        )
+    _, _, dw = jax.lax.fori_loop(0, chunk // rows, step, (behind, ahead, dw))
+    for lag in range(kernel_size):
+        dw_partial_ref[0, lag, :] = dw[lag]
 
 
 # --------------------------------------------------------------------------------------
-# Edge views, wrappers
+# Wrappers
 # --------------------------------------------------------------------------------------
 
 
-def _head_views(x, segment_ids, block_seq: int, width: int):
-    """``[B, BS+W-1, C]`` / ``[B, BS+W-1]``: ``W-1`` pad rows then the first ``BS`` rows.
-
-    Exactly what ``jnp.pad(x, ((0,0),(W-1,0),(0,0)))`` would give for those rows, so the
-    first-block path is the reference's semantics with no special casing inside the kernel.
-    """
-    pad_vals = jnp.zeros((x.shape[0], width - 1, x.shape[2]), x.dtype)
-    pad_segs = jnp.full((segment_ids.shape[0], width - 1), OOB_SEGMENT, segment_ids.dtype)
-    return (
-        jnp.concatenate([pad_vals, x[:, :block_seq, :]], axis=1),
-        jnp.concatenate([pad_segs, segment_ids[:, :block_seq]], axis=1),
-    )
-
-
-def _tail_views(dy, segment_ids, block_seq: int, width: int):
-    """``[B, BS+W-1, C]`` / ``[B, BS+W-1]``: the last ``BS`` rows then ``W-1`` pad rows.
-
-    The anti-causal mirror of ``_head_views``. Positions past the end contribute nothing to
-    ``dx``, so the pad value is zero and its segment id can never match.
-    """
-    pad_vals = jnp.zeros((dy.shape[0], width - 1, dy.shape[2]), dy.dtype)
-    pad_segs = jnp.full((segment_ids.shape[0], width - 1), OOB_SEGMENT, segment_ids.dtype)
-    return (
-        jnp.concatenate([dy[:, -block_seq:, :], pad_vals], axis=1),
-        jnp.concatenate([segment_ids[:, -block_seq:], pad_segs], axis=1),
-    )
-
-
-def _compiler_params(block_sizes: ShortConvBlockSizes):
+def _compiler_params(tiles: ShortConvTiles):
     if pltriton is None or _FORCE_INTERPRET:  # pragma: no cover
         return None
-    return pltriton.CompilerParams(num_warps=block_sizes.num_warps, num_stages=block_sizes.num_stages)
+    return pltriton.CompilerParams(num_warps=tiles.num_warps, num_stages=tiles.num_stages)
 
 
 def _cost_estimate(body, primals, kernel_inputs_specs, kernel_outputs_specs):
@@ -372,6 +418,16 @@ def _cost_estimate(body, primals, kernel_inputs_specs, kernel_outputs_specs):
         kernel_inputs_specs=kernel_inputs_specs,
         kernel_outputs_specs=kernel_outputs_specs,
     )
+
+
+def _grid_and_maps(batch: int, num_s: int, num_c: int):
+    """The grid, channel blocks fastest so neighbouring programs share DRAM rows, and an
+    adapter that hands index maps bounded ``(b, si, ci)``."""
+
+    def index_map(f):
+        return lambda ci, si, b: f(_bounded(b, batch), _bounded(si, num_s), _bounded(ci, num_c))
+
+    return (num_c, num_s, batch), index_map
 
 
 def short_conv_pallas_fwd_local(
@@ -385,39 +441,36 @@ def short_conv_pallas_fwd_local(
     """Shard-local fused forward. Callers must have already entered a ``shard_map``."""
     batch, seq_len, channels = x.shape
     width = weight.shape[0]
-    bs, bc = block_sizes.s_block_size, block_sizes.c_block_size
+    tiles = block_sizes.forward
+    bs, bc = tiles.s_block_size, _channel_block(channels, tiles.c_block_size)
     num_s, num_c = seq_len // bs, channels // bc
-    x_head, seg_head = _head_views(x, segment_ids, bs, width)
+    grid, im = _grid_and_maps(batch, num_s, num_c)
 
-    whole = lambda b, si, ci: (b, 0, ci)  # noqa: E731 - whole-sequence pointer window
-    whole_1d = lambda b, si, ci: (b, 0)  # noqa: E731
+    whole = im(lambda b, si, ci: (b, 0, ci))  # whole-sequence pointer window
+    whole_1d = im(lambda b, si, ci: (b, 0))
     out_shape = jax.ShapeDtypeStruct((batch, seq_len, channels), x.dtype)
 
     call = pl.pallas_call(
-        functools.partial(_fwd_kernel, kernel_size=width, exact=exact_reference_rounding),
+        functools.partial(_fwd_kernel, kernel_size=width, rows=tiles.rows_per_step, exact=exact_reference_rounding),
         out_shape=out_shape,
-        grid=(batch, num_s, num_c),
+        grid=grid,
         in_specs=[
             pl.BlockSpec((1, seq_len, bc), whole),
-            pl.BlockSpec((1, bs + width - 1, bc), whole),
             pl.BlockSpec((1, seq_len), whole_1d),
-            pl.BlockSpec((1, bs + width - 1), whole_1d),
-            pl.BlockSpec((width, bc), lambda b, si, ci: (0, ci)),
+            pl.BlockSpec((width, bc), im(lambda b, si, ci: (0, ci))),
         ],
-        out_specs=pl.BlockSpec((1, bs, bc), lambda b, si, ci: (b, si, ci)),
-        compiler_params=_compiler_params(block_sizes),
+        out_specs=pl.BlockSpec((1, bs, bc), im(lambda b, si, ci: (b, si, ci))),
+        compiler_params=_compiler_params(tiles),
         interpret=_FORCE_INTERPRET,
         cost_estimate=_cost_estimate(
             short_conv_reference,
             (weight, x, segment_ids),
-            # The head view is under 4% of `x` and every window aliases the same buffers, so
-            # modelling traffic as one read of x plus one write of the output is honest.
             kernel_inputs_specs=(weight, x, segment_ids),
             kernel_outputs_specs=(out_shape,),
         ),
         name="short_conv_fwd",
     )
-    return call(x, x_head, segment_ids, seg_head, weight)
+    return call(x, segment_ids, weight)
 
 
 def short_conv_pallas_bwd_local(
@@ -438,13 +491,13 @@ def short_conv_pallas_bwd_local(
     """
     batch, seq_len, channels = x.shape
     width = weight.shape[0]
-    bs, bc = block_sizes.s_block_size, block_sizes.c_block_size
+    tiles = block_sizes.backward
+    bs, bc = tiles.s_block_size, _channel_block(channels, tiles.c_block_size)
     num_s, num_c = seq_len // bs, channels // bc
-    x_head, seg_head = _head_views(x, segment_ids, bs, width)
-    dy_tail, seg_tail = _tail_views(dy, segment_ids, bs, width)
+    grid, im = _grid_and_maps(batch, num_s, num_c)
 
-    whole = lambda b, si, ci: (b, 0, ci)  # noqa: E731
-    whole_1d = lambda b, si, ci: (b, 0)  # noqa: E731
+    whole = im(lambda b, si, ci: (b, 0, ci))
+    whole_1d = im(lambda b, si, ci: (b, 0))
     dx_shape = jax.ShapeDtypeStruct((batch, seq_len, channels), dy.dtype)
     dw_shape = jax.ShapeDtypeStruct((batch * num_s, width, channels), jnp.float32)
 
@@ -453,24 +506,20 @@ def short_conv_pallas_bwd_local(
         return vjp(x_)
 
     call = pl.pallas_call(
-        functools.partial(_bwd_kernel, kernel_size=width, exact=exact_reference_rounding),
+        functools.partial(_bwd_kernel, kernel_size=width, rows=tiles.rows_per_step, exact=exact_reference_rounding),
         out_shape=[dx_shape, dw_shape],
-        grid=(batch, num_s, num_c),
+        grid=grid,
         in_specs=[
             pl.BlockSpec((1, seq_len, bc), whole),
-            pl.BlockSpec((1, bs + width - 1, bc), whole),
             pl.BlockSpec((1, seq_len), whole_1d),
-            pl.BlockSpec((1, bs + width - 1), whole_1d),
             pl.BlockSpec((1, seq_len, bc), whole),
-            pl.BlockSpec((1, bs + width - 1, bc), whole),
-            pl.BlockSpec((1, bs + width - 1), whole_1d),
-            pl.BlockSpec((width, bc), lambda b, si, ci: (0, ci)),
+            pl.BlockSpec((width, bc), im(lambda b, si, ci: (0, ci))),
         ],
         out_specs=[
-            pl.BlockSpec((1, bs, bc), lambda b, si, ci: (b, si, ci)),
-            pl.BlockSpec((1, width, bc), lambda b, si, ci: (b * num_s + si, 0, ci)),
+            pl.BlockSpec((1, bs, bc), im(lambda b, si, ci: (b, si, ci))),
+            pl.BlockSpec((1, width, bc), im(lambda b, si, ci: (b * num_s + si, 0, ci))),
         ],
-        compiler_params=_compiler_params(block_sizes),
+        compiler_params=_compiler_params(tiles),
         interpret=_FORCE_INTERPRET,
         cost_estimate=_cost_estimate(
             _vjp_body,
@@ -480,24 +529,22 @@ def short_conv_pallas_bwd_local(
         ),
         name="short_conv_bwd",
     )
-    dx, dw_partials = call(x, x_head, segment_ids, seg_head, dy, dy_tail, seg_tail, weight)
+    dx, dw_partials = call(x, segment_ids, dy, weight)
     return dx, dw_partials
 
 
 def expected_bytes_moved(x_shape: tuple[int, ...], itemsize: int, width: int, block_sizes) -> dict[str, float]:
     """Traffic model for the fused kernels, in bytes. Feeds the benchmark's GB/s column.
 
-    Forward: read ``x``, write ``y``, plus the head view (built and read once).
-    Backward: read ``x``, read ``dy``, write ``dx``, plus head and tail views, plus the
-    ``dw`` partials written by the kernel and read by the outer ``sum(0)``.
+    Forward: read ``x``, write ``y``, plus the ``W - 1`` halo rows each sequence block re-reads.
+    Backward: read ``x``, read ``dy``, write ``dx``, plus both halos, plus the ``dw`` partials
+    written by the kernel and read by the outer ``sum(0)``.
     """
     elements = math.prod(x_shape)
     tensor = elements * itemsize
-    seq_len = x_shape[1]
-    bs = block_sizes.s_block_size
-    edge = 2.0 * (bs + width - 1) / seq_len  # build (read+write) one BS-row edge view
-    dw_partial = 2.0 * elements * width * 4 / (bs * itemsize) / tensor
+    fwd_bs, bwd_bs = block_sizes.forward.s_block_size, block_sizes.backward.s_block_size
+    dw_partial = 2.0 * width * 4 / (bwd_bs * itemsize)
     return {
-        "forward": tensor * (2.0 + edge),
-        "backward": tensor * (3.0 + 2.0 * edge + dw_partial),
+        "forward": tensor * (2.0 + (width - 1) / fwd_bs),
+        "backward": tensor * (3.0 + 2.0 * (width - 1) / bwd_bs + dw_partial),
     }

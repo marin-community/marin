@@ -51,13 +51,8 @@ def sampling_model() -> dict:
     requests and leaves completed results addressable.
     """
     # The local dropless backend matches held-out evaluation and cannot drop another prompt's tokens.
-    # The training-side Triton short conv needs sequence-multiple shapes, so sampling keeps the
-    # default kernel.
     model = dataclasses.replace(
-        hero_recipe.HERO_MODEL_CONFIG,
-        moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION,
-        expert_chunks=1,
-        sconv_implementation=None,
+        hero_recipe.HERO_MODEL_CONFIG, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1
     )
     return draccus.encode(model)
 
