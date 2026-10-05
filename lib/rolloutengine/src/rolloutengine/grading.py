@@ -8,6 +8,7 @@ import json
 import math
 import tarfile
 from collections.abc import Mapping
+from functools import partial
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -18,6 +19,7 @@ from shellbox.machine import Command, ExitReason, Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
 from taskcompendium.environment import (
     ArtifactKind,
+    EnvironmentCommand,
     EnvironmentKind,
     ExitCodeReward,
     FileReward,
@@ -31,7 +33,7 @@ from taskcompendium.models import SkippedVerifierSpec, StageRewardStrategy, Task
 from taskcompendium.submission import Submission
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.machines import _install_files, _machine_command, _task_machine
+from rolloutengine.machines import _install_files, _machine_command, _run_setup_commands, _task_machine
 
 MISSING_FILE_EXIT = 44
 
@@ -75,12 +77,14 @@ async def _grade_rollout(
         with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
             for index, artifact in enumerate(verifier.artifacts):
                 path = Path(directory) / str(index)
-                if await _download_artifact(machine, artifact, path, verifier.timeout):
+                if await _download_artifact(machine, artifact, path, verifier.timeout, cleanup):
                     await grading_machine.upload(path, artifact.target)
         return await _shell_grade(verifier, messages, grading_machine)
 
 
-async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float) -> bool:
+async def _download_artifact(
+    machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float, cleanup: _Cleanup
+) -> bool:
     """Download an artifact. Return false only when its missing-file policy permits omission."""
     kind = artifact.kind
     if kind == ArtifactKind.AUTO or artifact.missing == MissingArtifactPolicy.SKIP:
@@ -109,7 +113,6 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         await machine.download(artifact.source, target)
         return True
     remote_archive = f"/tmp/taskcompendium-artifact-{uuid4().hex}.tar"
-    primary_error: BaseException | None = None
     try:
         result = await machine.run(
             Command(
@@ -132,17 +135,16 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         await machine.download(remote_archive, archive_path)
         with tarfile.open(archive_path) as archive:
             archive.extractall(target, filter="data")
-    except BaseException as error:
-        primary_error = error
-        raise
     finally:
-        try:
-            removed = await machine.run(Command(argv=("rm", "-f", remote_archive), timeout=timeout, user="0"))
-            if removed.exit_code != 0 and primary_error is None:
-                raise RuntimeError(f"Cannot remove grading artifact archive: exit={removed.exit_code}")
-        except BaseException:
-            if primary_error is None:
-                raise
+        await cleanup.run(
+            "artifact_archive_remove",
+            partial(
+                _run_setup_commands,
+                machine,
+                (EnvironmentCommand(argv=("rm", "-f", remote_archive), timeout=timeout, user="0"),),
+                "Artifact archive removal",
+            ),
+        )
     return True
 
 
