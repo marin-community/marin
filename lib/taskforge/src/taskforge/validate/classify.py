@@ -9,10 +9,9 @@ rollout the engine returned without a usable grade. A recognized original error 
 interrupted operation, so a ``GlmUnavailable`` during ``MODEL`` is ``MODEL_UNAVAILABLE``. Anything
 no rule matches is ``UNCLASSIFIED``, which ``Evidence`` counts like any other cause.
 
-Task setup failures are told apart from machine failures by the messages
-``rolloutengine.machines`` and ``rolloutengine.task_session`` raise them with (``SETUP_FAILURES``),
-because the engine raises a bare ``RuntimeError`` or ``TimeoutError`` for both; typed setup errors
-belong upstream in RolloutEngine.
+Task setup failures are told apart from machine failures only by their message text
+(``_matches_rolloutengine_setup_message``), because the engine raises a bare ``RuntimeError`` or
+``TimeoutError`` for both.
 """
 
 import traceback
@@ -40,8 +39,8 @@ GRADING_FAILURES = {
     GradingFailure.INVALID_REWARD: Cause.GRADER_INVALID_REWARD,
     GradingFailure.EXECUTION: Cause.GRADER_EXECUTION,
 }
-SETUP_FAILURES = ("Environment setup command ", "Environment healthcheck failed", "Task stage ")
-"""Message prefixes of the setup, healthcheck and stage-setup errors in ``rolloutengine.machines``."""
+ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES = ("Environment setup command ", "Environment healthcheck failed", "Task stage ")
+"""Message prefixes of the setup, healthcheck and stage-setup errors RolloutEngine raises."""
 AGENT_TIMEOUT_STOP_REASON = "agent_timeout"
 UNGRADED_AGENT_TIMEOUT = (
     "TaskSpec.agent_timeout expired before the engine graded the attempt; scored as a failed attempt"
@@ -104,10 +103,21 @@ def _exception_cause(error: BaseException) -> Cause:
     return Cause.UNCLASSIFIED
 
 
+def _matches_rolloutengine_setup_message(error: BaseException | None) -> bool:
+    """Whether ``error`` is a task setup, healthcheck or stage-setup failure from RolloutEngine.
+
+    ``rolloutengine.machines`` and ``rolloutengine.task_session`` raise these as a bare
+    ``RuntimeError`` or ``TimeoutError``, the same types as machine failures, so this matches
+    message prefixes. Replace it with the typed errors requested in #9782 (rolloutengine typed
+    setup errors) once they land.
+    """
+    return isinstance(error, RuntimeError | TimeoutError) and str(error).startswith(ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES)
+
+
 def _is_setup_failure(error: BaseException | None, operation: RolloutOperation) -> bool:
     if operation is RolloutOperation.PREPARE and isinstance(error, ValueError):
         return True  # _ShellboxTaskSession.prepare: the environment lacks the task's required capabilities
-    return isinstance(error, RuntimeError | TimeoutError) and str(error).startswith(SETUP_FAILURES)
+    return _matches_rolloutengine_setup_message(error)
 
 
 def _interruption_cause(error: RolloutInterrupted) -> Cause:
