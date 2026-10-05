@@ -146,7 +146,8 @@ def export_saved_four(config: SavedExportConfig) -> SkyRLRun:
         raise ValueError("Saved export request does not identify dose checkpoint four")
     with tempfile.TemporaryDirectory() as directory:
         launch = Path(directory) / "resolved-launch.yaml"
-        launch.write_bytes(StoragePath(config.resolved_launch_uri).read_bytes())
+        resolved = yaml.safe_load(StoragePath(config.resolved_launch_uri).read_text())
+        launch.write_text(yaml.safe_dump(resolved["config"], sort_keys=False))
         subprocess.run(
             [
                 "uv",

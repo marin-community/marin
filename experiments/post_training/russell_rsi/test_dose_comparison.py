@@ -93,7 +93,8 @@ def test_saved_four_export_reads_immutable_request_and_waits_for_completion(tmp_
     request = {"step": 4, "checkpoint_path": str(checkpoint), "export_path": export, "status": "pending"}
     request_file.write_text(json.dumps(request))
     launch = tmp_path / "resolved-launch.yaml"
-    launch.write_text("runtime: pinned\n")
+    launch_config = {"schema_version": 1, "runtime": {"launcher_commit": "pinned"}}
+    launch.write_text(yaml.safe_dump({"config": launch_config, "train_data_sources": [], "val_data_sources": []}))
     trained = SkyRLRun(
         path=str(tmp_path / "terminal.json"),
         hf_model_uri=str(tmp_path / "eight-export"),
@@ -111,7 +112,7 @@ def test_saved_four_export_reads_immutable_request_and_waits_for_completion(tmp_
         submitted.append(argv)
         assert argv[argv.index("--request") + 1] == str(checkpoint)
         assert "--no-wait" not in argv
-        assert "runtime: pinned" in Path(argv[argv.index("--launch-config") + 1]).read_text()
+        assert yaml.safe_load(Path(argv[argv.index("--launch-config") + 1]).read_text()) == launch_config
         request_file.write_text(json.dumps({**request, "status": "complete", "last_exit_code": 0}))
 
     monkeypatch.setattr("experiments.post_training.russell_rsi.launch_dose_comparison.subprocess.run", completed_export)
