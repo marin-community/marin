@@ -1,4 +1,4 @@
-"""Generation-only annotations for defaults, choices and pass-through mappings."""
+"""Schema annotations for generation and launch-time key admission."""
 
 from types import MappingProxyType
 

@@ -429,8 +429,9 @@ def build_run(
         raise ValueError("CatCount requires trainer.max_steps to bound its training pool")
     prefetch_rows = config.trainer.rollout_buffer.max_staleness_steps * batch_size
     train_rows = batch_size * max_steps + prefetch_rows
+    retention = SkyRLRetentionPolicy(resume_checkpoint_count=1)
     identity_document = config.to_skyrl()
-    identity_document["trainer"].update(seed=seed, max_ckpts_to_keep=1)
+    identity_document["trainer"].update(seed=seed, max_ckpts_to_keep=retention.resume_checkpoint_count)
     identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(identity_document) + repr(train_ns))}"
     data_identity = fingerprint_hash(repr((train_ns, train_rows, seed)))
     data_name = f"documents/{EXPERIMENT_NAME}/{data_identity}"
@@ -463,7 +464,7 @@ def build_run(
             train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
             hardware=SkyRLHardware(gpus_per_node=GPUS_PER_NODE, gpu_variant=GPU_VARIANT),
-            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+            retention=retention,
             seed=seed,
         ),
         IrisSkyRLExecution(

@@ -1,8 +1,8 @@
 {
   "repository": "https://github.com/marin-community/MarinSkyRL.git",
-  "commit": "cab2536014592934b69fc016613b6d07df4f7fec",
+  "commit": "1b72125e9d46a6036c419e2c767a8187cf94da02",
   "source_path": "marinskyrl/recipe_schema",
-  "sha256": "f6f5a30fa9a97cb9b2089fbc22a0fdbbdab3c95db62e129d052ec12ba5a27c6c",
+  "sha256": "02bd40db7172c96d186dab4479394ef25689315e2321ba942ceaf9c29e024c0a",
   "files": {
     "__init__.py": "ad65daa48c5819037c277a86a20e96a235c8024276c46b5e5f1bb5a899263da5",
     "budget.py": "1ee7bc20d1668631871481d5263479518e9908b620c4ce71379c545d8a357846",
@@ -15,6 +15,6 @@
     "rules.py": "b672d08e12d841d781fca0c526ddfa05252e5f0c3c658fad0d820d3151e60993",
     "sections.py": "e589426b495394213e6c9ea3061a9e8983ffa46d5b6836c4c187f3a9578e5846",
     "settings.py": "ff34872384c3e54d7961bf1cb1a73dedc0ebee569f7e8ac36b12a1ba9c5f7e35",
-    "sidecar.py": "d58286a6f793662974994fed17f7616854183e6d41e97fd93d6c06f1066798e5"
+    "sidecar.py": "2c360b6f63b570fcade04cbe147f0f151b96cc6209ca0a5112287c0ee365364c"
   }
 }
