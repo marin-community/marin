@@ -50,7 +50,9 @@ from rolloutengine.assets import cached_asset
 from rolloutengine.contracts import (
     GenerationLimitReached,
     ModelRequest,
+    ModelResponseRejected,
     ModelTurn,
+    RejectedModelResponse,
     RolloutInterrupted,
     RolloutOperation,
     SessionStart,
@@ -885,3 +887,82 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(tmp_
     for machine in machines:
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(argv=("true",)))
+
+
+@pytest.mark.parametrize("rejected_stage", [0, 1])
+async def test_staged_first_response_rejection_keeps_grade_without_invented_action(rejected_stage):
+    first = file_task()
+    stages = (
+        TaskStage(name="first", verifier=first.verifier),
+        TaskStage(
+            name="second",
+            verifier=VerifierSpec(
+                kind=VerifierKind.SHELL,
+                parameters_json=ShellVerifierSpec(argv=("false",), reward=ExitCodeReward(), timeout=5).model_dump_json(),
+            ),
+        ),
+    )
+    task = first.model_copy(
+        update={
+            "verifier": VerifierSpec(
+                kind=VerifierKind.STAGED,
+                parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.MEAN).model_dump_json(),
+            ),
+            "stages": stages,
+        }
+    )
+    evidence = RejectedModelResponse(
+        request={"prompt": [10, 11]},
+        request_sha256="authored-request",
+        response_body_base64="e30=",
+        response_sha256="authored-response",
+    )
+    prefix = ReplayModel(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "write",
+                        "type": "function",
+                        "function": {
+                            "name": "shell",
+                            "arguments": json.dumps({"command": "echo 12 > /workspace/answer"}),
+                        },
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "Done."},
+        ]
+    )
+    requests = []
+
+    async def model(request):
+        requests.append(request)
+        if rejected_stage == 1 and len(requests) <= 2:
+            return await prefix.complete(request)
+        raise ModelResponseRejected("Authored received-response rejection", evidence)
+
+    runner = ShellboxRolloutEngine(
+        model,
+        {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()},
+        max_turns=3,
+        command_timeout=5,
+        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+    )
+    with pytest.raises(RolloutInterrupted) as caught:
+        await runner.run(task)
+    record = caught.value.rollout
+    assert caught.value.operation == RolloutOperation.MODEL
+    assert record.grade.status == Outcome.GRADED
+    assert record.grade.reward == (0 if rejected_stage == 0 else 0.5)
+    assert len(requests) == (1 if rejected_stage == 0 else 3)
+    assert len(record.steps) == (0 if rejected_stage == 0 else 2)
+    assert record.response_token_ids == (() if rejected_stage == 0 else (20, 90, 91, 21))
+    assert record.loss_mask == (() if rejected_stage == 0 else (1, 0, 0, 1))
+    assert record.failure is not None
+    assert record.failure.diagnostics["rejected_response"]["response_body_base64"] == "e30="
+    if rejected_stage == 1:
+        assert record.steps[-1].transition.grade is not None
+        assert record.steps[-1].transition.grade.reward == 1
+        assert record.steps[-1].transition.reward == record.grade.reward

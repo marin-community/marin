@@ -11,9 +11,17 @@ import httpx
 import pytest
 from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle
+from rolloutengine.contracts import RolloutContractError
 from shellbox.backends.qemu.image import guest_code_id
-from taskcompendium.environment import ArtifactKind, ShellVerifierSpec, VerifierArtifact
-from taskcompendium.models import VerifierKind
+from taskcompendium.environment import (
+    ArtifactKind,
+    EnvironmentKind,
+    EnvironmentSpec,
+    ExitCodeReward,
+    ShellVerifierSpec,
+    VerifierArtifact,
+)
+from taskcompendium.models import VerifierKind, VerifierSpec
 from taskcompendium.parquet import write_tasks
 
 from experiments.post_training.russell_rsi.contract_tasks import digest
@@ -128,8 +136,9 @@ class TokenServer:
             return httpx.Response(200, json={"tokens": tokens})
         assert request.url.path == "/v1/completions"
         self.completions.append(body)
-        issued = [json.loads(p.read_text()) for p in self.journal_root.rglob("issued.json")]
-        assert any(row["request_sha256"] == compact_json_sha256(body) for row in issued)
+        if self.journal_root is not None:
+            issued = [json.loads(p.read_text()) for p in self.journal_root.rglob("issued.json")]
+            assert any(row["request_sha256"] == compact_json_sha256(body) for row in issued)
         messages = self.prompts[tuple(body["prompt"])]
         tools = [message for message in messages if message["role"] == "tool"]
         if tools:
@@ -340,3 +349,115 @@ def test_unsupported_submission_stops_before_http(tmp_path, frozen_comparison, l
         asyncio.run(evaluate())
     assert not server.prompts
     assert not server.completions
+
+
+@pytest.mark.parametrize(
+    "failure", ["syntax", "syntax-grade-failure", "transport", "tokenize", "no-response", "no-tokens"]
+)
+def test_initial_model_failure_grades_only_received_syntax_rejection_without_retry(tmp_path, frozen_comparison, failure):
+    task = preflight_task(101, "Authored rejection fixture.", 23).model_copy(
+        update={
+            "verifier": VerifierSpec(
+                kind=VerifierKind.SHELL,
+                parameters_json=ShellVerifierSpec(
+                    argv=("test", "-f", "/workspace/model-created"),
+                    reward=ExitCodeReward(),
+                    timeout=5,
+                    environment=(
+                        EnvironmentSpec(kind=EnvironmentKind.SHELLSIM) if failure == "syntax-grade-failure" else None
+                    ),
+                    artifacts=(
+                        (VerifierArtifact(source="/workspace/absent", target="/tmp/submission", kind=ArtifactKind.FILE),)
+                        if failure == "syntax-grade-failure"
+                        else ()
+                    ),
+                ).model_dump_json(),
+            )
+        }
+    )
+    path = tmp_path / "authored.parquet"
+    write_tasks(str(path), [task])
+    config = replace(frozen_comparison.evaluation, tasks_path=str(path), limit=1)
+    # Calibration does not require a journal. The trace must retain the raw rejected response itself.
+    server = TokenServer(journal_root=None)
+    rejected_requests = []
+    raw_responses = []
+
+    def endpoint(request):
+        body = json.loads(request.content)
+        if request.url.path == "/tokenize":
+            authored = any("Authored rejection fixture." in message.get("content", "") for message in body["messages"])
+            if authored and failure == "tokenize":
+                raise httpx.ReadError("Authored tokenizer failure", request=request)
+            return server(request)
+        messages = server.prompts[tuple(body["prompt"])]
+        if not any("Authored rejection fixture." in message.get("content", "") for message in messages):
+            return server(request)
+        rejected_requests.append(body)
+        if failure == "transport":
+            raise httpx.ReadError("Authored transport failure", request=request)
+        payload = (
+            {"choices": []}
+            if failure == "no-response"
+            else {
+                "choices": [
+                    {
+                        "text": "<tool_call>{invalid</tool_call>",
+                        "token_ids": [] if failure == "no-tokens" else [71, 72],
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+        response = httpx.Response(200, json=payload)
+        raw_responses.append(response.content)
+        return response
+
+    async def run():
+        await evaluate_development(
+            config,
+            "https://unit.test/v1",
+            "unit",
+            {"source_image": QEMU_TEST_IMAGE, "directory_name": "unused"},
+            http_transport=httpx.MockTransport(endpoint),
+        )
+
+    if failure == "no-tokens":
+        with pytest.raises(ExceptionGroup) as caught:
+            asyncio.run(run())
+        assert isinstance(caught.value.exceptions[0], RolloutContractError)
+        assert len(rejected_requests) == 1
+        return
+    asyncio.run(run())
+    record = json.loads((tmp_path / "parent/traces.jsonl").read_text())
+    assert record["interrupted_operation"] == ("grade" if failure == "syntax-grade-failure" else "model")
+    assert record["steps"] == []
+    assert record["prompt_token_ids"] == record["response_token_ids"] == record["loss_mask"] == []
+    assert all(message["role"] != "assistant" for message in record["messages"])
+    assert len(rejected_requests) == (0 if failure == "tokenize" else 1)
+    if failure not in {"syntax", "syntax-grade-failure"}:
+        assert record["grade"]["status"] == "unavailable"
+        assert record["grade"]["reward"] is None
+        assert record["failure"] is None
+        return
+    if failure == "syntax":
+        assert record["grade"]["status"] == "graded"
+        assert record["grade"]["reward"] == 0
+        assert record["execution_error"]["type"] == "ModelResponseRejected"
+    else:
+        assert record["grade"]["status"] == "unavailable"
+        assert record["grade"]["reward"] is None
+    assert record["failure"]["exception_type"] == "ModelResponseRejected"
+    assert record["failure"]["diagnostics"]["parse_error"] == {
+        "type": "HermesSyntaxError",
+        "message": "The model emitted invalid Hermes tool syntax",
+    }
+    evidence = record["failure"]["diagnostics"]["rejected_response"]
+    assert base64.b64decode(evidence["response_body_base64"]) == raw_responses[0]
+    assert evidence["response_sha256"] == hashlib.sha256(raw_responses[0]).hexdigest()
+    assert evidence["request"] == rejected_requests[0]
+    assert evidence["request_sha256"] == compact_json_sha256(rejected_requests[0])
+    received = json.loads(base64.b64decode(evidence["response_body_base64"]))["choices"][0]
+    assert received["token_ids"] == [71, 72]
+    assert received["text"] == "<tool_call>{invalid</tool_call>"
+    assert received["finish_reason"] == "stop"

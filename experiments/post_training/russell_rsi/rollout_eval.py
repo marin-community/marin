@@ -4,6 +4,7 @@
 """Evaluate a bounded development cohort with the shared Shellbox engine."""
 
 import asyncio
+import base64
 import hashlib
 import json
 import traceback
@@ -163,11 +164,15 @@ def run_supplementary_evaluation(config: SupplementaryEvaluationConfig) -> None:
     run_development_evaluation(config.evaluation, journal=journal)
 
 
+class HermesSyntaxError(ValueError):
+    """The Hermes parser rejected a received completion."""
+
+
 def completion_message(text: str, tools: list[dict], message_index: int) -> dict:
     """Serialize call arguments as JSON and assign IDs from the assistant message position."""
     parsed = opencode_protocol_messages([{"role": "assistant", "content": text}], tools)
     if parsed is None:
-        raise ValueError("The model emitted invalid Hermes tool syntax")
+        raise HermesSyntaxError("The model emitted invalid Hermes tool syntax")
     message = parsed[0][0]
     # The parser starts message numbering at zero for each completion.
     for call_index, call in enumerate(message.get("tool_calls", [])):
@@ -247,7 +252,9 @@ async def evaluate_development(
     from rolloutengine.contracts import (  # noqa: PLC0415
         GenerationLimitReached,
         ModelRequest,
+        ModelResponseRejected,
         ModelTurn,
+        RejectedModelResponse,
         RolloutContractError,
     )
     from rolloutengine.engine import ShellboxRolloutEngine  # noqa: PLC0415
@@ -326,13 +333,32 @@ async def evaluate_development(
             response_ids = choice.get("token_ids")
             if not isinstance(response_ids, list) or not all(type(token) is int for token in response_ids):
                 raise RolloutContractError("The server did not return exact response tokens")
+            # A parse rejection bypasses the engine's normal ModelTurn token checks.
+            if not response_ids:
+                raise RolloutContractError("The received completion has no response tokens")
+            text = choice["text"]
+            finish_reason = choice["finish_reason"]
+            if not isinstance(text, str) or not isinstance(finish_reason, str):
+                raise RolloutContractError("The server did not return a completion text and finish reason")
+            try:
+                message = completion_message(text, request.options.get("tools", []), len(request.messages))
+            except HermesSyntaxError as error:
+                if not isinstance(prompt_ids, list) or not all(type(token) is int for token in prompt_ids):
+                    raise RolloutContractError("The rejected completion has no exact prompt tokens") from error
+                evidence = RejectedModelResponse(
+                    request=completion,
+                    request_sha256=compact_json_sha256(completion),
+                    response_body_base64=base64.b64encode(response.content).decode("ascii"),
+                    response_sha256=hashlib.sha256(response.content).hexdigest(),
+                )
+                raise ModelResponseRejected(str(error), evidence) from error
             return ModelTurn(
-                message=completion_message(choice["text"], request.options.get("tools", []), len(request.messages)),
+                message=message,
                 prompt_token_ids=tuple(prompt_ids),
                 response_token_ids=tuple(response_ids),
                 logprobs=None,
-                stop_reason=choice["finish_reason"],
-                text=choice["text"],
+                stop_reason=finish_reason,
+                text=text,
             )
 
         await run_token_preflight(

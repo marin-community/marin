@@ -12,7 +12,7 @@ from dataclasses import asdict, replace
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.environment import EnvironmentKind
 from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.models import StageVerifierSpec, TaskSpec
+from taskcompendium.models import StageVerifierSpec, TaskSpec, VerifierKind
 from taskcompendium.submission import Submission, conversation_messages
 
 from rolloutengine.contracts import (
@@ -20,6 +20,7 @@ from rolloutengine.contracts import (
     MAX_TURNS_STOP_REASON,
     GenerationLimitReached,
     ModelRequest,
+    ModelResponseRejected,
     ModelTurn,
     RolloutContractError,
     RolloutData,
@@ -160,7 +161,7 @@ class ShellboxRolloutEngine:
                     loss_mask=record.loss_mask[:initial_tokens] + (0,) * (len(record.loss_mask) - initial_tokens),
                 )
                 break
-            last_graded_step = len(record.steps) - 1
+            last_graded_step = len(record.steps) - 1 if record.steps else None
             rewards = grade.diagnostics.get("rewards", {"reward": grade.reward})
             if any(rewards.get(key, -math.inf) < minimum for key, minimum in stage.minimum_rewards.items()):
                 break
@@ -246,7 +247,24 @@ class ShellboxRolloutEngine:
             except RolloutContractError:
                 raise
             except Exception as error:
-                if len(steps) > initial_step_count:
+                rejected = isinstance(error, ModelResponseRejected)
+                if rejected:
+                    completed = replace(
+                        completed,
+                        failure=RolloutFailure(
+                            type(error).__name__,
+                            {
+                                "message": str(error),
+                                "parse_error": {
+                                    "type": type(error.__cause__ or error).__name__,
+                                    "message": str(error.__cause__ or error),
+                                },
+                                "rejected_response": asdict(error.evidence),
+                            },
+                        ),
+                    )
+                # Only shell verifiers can grade an unchanged prepared workspace without an assistant answer.
+                if len(steps) > initial_step_count or (rejected and task.verifier.kind == VerifierKind.SHELL):
                     try:
                         grade = await session.grade(completed.messages)
                     except Exception as grading_error:

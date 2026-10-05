@@ -42,6 +42,24 @@ class ModelTurn:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class RejectedModelResponse:
+    """Request payload and exact response bytes. Keep this evidence out of training inputs."""
+
+    request: dict[str, Any]
+    request_sha256: str
+    response_body_base64: str
+    response_sha256: str
+
+
+class ModelResponseRejected(ValueError):
+    """A received completion failed parsing before it became a model turn."""
+
+    def __init__(self, message: str, evidence: RejectedModelResponse):
+        self.evidence = evidence
+        super().__init__(message)
+
+
 class GenerationLimitReached(Exception):
     """The rendered prompt leaves no permitted generation budget."""
 
