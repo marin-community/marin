@@ -21,7 +21,8 @@ Phases, each ``k`` trials through ``taskforge.validate.trials.run_trials``:
 
 - ``math``: a null-environment numeric task (no machine).
 - ``docker_shipped``: a docker task from a digest-pinned public image on
-  ``machine_factories(MachineHost.IRIS)`` exactly as shipped.
+  ``machine_factories(MachineHost.IRIS, controller_url)`` exactly as shipped, with the task's
+  ``IRIS_CONTROLLER_URL``.
 - ``docker_readiness_fix``: the same task and factory with a readiness poll that
   compares against ``iris`` ``TaskState``, patched into this process (``apply_readiness_fix``),
   then one machine that lists the environment variable names a sandbox receives. The run exits
@@ -54,9 +55,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import fsspec
 from iris.client.workload import TaskState
 from iris.rpc import job_pb2
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.image import RegistryImage as ShellboxRegistryImage
 from shellbox.machine import Command, Machine, MachineFactory, MachineSpec, NetworkPolicy
@@ -77,6 +78,7 @@ from taskforge.validate.outcome import Graded, Outcome, TrialKind
 from taskforge.validate.trials import EngineSettings, TrialPlan, run_trials
 
 GLM_TOKEN_ENV = "GLM_API_TOKEN"
+IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
 # Iris copies these from the submitting process into every child job (iris.cluster.types.EnvironmentSpec).
 SUBMITTER_KEYS = ("HF_TOKEN", "WANDB_API_KEY")
 IRIS_JOB_ENV = "IRIS_JOB_ENV"
@@ -325,9 +327,9 @@ def upload(results: Path, prefix: str) -> str:
         return "skipped: no AWS credentials in the task environment"
     if not prefix.startswith(("s3://", "gs://")):
         return f"skipped: unsupported prefix {prefix}"
-    filesystem, root = fsspec.core.url_to_fs(prefix)
+    destination = StoragePath(prefix)
     for path in sorted(p for p in results.rglob("*") if p.is_file()):
-        filesystem.put_file(str(path), f"{root}/{path.relative_to(results)}")
+        (destination / path.relative_to(results).as_posix()).upload_from(str(path))
     return f"uploaded to {prefix}"
 
 
@@ -360,7 +362,7 @@ def reassemble(logs: Path, results: Path) -> None:
     print(f"reassembled {len(chunks)} files into {results}")
 
 
-async def probe(args: argparse.Namespace, token: str, results: Path) -> dict[str, Any]:
+async def probe(args: argparse.Namespace, token: str, controller_url: str, results: Path) -> dict[str, Any]:
     endpoint = endpoint_in_task(args.relay_job, token, Pool.HIGH)
     print(f"GLM_ENDPOINT relay={args.relay_job} base_url={endpoint.base_url}", flush=True)
     summary: dict[str, Any] = {
@@ -369,19 +371,19 @@ async def probe(args: argparse.Namespace, token: str, results: Path) -> dict[str
         "image": IMAGE,
         "image_tag": IMAGE_TAG,
         "network": "docker task network=true; shipped IrisMachineFactory refuses NetworkPolicy.DENY",
-        "controller_url": os.environ.get("IRIS_CONTROLLER_URL"),
+        "controller_url": controller_url,
         "task_id": os.environ.get("IRIS_TASK_ID"),
         "phases": [],
     }
     async with GlmClient(endpoint) as client:
         model = GlmRolloutModel(client, POLICY)
         summary["phases"].append(await run_phase(Phase.MATH, math_task(), {}, model, results, args.k, 2))
-        factories = dict(machine_factories(MachineHost.IRIS))
+        factories = dict(machine_factories(MachineHost.IRIS, controller_url))
         summary["phases"].append(
             await run_phase(Phase.DOCKER_SHIPPED, docker_task(), factories, model, results, args.k, 1)
         )
         apply_readiness_fix()
-        factories = dict(machine_factories(MachineHost.IRIS))
+        factories = dict(machine_factories(MachineHost.IRIS, controller_url))
         summary["phases"].append(
             await run_phase(Phase.DOCKER_READINESS_FIX, docker_task(), factories, model, results, args.k, 2)
         )
@@ -403,6 +405,9 @@ def main() -> None:
             raise SystemExit("--reassemble needs --results-dir")
         reassemble(args.reassemble, args.results_dir)
         return
+    controller_url = os.environ.get(IRIS_CONTROLLER_URL_ENV)
+    if not controller_url:
+        raise SystemExit(f"{IRIS_CONTROLLER_URL_ENV} is unset; the probe runs only inside an Iris task")
     token = scrub_child_environment()
     run = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results = args.results_dir
@@ -413,9 +418,9 @@ def main() -> None:
         results = Path(output_dir) / "cluster_rollout_probe"
     results.mkdir(parents=True, exist_ok=True)
     marin_prefix = os.environ.get("MARIN_PREFIX")
-    prefix = args.upload_prefix or (marin_prefix and f"{marin_prefix}/taskforge/cluster_rollout_probe/{run}")
+    prefix = args.upload_prefix or (marin_prefix and prefix_join(marin_prefix, f"taskforge/cluster_rollout_probe/{run}"))
     started = time.monotonic()
-    summary = asyncio.run(probe(args, token, results))
+    summary = asyncio.run(probe(args, token, controller_url, results))
     summary["wall_time"] = time.monotonic() - started
     summary["run"] = run
     (results / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
