@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frozen configuration profile for the September 29 campaign.
+"""Frozen configuration profile for the October 5 campaign.
 
 These checks compare submitter-provided settings. Independent policy attestation
 requires the trusted evidence boundary described in marin-community/marin#9458.
@@ -17,9 +17,8 @@ from marin.evaluation.harbor.agent_context import reconciled_model_info, served_
 from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalchemyRef, EvalRef, ModelRef
 
-SEPTEMBER_29_VERSION = "eval-policy-2026-09-29-verified"
-SEPTEMBER_29_R2_VERSION = "eval-policy-2026-09-29-r2-verified"
-MAX_SERVED_CONTEXT = 73728
+OCTOBER_5_VERSION = "eval-policy-2026-10-05-verified"
+MAX_SERVED_CONTEXT = 131072
 
 
 class HarborIdentity(BaseModel):
@@ -35,7 +34,7 @@ class HarborProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     sources: dict[Literal["standard", "native32k"], str]
-    model_info: dict[str, int]
+    model_info: dict[Literal["standard", "native32k"], dict[str, int]]
     identity: HarborIdentity
 
 
@@ -50,14 +49,9 @@ class CampaignProfile(BaseModel):
 
 
 CAMPAIGN = CampaignProfile.model_validate_json(
-    Path(__file__).with_name("policies").joinpath("september_29.json").read_text()
+    Path(__file__).with_name("policies").joinpath("october_05.json").read_text()
 )
-CAMPAIGNS = {
-    SEPTEMBER_29_VERSION: CAMPAIGN,
-    SEPTEMBER_29_R2_VERSION: CampaignProfile.model_validate_json(
-        Path(__file__).with_name("policies").joinpath("september_29_r2.json").read_text()
-    ),
-}
+CAMPAIGNS = {OCTOBER_5_VERSION: CAMPAIGN}
 
 
 def campaign_policy_violations(model: ModelRef, evaluation: EvalRef, profile: CampaignProfile) -> tuple[str, ...]:
@@ -140,9 +134,7 @@ def campaign_policy_violations(model: ModelRef, evaluation: EvalRef, profile: Ca
             problems.append("Harbor task differs from the approved benchmark policy")
         if evaluation.harbor.config_digest is None:
             problems.append("missing normalized Harbor configuration digest")
-        policy_info = dict(approved_harbor.model_info)
-        if variant == "native32k" and policy_info:
-            policy_info["max_input_tokens"] = 32768
+        policy_info = approved_harbor.model_info[variant]
         served = served_model_info(model.config.serve.max_model_len, model.config.generation.max_gen_toks)
         try:
             expected_info = reconciled_model_info(served, policy_info)

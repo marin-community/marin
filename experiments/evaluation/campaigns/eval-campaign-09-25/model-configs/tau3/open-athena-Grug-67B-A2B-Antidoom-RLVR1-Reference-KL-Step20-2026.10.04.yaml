@@ -15,6 +15,7 @@ serve:
   max_num_batched_tokens: 7168
   max_num_seqs: 32
   tool_call_parser: hermes
+  reasoning_parser: grug
   auto_overrides: false
   vllm_extra_args:
   - --enable-expert-parallel

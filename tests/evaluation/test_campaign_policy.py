@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Admission for the September 29 evaluation campaign."""
+"""Admission for the October 5 evaluation campaign."""
 
 from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from marin.evaluation.campaign_policy import CAMPAIGNS, SEPTEMBER_29_R2_VERSION, SEPTEMBER_29_VERSION
+from marin.evaluation.campaign_policy import CAMPAIGNS, OCTOBER_5_VERSION
 from marin.evaluation.eval_policy import policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.harbor import driver_config
@@ -18,7 +18,7 @@ from marin.external_dependencies import EVALCHEMY
 from experiments.evaluation.evals import EvalchemyDefinition
 
 CAMPAIGN_ROOT = Path(__file__).resolve().parents[2] / "experiments/evaluation/campaigns/eval-campaign-09-25"
-CAMPAIGN = CAMPAIGNS[SEPTEMBER_29_R2_VERSION]
+CAMPAIGN = CAMPAIGNS[OCTOBER_5_VERSION]
 
 
 def test_harbor_runtime_selection_uses_the_lock_not_the_shared_declaration(tmp_path, monkeypatch):
@@ -47,15 +47,22 @@ def _campaign_run(model_name: str, benchmark: str) -> tuple[ModelRef, EvalRef]:
 
 @pytest.mark.parametrize(
     "model_name,benchmark",
-    [("Qwen-Qwen3.6-35B-A3B", path.stem) for path in sorted((CAMPAIGN_ROOT / "evalchemy-configs").glob("*.yaml"))]
+    [
+        (model, path.stem)
+        for model in (
+            "Qwen-Qwen3.6-35B-A3B",
+            "open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
+            "open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04",
+        )
+        for path in sorted((CAMPAIGN_ROOT / "evalchemy-configs").glob("*.yaml"))
+    ]
     + [
         ("openai-gpt-oss-20b", "cruxeval"),
-        ("open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21", "math500"),
     ],
 )
 def test_campaign_accepts_effective_configs_including_native_thinking_translation(model_name, benchmark):
     model, evaluation = _campaign_run(model_name, benchmark)
-    assert policy_violations(SEPTEMBER_29_R2_VERSION, model, evaluation) == ()
+    assert policy_violations(OCTOBER_5_VERSION, model, evaluation) == ()
 
 
 @pytest.mark.parametrize(
@@ -72,7 +79,7 @@ def test_campaign_rejects_effective_settings_drift(change):
     model, evaluation = _campaign_run("Qwen-Qwen3.6-35B-A3B", "aime24")
     assert evaluation.evalchemy is not None
     changed = evaluation.model_copy(update={"evalchemy": evaluation.evalchemy.model_copy(update=change)})
-    assert policy_violations(SEPTEMBER_29_R2_VERSION, model, changed)
+    assert policy_violations(OCTOBER_5_VERSION, model, changed)
 
 
 @pytest.mark.parametrize("change", [{"location": "different/model"}, {"revision": "main"}])
@@ -80,7 +87,7 @@ def test_campaign_rejects_effective_model_identity_different_from_source(change)
     model, evaluation = _campaign_run("Qwen-Qwen3.6-35B-A3B", "math500")
     assert model.config is not None
     changed = model.model_copy(update={"source_config": model.config, "config": model.config.model_copy(update=change)})
-    assert policy_violations(SEPTEMBER_29_R2_VERSION, changed, evaluation)
+    assert policy_violations(OCTOBER_5_VERSION, changed, evaluation)
 
 
 @pytest.mark.parametrize(
@@ -102,17 +109,17 @@ def test_campaign_accepts_model_specific_harbor_profile_and_rejects_other_varian
             max_output_tokens=16384,
         ),
     )
-    assert policy_violations(SEPTEMBER_29_R2_VERSION, model, evaluation) == ()
+    assert policy_violations(OCTOBER_5_VERSION, model, evaluation) == ()
     other = "native32k" if variant == "standard" else "standard"
     changed = evaluation.model_copy(update={"source_digest": profile.sources[other]})
-    assert policy_violations(SEPTEMBER_29_R2_VERSION, model, changed)
+    assert policy_violations(OCTOBER_5_VERSION, model, changed)
 
     assert evaluation.harbor is not None
     for field in ("dataset", "version", "agent", "env"):
         changed = evaluation.model_copy(update={"harbor": evaluation.harbor.model_copy(update={field: "different"})})
-        assert policy_violations(SEPTEMBER_29_R2_VERSION, model, changed)
+        assert policy_violations(OCTOBER_5_VERSION, model, changed)
     changed = evaluation.model_copy(update={"harbor": evaluation.harbor.model_copy(update={"max_output_tokens": 256})})
-    assert policy_violations(SEPTEMBER_29_R2_VERSION, model, changed)
+    assert policy_violations(OCTOBER_5_VERSION, model, changed)
 
 
 def test_campaign_accepts_sotopia_hugging_face_record_identity():
@@ -126,7 +133,7 @@ def test_campaign_accepts_sotopia_hugging_face_record_identity():
         tasks=(EvalTaskRef(name=identity["dataset"], num_fewshot=None),),
         harbor=HarborRef(**identity, config_digest="sha256:" + "1" * 64, max_input_tokens=32768, max_output_tokens=8192),
     )
-    assert policy_violations(SEPTEMBER_29_R2_VERSION, model, evaluation) == ()
+    assert policy_violations(OCTOBER_5_VERSION, model, evaluation) == ()
 
 
 def test_campaign_rejects_runtime_and_source_drift():
@@ -134,46 +141,21 @@ def test_campaign_rejects_runtime_and_source_drift():
     commit = CAMPAIGN.runtimes["evalchemy"]
     assert (
         runtime_violations(
-            SEPTEMBER_29_R2_VERSION,
+            OCTOBER_5_VERSION,
             evaluation,
             f"evalchemy @ git+https://github.com/marin-community/evalchemy.git@{commit}",
         )
         == ()
     )
-    assert runtime_violations(SEPTEMBER_29_R2_VERSION, evaluation, "evalchemy@" + "0" * 40)
+    assert runtime_violations(OCTOBER_5_VERSION, evaluation, "evalchemy@" + "0" * 40)
     changed = evaluation.model_copy(update={"source_digest": "sha256:" + "0" * 64})
-    assert policy_violations(SEPTEMBER_29_R2_VERSION, model, changed)
+    assert policy_violations(OCTOBER_5_VERSION, model, changed)
 
 
-def test_revised_campaign_does_not_admit_original_harbor_runtime():
+@pytest.mark.parametrize("mechanism", ["evalchemy", "harbor"])
+def test_campaign_admits_only_its_pinned_runtime(mechanism):
     _, evaluation = _campaign_run("Qwen-Qwen3.6-35B-A3B", "math500")
-    evaluation = evaluation.model_copy(update={"mechanism": "harbor"})
-    original = CAMPAIGNS[SEPTEMBER_29_VERSION].runtimes["harbor"]
-    revised = CAMPAIGN.runtimes["harbor"]
-    for version, allowed, rejected in (
-        (SEPTEMBER_29_VERSION, original, revised),
-        (SEPTEMBER_29_R2_VERSION, revised, original),
-    ):
-        assert runtime_violations(version, evaluation, "harbor@" + allowed) == ()
-        assert runtime_violations(version, evaluation, "harbor@" + rejected)
-
-
-@pytest.mark.parametrize("version", [SEPTEMBER_29_VERSION, SEPTEMBER_29_R2_VERSION])
-def test_historical_and_revised_harbor_configs_stay_in_their_own_cohorts(version):
-    model, _ = _campaign_run("Qwen-Qwen3.6-35B-A3B", "math500")
-    profile = CAMPAIGNS[version].harbor["swebench-verified"]
-    evaluation = EvalRef(
-        name="swebench-verified",
-        mechanism="harbor",
-        source_digest=profile.sources["standard"],
-        tasks=(EvalTaskRef(name=profile.identity.dataset, num_fewshot=None),),
-        harbor=HarborRef(
-            **profile.identity.model_dump(),
-            config_digest="sha256:" + "1" * 64,
-            max_input_tokens=32768,
-            max_output_tokens=8192,
-        ),
-    )
-    assert policy_violations(version, model, evaluation) == ()
-    other = SEPTEMBER_29_R2_VERSION if version == SEPTEMBER_29_VERSION else SEPTEMBER_29_VERSION
-    assert policy_violations(other, model, evaluation)
+    evaluation = evaluation.model_copy(update={"mechanism": mechanism})
+    allowed = CAMPAIGN.runtimes[mechanism]
+    assert runtime_violations(OCTOBER_5_VERSION, evaluation, mechanism + "@" + allowed) == ()
+    assert runtime_violations(OCTOBER_5_VERSION, evaluation, mechanism + "@" + "0" * 40)
