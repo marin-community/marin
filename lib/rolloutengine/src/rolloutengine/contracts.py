@@ -11,6 +11,7 @@ from taskcompendium.grading import GradeResult
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
+AGENT_TIMEOUT_STOP_REASON = "agent_timeout"
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ class RolloutOperation(StrEnum):
     MODEL = "model"
     ADVANCE = "advance"
     GRADE = "grade"
+    CLEANUP = "cleanup"
 
 
 class RolloutInterrupted(RuntimeError):

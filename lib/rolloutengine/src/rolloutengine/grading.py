@@ -30,6 +30,7 @@ from taskcompendium.grading import GradeResult, GradingFailure, Outcome, grade_a
 from taskcompendium.models import SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
 from taskcompendium.submission import Submission
 
+from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _install_files, _machine_command, _task_machine
 
 MISSING_FILE_EXIT = 44
@@ -59,6 +60,7 @@ async def _grade_rollout(
     messages: tuple[dict[str, Any], ...],
     machine: Machine | None,
     factories: Mapping[EnvironmentKind, MachineFactory],
+    cleanup: _Cleanup,
 ) -> GradeResult:
     """Grade the final transcript and task filesystem without model access to private files."""
     if task.verifier.kind == VerifierKind.SKIPPED:
@@ -78,7 +80,7 @@ async def _grade_rollout(
             )
     if verifier.environment is None:
         return await _shell_grade(verifier, messages, machine)
-    async with _task_machine(verifier.environment, factories) as grading_machine:
+    async with _task_machine(verifier.environment, factories, cleanup) as grading_machine:
         assert grading_machine is not None
         with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
             for index, artifact in enumerate(verifier.artifacts):
