@@ -7,6 +7,7 @@ import asyncio
 import json
 import traceback
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from itertools import islice
 from pathlib import Path
@@ -26,6 +27,7 @@ from experiments.post_training.russell_rsi.settings import (
     ROLLOUT_CONCURRENCY,
     STOP_TOKEN_IDS,
 )
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class DevelopmentEvaluationConfig:
     samples_per_task: int = 1
     temperature: float = 0.0
     require_reward_variation: bool = False
+    startup_attempts: int = 1
 
 
 def completion_message(text: str, tools: list[dict], message_index: int) -> dict:
@@ -68,24 +71,52 @@ def qemu_factory(manifest: dict, runtime_bundle: RuntimeBundle):
     )
 
 
-async def rollout_evidence(engine, task):
+async def rollout_evidence(
+    engine,
+    task,
+    *,
+    startup_attempts: int = 1,
+    record_startup_failure: Callable[[int, dict], None] | None = None,
+):
     """Return the rollout and a record with execution failure details."""
-    from rolloutengine.contracts import RolloutInterrupted  # noqa: PLC0415
+    from rolloutengine.contracts import RolloutInterrupted, RolloutOperation  # noqa: PLC0415
+    from shellbox.machine import MachineStartupError  # noqa: PLC0415
 
-    operation = None
-    execution_error: dict | None = None
-    try:
-        rollout = await engine.run(task)
-    except RolloutInterrupted as error:
-        rollout = error.rollout
-        operation = error.operation.value
-        cause = error.__cause__ or error
-        execution_error = {
-            "type": type(cause).__name__,
-            "message": str(cause),
-            "traceback": "".join(traceback.format_exception(error)),
+    if startup_attempts < 1 or (startup_attempts > 1 and record_startup_failure is None):
+        raise ValueError("Startup retries require a positive bound and durable failure records")
+    for attempt in range(1, startup_attempts + 1):
+        operation = None
+        execution_error: dict | None = None
+        retry_start = False
+        try:
+            rollout = await engine.run(task)
+        except RolloutInterrupted as error:
+            rollout = error.rollout
+            operation = error.operation.value
+            cause = error.__cause__ or error
+            execution_error = {
+                "type": type(cause).__name__,
+                "message": str(cause),
+                "traceback": "".join(traceback.format_exception(error)),
+            }
+            retry_start = (
+                error.operation == RolloutOperation.START
+                and isinstance(cause, MachineStartupError)
+                and not rollout.steps
+                and not rollout.response_token_ids
+                and (rollout.failure is None or "pending_turn" not in rollout.failure.diagnostics)
+            )
+        evidence = {
+            **asdict(rollout),
+            "interrupted_operation": operation,
+            "execution_error": execution_error,
+            "startup_attempt": attempt,
         }
-    return rollout, {**asdict(rollout), "interrupted_operation": operation, "execution_error": execution_error}
+        if retry_start and record_startup_failure is not None:
+            record_startup_failure(attempt, evidence)
+        if not retry_start or attempt == startup_attempts:
+            return rollout, evidence
+    raise AssertionError("Startup attempt bound was not applied")
 
 
 async def evaluate_development(
@@ -116,6 +147,7 @@ async def evaluate_development(
     if not tasks:
         raise ValueError("The frozen development cohort is empty")
     categories: Counter[str] = Counter()
+    startup_counts: Counter[str] = Counter()
     failed_ids: set[str] = set()
     group_rewards: dict[str, list[float]] = {}
     async with httpx.AsyncClient(timeout=600) as client:
@@ -187,10 +219,40 @@ async def evaluate_development(
         semaphore = asyncio.Semaphore(ROLLOUT_CONCURRENCY)
         with StoragePath(prefix_join(config.output_path, "traces.jsonl")).open("w") as traces:
 
-            async def run_task(task) -> None:
+            async def run_task(task, sample_index: int) -> None:
                 async with semaphore:
-                    rollout, record = await rollout_evidence(engine, task)
-                    traces.write(json.dumps(record) + "\n")
+
+                    def record_startup_failure(attempt: int, evidence: dict) -> None:
+                        task_sha256 = compact_json_sha256(task.model_dump(mode="json"))
+                        path = prefix_join(
+                            config.output_path,
+                            f"startup-failures/{task_sha256}/{sample_index}-{attempt}.json",
+                        )
+                        StoragePath(path).write_text(
+                            json.dumps(
+                                {
+                                    "task_id": task.id,
+                                    "task_sha256": task_sha256,
+                                    "sample_index": sample_index,
+                                    "model_identity": config.model_identity,
+                                    "model_requests_issued": 0,
+                                    "evidence": evidence,
+                                }
+                            )
+                            + "\n"
+                        )
+                        startup_counts["failed_starts"] += 1
+                        if attempt == config.startup_attempts:
+                            startup_counts["exhausted_samples"] += 1
+
+                    rollout, record = await rollout_evidence(
+                        engine,
+                        task,
+                        startup_attempts=config.startup_attempts,
+                        record_startup_failure=record_startup_failure,
+                    )
+                    startup_counts["retries"] += record["startup_attempt"] - 1
+                    traces.write(json.dumps({**record, "sample_index": sample_index}) + "\n")
                     operation = record["interrupted_operation"]
                     if rollout.grade.status != Outcome.GRADED:
                         category = f"execution_{operation or 'ungraded'}"
@@ -206,8 +268,8 @@ async def evaluate_development(
 
             async with asyncio.TaskGroup() as group:
                 for task in tasks:
-                    for _ in range(config.samples_per_task):
-                        group.create_task(run_task(task))
+                    for sample_index in range(config.samples_per_task):
+                        group.create_task(run_task(task, sample_index))
 
     informative_groups = sum(len(set(rewards)) > 1 for rewards in group_rewards.values())
     summary = {
@@ -216,6 +278,8 @@ async def evaluate_development(
         "tasks_identity": config.tasks_identity,
         "count": len(tasks),
         "samples_per_task": config.samples_per_task,
+        "startup_attempts": config.startup_attempts,
+        "startup_counts": dict(startup_counts),
         "informative_groups": informative_groups,
         "task_rewards": group_rewards,
         "categories": dict(categories),

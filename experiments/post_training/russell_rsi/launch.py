@@ -108,6 +108,7 @@ from experiments.post_training.russell_rsi.settings import (
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
+CONTINUATION_STARTUP_ATTEMPTS = 3
 MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "b8c07f7df1df65525abbfdbcd1572318ba11c42f"
 CLUSTER = "cw-us-east-02a"
@@ -333,6 +334,7 @@ def development_step(
     temperature: float = 0.0,
     require_reward_variation: bool = False,
     limit: int = 32,
+    startup_attempts: int = 1,
 ) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> DevelopmentEvaluationConfig:
         if model.artifact_type is SkyRLRun:
@@ -362,6 +364,7 @@ def development_step(
             samples_per_task=samples_per_task,
             temperature=temperature,
             require_reward_variation=require_reward_variation,
+            startup_attempts=startup_attempts,
         )
 
     return ArtifactStep(
@@ -1070,6 +1073,7 @@ def run_bootstrap_loop(
                 "predecessor_round_sha256": previous_sha256,
                 "predecessor_state": asdict(state),
                 "runtime_smoke_policy": "Run a fresh disposable smoke before the continued pilot.",
+                "calibration_startup_attempts": CONTINUATION_STARTUP_ATTEMPTS,
                 "raw_feedback_identity": predecessor.round.result.feedback_identity,
                 "raw_capabilities_sha256": hashlib.sha256(predecessor.raw_capabilities).hexdigest(),
                 "reviewed_feedback_identity": feedback_identity,
@@ -1101,6 +1105,9 @@ def run_bootstrap_loop(
         if state.completed_pilots and not targeted:
             state = replace(state, stop_reason=StopReason.TASK_SUPPLY)
             break
+        calibration_label = f"bootstrap-round-{number}-bank-difficulty{'-replay-v1' if number >= 2 else ''}"
+        if predecessor is not None:
+            calibration_label += f"-startup{CONTINUATION_STARTUP_ATTEMPTS}-v1"
         difficulty = (
             initial_calibration
             if number == 1 and initial_calibration is not None
@@ -1109,12 +1116,13 @@ def run_bootstrap_loop(
                 current,
                 version,
                 runtime_bundle,
-                f"bootstrap-round-{number}-bank-difficulty{'-replay-v1' if number >= 2 else ''}",
+                calibration_label,
                 relative_path="train.parquet",
                 samples_per_task=8,
                 temperature=CALIBRATION_TEMPERATURE,
                 require_reward_variation=number == 1,
                 limit=len(bank),
+                startup_attempts=CONTINUATION_STARTUP_ATTEMPTS if predecessor is not None else 1,
             )
         )
         inputs = round_inputs(

@@ -10,6 +10,7 @@ import pytest
 from rolloutengine.contracts import ModelTurn, RolloutContractError
 from rolloutengine.engine import ShellboxRolloutEngine
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import MachineStartupError
 from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec
 from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
@@ -187,3 +188,87 @@ def test_rollout_evidence_preserves_execution_failure_and_partial_tokens(stage):
     assert cause["message"] in record["execution_error"]["traceback"]
     if stage == "start":
         assert cause["message"] == "Guest transport is unavailable"
+
+
+@pytest.mark.parametrize("failed_starts,fail_command", [(1, False), (3, False), (0, True)])
+def test_startup_retry_preserves_failures_without_replacing_model_samples(failed_starts, fail_command):
+    failures = []
+    model_requests = []
+
+    class Machine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            if command.argv[-1] == "fail-after-turn":
+                raise MachineStartupError("Failure after inference")
+            return await self.machine.run(command)
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            await self.machine.download(source, target)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        attempts = 0
+
+        async def create(self, spec):
+            self.attempts += 1
+            # Each failed start must be saved before the next machine starts.
+            assert len(failures) == min(self.attempts - 1, failed_starts)
+            if self.attempts <= failed_starts:
+                raise MachineStartupError(f"Failed start {self.attempts}")
+            return Machine(await ShellSimMachineFactory().create(spec))
+
+    async def turn(request):
+        model_requests.append(request)
+        message = {"role": "assistant", "content": "89"}
+        if fail_command:
+            message = {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "command",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": json.dumps({"command": "fail-after-turn"})},
+                    }
+                ],
+            }
+        return ModelTurn(message, (1,), (2,), None, "stop")
+
+    factory = Factory()
+    engine = ShellboxRolloutEngine(
+        turn,
+        {EnvironmentKind.SHELLSIM: factory},
+        max_turns=4,
+        command_timeout=10,
+        convention=SubmissionConvention(id="unit", answer_format=AnswerFormat.PLAIN),
+    )
+    task = preflight_task(1, "Return the file value.", 89)
+    rollout, evidence = asyncio.run(
+        rollout_evidence(
+            engine,
+            task,
+            startup_attempts=3,
+            record_startup_failure=lambda attempt, record: failures.append((attempt, json.loads(json.dumps(record)))),
+        )
+    )
+    assert factory.attempts == (3 if failed_starts == 3 else failed_starts + 1)
+    assert len(model_requests) == (0 if failed_starts == 3 else 1)
+    assert [record[0] for record in failures] == list(range(1, failed_starts + 1))
+    for attempt, record in failures:
+        assert record["response_token_ids"] == []
+        assert record["execution_error"]["message"] == f"Failed start {attempt}"
+    if failed_starts == 3:
+        assert rollout.grade.reward is None
+        assert evidence["startup_attempt"] == 3
+    elif fail_command:
+        assert evidence["interrupted_operation"] == "advance"
+        assert evidence["response_token_ids"] == (2,)
+    else:
+        assert rollout.grade.reward == 1.0
+        assert evidence["interrupted_operation"] is None
