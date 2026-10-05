@@ -36,6 +36,7 @@ GRANTS = {
     ],
     "context": [
         f'GRANT CREATE ON SCHEMA public TO "{LOOM_DATABASE_USER}"',
+        # Fresh init-schema tables are owned by the workbench writer; this repairs existing admin-owned tables.
         f"""DO $$ BEGIN
             IF to_regclass('public.codehealth_lint_findings') IS NOT NULL THEN
                 GRANT DELETE ON TABLE public.codehealth_lint_findings TO "{LOOM_DATABASE_USER}";
