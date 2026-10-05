@@ -74,8 +74,12 @@ def git_image(tmp_path):
     return repository
 
 
-@pytest.mark.parametrize("answer,reward", [("fixed", 1.0), ("wrong", 0.0)])
-async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(tmp_path, git_image, answer, reward):
+@pytest.mark.parametrize(
+    "answer,commit_repair,reward", [("fixed", False, 1.0), ("wrong", False, 0.0), ("fixed", True, 1.0)]
+)
+async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
+    tmp_path, git_image, answer, reward, commit_repair
+):
     task = swe_task(
         SWEInstance(
             instance_id="fixture-1",
@@ -99,6 +103,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(tmp_p
             machines.append(machine)
             return machine
 
+    edit = f"echo {answer} > value.txt" + (" && git add value.txt && git commit -qm Repair" if commit_repair else "")
     model = ReplayModel(
         [
             {
@@ -109,7 +114,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(tmp_p
                         "type": "function",
                         "function": {
                             "name": "shell",
-                            "arguments": json.dumps({"command": f"echo {answer} > value.txt"}),
+                            "arguments": json.dumps({"command": edit}),
                         },
                     }
                 ],
