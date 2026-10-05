@@ -144,12 +144,14 @@ def test_resolved_root_selects_region_local_bucket(monkeypatch):
     assert config.resolved_root() == "gs://marin-us-east5"
 
 
-def test_resolved_root_constructs_default_for_unmapped_region(monkeypatch):
-    """A detected-but-unmapped region constructs gs://marin-{region}."""
+def test_resolved_root_rejects_unmapped_region(monkeypatch):
+    """A detected region without a configured bucket fails before writing."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    monkeypatch.setattr(fs, "region_from_metadata", lambda: "antarctica-south1")
-    config = DataConfig(region_buckets={"us-east5": BucketSpec("marin-us-east5", StoreType.GCS)})
-    assert config.resolved_root() == "gs://marin-antarctica-south1"
+    monkeypatch.setattr(fs, "region_from_metadata", lambda: "us-west2")
+    with pytest.raises(ValueError) as exc_info:
+        marin_prefix()
+    assert "us-west2" in str(exc_info.value)
+    assert "MARIN_PREFIX" in str(exc_info.value)
 
 
 def test_resolved_root_local_fallback(monkeypatch):
