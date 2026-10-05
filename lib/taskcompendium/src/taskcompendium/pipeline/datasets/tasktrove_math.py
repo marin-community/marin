@@ -1,21 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind remaining typed TaskTrove math sources without claiming source scorer parity."""
+"""Normalize typed TaskTrove math tasks without claiming source scorer parity."""
 
 from taskcompendium.pipeline.datasets import atlas_math_qa
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     NormalizationChange,
     NormalizedTask,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
 )
 
 MATH_CRITERIA = (
@@ -65,83 +61,53 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     return NormalizedTask(task, changes)
 
 
-def recipe(name: str, *, config: str, revision: str, rubric: ReviewRubric) -> DatasetRecipe:
-    return DatasetRecipe(
-        name=f"tasktrove-{name}",
-        version=f"tasktrove-{name}-v1",
-        source=HFSource(TASKTROVE_DATASET, revision, config, "train"),
-        inputs=tasktrove_inputs(config, revision),
-        normalize=normalize,
-        rubric=rubric,
-        intended_use=IntendedUse.TRAIN,
-        check_suite=CheckSuite(
-            id=f"{name}-typed-math-controls",
-            revision="1",
-            parameters={},
-            run=atlas_math_qa.verification_report,
-        ),
-    )
-
-
-SOURCES = {
-    "math_gym": tasktrove_source(
-        config="laion__nemotron-gym-math-v5",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="math_gym-answerability",
-            version="1",
-            criteria=(
-                *MATH_CRITERIA,
-                "Check complete contest statements and exact final-answer format; independently verify feasible "
-                "calculations and flag private references answering a different quantity.",
-            ),
+RUBRICS: dict[str, ReviewRubric] = {
+    "math_gym": ReviewRubric(
+        id="math_gym-answerability",
+        version="1",
+        criteria=(
+            *MATH_CRITERIA,
+            "Check complete contest statements and exact final-answer format; independently verify feasible "
+            "calculations and flag private references answering a different quantity.",
         ),
     ),
-    "math_oracle": tasktrove_source(
-        config="SankalpKJ__nemotron-math-oracle-filtered-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="math_oracle-answerability",
-            version="1",
-            criteria=(
-                *MATH_CRITERIA,
-                "Check that oracle-filtered references solve the public problem; source oracle existence is evidence of "
-                "grader compatibility, not proof of mathematical correctness.",
-            ),
+    "math_oracle": ReviewRubric(
+        id="math_oracle-answerability",
+        version="1",
+        criteria=(
+            *MATH_CRITERIA,
+            "Check that oracle-filtered references solve the public problem; source oracle existence is evidence of "
+            "grader compatibility, not proof of mathematical correctness.",
         ),
     ),
-    "math_prism": tasktrove_source(
-        config="laion__nemo-prism-math-v3",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="math_prism-answerability",
-            version="1",
-            criteria=(
-                *MATH_CRITERIA,
-                "Check symbolic olympiad statements, quantifiers, strict versus attained extrema, and whether escaped "
-                "LaTeX keys express the requested quantity.",
-            ),
+    "math_prism": ReviewRubric(
+        id="math_prism-answerability",
+        version="1",
+        criteria=(
+            *MATH_CRITERIA,
+            "Check symbolic olympiad statements, quantifiers, strict versus attained extrema, and whether escaped "
+            "LaTeX keys express the requested quantity.",
         ),
     ),
-    "math_stack": tasktrove_source(
-        config="laion__nemotron-gym-math-stack-overflow-v3",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="math_stack-answerability",
-            version="1",
-            criteria=(
-                *MATH_CRITERIA,
-                "Check mathematical questions for missing prior context, definitions, diagrams, or truncated "
-                "expressions; "
-                "a plausible private answer cannot fill absent public premises.",
-            ),
+    "math_stack": ReviewRubric(
+        id="math_stack-answerability",
+        version="1",
+        criteria=(
+            *MATH_CRITERIA,
+            "Check mathematical questions for missing prior context, definitions, diagrams, or truncated "
+            "expressions; "
+            "a plausible private answer cannot fill absent public premises.",
         ),
     ),
 }
 
 
-def recipe_for_source(
-    name: str,
-) -> DatasetRecipe:
-    source = SOURCES[name]
-    return recipe(name, config=source.config, revision=source.revision, rubric=source.rubric)
+def pipeline(name: str) -> TaskPipeline:
+    """Build typed TaskTrove math normalization and source controls."""
+    return TaskPipeline(
+        normalize=normalize,
+        rubric=RUBRICS[name],
+        check_suite=CheckSuite(
+            id=f"{name}-typed-math-controls", revision="1", parameters={}, run=atlas_math_qa.verification_report
+        ),
+    )

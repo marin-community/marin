@@ -20,7 +20,6 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.datasets.numeric_answers import RECIPES
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     Confidence,
@@ -37,6 +36,7 @@ from taskcompendium.pipeline.rewriting import BatchRewriter
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
+from experiments.post_training.task_curation.direct_sources import RECIPES
 from experiments.post_training.task_curation.pipeline import RewriteSelection, SourceBinding, build_workflow, main
 
 

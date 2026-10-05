@@ -7,16 +7,14 @@ import base64
 import tomllib
 
 from taskcompendium.pipeline.datasets import rubric_tasks
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.models import (
-    DatasetRecipe,
     ImportRejection,
     NormalizedTask,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
 )
 
-CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 RUBRIC = ReviewRubric(
     id="multichallenge-answerability",
     version="1",
@@ -53,11 +51,6 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     )
 
 
-def recipe() -> DatasetRecipe:
-    return rubric_tasks.recipe(
-        "multichallenge",
-        config=CONFIG,
-        revision=REVISION,
-        rubric=RUBRIC,
-        normalize_row=normalize,
-    )
+def pipeline() -> TaskPipeline:
+    """Build the multichallenge normalization and review policy."""
+    return rubric_tasks.pipeline(RUBRIC, normalize_row=normalize)

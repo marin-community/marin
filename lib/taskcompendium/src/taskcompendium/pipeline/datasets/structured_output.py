@@ -22,18 +22,14 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
@@ -60,7 +56,6 @@ def required_object_conflicts(schema: dict[str, Any], path: str = "$") -> list[s
     return conflicts
 
 
-CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
 DELIVERY = "Write your final JSON to `/app/answer.txt`."
 RUBRIC = ReviewRubric(
     id="structured-output-contract",
@@ -122,15 +117,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="tasktrove-structured",
-        version="tasktrove-structured-v1",
-        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIG, "train"),
-        inputs=tasktrove_inputs(CONFIG, REVISION),
+def pipeline() -> TaskPipeline:
+    """Build the source normalization and review policy."""
+    return TaskPipeline(
         normalize=normalize,
         rubric=RUBRIC,
-        intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(
             id="json-schema-contract-and-controls",
             revision="1",

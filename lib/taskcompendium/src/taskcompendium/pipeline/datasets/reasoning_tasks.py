@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize pinned TaskTrove Reasoning Gym and all-puzzles sources."""
+"""Normalize TaskTrove Reasoning Gym and all-puzzles task contracts."""
 
 import base64
 import json
@@ -20,22 +20,16 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
 from taskcompendium.pipeline.datasets.grader_scripts.puzzle import puzzle_spec
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 
-REASONING_CONFIG = "laion__nemotron-gym-reasoning-gym-v2"
-PUZZLE_CONFIG = "laion__all-puzzles-v2"
 UNSCORABLE_DATASETS = frozenset({"arc_agi", "rearc"})
 REASONING_RUBRIC = ReviewRubric(
     id="reasoning-gym-answerability",
@@ -157,27 +151,19 @@ def puzzle_checks(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=verify_witness(task, expected, "__incorrect_puzzle_answer__"))
 
 
-def reasoning_recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="tasktrove-reasoning-gym",
-        version="tasktrove-reasoning-gym-v1",
-        source=HFSource(TASKTROVE_DATASET, REVISION, REASONING_CONFIG, "train"),
-        inputs=tasktrove_inputs(REASONING_CONFIG, REVISION),
+def reasoning_pipeline() -> TaskPipeline:
+    """Build the source normalization and review policy."""
+    return TaskPipeline(
         normalize=normalize_reasoning,
         rubric=REASONING_RUBRIC,
-        intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(id="reasoning-gym-reference-controls", revision="1", parameters={}, run=reasoning_checks),
     )
 
 
-def puzzle_recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="tasktrove-puzzles",
-        version="tasktrove-puzzles-v1",
-        source=HFSource(TASKTROVE_DATASET, REVISION, PUZZLE_CONFIG, "train"),
-        inputs=tasktrove_inputs(PUZZLE_CONFIG, REVISION),
+def puzzle_pipeline() -> TaskPipeline:
+    """Build the source normalization and review policy."""
+    return TaskPipeline(
         normalize=normalize_puzzle,
         rubric=PUZZLE_RUBRIC,
-        intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(id="puzzle-reference-controls", revision="1", parameters={}, run=puzzle_checks),
     )

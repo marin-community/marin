@@ -48,7 +48,7 @@ def qa_row(request):
     )
     return RawRow(
         "qa-1",
-        Source(dataset="open-thoughts/TaskTrove", revision=qa_tasks.REVISION, row="test:0", importer_revision="test-v1"),
+        Source(dataset="open-thoughts/TaskTrove", revision="fixture-v1", row="test:0", importer_revision="test-v1"),
         {
             "instruction": (
                 "You are answering an open-ended question. " + qa_tasks.SOURCE_DELIVERY + "\n---\n" + question
@@ -103,7 +103,7 @@ def test_nemo_reference_schema_violation_is_not_hidden_by_matching_comparator():
     data["expected_action"]["arguments"] = json.dumps(arguments)
     row = RawRow(
         "action-1",
-        Source(dataset=nemo_actions.DATASET, revision=nemo_actions.REVISION, row="test:0", importer_revision="test-v1"),
+        Source(dataset="fixture/nemo", revision="fixture-v1", row="test:0", importer_revision="test-v1"),
         data,
     )
     task = nemo_actions.normalize(row)
@@ -118,7 +118,7 @@ def test_nemo_text_target_retains_explicit_unsupported_reason():
     data["expected_action"] = {"type": "message", "content": "Please provide your user ID."}
     row = RawRow(
         "action-2",
-        Source(dataset=nemo_actions.DATASET, revision=nemo_actions.REVISION, row="test:1", importer_revision="test-v1"),
+        Source(dataset="fixture/nemo", revision="fixture-v1", row="test:1", importer_revision="test-v1"),
         data,
     )
     result = nemo_actions.normalize(row)

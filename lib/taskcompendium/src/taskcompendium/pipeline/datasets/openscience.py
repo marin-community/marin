@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned generated science MCQA with private reference reasoning."""
+"""Generated science MCQA normalization with private reference reasoning."""
 
 import json
 import re
@@ -18,26 +18,16 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource
-
-DATASET = "nvidia/OpenScience"
-REVISION = "7bd0437e4756f761768fe7e5cebeaa75480a4fd6"
-CONFIG = "OS-Q2.5-32B-4"
-SPLIT = "train"
-SOURCE_FILE = "OS-Q2.5-32B-4.jsonl"
-SOURCE_FORMAT = "jsonl"
 
 RUBRIC = ReviewRubric(
     id="openscience-quality",
@@ -90,15 +80,10 @@ def controls(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=verify_witness(task, verifier.expected, wrong))
 
 
-def recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="openscience",
-        version="openscience-v1",
-        source=HFSource(DATASET, REVISION, CONFIG, SPLIT),
+def pipeline() -> TaskPipeline:
+    return TaskPipeline(
         normalize=normalize,
-        intended_use=IntendedUse.TRAIN,
         rubric=RUBRIC,
-        inputs=hub_inputs(DATASET, REVISION, SourceFiles((SOURCE_FILE,), SourceFormat.JSONL)),
         check_suite=CheckSuite(
             id="openscience-controls", revision="1", parameters={"comparator": "cleanup-mcq"}, run=controls
         ),

@@ -23,8 +23,8 @@ def row(name, instruction, data):
         "test-task",
         Source(
             dataset="open-thoughts/TaskTrove",
-            revision=atlas_math_qa.REVISION,
-            row=f"{atlas_math_qa.CONFIGS[name]}:train:0",
+            revision="fixture-v1",
+            row=f"{name}:train:0",
             importer_revision="test",
         ),
         {"instruction": instruction, "verifier_data": data, "files": files},

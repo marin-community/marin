@@ -30,18 +30,20 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.datasets import gpqa, instruction_following, preference_tasks, rubric_tasks
 from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
-from taskcompendium.pipeline.datasets.math_answers import recipe_asdiv
-from taskcompendium.pipeline.datasets.numeric_answers import SVAMP_RECIPE, normalize_aime24, normalize_svamp
+from taskcompendium.pipeline.datasets.math_answers import asdiv_rows
+from taskcompendium.pipeline.datasets.numeric_answers import normalize_aime24, normalize_svamp, svamp_pipeline
 from taskcompendium.pipeline.datasets.source_definitions import tasktrove_files
 from taskcompendium.pipeline.filtering import task_decision
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
+from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
     CheckStatus,
     Confidence,
+    DatasetRecipe,
     Decision,
     Disposition,
     EnvironmentInventory,
     FilterPolicy,
+    HFSource,
     ImportRejection,
     IntendedUse,
     Quality,
@@ -64,7 +66,7 @@ from taskcompendium.pipeline.stages import (
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
-from .pipeline_stages import run_stages, stage_table
+from .pipeline_stages import fixture_recipe, run_stages, stage_table
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,18 @@ def response(task_id, confidence="high", quality="good"):
 
 
 @pytest.fixture
+def svamp_recipe():
+    return DatasetRecipe(
+        name="svamp-fixture",
+        version="1",
+        source=HFSource("fixture/svamp", "1", "default", "train"),
+        pipeline=svamp_pipeline(),
+        intended_use=IntendedUse.TRAIN,
+        inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
+    )
+
+
+@pytest.fixture
 def apple_row():
     return {
         "Body": "Aya has 2 apples.\u2028They belong to Aya.",
@@ -156,7 +170,7 @@ def apple_row():
     }
 
 
-def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path, apple_row):
+def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path, apple_row, svamp_recipe):
     conflicting = {**apple_row, "Body": "Aya has some apples."}
     rows = [
         apple_row,
@@ -167,7 +181,7 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
     ]
     service = BatchService()
     manifest = run_stages(
-        SVAMP_RECIPE,
+        svamp_recipe,
         rows,
         output_path=tmp_path,
         limit=10,
@@ -181,7 +195,7 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
     assert all(audit[index]["filter_reasons"] == ["conflicting_references"] for index in (2, 3))
     accepted = [TaskSpec.model_validate_json(row["task_json"]) for row in stage_table(tmp_path, "accepted").to_pylist()]
     assert [task.id for task in accepted] == [audit[0]["task_id"]]
-    assert accepted[0].source.revision == SVAMP_RECIPE.source.revision
+    assert accepted[0].source.revision == svamp_recipe.source.revision
     assert apple_row["Body"] in accepted[0].context.events[0].content
     assert "Equation" not in service.batches["batch-0"][0]["body"]["messages"][1]["content"]
     controls = audit[0]["checks"]
@@ -199,7 +213,7 @@ def test_pipeline_accounts_for_rejects_duplicates_and_conflicting_keys(tmp_path,
     assert audit[4]["normalization_detail"]
 
 
-def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, apple_row):
+def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, apple_row, svamp_recipe):
     conflicting = {**apple_row, "Body": "Aya has some apples."}
     rows = [apple_row] * 1001 + [{**conflicting, "Answer": "1"}, {**conflicting, "Answer": "2"}]
     snapshot = tmp_path / "sample.jsonl"
@@ -211,7 +225,7 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
     audit_source(
         f"{root}/staged",
         f"{root}/audited",
-        SVAMP_RECIPE,
+        svamp_recipe,
         ReviewConfig(reviewer.model, reviewer.model_revision, reviewer.max_prompt_characters, reviewer.max_tokens),
         AuditExecution(max_workers=2, review_batch_size=1, reviewer=reviewer),
         SourceFiles(("source.jsonl",), SourceFormat.JSONL),
@@ -231,7 +245,7 @@ def test_audit_deduplicates_across_acquired_shards_on_storage_uri(tmp_path, appl
     assert all(row["raw_json"] and row["task_json"] for row in audit)
 
 
-def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_path, apple_row):
+def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_path, apple_row, svamp_recipe):
     rows = [{**apple_row, "Body": f"Person {index} has 2 apples."} for index in range(201)]
     snapshot = tmp_path / "sample.jsonl"
     snapshot.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -244,7 +258,7 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
     audit_source(
         str(staged),
         str(tmp_path / "audited"),
-        SVAMP_RECIPE,
+        svamp_recipe,
         config,
         AuditExecution(max_workers=1, reviewer=reviewer),
         SourceFiles(("source.jsonl",), SourceFormat.JSONL),
@@ -260,7 +274,7 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
     audit_source(
         str(staged),
         str(tmp_path / "audited"),
-        SVAMP_RECIPE,
+        svamp_recipe,
         config,
         AuditExecution(max_workers=3, reviewer=BatchReviewer(resumed, "fixture", "revision")),
         SourceFiles(("source.jsonl",), SourceFormat.JSONL),
@@ -274,12 +288,12 @@ def test_audit_restart_reuses_completed_shards_when_worker_count_changes(tmp_pat
     assert manifest["dispositions"] == {"keep": len(rows) - len(missing_ids), "reject": len(missing_ids)}
 
 
-def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, apple_row):
+def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, apple_row, svamp_recipe):
     service = BatchService(confidence="medium")
     reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
     strict_policy = FilterPolicy(id="high-confidence", minimum_confidence=Confidence.HIGH)
     resumed = run_stages(
-        SVAMP_RECIPE,
+        svamp_recipe,
         [apple_row],
         output_path=tmp_path,
         limit=1,
@@ -289,7 +303,7 @@ def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, appl
     assert resumed["dispositions"] == {"reject": 1}
     pending_audit = stage_table(tmp_path).to_pylist()[0]
     accepted = run_stages(
-        SVAMP_RECIPE,
+        svamp_recipe,
         iter(()),
         output_path=tmp_path,
         limit=1,
@@ -306,10 +320,10 @@ def test_pipeline_refilters_completed_shards_without_new_requests(tmp_path, appl
     assert accepted_audit["review_evidence"] == pending_audit["review_evidence"]
 
 
-def test_pipeline_retries_invalid_model_reply_and_preserves_both_attempts(tmp_path, apple_row):
+def test_pipeline_retries_invalid_model_reply_and_preserves_both_attempts(tmp_path, apple_row, svamp_recipe):
     service = BatchService(invalid_first_batch=True)
     reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment")
-    manifest = run_stages(SVAMP_RECIPE, [apple_row], output_path=tmp_path, limit=1, reviewer=reviewer)
+    manifest = run_stages(svamp_recipe, [apple_row], output_path=tmp_path, limit=1, reviewer=reviewer)
     assert manifest["dispositions"] == {"keep": 1}
     assert manifest["reviewed_rows"] == 1
     task_id = stage_table(tmp_path).to_pylist()[0]["task_id"]
@@ -318,7 +332,7 @@ def test_pipeline_retries_invalid_model_reply_and_preserves_both_attempts(tmp_pa
     retry = review_records((review_path / "retry-1/raw-output.jsonl").read_text(), [task_id])
     assert initial[0].status == ReviewStatus.INVALID
     assert retry[0].status == ReviewStatus.REVIEWED
-    run_stages(SVAMP_RECIPE, iter(()), output_path=tmp_path, limit=1, reviewer=reviewer)
+    run_stages(svamp_recipe, iter(()), output_path=tmp_path, limit=1, reviewer=reviewer)
     assert len(service.batches) == 2
 
 
@@ -454,7 +468,7 @@ def test_unsupported_verification_is_annotated_separately_from_quality(tmp_path,
         },
     }
     manifest = run_stages(
-        instruction_following.recipe(),
+        fixture_recipe(instruction_following.pipeline()),
         [row],
         output_path=tmp_path / "run",
         limit=1,
@@ -529,29 +543,29 @@ def test_explicit_language_conflict_is_rejected_even_when_grader_and_model_pass(
     )
 
 
-def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_path, apple_row):
+def test_query_cache_survives_catalog_changes_and_invalidates_review_inputs(tmp_path, apple_row, svamp_recipe):
     service = BatchService()
     source = Source(dataset="catalog-1", revision="1", row="0", importer_revision="1")
-    task = SVAMP_RECIPE.normalize(RawRow("first", source, apple_row))
+    task = svamp_recipe.pipeline.normalize(RawRow("first", source, apple_row))
     assert isinstance(task, TaskSpec)
     cache_root = str(tmp_path / "cache")
     reviewer = BatchReviewer(service, "fixture-model", "deployment-1", query_cache_root=cache_root)
-    first = reviewer.review([task], SVAMP_RECIPE.rubric, tmp_path / "first")
+    first = reviewer.review([task], svamp_recipe.pipeline.rubric, tmp_path / "first")
     changed = task.model_copy(
         update={
             "id": "second",
             "source": Source(dataset="catalog-2", revision="2", row="99", importer_revision="2"),
         }
     )
-    second = replace(reviewer).review([changed], SVAMP_RECIPE.rubric, tmp_path / "second")
+    second = replace(reviewer).review([changed], svamp_recipe.pipeline.rubric, tmp_path / "second")
     assert len(service.batches) == 1
     assert first[0].task_id == "first"
     assert second[0].verdict is not None
     assert second[0].task_id == second[0].verdict.task_id == "second"
     assert list((tmp_path / "second/query-cache").glob("*.json"))
     rubric = replace(
-        SVAMP_RECIPE.rubric,
-        criteria=(*SVAMP_RECIPE.rubric.criteria, "Check all arithmetic."),
+        svamp_recipe.pipeline.rubric,
+        criteria=(*svamp_recipe.pipeline.rubric.criteria, "Check all arithmetic."),
     )
     reviewer.review([changed], rubric, tmp_path / "rubric")
     replace(reviewer, model_revision="deployment-2").review([changed], rubric, tmp_path / "rubric")
@@ -598,11 +612,13 @@ def test_family_source_hooks_preserve_tasktrove_archive_and_asdiv_xml_records(tm
         '<Dataset><Problem ID="1"><Body>Two plus two</Body><Question>How many?</Question>'
         "<Answer>4 (things)</Answer></Problem></Dataset>"
     )
-    asdiv_row = next(staged_file_rows(str(tmp_path), "ASDiv.xml", recipe_asdiv().inputs.files))
+    asdiv_row = next(
+        staged_file_rows(str(tmp_path), "ASDiv.xml", SourceFiles(("ASDiv.xml",), SourceFormat.XML, reader=asdiv_rows))
+    )
     assert asdiv_row["data"] == {"ID": "1", "Body": "Two plus two", "Question": "How many?", "Answer": "4 (things)"}
 
 
-def test_audit_limit_counts_selected_input_across_files_before_normalization(tmp_path, apple_row):
+def test_audit_limit_counts_selected_input_across_files_before_normalization(tmp_path, apple_row, svamp_recipe):
     staged = tmp_path / "staged"
     staged.mkdir()
     (staged / "a.jsonl").write_text(json.dumps({**apple_row, "Answer": None}) + "\n")
@@ -612,7 +628,7 @@ def test_audit_limit_counts_selected_input_across_files_before_normalization(tmp
     manifest = audit_source(
         str(staged),
         str(tmp_path / "audited"),
-        SVAMP_RECIPE,
+        svamp_recipe,
         ReviewConfig(reviewer.model, reviewer.model_revision, reviewer.max_prompt_characters, reviewer.max_tokens),
         AuditExecution(reviewer=reviewer),
         SourceFiles(("*.jsonl",), SourceFormat.JSONL),
@@ -629,7 +645,7 @@ def test_preference_candidates_are_not_conflicting_answer_keys(tmp_path):
     prompt = [{"role": "user", "content": "Write a greeting."}]
     first = {"prompt": prompt, "completion": [{"role": "assistant", "content": "Hello!"}], "label": True}
     second = {"prompt": prompt, "completion": [{"role": "assistant", "content": "Go away."}], "label": False}
-    recipe = preference_tasks.recipe_for_source("kto_mix")
+    recipe = fixture_recipe(preference_tasks.binary_pipeline(preference_tasks.KTO_MIX_RUBRIC))
     service = BatchService()
     manifest = run_stages(
         recipe,
@@ -647,7 +663,7 @@ def test_preference_candidates_are_not_conflicting_answer_keys(tmp_path):
     assert [json.loads(rows[index]["raw_json"])["data"]["origin"] for index in (0, 2)] == ["a", "b"]
 
 
-def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_path, apple_row):
+def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_path, apple_row, svamp_recipe):
     specifications = (
         ("a", "duplicate", "5", IntendedUse.TRAIN, Disposition.KEEP),
         ("b", "duplicate", "5", IntendedUse.TRAIN, Disposition.KEEP),
@@ -661,7 +677,7 @@ def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_pat
     rows = []
     for name, prompt, answer, use, disposition in specifications:
         source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
-        task = SVAMP_RECIPE.normalize(RawRow(name, source, {**apple_row, "Body": prompt, "Answer": answer}))
+        task = svamp_recipe.pipeline.normalize(RawRow(name, source, {**apple_row, "Body": prompt, "Answer": answer}))
         assert isinstance(task, TaskSpec)
         audit = TaskAudit(
             task_id=name,
@@ -709,14 +725,14 @@ def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_pat
     }
 
 
-def test_query_cache_does_not_reuse_invalid_completions(tmp_path, apple_row):
+def test_query_cache_does_not_reuse_invalid_completions(tmp_path, apple_row, svamp_recipe):
     service = BatchService(invalid_first_batch=True)
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = SVAMP_RECIPE.normalize(RawRow("task", source, apple_row))
+    task = svamp_recipe.pipeline.normalize(RawRow("task", source, apple_row))
     assert isinstance(task, TaskSpec)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
-    assert reviewer.review([task], SVAMP_RECIPE.rubric, tmp_path / "first")[0].status == ReviewStatus.INVALID
-    assert reviewer.review([task], SVAMP_RECIPE.rubric, tmp_path / "second")[0].status == ReviewStatus.REVIEWED
+    assert reviewer.review([task], svamp_recipe.pipeline.rubric, tmp_path / "first")[0].status == ReviewStatus.INVALID
+    assert reviewer.review([task], svamp_recipe.pipeline.rubric, tmp_path / "second")[0].status == ReviewStatus.REVIEWED
     assert len(service.batches) == 2
 
 
@@ -728,27 +744,27 @@ class PartialBatchService(BatchService):
         return result
 
 
-def test_query_cache_fetches_only_missing_completions_in_same_evidence_directory(tmp_path, apple_row):
+def test_query_cache_fetches_only_missing_completions_in_same_evidence_directory(tmp_path, apple_row, svamp_recipe):
     service = PartialBatchService()
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     normalized = [
-        SVAMP_RECIPE.normalize(RawRow("first", source, apple_row)),
-        SVAMP_RECIPE.normalize(RawRow("second", source, {**apple_row, "Body": "Bea has 2 apples."})),
+        svamp_recipe.pipeline.normalize(RawRow("first", source, apple_row)),
+        svamp_recipe.pipeline.normalize(RawRow("second", source, {**apple_row, "Body": "Bea has 2 apples."})),
     ]
     tasks = []
     for task in normalized:
         assert isinstance(task, TaskSpec)
         tasks.append(task)
     reviewer = BatchReviewer(service, "model", "deployment", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
-    first = reviewer.review(tasks, SVAMP_RECIPE.rubric, tmp_path / "review")
+    first = reviewer.review(tasks, svamp_recipe.pipeline.rubric, tmp_path / "review")
     assert [record.status for record in first] == [ReviewStatus.REVIEWED, ReviewStatus.UNAVAILABLE]
-    resumed = replace(reviewer).review(tasks, SVAMP_RECIPE.rubric, tmp_path / "review")
+    resumed = replace(reviewer).review(tasks, svamp_recipe.pipeline.rubric, tmp_path / "review")
     assert all(record.status == ReviewStatus.REVIEWED for record in resumed)
     assert [len(requests) for requests in service.batches.values()] == [2, 1]
     assert [record.task_id for record in resumed] == ["first", "second"]
 
 
-def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_path, apple_row):
+def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_path, apple_row, svamp_recipe):
     question = "Public conversation with the user's requirements. " * 1000
     rules: dict[str, JsonValue] = {
         "scoring": {"aggregation": "all_pass"},
@@ -764,7 +780,7 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
     )
     package = source_contract_package("rubric", "1", contract, ("semantic judge",))
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
-    task = SVAMP_RECIPE.normalize(RawRow("conversation", source, apple_row))
+    task = svamp_recipe.pipeline.normalize(RawRow("conversation", source, apple_row))
     assert isinstance(task, TaskSpec)
     task = task.model_copy(
         update={
@@ -776,7 +792,7 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
     original = task.model_dump_json()
     service = BatchService()
     reviewer = BatchReviewer(service, "fixture-model", "fixture-deployment", max_prompt_characters=128000)
-    review = reviewer.review([task], rubric_tasks.recipe_for_source("wizard_orca").rubric, tmp_path)
+    review = reviewer.review([task], rubric_tasks.RUBRICS["wizard_orca"], tmp_path)
     assert review[0].status == ReviewStatus.REVIEWED
     payload = json.loads(service.batches["batch-0"][0]["body"]["messages"][1]["content"])
     assert payload["context"]["events"][0]["content"] == question

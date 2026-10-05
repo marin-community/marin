@@ -22,26 +22,21 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.datasets.structured_output import verification_report as schema_verification_report
 from taskcompendium.pipeline.models import (
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     NormalizationChange,
     NormalizedTask,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource
 
-CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 RUBRIC = ReviewRubric(
     id="structured-outputs-answerability",
     version="3",
@@ -136,20 +131,16 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     return NormalizedTask(task, changes)
 
 
-def recipe(*, converter: RawConverter, converter_revision: str) -> DatasetRecipe:
-    source_recipe = DatasetRecipe(
-        name="tasktrove-structured_outputs",
-        version="tasktrove-structured_outputs-v2",
-        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIG, "train"),
+def pipeline(*, converter: RawConverter, converter_revision: str) -> TaskPipeline:
+    """Build structured-format normalization and controls."""
+    base = TaskPipeline(
         normalize=normalize,
         rubric=RUBRIC,
-        intended_use=IntendedUse.TRAIN,
-        inputs=tasktrove_inputs(CONFIG, REVISION),
         check_suite=CheckSuite(
             id="structured-format-contract-and-controls", revision="2", parameters={}, run=verification_report
         ),
     )
-    return with_raw_converter(source_recipe, converter, converter_revision)
+    return with_raw_converter(base, converter, converter_revision)
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:

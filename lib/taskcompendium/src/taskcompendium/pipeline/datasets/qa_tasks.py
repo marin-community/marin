@@ -16,26 +16,20 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import answer_checks
 
 GRADER_SCRIPT = (Path(__file__).with_name("grader_scripts") / "references.py").read_bytes()
 
-KNOWLEDGE_CONFIG = "laion__nemotron-gym-knowledge-openqa-v4"
-SCIENCE_CONFIG = "laion__nemotron-gym-science-so-openq-v3"
 SOURCE_DELIVERY = "Write your concise final answer to `/app/response.txt`."
 SCIENCE_DELIVERY = "Work through it and write your full answer to the file `/app/response.txt` inside the sandbox."
 SCIENCE_SHELL_GUIDANCE = (
@@ -116,23 +110,11 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=checks)
 
 
-def knowledge_recipe() -> DatasetRecipe:
-    return _recipe("knowledge-openqa", KNOWLEDGE_CONFIG)
-
-
-def science_recipe() -> DatasetRecipe:
-    return _recipe("science-openqa", SCIENCE_CONFIG)
-
-
-def _recipe(name: str, config: str) -> DatasetRecipe:
-    return DatasetRecipe(
-        name=name,
-        version=f"{name}-v1",
-        source=HFSource(TASKTROVE_DATASET, REVISION, config, "train"),
-        inputs=tasktrove_inputs(config, REVISION),
+def pipeline() -> TaskPipeline:
+    """Build the source normalization and review policy."""
+    return TaskPipeline(
         normalize=normalize,
         rubric=RUBRIC,
-        intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(
             id="openqa-exact-gate-with-unbound-judge", revision="1", parameters={}, run=verification_report
         ),

@@ -75,34 +75,58 @@ fail the stage with file context.
 
 ## Source families
 
-A source does not need its own Python module. Sources sharing conversion and
-review structure belong together, with source-specific criteria beside their
-metadata. Each `DatasetRecipe` owns its `RecipeInputs`, normalizer, rubric, intended
-use and check suite. `RecipeInputs` declares staged file selection and pinned
-`HubDownload` or `UrlDownload` inputs, including auxiliary reference files. The
-experiment translates those declarations into artifacts without source-name
-acquisition switches.
+Sources sharing conversion and review structure belong together. The library
+provides a `TaskPipeline`: a normalizer, review rubric and optional check suite.
+It describes conversion policy without selecting a dataset or constructing an
+artifact graph. Family factories expose meaningful schema and grading differences.
 
-Examples of source families:
+The experiment binds that policy in a `DatasetRecipe`, which declares the name,
+version, source identity, intended train/eval use and `RecipeInputs`. The inputs
+specify staged file selection and pinned `HubDownload` or `UrlDownload`
+declarations, including auxiliary reference files.
 
-| Family | Shared contract |
+| Location | Responsibility |
 |---|---|
-| `math_answers` | Ten typed-math sources, including MATH-500 and Hendrycks MATH; named extraction functions retain schema differences |
-| `numeric_answers` | AIME24 and SVAMP exact-numeric answers |
-| `instruction_tasks` | Direct Nemotron IF and RLVR IFEval records |
-| `code_contracts` | APPS, Eurus2 and VerifiableCode with retained test contracts |
-| `python_tasks`, `atlas_code`, `executable_tasks` | Archived executable tasks with shared runtime checks |
-| `preference_tasks`, `repository_tasks`, `rubric_tasks` | Related source schemas with explicit source-specific criteria |
-| `nemotron_ultra/` | Seventy-five selections grouped by reward family; pinned blend and auxiliary inputs |
+| `lib/taskcompendium/.../pipeline/datasets/` | Family normalizers, review criteria, controls and grader packages |
+| `experiments/post_training/task_curation/nemotron.py` | Seventy-five Ultra selections, blend pins, membership and placeholder inputs |
+| `experiments/post_training/task_curation/direct_sources.py` | Direct math, QA, instruction, code, preference and generated-source bindings |
+| `experiments/post_training/task_curation/archive_sources.py` | TaskTrove component selections and bindings for archived task schemas |
+| `experiments/post_training/task_curation/source_bindings.py` | Catalog assembly and experiment-specific converter adapters |
+| `experiments/post_training/task_curation/pipeline.py` | Download, audit, optional rewrite, filter and merge artifact graph |
+| `lib/taskcompendium/.../pipeline/stages.py` | Reusable Zephyr execution of the bound conversion and review policy |
 
-Family `RECIPES` mappings contain static recipes. Factories remain for sources
-that need runtime images or converter adapters. Existing TaskTrove conversion
-adapters are supplied by the experiment; library families compose them with
-normalization and preserve conversion edits. VerifyIT owns generic comparisons, format validation, execution and the structured verdict contract. Recipes own source-specific scoring policy and package it as script resources when a standard specification is insufficient. `taskcompendium.grader` builds these packages; `taskcompendium.grading` extracts evidence and executes them. Environment capture and isolated execution live under `taskcompendium.runtime`. SQL and structured tool actions retain their distinct contracts.
+For example, `nemotron_ultra/safety.py` supplies `safety.pipeline(...)`.
+The experiment selects that policy for the safety component in three Ultra
+blends. Math selections explicitly attach placeholder-reference downloads;
+repository selections attach the SWE-Gym membership input. Adding a selection
+uses the family policy without adding another converter module or a branch to
+the execution engine.
+
+```mermaid
+flowchart TD
+    B[Experiment source binding] --> D[Download artifact]
+    P[Library family TaskPipeline] --> A[Zephyr audit]
+    D --> A
+    A --> Q[Audit parquet: every task and reason]
+    Q --> R[Optional rewrite and re-review]
+    Q --> F[Final acceptance policy]
+    R --> F
+    F --> K[Accepted parquet]
+    K --> M[Merge selected sources]
+```
+
+Existing TaskTrove conversion adapters are supplied by the experiment. Library
+policies compose them with normalization and preserve conversion edits. VerifyIT
+owns generic comparisons, format validation, execution and the structured verdict
+contract. Library conversion policies own source-specific scoring policy and package it as scripts
+when a standard specification is insufficient. `taskcompendium.grader` builds
+these packages; `taskcompendium.grading` extracts evidence and executes them.
+Environment capture and isolated execution live under `taskcompendium.runtime`.
+SQL and structured tool actions retain their distinct contracts.
 
 ### Grader packages
 
-`GraderPackage` pairs a standard VerifyIT descriptor with private files. Assign its descriptor to `task.verifier` and its files to `task.resources.verifier`. File paths are relative to the private tests directory. A math recipe can emit a `MathSpec`; a schema recipe emits `JsonSchemaSpec` and its schema. Neither requires a new registered kind.
+`GraderPackage` pairs a standard VerifyIT descriptor with private files. Assign its descriptor to `task.verifier` and its files to `task.resources.verifier`. File paths are relative to the private tests directory. A math normalizer can emit a `MathSpec`; a schema normalizer emits `JsonSchemaSpec` and its schema. Neither requires a new registered kind.
 
 For custom policy, `script_package(script_bytes, config)` emits `ScriptSpec`, `grader.py` and `config.json`. The script reads `VERIFYIT_TESTS_DIR` and `VERIFYIT_WORKSPACE` and writes a structured verdict to `VERIFYIT_LOGS_DIR/verdict.json`. A script may import generic VerifyIT components or implement the comparison itself. Recipe templates live alongside the dataset families in `pipeline/datasets/grader_scripts/` and are embedded into the task; execution does not import the converter module.
 
@@ -121,22 +145,23 @@ Direct-chat evidence is written to `answer.txt`; captured state is written to `s
 
 Unbound source evaluators preserve their private contract and emit infrastructure errors. Quality filtering can keep an understandable task while the executable view excludes it. Positive and negative controls exercise the same emitted package used for grading.
 
-For example, the Python-test family owns the `pymethods` and `pymethods_large`
-source definitions. Both use the same converter and common privacy/test criteria.
-The former adds scheduling and optimization checks; the latter adds missing public
-signatures and class-state checks. Those differences remain in their own rubric
-entries. A new variant adds a source entry and any needed criteria, not another
-wrapper module.
+The Python-test family shares conversion and privacy checks between `pymethods`
+and `pymethods_large`. Its rubric entries preserve their differences: scheduling
+and optimization for the former, public signatures and class state for the
+latter. Their selected TaskTrove components and revisions live in the experiment.
 
 To add a source:
 
-- Declare its immutable release, split/component and staged file selection in the
-  owning family. Reuse a format reader and archive decoder where possible.
-- Reuse the family normalizer, or add a concrete extraction function when the row
-  shape or grading contract differs. Keep private solutions and tests private.
-- Specify source-specific rubric additions, intended train/eval use, and any
-  executable controls. Register the family entry with the experiment binding.
-- Run the ordinary graph with a small limit. Inspect audit rows and reasons.
+- Declare its immutable release, split/component, staged file selection and
+  intended use in the relevant experiment binding module. Reuse a format reader
+  and archive decoder where possible.
+- Bind a family `TaskPipeline`. Add a concrete extraction function in the library
+  when the row schema or grading contract differs. Keep private solutions and
+  tests private.
+- Specify family review criteria and executable controls in the library policy.
+  Apply experiment-specific rubric overrides at the binding when needed.
+- Run the ordinary artifact graph with a small limit. Inspect the audit rows,
+  final decisions and reasons.
 
 Keep distinct contracts explicit. HH pairs, binary KTO labels and generation-based
 GenRM prompts need different handling. Interactive calendar episodes differ from

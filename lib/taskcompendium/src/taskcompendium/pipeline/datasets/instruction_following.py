@@ -18,23 +18,18 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
 
-REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
-CONFIG = "laion__nemotron-gym-instruction-following-v3"
 NON_LATIN_LANGUAGES = frozenset({"ar", "bg", "bn", "he", "hi", "ja", "ko", "ne", "ru", "ta", "te", "th", "zh"})
 LATIN_WORD = re.compile(r"[A-Za-z]+")
 POSITIONAL_WORDS = {
@@ -119,15 +114,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="tasktrove-ifeval",
-        version="tasktrove-ifeval-v1",
-        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIG, "train"),
-        inputs=tasktrove_inputs(CONFIG, REVISION),
+def pipeline() -> TaskPipeline:
+    """Build the source normalization and review policy."""
+    return TaskPipeline(
         normalize=normalize,
         rubric=RUBRIC,
-        intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(
             id="ifeval-contract-and-controls",
             revision="1",

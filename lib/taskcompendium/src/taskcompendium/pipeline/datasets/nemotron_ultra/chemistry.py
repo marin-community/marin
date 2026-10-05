@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""chemistry contracts and explicit pinned blend selections."""
+"""chemistry contracts and normalization policies."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_pipeline
+from taskcompendium.pipeline.models import TaskPipeline
 
-FAMILY_MODULE = __name__
 CRITERIA = (
     (
         "Check public molecular inputs and requested properties against retained target/validator "
@@ -17,12 +17,8 @@ CRITERIA = (
         "chemistry task."
     ),
 )
-UPSTREAM = "https://huggingface.co/datasets/nvidia/Nemotron-RL-Litmus-Bench-v0.1"
 
-SOURCES = tuple(
-    quality_source(blend, selector, UPSTREAM, "chemistry", CRITERIA, FAMILY_MODULE)
-    for blend, selector in (
-        ("mopd", "ultra_sft_step3200_rdkit"),
-        ("rlvr2", "ultra_sft_step3200_rdkit"),
-    )
-)
+
+def pipeline(selector: str, rubric_id: str, provenance: str) -> TaskPipeline:
+    """Build the chemistry normalization and review policy."""
+    return quality_pipeline("chemistry", selector, rubric_id, (*CRITERIA, provenance))

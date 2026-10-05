@@ -8,19 +8,16 @@ from jsonschema.validators import validator_for
 from verifyit.spec import PredictedActionSpec
 
 from taskcompendium.grading import resolve_verifier
-from taskcompendium.importers.nemo_predicted_action import DATASET, REVISION, canonical_sha256, import_row
+from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
@@ -60,26 +57,27 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=[*checks, *verify_task(task)])
 
 
-recipe = DatasetRecipe(
-    name="nemo-actions",
-    version="nemo-actions-v2",
-    source=HFSource(DATASET, REVISION, "default", "train"),
-    normalize=normalize,
-    rubric=ReviewRubric(
-        "next-action",
-        "2",
-        (
-            "Judge the next action from the complete conversation and advertised tool schemas.",
-            "Check that required arguments are grounded in the conversation, without guessing hidden values.",
-            "Flag a reference that chooses one of several equally defensible actions under an exact-call grader.",
-            "Historical tool results are context. This task predicts a call; it does not execute it.",
-            "Check that each reference argument satisfies the advertised tool's parameter schema and that "
-            "authentication, consent, and ordering prerequisites are grounded in the visible history.",
-            "Do not treat a plausible guessed identifier, date, or location as grounded. Flag absent inputs "
-            "and contradictory tool outputs while allowing explicit relative dates tied to a supplied date.",
-        ),
+RUBRIC = ReviewRubric(
+    "next-action",
+    "2",
+    (
+        "Judge the next action from the complete conversation and advertised tool schemas.",
+        "Check that required arguments are grounded in the conversation, without guessing hidden values.",
+        "Flag a reference that chooses one of several equally defensible actions under an exact-call grader.",
+        "Historical tool results are context. This task predicts a call; it does not execute it.",
+        "Check that each reference argument satisfies the advertised tool's parameter schema and that "
+        "authentication, consent, and ordering prerequisites are grounded in the visible history.",
+        "Do not treat a plausible guessed identifier, date, or location as grounded. Flag absent inputs "
+        "and contradictory tool outputs while allowing explicit relative dates tied to a supplied date.",
     ),
-    intended_use=IntendedUse.TRAIN,
-    inputs=hub_inputs(DATASET, REVISION, SourceFiles(("train.jsonl",), SourceFormat.JSONL)),
-    check_suite=CheckSuite(id="next-action-schema-and-controls", revision="1", parameters={}, run=verification_report),
 )
+
+
+def pipeline() -> TaskPipeline:
+    return TaskPipeline(
+        normalize=normalize,
+        rubric=RUBRIC,
+        check_suite=CheckSuite(
+            id="next-action-schema-and-controls", revision="1", parameters={}, run=verification_report
+        ),
+    )

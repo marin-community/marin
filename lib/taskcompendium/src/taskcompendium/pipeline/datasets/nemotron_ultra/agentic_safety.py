@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""agentic-safety contracts and explicit pinned blend selections."""
+"""agentic-safety contracts and normalization policies."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_pipeline
+from taskcompendium.pipeline.models import TaskPipeline
 
-FAMILY_MODULE = __name__
 CRITERIA = (
     (
         "Preserve trusted instructions, tool schemas, full tool observations, initial environment, "
@@ -17,9 +17,8 @@ CRITERIA = (
         "or exposing hidden evaluator goals."
     ),
 )
-UPSTREAM = "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Indirect-Prompt-Injection-v1"
 
-SOURCES = tuple(
-    quality_source(blend, selector, UPSTREAM, "agentic-safety", CRITERIA, FAMILY_MODULE)
-    for blend, selector in (("mopd", "makeshn_ultra_v3_ipi_train"),)
-)
+
+def pipeline(selector: str, rubric_id: str, provenance: str) -> TaskPipeline:
+    """Build the agentic-safety normalization and review policy."""
+    return quality_pipeline("agentic-safety", selector, rubric_id, (*CRITERIA, provenance))

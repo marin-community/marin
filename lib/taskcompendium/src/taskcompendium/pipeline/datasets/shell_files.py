@@ -19,14 +19,11 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
-    DatasetRecipe,
-    GeneratedSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
 )
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import CONTROL_PATH, INTERFACE, OUTPUT_PATH
@@ -121,12 +118,8 @@ def generate_rows(limit: int) -> Iterator[dict[str, Any]]:
         }
 
 
-recipe = DatasetRecipe(
-    name="shell-files-mock",
-    version="shell-files-v1",
-    source=GeneratedSource("mock/shell-files", "1", "default", "train", __name__),
-    inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
-    normalize=normalize,
-    rubric=RUBRIC,
-    intended_use=IntendedUse.TRAIN,
-)
+def pipeline() -> TaskPipeline:
+    return TaskPipeline(
+        normalize=normalize,
+        rubric=RUBRIC,
+    )

@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""qa-abstention contracts and explicit pinned blend selections."""
+"""qa-abstention contracts and normalization policies."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_pipeline
+from taskcompendium.pipeline.models import TaskPipeline
 
-FAMILY_MODULE = __name__
 CRITERIA = (
     "Check whether the actual question is answerable, and whether the private answer is correct.",
     (
@@ -13,13 +13,8 @@ CRITERIA = (
         "substitute exact-only matching for its semantic evaluator."
     ),
 )
-UPSTREAM = "https://huggingface.co/datasets/nvidia/Nemotron-RL-QA-Abstention-v1"
 
-SOURCES = tuple(
-    quality_source(blend, selector, UPSTREAM, "qa-abstention", CRITERIA, FAMILY_MODULE)
-    for blend, selector in (
-        ("mopd", "ultra_sft_step3200_abstention"),
-        ("rlvr1", "ultra_sft_step3200_abstention"),
-        ("rlvr2", "ultra_sft_step3200_abstention"),
-    )
-)
+
+def pipeline(selector: str, rubric_id: str, provenance: str) -> TaskPipeline:
+    """Build the qa-abstention normalization and review policy."""
+    return quality_pipeline("qa-abstention", selector, rubric_id, (*CRITERIA, provenance))

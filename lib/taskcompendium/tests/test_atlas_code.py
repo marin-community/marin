@@ -23,7 +23,7 @@ def test_code_snapshot_roundtrip_preserves_private_cases_and_oracle():
     oracle = b"printf 'print(sum(map(int,input().split())))' > /app/solution.py\n"
     row = RawRow(
         id="sum",
-        source=Source(dataset="open-thoughts/TaskTrove", revision=atlas_code.REVISION, row="1", importer_revision="1"),
+        source=Source(dataset="open-thoughts/TaskTrove", revision="fixture-v1", row="1", importer_revision="1"),
         data={
             "converted": {
                 "instruction": "Read two integers and print their sum. Write /app/solution.py.",

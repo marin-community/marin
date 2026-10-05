@@ -105,7 +105,7 @@ def normalize_row(record: dict[str, Any], recipe: DatasetRecipe) -> dict[str, An
         "raw_sha256": canonical_sha256(record["data"]),
         "data": record["data"],
     }
-    result = recipe.normalize(RawRow(task_id, source, record["data"]))
+    result = recipe.pipeline.normalize(RawRow(task_id, source, record["data"]))
     audit = TaskAudit(
         task_id=task_id,
         source=source,

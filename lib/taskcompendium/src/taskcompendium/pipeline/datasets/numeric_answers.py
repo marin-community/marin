@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned numeric-answer sources with their exact numeric verifiers."""
+"""Numeric-answer normalization and exact verifiers."""
 
 from math import isfinite
 
@@ -9,13 +9,12 @@ from verifyit.spec import NumericSpec
 
 from taskcompendium.grader import grader_package
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
-from taskcompendium.pipeline.models import DatasetRecipe, HFSource, ImportRejection, IntendedUse, RawRow, ReviewRubric
-
-AIME24_DATASET = "HuggingFaceH4/aime_2024"
-AIME24_REVISION = "2fe88a2f1091d5048c0f36abc874fb997b3dd99a"
-SVAMP_DATASET = "ChilleD/SVAMP"
-SVAMP_REVISION = "5e0bf1e5e7c0e9c4bc39180d224f41f3f801b7ef"
+from taskcompendium.pipeline.models import (
+    ImportRejection,
+    RawRow,
+    ReviewRubric,
+    TaskPipeline,
+)
 
 
 def normalize_aime24(row: RawRow) -> TaskSpec | ImportRejection:
@@ -32,29 +31,6 @@ def normalize_aime24(row: RawRow) -> TaskSpec | ImportRejection:
         verifier=grader_package(NumericSpec(float(answer), tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
         source=row.source,
     )
-
-
-AIME24_RECIPE = DatasetRecipe(
-    name="aime24",
-    version="aime24-v1",
-    source=HFSource(AIME24_DATASET, AIME24_REVISION, "default", "train"),
-    inputs=hub_inputs(
-        AIME24_DATASET,
-        AIME24_REVISION,
-        SourceFiles(("data/train-*.parquet",), SourceFormat.PARQUET),
-    ),
-    normalize=normalize_aime24,
-    rubric=ReviewRubric(
-        id="competition-math",
-        version="1",
-        criteria=(
-            "Preserve LaTeX, domains, quantifiers, and geometric assumptions. Do not demand decimal reformulation.",
-            "The source expects one integer from 0 through 999; leading zeros do not change the integer.",
-            "Check whether the premises specify a unique answer. Difficulty alone is not a quality defect.",
-        ),
-    ),
-    intended_use=IntendedUse.EVAL,
-)
 
 
 def normalize_svamp(row: RawRow) -> TaskSpec | ImportRejection:
@@ -79,30 +55,31 @@ def normalize_svamp(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-SVAMP_RECIPE = DatasetRecipe(
-    name="svamp",
-    version="svamp-v1",
-    source=HFSource(SVAMP_DATASET, SVAMP_REVISION, "default", "train"),
-    inputs=hub_inputs(
-        SVAMP_DATASET,
-        SVAMP_REVISION,
-        SourceFiles(("data/train-*.parquet",), SourceFormat.PARQUET),
+AIME24_RUBRIC = ReviewRubric(
+    id="competition-math",
+    version="1",
+    criteria=(
+        "Preserve LaTeX, domains, quantifiers, and geometric assumptions. Do not demand decimal reformulation.",
+        "The source expects one integer from 0 through 999; leading zeros do not change the integer.",
+        "Check whether the premises specify a unique answer. Difficulty alone is not a quality defect.",
     ),
-    normalize=normalize_svamp,
-    rubric=ReviewRubric(
-        id="arithmetic-word-problems",
-        version="1",
-        criteria=(
-            "Identify the quantities and the operation the question actually requests. Check units and directionality.",
-            "Ignore irrelevant quantities. Distracting numbers alone do not make a task ambiguous.",
-            "Flag contradictions or missing quantities that prevent a unique numeric answer.",
-        ),
-    ),
-    intended_use=IntendedUse.TRAIN,
 )
 
 
-RECIPES: dict[str, DatasetRecipe] = {
-    "aime24": AIME24_RECIPE,
-    "svamp": SVAMP_RECIPE,
-}
+def aime24_pipeline() -> TaskPipeline:
+    return TaskPipeline(normalize=normalize_aime24, rubric=AIME24_RUBRIC)
+
+
+SVAMP_RUBRIC = ReviewRubric(
+    id="arithmetic-word-problems",
+    version="1",
+    criteria=(
+        "Identify the quantities and the operation the question actually requests. Check units and directionality.",
+        "Ignore irrelevant quantities. Distracting numbers alone do not make a task ambiguous.",
+        "Flag contradictions or missing quantities that prevent a unique numeric answer.",
+    ),
+)
+
+
+def svamp_pipeline() -> TaskPipeline:
+    return TaskPipeline(normalize=normalize_svamp, rubric=SVAMP_RUBRIC)

@@ -19,19 +19,15 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.shell_files import BASH
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.runtime.resources import inline_resource
@@ -130,21 +126,6 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     )
 
 
-def recipe(name: str, *, config: str, revision: str, rubric: ReviewRubric) -> DatasetRecipe:
-    return DatasetRecipe(
-        name=f"tasktrove-{name}",
-        version=f"tasktrove-{name}-v1",
-        source=HFSource(TASKTROVE_DATASET, revision, config, "train"),
-        inputs=tasktrove_inputs(config, revision),
-        normalize=normalize,
-        rubric=rubric,
-        intended_use=IntendedUse.TRAIN,
-        check_suite=CheckSuite(
-            id="repository-contract-unbound-runtime", revision="1", parameters={}, run=verification_report
-        ),
-    )
-
-
 REPOSITORY_COMMON_CRITERIA = (
     "The public repository and checkout identify necessary context; unavailable local checkout is a "
     "runtime limitation rather than proof that the issue is underspecified.",
@@ -155,38 +136,33 @@ REPOSITORY_COMMON_CRITERIA = (
     "Distinguish installation/network failures from task defects and retain concrete unresolved evidence.",
 )
 
-SOURCES = {
-    "swe_rebench": tasktrove_source(
-        config="DCAgent__swe_rebench_v2_patched_oracle-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="swe_rebench-answerability",
-            version="1",
-            criteria=(
-                "Compare the issue request and source checkout with the hidden test patch, restored trusted paths, "
-                "and test IDs.",
-                *REPOSITORY_COMMON_CRITERIA,
-            ),
+RUBRICS: dict[str, ReviewRubric] = {
+    "swe_rebench": ReviewRubric(
+        id="swe_rebench-answerability",
+        version="1",
+        criteria=(
+            "Compare the issue request and source checkout with the hidden test patch, restored trusted paths, "
+            "and test IDs.",
+            *REPOSITORY_COMMON_CRITERIA,
         ),
     ),
-    "swesmith": tasktrove_source(
-        config="laion__swesmith-oracle-filtered-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="swesmith-answerability",
-            version="1",
-            criteria=(
-                "Compare the stated repository bug and behavioral requirements with FAIL_TO_PASS and PASS_TO_PASS "
-                "tests.",
-                *REPOSITORY_COMMON_CRITERIA,
-            ),
+    "swesmith": ReviewRubric(
+        id="swesmith-answerability",
+        version="1",
+        criteria=(
+            "Compare the stated repository bug and behavioral requirements with FAIL_TO_PASS and PASS_TO_PASS tests.",
+            *REPOSITORY_COMMON_CRITERIA,
         ),
     ),
 }
 
 
-def recipe_for_source(
-    name: str,
-) -> DatasetRecipe:
-    source = SOURCES[name]
-    return recipe(name, config=source.config, revision=source.revision, rubric=source.rubric)
+def pipeline(name: str) -> TaskPipeline:
+    """Build repository normalization and the unbound-runtime review policy."""
+    return TaskPipeline(
+        normalize=normalize,
+        rubric=RUBRICS[name],
+        check_suite=CheckSuite(
+            id="repository-contract-unbound-runtime", revision="1", parameters={}, run=verification_report
+        ),
+    )

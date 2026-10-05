@@ -1,26 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned gretel_text_to_sql source and its private evaluator contract."""
+"""Text-to-SQL normalization and its private evaluator contract."""
 
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets.direct_contracts import contract_task
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
 )
-
-DATASET = "gretelai/synthetic_text_to_sql"
-REVISION = "740ab236e64503fba51be1101df7a1be83bf455d"
-CONFIG = "default"
-SPLIT = "train"
-SOURCE_FILE = "synthetic_text_to_sql_train.snappy.parquet"
-SOURCE_FORMAT = "parquet"
 
 RUBRIC = ReviewRubric(
     id="gretel_text_to_sql-quality",
@@ -51,13 +41,5 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="gretel_text_to_sql",
-        version="gretel_text_to_sql-v1",
-        source=HFSource(DATASET, REVISION, CONFIG, SPLIT),
-        normalize=normalize,
-        intended_use=IntendedUse.TRAIN,
-        rubric=RUBRIC,
-        inputs=hub_inputs(DATASET, REVISION, SourceFiles((SOURCE_FILE,), SourceFormat.PARQUET)),
-    )
+def pipeline() -> TaskPipeline:
+    return TaskPipeline(normalize=normalize, rubric=RUBRIC)

@@ -31,8 +31,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 
-DATASET = "nvidia/Nemotron-RL-Ultra-Training-Blends"
-REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
 VERIFIER_REVISION = "d8b6e8c163def3660e9d3072c1c174226a1709fa"
 
 

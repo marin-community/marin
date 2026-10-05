@@ -16,19 +16,15 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.datasets.grader_scripts.schedule import normalized_name, parse_time
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.reasoning_tasks import snapshot_file
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
@@ -36,7 +32,6 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 SCHEDULE_SCRIPT = (Path(__file__).with_name("grader_scripts") / "schedule.py").read_bytes()
 
-CONFIG = "laion__nemotron-gym-agent-calendar-v2"
 WITNESS_PATH = "/control/calendar-answer.json"
 RUBRIC = ReviewRubric(
     id="tasktrove-calendar-feasibility",
@@ -129,15 +124,11 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=verify_witness(task, witness_json, negative))
 
 
-def recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="tasktrove-calendar",
-        version="tasktrove-calendar-v1",
-        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIG, "train"),
-        inputs=tasktrove_inputs(CONFIG, REVISION),
+def pipeline() -> TaskPipeline:
+    """Build the source normalization and review policy."""
+    return TaskPipeline(
         normalize=normalize,
         rubric=RUBRIC,
-        intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(
             id="calendar-source-witness-controls", revision="1", parameters={}, run=verification_report
         ),

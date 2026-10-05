@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""arc-agi contracts and explicit pinned blend selections."""
+"""arc-agi contracts and normalization policies."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_pipeline
+from taskcompendium.pipeline.models import TaskPipeline
 
-FAMILY_MODULE = __name__
 CRITERIA = (
     (
         "Check that all training grids, public test inputs, and private expected_output match the "
@@ -17,16 +17,8 @@ CRITERIA = (
         "expose hidden outputs."
     ),
 )
-UPSTREAM = "https://huggingface.co/datasets/nvidia/Nemotron-RL-ARC-AGI-v1"
 
-SOURCES = tuple(
-    quality_source(blend, selector, UPSTREAM, "arc-agi", CRITERIA, FAMILY_MODULE)
-    for blend, selector in (
-        ("mopd", "ultra_sft_step3200_nvarc_inductive"),
-        ("mopd", "ultra_sft_step3200_nvarc_transductive"),
-        ("rlvr1", "ultra_sft_step3200_nvarc_inductive"),
-        ("rlvr1", "ultra_sft_step3200_nvarc_transductive"),
-        ("rlvr2", "ultra_sft_step3200_nvarc_inductive"),
-        ("rlvr2", "ultra_sft_step3200_nvarc_transductive"),
-    )
-)
+
+def pipeline(selector: str, rubric_id: str, provenance: str) -> TaskPipeline:
+    """Build the arc-agi normalization and review policy."""
+    return quality_pipeline("arc-agi", selector, rubric_id, (*CRITERIA, provenance))

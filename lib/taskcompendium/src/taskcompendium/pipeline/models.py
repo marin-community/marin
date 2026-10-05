@@ -84,15 +84,24 @@ class NormalizedTask:
 
 
 @dataclass(frozen=True)
+class TaskPipeline:
+    """Reusable conversion and review policy, independent of source acquisition."""
+
+    normalize: Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
+    rubric: ReviewRubric
+    check_suite: "CheckSuite | None" = None
+
+
+@dataclass(frozen=True)
 class DatasetRecipe:
+    """An experiment's source and acquisition inputs bound to conversion policy."""
+
     name: str
     version: str
     source: HFSource | GeneratedSource
-    normalize: Callable[[RawRow], TaskSpec | NormalizedTask | ImportRejection]
-    rubric: ReviewRubric
+    pipeline: TaskPipeline
     intended_use: IntendedUse
     inputs: RecipeInputs
-    check_suite: "CheckSuite | None" = None
 
 
 class CheckStatus(StrEnum):

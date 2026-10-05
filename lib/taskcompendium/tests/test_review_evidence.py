@@ -6,7 +6,7 @@
 import json
 
 from taskcompendium.models import ResourceGroups, Source, TaskSpec
-from taskcompendium.pipeline.datasets.numeric_answers import SVAMP_RECIPE, normalize_svamp
+from taskcompendium.pipeline.datasets.numeric_answers import normalize_svamp, svamp_pipeline
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.review import completion_body
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
@@ -20,7 +20,7 @@ def test_review_can_inspect_private_text_without_changing_task_bytes():
     assert isinstance(task, TaskSpec)
     resource = inline_resource("tests/cases.json", b'{"input":"two","output":"2"}')
     task = task.model_copy(update={"resources": ResourceGroups(verifier=(resource,))})
-    payload = json.loads(completion_body(task, SVAMP_RECIPE.rubric, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(completion_body(task, svamp_pipeline().rubric, "reviewer", 100)["messages"][1]["content"])
     assert payload["resources"][0]["text"] == '{"input":"two","output":"2"}'
     assert payload["resources"][0]["role"] == "verifier"
     assert resource_bytes(task.resources.verifier[0]) == resource_bytes(resource)
@@ -34,7 +34,7 @@ def test_review_marks_omitted_fixture_content_and_retains_full_task():
     assert isinstance(task, TaskSpec)
     resource = inline_resource("tests/large.txt", b"a" * 100_000)
     task = task.model_copy(update={"resources": ResourceGroups(verifier=(resource,))})
-    payload = json.loads(completion_body(task, SVAMP_RECIPE.rubric, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(completion_body(task, svamp_pipeline().rubric, "reviewer", 100)["messages"][1]["content"])
     preview = payload["resources"][0]
     assert preview["truncated"] and preview["byte_count"] == 100_000
     assert 0 < len(preview["text"]) < preview["byte_count"]
@@ -53,7 +53,7 @@ def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
         oracle=(inline_resource("solution/solve.sh", b"Private oracle"),),
     )
     task = task.model_copy(update={"resources": resources})
-    body = completion_body(task, SVAMP_RECIPE.rubric, "reviewer", 100)
+    body = completion_body(task, svamp_pipeline().rubric, "reviewer", 100)
     payload = json.loads(body["messages"][1]["content"])
     previews = {resource["path"]: resource["text"] for resource in payload["resources"]}
     assert previews["input.txt"] == "Public input"
@@ -64,7 +64,7 @@ def test_fixture_heavy_review_keeps_public_inputs_and_oracle_visible():
         update={"verifier": (*resources.verifier[:-1], inline_resource("tests/case-299.txt", b"edit"))}
     )
     changed_task = task.model_copy(update={"resources": changed_resources})
-    changed_body = completion_body(changed_task, SVAMP_RECIPE.rubric, "reviewer", 100)
+    changed_body = completion_body(changed_task, svamp_pipeline().rubric, "reviewer", 100)
     changed_payload = json.loads(changed_body["messages"][1]["content"])
     assert changed_payload["resources"] == payload["resources"]
     assert changed_payload["resource_manifest"]["sha256"] != payload["resource_manifest"]["sha256"]
@@ -88,7 +88,7 @@ def test_review_exposes_late_small_cases_that_can_violate_the_public_domain():
         )
     )
     task = task.model_copy(update={"resources": resources})
-    payload = json.loads(completion_body(task, SVAMP_RECIPE.rubric, "reviewer", 100)["messages"][1]["content"])
+    payload = json.loads(completion_body(task, svamp_pipeline().rubric, "reviewer", 100)["messages"][1]["content"])
     previews = {resource["path"]: resource["text"] for resource in payload["resources"]}
     assert previews["tests/input_80.txt"] == "0"
     assert previews["tests/output_80.txt"] == "1"

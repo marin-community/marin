@@ -155,10 +155,10 @@ def _audit_batch(
             checks_path = local / "checks.json"
             checks = {}
             for task in candidates:
-                if recipe.check_suite is None:
+                if recipe.pipeline.check_suite is None:
                     report_checks, rollouts = verify_task(task), ()
                 else:
-                    report = recipe.check_suite.run(task)
+                    report = recipe.pipeline.check_suite.run(task)
                     report_checks, rollouts = report.checks, report.rollouts
                 checks[task.id] = {
                     "checks": [check.model_dump(mode="json") for check in report_checks],
@@ -166,7 +166,7 @@ def _audit_batch(
                 }
             checks_path.write_text(json.dumps(checks))
             reviews_path = local / "reviews.json"
-            reviews = reviewer.review(candidates, recipe.rubric, local / "review")
+            reviews = reviewer.review(candidates, recipe.pipeline.rubric, local / "review")
             reviews_path.write_text(json.dumps([review.model_dump(mode="json") for review in reviews]))
             expected = {task.id for task in candidates}
             if (
@@ -291,7 +291,7 @@ def audit_source(
         "recipe_version": recipe.version,
         "review": asdict(review),
         "reviewer": reviewer.identity,
-        "rubric": asdict(recipe.rubric),
+        "rubric": asdict(recipe.pipeline.rubric),
     }
     _write_json(output / "manifest.json", manifest)
     return manifest
@@ -396,12 +396,14 @@ def _rewrite_window(
             checks = {}
             for parent, candidate in candidates.items():
                 checks[parent] = (
-                    verify_task(candidate) if recipe.check_suite is None else recipe.check_suite.run(candidate).checks
+                    verify_task(candidate)
+                    if recipe.pipeline.check_suite is None
+                    else recipe.pipeline.check_suite.run(candidate).checks
                 )
             reviews = (
                 reviewer.review(
                     list(candidates.values()),
-                    recipe.rubric,
+                    recipe.pipeline.rubric,
                     work / "candidate-review",
                     originals={candidate.id: originals[parent] for parent, candidate in candidates.items()},
                 )

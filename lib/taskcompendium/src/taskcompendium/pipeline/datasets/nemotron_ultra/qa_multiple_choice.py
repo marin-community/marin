@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""qa-multiple-choice contracts and explicit pinned blend selections."""
+"""qa-multiple-choice contracts and normalization policies."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_pipeline
+from taskcompendium.pipeline.models import TaskPipeline
 
-FAMILY_MODULE = __name__
 CRITERIA = (
     "Check option labels and answer encoding against the complete public choices and expected_answer.",
     (
@@ -15,26 +15,7 @@ CRITERIA = (
     ),
 )
 
-SOURCES = tuple(
-    quality_source(blend, selector, upstream, "qa-multiple-choice", CRITERIA, FAMILY_MODULE)
-    for blend, selector, upstream in (
-        ("mopd", "ultra_sft_step3200_stem_mcqa", "https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-mcqa"),
-        (
-            "mopd",
-            "ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            "https://huggingface.co/datasets/nvidia/Nemotron-SFT-Science-v2",
-        ),
-        ("rlvr1", "ultra_sft_step3200_stem_mcqa", "https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-mcqa"),
-        (
-            "rlvr1",
-            "ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            "https://huggingface.co/datasets/nvidia/Nemotron-SFT-Science-v2",
-        ),
-        ("rlvr2", "ultra_sft_step3200_stem_mcqa", "https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-mcqa"),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_stem_mcqa_cot_rima_new",
-            "https://huggingface.co/datasets/nvidia/Nemotron-SFT-Science-v2",
-        ),
-    )
-)
+
+def pipeline(selector: str, rubric_id: str, provenance: str) -> TaskPipeline:
+    """Build the qa-multiple-choice normalization and review policy."""
+    return quality_pipeline("qa-multiple-choice", selector, rubric_id, (*CRITERIA, provenance))

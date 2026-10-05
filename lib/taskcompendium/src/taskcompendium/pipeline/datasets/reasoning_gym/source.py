@@ -5,14 +5,13 @@
 
 import dataclasses
 import json
+import sys
 from collections.abc import Callable
 from typing import Any, cast
 
 import numpy as np
 import reasoning_gym
 from reasoning_gym.factory import DATASETS
-
-from taskcompendium.pipeline.datasets.reasoning_gym.generated import REVISION
 
 ROWS_PER_TASK = 1000
 GENERATION_SEED = 42
@@ -24,7 +23,7 @@ def _json_value(value: object) -> object:
     raise TypeError(f"Generated value of type {type(value).__name__} is not JSON serializable")
 
 
-def generated_rows():
+def generated_rows(generator_revision: str):
     """Cycle the sorted task registry with stable per-task seeds and native score evidence."""
     names = sorted(DATASETS)
     datasets = {}
@@ -49,7 +48,7 @@ def generated_rows():
                     "config": dataclasses.asdict(dataset.config),
                 },
                 "recorded_pinned_generator_controls": {
-                    "generator_revision": REVISION,
+                    "generator_revision": generator_revision,
                     "positive": {"candidate": answer, "reward": float(scorer(answer, entry))},
                     "negative": {"candidate": "definitely wrong", "reward": float(scorer("definitely wrong", entry))},
                     "execution": "Pinned reasoning-gym native scorer",
@@ -58,5 +57,5 @@ def generated_rows():
 
 
 if __name__ == "__main__":
-    for row in generated_rows():
+    for row in generated_rows(sys.argv[1]):
         print(json.dumps(row, ensure_ascii=False, default=_json_value), flush=True)

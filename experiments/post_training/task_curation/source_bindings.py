@@ -4,148 +4,116 @@
 """Bind recipe families to experiment-owned execution adapters."""
 
 import re
+from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 
-from taskcompendium.pipeline.datasets import (
-    atlas_arc_injection,
-    atlas_code,
-    atlas_math_qa,
-    calendar_tasks,
-    code_contracts,
-    competitive_coding,
-    executable_tasks,
-    gpqa,
-    gretel_text_to_sql,
-    if_calendar,
-    instruction_following,
-    instruction_tasks,
-    math_answers,
-    multichallenge,
-    nemo_actions,
-    numeric_answers,
-    openscience,
-    preference_tasks,
-    python_tasks,
-    qa_tasks,
-    reasoning_tasks,
-    repository_tasks,
-    rubric_tasks,
-    structured_output,
-    tasktrove_math,
-)
-from taskcompendium.pipeline.datasets.nemotron import structured_outputs
-from taskcompendium.pipeline.datasets.nemotron_ultra.catalog import NEMOTRON_SOURCES
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import recipe_for_source
-from taskcompendium.pipeline.datasets.reasoning_gym import generated as reasoning_gym_generated
 from taskcompendium.pipeline.models import DatasetRecipe
+from verifyit.spec import Compare, StdioSpec
 
-from experiments.post_training.task_curation.competitive import convert_competitive_coding
+from experiments.post_training.task_curation import archive_sources
+from experiments.post_training.task_curation.direct_sources import RECIPES as DIRECT_RECIPES
 from experiments.post_training.task_curation.executable import converted_row
-from experiments.post_training.task_curation.next_code import CONVERTERS as NEXT_CODE_CONVERTERS
+from experiments.post_training.task_curation.nemotron import RECIPES as NEMOTRON_RECIPES
+from experiments.post_training.tasktrove.converters.code_contests import convert_code_contests
+from experiments.post_training.tasktrove.converters.codeforces import convert_codeforces
+from experiments.post_training.tasktrove.converters.converted_task import ConvertedTask, ConvertStatus, Rejected
+from experiments.post_training.tasktrove.converters.nemotron_data import verifier_data
 from experiments.post_training.tasktrove.converters.nemotron_structured_outputs import (
     convert_nemotron_structured_outputs,
 )
 from experiments.post_training.tasktrove.converters.python_unit_tests import convert as convert_python
+from experiments.post_training.tasktrove.converters.stdio_cases import SOLUTION_COMMAND, case_files
+from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, INSTRUCTION, TaskFiles
 
 SANDBOX_TIMEOUT = 120.0
 SANDBOX_MEMORY_MB = 512
 
-RECIPES = (
-    math_answers.RECIPES
-    | numeric_answers.RECIPES
-    | instruction_tasks.RECIPES
-    | code_contracts.RECIPES
-    | {"nemo_actions": nemo_actions.recipe, "gpqa": gpqa.recipe}
-)
-FAMILY_SOURCES = {
-    name: family
-    for family in (
-        atlas_arc_injection,
-        atlas_math_qa,
-        preference_tasks,
-        repository_tasks,
-        rubric_tasks,
-        tasktrove_math,
+
+def convert_competitive_coding(task: TaskFiles) -> ConvertedTask | Rejected:
+    """Bind the source input/output pairs to its solution command and exact comparator."""
+    data = verifier_data(task)
+    inputs, outputs = data.get("inputs"), data.get("outputs")
+    if not isinstance(inputs, list) or not isinstance(outputs, list) or len(inputs) != len(outputs) or not inputs:
+        return Rejected(ConvertStatus.NULL_GRADER, "At least one aligned input/output case is required")
+    if not all(isinstance(value, str) for value in [*inputs, *outputs]):
+        return Rejected(ConvertStatus.NULL_GRADER, "Inputs and outputs must be strings")
+    return ConvertedTask(
+        instruction=task.text(INSTRUCTION),
+        spec=StdioSpec(command=SOLUTION_COMMAND, compare=Compare.EXACT),
+        dockerfile=task.text(DOCKERFILE),
+        tags=("code", "competitive-programming", "stdio", "nemotron"),
+        language="python",
+        data_files=case_files(inputs, outputs),
     )
-    for name in family.SOURCES
+
+
+def convert_codenet(task: TaskFiles) -> ConvertedTask | Rejected:
+    """Extract CodeNet cases and bind whitespace-token output comparison."""
+    converted = convert_codeforces(task)
+    if isinstance(converted, Rejected):
+        return converted
+    cases = sum(path.startswith("tests/cases/input_") for path in converted.data_files)
+    if cases < 2:
+        return Rejected(ConvertStatus.NULL_GRADER, "CodeNet source requires at least two input/output pairs")
+    return replace(
+        converted,
+        spec=StdioSpec(command=SOLUTION_COMMAND, compare=Compare.TOKENS, per_case_timeout=30.0, min_cases=2),
+        tags=("code", "competitive-programming", "stdio", "codenet"),
+    )
+
+
+RECIPES = DIRECT_RECIPES | archive_sources.RECIPES | NEMOTRON_RECIPES
+SOURCE_NAMES = (*RECIPES, *archive_sources.EXECUTABLE_SOURCES, "structured_outputs")
+
+
+CONVERTERS: dict[str, Callable[[TaskFiles], ConvertedTask | Rejected]] = {
+    "code_contests": convert_code_contests,
+    "codenet": convert_codenet,
+    "competitive_coding": convert_competitive_coding,
+    **dict.fromkeys(
+        (
+            "curriculum_easy",
+            "curriculum_medium",
+            "e2egit",
+            "e2egit_large",
+            "multifile",
+            "pymethods",
+            "pymethods_large",
+            "stack_pytest",
+            "unitsyn_large",
+        ),
+        convert_python,
+    ),
 }
-SOURCE_FACTORIES = {
-    "instruction_following": instruction_following.recipe,
-    "structured_output": structured_output.recipe,
-    "gretel_text_to_sql": gretel_text_to_sql.recipe,
-    "openscience": openscience.recipe,
-    "reasoning_gym_generated": reasoning_gym_generated.recipe,
-    "if_calendar": if_calendar.recipe,
-    "multichallenge": multichallenge.recipe,
-    "calendar": calendar_tasks.recipe,
-    "reasoning_gym": reasoning_tasks.reasoning_recipe,
-    "all_puzzles": reasoning_tasks.puzzle_recipe,
-    "knowledge_openqa": qa_tasks.knowledge_recipe,
-    "science_openqa": qa_tasks.science_recipe,
-}
-SOURCE_NAMES = (
-    *RECIPES,
-    *SOURCE_FACTORIES,
-    *FAMILY_SOURCES,
-    *executable_tasks.CONFIGS,
-    *atlas_code.CONFIGS,
-    *python_tasks.SOURCES,
-    "structured_outputs",
-    "competitive_coding",
-    *NEMOTRON_SOURCES,
-)
 
 
 def source_recipe(name: str, image: str | None) -> DatasetRecipe:
-    """Bind a pinned recipe; legacy conversion executes inside audit workers."""
+    """Bind an experiment selection; legacy converters execute inside audit workers."""
     if name in RECIPES:
         return RECIPES[name]
-    if name in NEMOTRON_SOURCES:
-        return recipe_for_source(NEMOTRON_SOURCES[name])
-    if name in FAMILY_SOURCES:
-        return FAMILY_SOURCES[name].recipe_for_source(name)
-    if name in SOURCE_FACTORIES:
-        return SOURCE_FACTORIES[name]()
     if name == "structured_outputs":
-        return structured_outputs.recipe(
+        return archive_sources.structured_outputs_recipe(
             converter=partial(converted_row, name=name, converter=convert_nemotron_structured_outputs),
             converter_revision="structured-outputs-v1",
         )
-    if name not in SOURCE_NAMES:
+    if name not in archive_sources.EXECUTABLE_SOURCES:
         raise ValueError(f"Unknown curation source: {name}")
     if image is None or re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-fA-F]{64}", image) is None:
         raise ValueError(f"Executable source {name} requires an immutable grader image")
-    if name == "competitive_coding":
-        return competitive_coding.recipe(
-            image,
-            converter=partial(converted_row, name=name, converter=convert_competitive_coding),
-            converter_revision="competitive-coding-v1",
-            timeout=SANDBOX_TIMEOUT,
-            memory_mb=SANDBOX_MEMORY_MB,
-        )
-    if name in python_tasks.SOURCES:
-        return python_tasks.recipe_for_source(
-            name,
-            image,
-            converter=partial(converted_row, name=name, converter=convert_python),
-            converter_revision="python-unit-tests-v1",
-            timeout=SANDBOX_TIMEOUT,
-            memory_mb=SANDBOX_MEMORY_MB,
-        )
-    if name in atlas_code.CONFIGS:
-        return atlas_code.recipe_for_source(
-            name,
-            image,
-            converter=partial(converted_row, name=name, converter=NEXT_CODE_CONVERTERS[name]),
-            converter_revision=f"{name}-v1",
-            timeout=SANDBOX_TIMEOUT,
-            memory_mb=SANDBOX_MEMORY_MB,
-        )
-    return executable_tasks.recipe(
+    adapter = CONVERTERS.get(name)
+    converter = partial(converted_row, name=name, converter=adapter) if adapter else partial(converted_row, name=name)
+    if adapter is convert_python:
+        converter_revision = "python-unit-tests-v1"
+    elif name == "competitive_coding":
+        converter_revision = "competitive-coding-v1"
+    else:
+        converter_revision = f"{name}-v1"
+    return archive_sources.executable_recipe(
         name,
         image,
-        converter=partial(converted_row, name=name),
-        converter_revision=f"{name}-v1",
+        converter=converter,
+        converter_revision=converter_revision,
         timeout=SANDBOX_TIMEOUT,
         memory_mb=SANDBOX_MEMORY_MB,
     )

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 from collections.abc import Iterator
+from dataclasses import dataclass
 from tempfile import TemporaryDirectory, TemporaryFile
 from typing import Any
 
@@ -22,24 +23,18 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.datasets.direct_contracts import contract_task
-from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat, UrlDownload
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
 
-DATASET = "open-thought/reasoning-gym"
-REVISION = "49b07130b3fcd12f2d064bba7c43869543a0e7e7"
-VERIFIER_REVISION = "bb6494e678ffaa1e6bd3967e221d1a67b038757e"
 RUBRIC = ReviewRubric(
     id="direct-reasoning-gym-answerability",
     version="1",
@@ -68,7 +63,7 @@ RUBRIC = ReviewRubric(
 )
 
 
-def generated_rows(archive_path: StoragePath) -> Iterator[dict[str, Any]]:
+def generated_rows(archive_path: StoragePath, generator_revision: str) -> Iterator[dict[str, Any]]:
     """Run the pinned generator checkout without importing it into the audit worker."""
     with TemporaryDirectory() as directory:
         local_archive = os.path.join(directory, "generator.tar.gz")
@@ -87,7 +82,7 @@ def generated_rows(archive_path: StoragePath) -> Iterator[dict[str, Any]]:
         }
         with TemporaryFile(mode="w+t") as errors:
             process = subprocess.Popen(
-                [sys.executable, "-m", "taskcompendium.pipeline.datasets.reasoning_gym.source"],
+                [sys.executable, "-m", "taskcompendium.pipeline.datasets.reasoning_gym.source", generator_revision],
                 stdout=subprocess.PIPE,
                 stderr=errors,
                 text=True,
@@ -131,7 +126,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
             "task": task_name,
             "entry": entry,
             "generation": generation,
-            "generator_revision": REVISION,
+            "generator_revision": row.source.revision,
             "answer_extraction": "Text after the last Answer: marker, stripped; otherwise stripped whole response",
             "reward": "float(reasoning_gym.get_score_answer_fn(task)(answer, entry))",
             "recorded_pinned_generator_controls": controls.model_dump(mode="json") if controls is not None else None,
@@ -143,7 +138,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         (TextMessage(role="user", content=entry["question"]),),
         "MarinSkyRL:skyrl_gym.envs.reasoning_gym.scoring.score_response",
         contract,
-        (f"Native reasoning-gym scorer at generator revision {REVISION}",),
+        (f"Native reasoning-gym scorer at generator revision {row.source.revision}",),
     )
 
 
@@ -153,7 +148,7 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     if controls is None:
         return VerificationReport(checks=checks)
     controls = RecordedControls.model_validate(controls)
-    if controls.generator_revision != REVISION:
+    if controls.generator_revision != task.source.revision:
         checks.append(
             CheckResult(
                 check="recorded_pinned_generator_controls",
@@ -173,18 +168,18 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     return VerificationReport(checks=checks)
 
 
-def recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="reasoning_gym_generated",
-        version="reasoning-gym-direct-v1",
-        source=HFSource(DATASET, REVISION, "generated", "generated"),
-        inputs=RecipeInputs(
-            files=SourceFiles(("generator.tar.gz",), SourceFormat.GENERATED, reader=generated_rows),
-            downloads=(UrlDownload(f"https://api.github.com/repos/{DATASET}/tarball/{REVISION}", "generator.tar.gz"),),
-        ),
+@dataclass(frozen=True)
+class GeneratedRows:
+    generator_revision: str
+
+    def __call__(self, archive_path: StoragePath) -> Iterator[dict[str, Any]]:
+        return generated_rows(archive_path, self.generator_revision)
+
+
+def pipeline() -> TaskPipeline:
+    return TaskPipeline(
         normalize=normalize,
         rubric=RUBRIC,
-        intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(
             id="recorded-pinned-generator-controls", revision="1", parameters={}, run=verification_report
         ),

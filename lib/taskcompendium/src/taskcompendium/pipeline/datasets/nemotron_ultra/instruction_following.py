@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""instruction-following contracts and explicit pinned blend selections."""
+"""instruction-following contracts and normalization policies."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_pipeline
+from taskcompendium.pipeline.models import TaskPipeline
 
-FAMILY_MODULE = __name__
 CRITERIA = (
     (
         "Identify the underlying content request and verify that all supplied formal constraints "
@@ -18,98 +18,7 @@ CRITERIA = (
     ),
 )
 
-SOURCES = tuple(
-    quality_source(blend, selector, upstream, "instruction-following", CRITERIA, FAMILY_MODULE)
-    for blend, selector, upstream in (
-        (
-            "mopd",
-            "ultra_sft_step3200_calendar_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
-        ),
-        (
-            "mopd",
-            "ultra_sft_step3200_instruction_following",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-instruction_following",
-        ),
-        (
-            "mopd",
-            "ultra_sft_step3200_multichallenge_len40k",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1",
-        ),
-        (
-            "mopd",
-            "ultra_sft_step3200_structured_outputs_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-        ),
-        (
-            "mopd",
-            "ultra_v3_agentic_rl_step73_citation_format_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
-        ),
-        (
-            "mopd",
-            "ultra_v3_agentic_rl_step73_freeform_text_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
-        ),
-        (
-            "mopd",
-            "ultra_v3_agentic_rl_step73_structured_outputs_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-        ),
-        (
-            "rlvr1",
-            "ultra_sft_step3200_calendar_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
-        ),
-        (
-            "rlvr1",
-            "ultra_sft_step3200_instruction_following",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-instruction_following",
-        ),
-        (
-            "rlvr1",
-            "ultra_sft_step3200_multichallenge_len40k",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1",
-        ),
-        (
-            "rlvr1",
-            "ultra_sft_step3200_structured_outputs_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_calendar_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Calendar-v2",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_ds2_freeform",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_ds3_citation",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_instruction_following",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-instruction_following",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_multichallenge_len40k",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-MultiTurnChat-v1",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_structured_outputs_v2",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_structured_outputs_v3",
-            "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
-        ),
-    )
-)
+
+def pipeline(selector: str, rubric_id: str, provenance: str) -> TaskPipeline:
+    """Build the instruction-following normalization and review policy."""
+    return quality_pipeline("instruction-following", selector, rubric_id, (*CRITERIA, provenance))

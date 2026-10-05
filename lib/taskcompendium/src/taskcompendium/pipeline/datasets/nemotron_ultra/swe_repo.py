@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""swe-repo contracts and explicit pinned blend selections."""
+"""swe-repo contracts and normalization policies."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import ACTION_COMPARISON_CRITERION, quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import ACTION_COMPARISON_CRITERION, quality_pipeline
+from taskcompendium.pipeline.models import TaskPipeline
 
-FAMILY_MODULE = __name__
 CRITERIA = (
     (
         "The public repository/environment reference supplies code context; a pinned checkout and "
@@ -19,68 +19,7 @@ CRITERIA = (
     (ACTION_COMPARISON_CRITERION),
 )
 
-SOURCES = tuple(
-    quality_source(blend, selector, upstream, "swe-repo", CRITERIA, FAMILY_MODULE, component=component)
-    for blend, selector, upstream, component in (
-        (
-            "mopd",
-            "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent",
-            "https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2",
-        ),
-        (
-            "mopd",
-            "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent",
-            "https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/SWE-Gym/SWE-Gym",
-        ),
-        (
-            "mopd",
-            "swe_pivot_len40k",
-            "https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            "swe_pivot_len40k/nebius/SWE-rebench-V2",
-        ),
-        (
-            "mopd",
-            "swe_pivot_len40k",
-            "https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            "swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        ),
-        (
-            "mopd",
-            "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k",
-            "https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2",
-        ),
-        (
-            "mopd",
-            "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k",
-            "https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym",
-        ),
-        (
-            "rlvr1",
-            "ultra_sft_step3200_swe_pivot_len40k",
-            "https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-        ),
-        (
-            "rlvr1",
-            "ultra_sft_step3200_swe_pivot_len40k",
-            "https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_swe_pivot_len40k",
-            "https://huggingface.co/datasets/nebius/SWE-rebench-V2",
-            "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2",
-        ),
-        (
-            "rlvr2",
-            "ultra_sft_step3200_swe_pivot_len40k",
-            "https://huggingface.co/datasets/SWE-Gym/SWE-Gym",
-            "ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym",
-        ),
-    )
-)
+
+def pipeline(selector: str, rubric_id: str, provenance: str) -> TaskPipeline:
+    """Build the swe-repo normalization and review policy."""
+    return quality_pipeline("swe-repo", selector, rubric_id, (*CRITERIA, provenance))

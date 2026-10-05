@@ -23,14 +23,11 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
-    DatasetRecipe,
-    GeneratedSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
 )
 from taskcompendium.runtime.calendar import INTERFACE, CalendarGoal, CalendarState
 
@@ -123,21 +120,17 @@ def generate_rows(limit: int) -> Iterator[dict[str, Any]]:
         }
 
 
-recipe = DatasetRecipe(
-    name="calendar-mock",
-    version="calendar-v1",
-    source=GeneratedSource("mock/calendar", "1", "default", "train", __name__),
-    inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
-    normalize=normalize,
-    rubric=ReviewRubric(
-        "calendar-state",
-        "1",
-        (
-            "Check that at least one conflict-free slot exists within the requested window.",
-            "Any slot satisfying the constraints is correct; do not demand the control trajectory's slot.",
-            "Tools must save the meeting; saying it was scheduled does not change state.",
-            "Existing events must remain unchanged, and the goal must specify duration, window and participants.",
+def pipeline() -> TaskPipeline:
+    return TaskPipeline(
+        normalize=normalize,
+        rubric=ReviewRubric(
+            "calendar-state",
+            "1",
+            (
+                "Check that at least one conflict-free slot exists within the requested window.",
+                "Any slot satisfying the constraints is correct; do not demand the control trajectory's slot.",
+                "Tools must save the meeting; saying it was scheduled does not change state.",
+                "Existing events must remain unchanged, and the goal must specify duration, window and participants.",
+            ),
         ),
-    ),
-    intended_use=IntendedUse.TRAIN,
-)
+    )

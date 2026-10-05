@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""math-proof contracts and explicit pinned blend selections."""
+"""math-proof contracts and normalization policies."""
 
-from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_source
+from taskcompendium.pipeline.datasets.nemotron_ultra.source import quality_pipeline
+from taskcompendium.pipeline.models import TaskPipeline
 
-FAMILY_MODULE = __name__
 CRITERIA = (
     (
         "Check that the complete Lean header, formal_statement, imports, and holes to be filled "
@@ -16,13 +16,8 @@ CRITERIA = (
         "agrees with informal text and preserve exact Lean/toolchain requirements."
     ),
 )
-UPSTREAM = "https://huggingface.co/datasets/nvidia/Nemotron-Math-Proofs-v1"
 
-SOURCES = tuple(
-    quality_source(blend, selector, UPSTREAM, "math-proof", CRITERIA, FAMILY_MODULE)
-    for blend, selector in (
-        ("mopd", "ultra_sft_step3200_lean"),
-        ("rlvr1", "ultra_sft_step3200_lean"),
-        ("rlvr2", "ultra_sft_step3200_lean"),
-    )
-)
+
+def pipeline(selector: str, rubric_id: str, provenance: str) -> TaskPipeline:
+    """Build the math-proof normalization and review policy."""
+    return quality_pipeline("math-proof", selector, rubric_id, (*CRITERIA, provenance))

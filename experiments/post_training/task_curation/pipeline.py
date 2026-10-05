@@ -117,12 +117,12 @@ def content_name(name: str, config: object) -> str:
 
 def recipe_identity(recipe: DatasetRecipe) -> dict[str, Any]:
     """Record explicit recipe revisions and parameters without serializing callables."""
-    checks = recipe.check_suite
+    checks = recipe.pipeline.check_suite
     return {
         "name": recipe.name,
         "version": recipe.version,
         "source": recipe.source,
-        "rubric": recipe.rubric,
+        "rubric": recipe.pipeline.rubric,
         "intended_use": recipe.intended_use,
         "check_suite": (
             {"id": checks.id, "revision": checks.revision, "parameters": checks.parameters}
@@ -423,7 +423,10 @@ def main(
                 binding,
                 recipe=replace(
                     binding.recipe,
-                    rubric=replace(binding.recipe.rubric, environment_inventory=inventories[binding.name]),
+                    pipeline=replace(
+                        binding.recipe.pipeline,
+                        rubric=replace(binding.recipe.pipeline.rubric, environment_inventory=inventories[binding.name]),
+                    ),
                 ),
             )
             if binding.name in inventories

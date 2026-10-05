@@ -10,7 +10,7 @@ from verifyit.grade import grade
 from verifyit.spec import StdioSpec, spec_from_table
 
 from experiments.post_training.task_curation.executable import converted_row
-from experiments.post_training.task_curation.next_code import convert_codenet
+from experiments.post_training.task_curation.source_bindings import convert_codenet
 
 
 def test_codenet_token_grader_accepts_valid_multiline_output(tmp_path):

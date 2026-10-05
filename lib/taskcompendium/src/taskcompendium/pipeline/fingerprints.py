@@ -19,7 +19,7 @@ def recipe_code_identity(recipe: DatasetRecipe) -> dict[str, str]:
     return {
         "normalization_stage": NORMALIZATION_STAGE_REVISION,
         "task_schema": SCHEMA_VERSION,
-        "family": recipe.normalize.__module__,
+        "family": recipe.pipeline.normalize.__module__,
         "family_revision": recipe.version,
         "verification_stage": VERIFICATION_STAGE_REVISION,
         "review_stage": REVIEW_STAGE_REVISION,

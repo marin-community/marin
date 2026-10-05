@@ -36,6 +36,8 @@ from taskcompendium.pipeline.stages import rewrite_audit_source
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import resource_bytes
 
+from .pipeline_stages import fixture_recipe
+
 
 @dataclass(frozen=True)
 class Submission:
@@ -308,7 +310,7 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
     manifest = rewrite_audit_source(
         str(source),
         str(output),
-        structured_output.recipe(),
+        fixture_recipe(structured_output.pipeline()),
         FilterPolicy(),
         ReviewRubric("repair", "1", ("Preserve the schema.",)),
         BatchRewriter(service, "model", "deployment"),
@@ -330,7 +332,7 @@ def test_rewrite_stage_rechecks_candidate_and_retains_original_audit(tmp_path, s
     repeated = rewrite_audit_source(
         str(source),
         str(output),
-        structured_output.recipe(),
+        fixture_recipe(structured_output.pipeline()),
         FilterPolicy(),
         ReviewRubric("repair", "1", ("Preserve the schema.",)),
         BatchRewriter(service, "model", "deployment"),
@@ -391,7 +393,7 @@ def test_rewrite_stage_rejects_candidate_with_unavailable_review(tmp_path, struc
     manifest = rewrite_audit_source(
         str(source),
         str(output),
-        structured_output.recipe(),
+        fixture_recipe(structured_output.pipeline()),
         FilterPolicy(),
         ReviewRubric("repair", "1", ()),
         BatchRewriter(service, "model", "deployment"),
@@ -449,7 +451,7 @@ def test_rewrite_stage_preserves_original_decisions_without_a_candidate(tmp_path
     manifest = rewrite_audit_source(
         str(source),
         str(output),
-        structured_output.recipe(),
+        fixture_recipe(structured_output.pipeline()),
         FilterPolicy(),
         ReviewRubric("repair", "1", ()),
         BatchRewriter(service, "model", "deployment"),

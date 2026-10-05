@@ -4,7 +4,6 @@
 """Preserve public preference prompts and private candidate labels for curation."""
 
 import re
-from collections.abc import Callable
 
 from pydantic import ValidationError
 
@@ -18,15 +17,11 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
-from taskcompendium.pipeline.datasets.source_definitions import SourceDefinition
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
 )
 
 PREFERENCE_CRITERIA = (
@@ -36,7 +31,6 @@ PREFERENCE_CRITERIA = (
     "The reward model is unbound; unavailable execution alone is not a content-quality defect.",
 )
 
-HH_REVISION = "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa"
 HH_TURN = re.compile(r"\n\n(Human|Assistant):")
 HH_ROLES = {"Human": "user", "Assistant": "assistant"}
 
@@ -115,132 +109,70 @@ def normalize_binary(row: RawRow) -> TaskSpec | ImportRejection:
     return preference_task(row, ConversationInput(events=context.events), evidence)
 
 
-def recipe(
-    name: str,
-    *,
-    dataset: str,
-    revision: str,
-    config: str,
-    rubric: ReviewRubric,
-    files: SourceFiles,
-    normalize: Callable[[RawRow], TaskSpec | ImportRejection],
-) -> DatasetRecipe:
-    return DatasetRecipe(
-        name=name,
-        version=f"{name}-v1",
-        source=HFSource(dataset, revision, config, "train"),
-        inputs=hub_inputs(dataset, revision, files),
-        normalize=normalize,
-        rubric=rubric,
-        intended_use=IntendedUse.TRAIN,
-    )
+def hh_pipeline(rubric: ReviewRubric) -> TaskPipeline:
+    return TaskPipeline(normalize=normalize_hh, rubric=rubric)
 
 
-SOURCES = {
-    "hh_harmless_base": SourceDefinition(
-        dataset="Anthropic/hh-rlhf",
-        revision=HH_REVISION,
-        config="harmless-base",
-        split="train",
-        files=SourceFiles(patterns=("harmless-base/train.jsonl.gz",), format=SourceFormat.JSONL),
-        rubric=ReviewRubric(
-            id="hh_harmless_base-answerability",
-            version="1",
-            criteria=(
-                (
-                    "Assess whether the public request is intelligible and whether a safe response is possible; "
-                    "harmful requests can have meaningful refusal responses."
-                ),
-                *PREFERENCE_CRITERIA,
-            ),
-        ),
-    ),
-    "hh_helpful_base": SourceDefinition(
-        dataset="Anthropic/hh-rlhf",
-        revision=HH_REVISION,
-        config="helpful-base",
-        split="train",
-        files=SourceFiles(patterns=("helpful-base/train.jsonl.gz",), format=SourceFormat.JSONL),
-        rubric=ReviewRubric(
-            id="hh_helpful_base-answerability",
-            version="1",
-            criteria=(
-                (
-                    "Assess the helpfulness task using the full conversation, including earlier assistant turns and "
-                    "any missing requested inputs."
-                ),
-                *PREFERENCE_CRITERIA,
-            ),
-        ),
-    ),
-    "hh_helpful_online": SourceDefinition(
-        dataset="Anthropic/hh-rlhf",
-        revision=HH_REVISION,
-        config="helpful-online",
-        split="train",
-        files=SourceFiles(patterns=("helpful-online/train.jsonl.gz",), format=SourceFormat.JSONL),
-        rubric=ReviewRubric(
-            id="hh_helpful_online-answerability",
-            version="1",
-            criteria=(
-                (
-                    "Assess the full online-feedback conversation; source preference alone does not certify factual "
-                    "accuracy or completeness."
-                ),
-                *PREFERENCE_CRITERIA,
-            ),
-        ),
-    ),
-    "hh_helpful_rejection_sampled": SourceDefinition(
-        dataset="Anthropic/hh-rlhf",
-        revision=HH_REVISION,
-        config="helpful-rejection-sampled",
-        split="train",
-        files=SourceFiles(patterns=("helpful-rejection-sampled/train.jsonl.gz",), format=SourceFormat.JSONL),
-        rubric=ReviewRubric(
-            id="hh_helpful_rejection_sampled-answerability",
-            version="1",
-            criteria=(
-                (
-                    "Assess the underlying public task independently of the rejection-sampled candidate ranking and "
-                    "any candidate errors."
-                ),
-                *PREFERENCE_CRITERIA,
-            ),
-        ),
-    ),
-    "kto_mix": SourceDefinition(
-        dataset="trl-lib/kto-mix-14k",
-        revision="4470f033f33364e7d064c9f920c3df54d0cce767",
-        config="default",
-        split="train",
-        files=SourceFiles(patterns=("data/train-00000-of-00001.parquet",), format=SourceFormat.PARQUET),
-        rubric=ReviewRubric(
-            id="kto-mix-answerability",
-            version="1",
-            criteria=(
-                "Read the complete public prompt messages; the labeled candidate completion remains private.",
-                "The boolean label is an unpaired preference observation; do not invent a chosen/rejected counterpart.",
-                "Assess public task coherence separately from candidate quality or the source preference label.",
-                "The pinned mixture has no contributor column; do not claim a sampled row belongs to a named "
-                "contributor.",
-                "Missing inputs and contradictions are task defects; an unbound reward model alone is not.",
-            ),
-        ),
-    ),
-}
+def binary_pipeline(rubric: ReviewRubric) -> TaskPipeline:
+    return TaskPipeline(normalize=normalize_binary, rubric=rubric)
 
 
-def recipe_for_source(
-    name: str,
-) -> DatasetRecipe:
-    source = SOURCES[name]
-    return recipe(
-        name,
-        dataset=source.dataset,
-        revision=source.revision,
-        config=source.config,
-        rubric=source.rubric,
-        files=source.files,
-        normalize=normalize_binary if name == "kto_mix" else normalize_hh,
-    )
+HH_HARMLESS_BASE_RUBRIC = ReviewRubric(
+    id="hh_harmless_base-answerability",
+    version="1",
+    criteria=(
+        (
+            "Assess whether the public request is intelligible and whether a safe response is possible; "
+            "harmful requests can have meaningful refusal responses."
+        ),
+        *PREFERENCE_CRITERIA,
+    ),
+)
+
+HH_HELPFUL_BASE_RUBRIC = ReviewRubric(
+    id="hh_helpful_base-answerability",
+    version="1",
+    criteria=(
+        (
+            "Assess the helpfulness task using the full conversation, including earlier assistant turns and "
+            "any missing requested inputs."
+        ),
+        *PREFERENCE_CRITERIA,
+    ),
+)
+
+HH_HELPFUL_ONLINE_RUBRIC = ReviewRubric(
+    id="hh_helpful_online-answerability",
+    version="1",
+    criteria=(
+        (
+            "Assess the full online-feedback conversation; source preference alone does not certify factual "
+            "accuracy or completeness."
+        ),
+        *PREFERENCE_CRITERIA,
+    ),
+)
+
+HH_HELPFUL_REJECTION_SAMPLED_RUBRIC = ReviewRubric(
+    id="hh_helpful_rejection_sampled-answerability",
+    version="1",
+    criteria=(
+        (
+            "Assess the underlying public task independently of the rejection-sampled candidate ranking and "
+            "any candidate errors."
+        ),
+        *PREFERENCE_CRITERIA,
+    ),
+)
+
+KTO_MIX_RUBRIC = ReviewRubric(
+    id="kto-mix-answerability",
+    version="1",
+    criteria=(
+        "Read the complete public prompt messages; the labeled candidate completion remains private.",
+        "The boolean label is an unpaired preference observation; do not invent a chosen/rejected counterpart.",
+        "Assess public task coherence separately from candidate quality or the source preference label.",
+        "The pinned mixture has no contributor column; do not claim a sampled row belongs to a named " "contributor.",
+        "Missing inputs and contradictions are task defects; an unbound reward model alone is not.",
+    ),
+)

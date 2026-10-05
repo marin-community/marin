@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned Nemotron stdin/stdout coding source and case-alignment rubric."""
+"""Nemotron stdin/stdout coding policy and case-alignment rubric."""
 
 from dataclasses import replace
 
@@ -9,12 +9,10 @@ from verifyit.modes.extract import collapse_whitespace
 
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import python_tasks
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter
-from taskcompendium.pipeline.models import CheckResult, CheckStatus, DatasetRecipe, ReviewRubric, VerificationReport
+from taskcompendium.pipeline.models import CheckResult, CheckStatus, ReviewRubric, TaskPipeline, VerificationReport
 from taskcompendium.runtime.resources import resource_bytes
 
-CONFIG = "laion__nemotron-gym-competitive-coding-v2"
 RUBRIC = ReviewRubric(
     id="competitive-coding-answerability",
     version="1",
@@ -30,27 +28,23 @@ RUBRIC = ReviewRubric(
 )
 
 
-def recipe(
+def pipeline(
     image: str,
     *,
     converter: RawConverter,
     converter_revision: str,
     timeout: float,
     memory_mb: int,
-) -> DatasetRecipe:
-    source_recipe = python_tasks.recipe(
-        "competitive_coding",
+) -> TaskPipeline:
+    source_pipeline = python_tasks.pipeline(
         image,
-        config=CONFIG,
-        revision=REVISION,
         rubric=RUBRIC,
         converter=converter,
         converter_revision=converter_revision,
         timeout=timeout,
         memory_mb=memory_mb,
     )
-
-    suite = source_recipe.check_suite
+    suite = source_pipeline.check_suite
     assert suite is not None
 
     def checks(task: TaskSpec) -> VerificationReport:
@@ -76,4 +70,4 @@ def recipe(
         )
         return VerificationReport(checks=[*report.checks, coverage])
 
-    return replace(source_recipe, check_suite=replace(suite, run=checks))
+    return replace(source_pipeline, check_suite=replace(suite, run=checks))

@@ -9,19 +9,19 @@ from typing import Any
 
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import (
-    DatasetRecipe,
     ImportRejection,
     NormalizationChange,
     NormalizedTask,
     RawRow,
+    TaskPipeline,
 )
 
 RawConverter = Callable[[Mapping[str, Any]], dict[str, Any]]
 
 
-def with_raw_converter(recipe: DatasetRecipe, converter: RawConverter, revision: str) -> DatasetRecipe:
+def with_raw_converter(pipeline: TaskPipeline, converter: RawConverter, revision: str) -> TaskPipeline:
     """Record converter repairs and identity beside the source's normalizer."""
-    normalize = recipe.normalize
+    normalize = pipeline.normalize
 
     def normalize_raw(row: RawRow) -> TaskSpec | NormalizedTask | ImportRejection:
         prepared = converter(row.data)
@@ -35,11 +35,10 @@ def with_raw_converter(recipe: DatasetRecipe, converter: RawConverter, revision:
             return NormalizedTask(result.task, changes + result.changes)
         return NormalizedTask(result, changes)
 
-    suite = recipe.check_suite
+    suite = pipeline.check_suite
     assert suite is not None
     return replace(
-        recipe,
-        version=f"{recipe.version}-raw-conversion-v2",
+        pipeline,
         normalize=normalize_raw,
         check_suite=replace(suite, parameters={**suite.parameters, "converter_revision": revision}),
     )

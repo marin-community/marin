@@ -9,11 +9,12 @@ from verifyit.spec import McqSpec
 
 from taskcompendium.grader import grader_package
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
-from taskcompendium.pipeline.models import DatasetRecipe, HFSource, ImportRejection, IntendedUse, RawRow, ReviewRubric
-
-DATASET = "Idavidrein/gpqa"
-REVISION = "83022cefff930aea54f654c0b282e74b9eeda5c6"
+from taskcompendium.pipeline.models import (
+    ImportRejection,
+    RawRow,
+    ReviewRubric,
+    TaskPipeline,
+)
 
 
 def normalize(row: RawRow) -> TaskSpec | ImportRejection:
@@ -45,24 +46,16 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     )
 
 
-recipe = DatasetRecipe(
-    name="gpqa",
-    version="gpqa-v1",
-    source=HFSource(DATASET, REVISION, "gpqa_diamond", "train"),
-    inputs=hub_inputs(
-        DATASET,
-        REVISION,
-        SourceFiles(("gpqa_diamond.csv",), SourceFormat.CSV),
+RUBRIC = ReviewRubric(
+    id="science-mcqa",
+    version="1",
+    criteria=(
+        "Assess every displayed option, units, assumptions, and scientific directionality before judging the key.",
+        "Specialist background knowledge is allowed; an omitted experiment, figure, or passage is missing context.",
+        "Flag ties, approximate synonyms, or an indefensible key. Technical difficulty alone is not a defect.",
     ),
-    normalize=normalize,
-    rubric=ReviewRubric(
-        id="science-mcqa",
-        version="1",
-        criteria=(
-            "Assess every displayed option, units, assumptions, and scientific directionality before judging the key.",
-            "Specialist background knowledge is allowed; an omitted experiment, figure, or passage is missing context.",
-            "Flag ties, approximate synonyms, or an indefensible key. Technical difficulty alone is not a defect.",
-        ),
-    ),
-    intended_use=IntendedUse.EVAL,
 )
+
+
+def pipeline() -> TaskPipeline:
+    return TaskPipeline(normalize=normalize, rubric=RUBRIC)

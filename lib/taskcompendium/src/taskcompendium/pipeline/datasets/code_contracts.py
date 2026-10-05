@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned source contracts for directly imported code tasks."""
+"""Normalization and review policies for directly imported code tasks."""
 
 import json
 from typing import Any
@@ -10,13 +10,11 @@ from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets.direct_contracts import contract_task
-from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
-from taskcompendium.pipeline.models import DatasetRecipe, HFSource, ImportRejection, IntendedUse, RawRow, ReviewRubric
-
-APPS_SOURCE = HFSource("codeparrot/apps", "21e74ddf8de1a21436da12e3e653065c5213e9d1", "default", "train")
-EURUS2_CODE_SOURCE = HFSource("PRIME-RL/Eurus-2-RL-Data", "9776b13264b5aaa0b16495fcf086a0a8d86fd655", "default", "train")
-VERIFIABLE_CODE_SOURCE = HFSource(
-    "open-r1/verifiable-coding-problems-python", "b761a24a95fa03289a231d2d31c183636ffb9833", "default", "train"
+from taskcompendium.pipeline.models import (
+    ImportRejection,
+    RawRow,
+    ReviewRubric,
+    TaskPipeline,
 )
 
 APPS_RUBRIC = ReviewRubric(
@@ -126,44 +124,13 @@ def select_eurus_code(row: dict[str, Any], staged_root: StoragePath) -> bool:
     return row["ability"] == "code"
 
 
-RECIPES = {
-    "apps": DatasetRecipe(
-        name="apps",
-        version="apps-v1",
-        source=APPS_SOURCE,
-        normalize=normalize_apps,
-        intended_use=IntendedUse.TRAIN,
-        rubric=APPS_RUBRIC,
-        inputs=hub_inputs(
-            APPS_SOURCE.dataset,
-            APPS_SOURCE.revision,
-            SourceFiles(("train.jsonl",), SourceFormat.JSONL),
-        ),
-    ),
-    "eurus2_code": DatasetRecipe(
-        name="eurus2_code",
-        version="eurus2_code-v1",
-        source=EURUS2_CODE_SOURCE,
-        normalize=normalize_eurus2_code,
-        intended_use=IntendedUse.TRAIN,
-        rubric=EURUS2_CODE_RUBRIC,
-        inputs=hub_inputs(
-            EURUS2_CODE_SOURCE.dataset,
-            EURUS2_CODE_SOURCE.revision,
-            SourceFiles(("train.parquet",), SourceFormat.PARQUET, selector=select_eurus_code),
-        ),
-    ),
-    "verifiable_code": DatasetRecipe(
-        name="verifiable_code",
-        version="verifiable_code-v1",
-        source=VERIFIABLE_CODE_SOURCE,
-        normalize=normalize_verifiable_code,
-        intended_use=IntendedUse.TRAIN,
-        rubric=VERIFIABLE_CODE_RUBRIC,
-        inputs=hub_inputs(
-            VERIFIABLE_CODE_SOURCE.dataset,
-            VERIFIABLE_CODE_SOURCE.revision,
-            SourceFiles(("data/train-*.parquet",), SourceFormat.PARQUET),
-        ),
-    ),
-}
+def apps_pipeline() -> TaskPipeline:
+    return TaskPipeline(normalize=normalize_apps, rubric=APPS_RUBRIC)
+
+
+def eurus2_code_pipeline() -> TaskPipeline:
+    return TaskPipeline(normalize=normalize_eurus2_code, rubric=EURUS2_CODE_RUBRIC)
+
+
+def verifiable_code_pipeline() -> TaskPipeline:
+    return TaskPipeline(normalize=normalize_verifiable_code, rubric=VERIFIABLE_CODE_RUBRIC)

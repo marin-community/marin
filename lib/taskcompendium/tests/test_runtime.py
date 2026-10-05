@@ -14,7 +14,8 @@ from taskcompendium.grader import grader_config
 from taskcompendium.grading import grade_task
 from taskcompendium.models import ConversationTrace, FunctionCall, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import calendar, nemo_actions, shell_files
-from taskcompendium.pipeline.models import CheckStatus, RawRow
+from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
+from taskcompendium.pipeline.models import CheckStatus, DatasetRecipe, GeneratedSource, IntendedUse, RawRow
 from taskcompendium.pipeline.review import BatchReviewer
 from taskcompendium.pipeline.verification import PLAIN, verify_task
 from taskcompendium.runtime.calendar import CalendarFactory, CalendarGoal, calendar_controls
@@ -176,7 +177,14 @@ async def test_environment_failure_is_recorded_without_reward(calendar_task):
 
 
 def test_calendar_pipeline_persists_controls_and_replays_without_runtime(tmp_path):
-    recipe = replace(calendar.recipe, check_suite=episode_suite(CalendarFactory(), max_steps=4))
+    recipe = DatasetRecipe(
+        name="calendar-fixture",
+        version="1",
+        source=GeneratedSource("mock/calendar", "1", "default", "train", calendar.__name__),
+        pipeline=replace(calendar.pipeline(), check_suite=episode_suite(CalendarFactory(), max_steps=4)),
+        intended_use=IntendedUse.TRAIN,
+        inputs=RecipeInputs(SourceFiles(("*.jsonl",), SourceFormat.JSONL), ()),
+    )
     reviewer = BatchReviewer(BatchService(), "fake", "1")
     first = run_stages(recipe, calendar.generate_rows(2), output_path=tmp_path, limit=2, reviewer=reviewer)
     assert first["dispositions"] == {"keep": 2}
@@ -188,7 +196,13 @@ def test_calendar_pipeline_persists_controls_and_replays_without_runtime(tmp_pat
     ]
     assert len(rollouts) == 10
     unavailable = replace(
-        recipe, check_suite=replace(recipe.check_suite, run=lambda task: pytest.fail("Runtime was called during replay"))
+        recipe,
+        pipeline=replace(
+            recipe.pipeline,
+            check_suite=replace(
+                recipe.pipeline.check_suite, run=lambda task: pytest.fail("Runtime was called during replay")
+            ),
+        ),
     )
     second = run_stages(unavailable, iter(()), output_path=tmp_path, limit=2, reviewer=reviewer)
     assert first == second
@@ -201,8 +215,8 @@ def test_nemo_pipeline_normalizes_untyped_source_messages_and_checks_actions():
         if item.get("type") == "message" and item["role"] in {"system", "user"}:
             del item["type"]
     source = Source(
-        dataset=nemo_actions.recipe.source.dataset,
-        revision=nemo_actions.recipe.source.revision,
+        dataset="fixture/nemo",
+        revision="1",
         row="0",
         importer_revision="1",
     )

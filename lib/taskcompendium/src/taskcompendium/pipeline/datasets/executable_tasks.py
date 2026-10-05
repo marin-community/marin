@@ -26,32 +26,22 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
 from taskcompendium.pipeline.datasets.shell_files import BASH
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 from taskcompendium.runtime.grading import GRADING_MEMORY_MB, GRADING_TIMEOUT, grade_submission
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import INTERFACE, ShellFactory
 
-CONFIGS = {
-    "nl2bash": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
-    "taco": "laion__exp_rpt_taco-v2",
-    "codeforces": "laion__codeforces-v3",
-    "unitsyn": "DCAgent__exp_rpt_unitsyn-python-v4",
-}
 CRITERIA = {
     "nl2bash": (
         "The public seed/setup files must recreate the command's input files. Flag unavailable tools or inputs.",
@@ -127,7 +117,7 @@ def normalize(row: RawRow, image: str) -> TaskSpec | ImportRejection:
     )
 
 
-def recipe(
+def pipeline(
     name: str,
     image: str,
     *,
@@ -135,16 +125,13 @@ def recipe(
     converter_revision: str,
     timeout: float,
     memory_mb: int,
-) -> DatasetRecipe:
-    """Bind one converted source and explicit sandbox limits to the common stages."""
+) -> TaskPipeline:
+    """Build executable normalization and controls with explicit sandbox limits."""
 
     def normalize_row(row: RawRow) -> TaskSpec | ImportRejection:
         return normalize(row, image)
 
-    source_recipe = DatasetRecipe(
-        name=f"tasktrove-{name}",
-        version=f"tasktrove-{name}-v1",
-        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIGS[name], "train"),
+    base = TaskPipeline(
         normalize=normalize_row,
         rubric=ReviewRubric(
             id=f"{name}-answerability",
@@ -157,8 +144,6 @@ def recipe(
                 *CRITERIA[name],
             ),
         ),
-        intended_use=IntendedUse.TRAIN,
-        inputs=tasktrove_inputs(CONFIGS[name], REVISION),
         check_suite=CheckSuite(
             id="isolated-executable-controls",
             revision="1",
@@ -166,7 +151,7 @@ def recipe(
             run=partial(verification_report, timeout=timeout, memory_mb=memory_mb),
         ),
     )
-    return with_raw_converter(source_recipe, converter, converter_revision)
+    return with_raw_converter(base, converter, converter_revision)
 
 
 def verification_report(

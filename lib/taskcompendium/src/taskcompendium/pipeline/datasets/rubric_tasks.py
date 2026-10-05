@@ -18,20 +18,16 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     NormalizationChange,
     NormalizedTask,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
     VerificationReport,
 )
 
@@ -160,31 +156,6 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     )
 
 
-def recipe(
-    name: str,
-    *,
-    config: str,
-    revision: str,
-    rubric: ReviewRubric,
-    normalize_row: Callable[[RawRow], NormalizedTask | ImportRejection] = normalize,
-) -> DatasetRecipe:
-    return DatasetRecipe(
-        name=f"tasktrove-{name}",
-        version=f"tasktrove-{name}-v1",
-        source=HFSource(TASKTROVE_DATASET, revision, config, "train"),
-        inputs=tasktrove_inputs(config, revision),
-        normalize=normalize_row,
-        rubric=rubric,
-        intended_use=IntendedUse.TRAIN,
-        check_suite=CheckSuite(
-            id="source-rubric-with-unbound-judge",
-            revision="1",
-            parameters={},
-            run=verification_report,
-        ),
-    )
-
-
 STACK_EXCHANGE_COMMON_CRITERIA = (
     "Require a complete public request and any code, prior turns, or external passages needed to answer it.",
     "Check each private criterion against the public request; flag invented constraints or incorrect premises.",
@@ -192,127 +163,101 @@ STACK_EXCHANGE_COMMON_CRITERIA = (
     "judge is unbound.",
 )
 
-SOURCES = {
-    "codereview": tasktrove_source(
-        config="laion__stackexchange-codereview-sandboxes-verified-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="codereview-answerability",
-            version="1",
-            criteria=(
-                *STACK_EXCHANGE_COMMON_CRITERIA,
-                "Require the code under review and its intended behavior; inspect flattened source for lost "
-                "comparisons, "
-                "markup, links, and abrupt truncation before judging it complete.",
-            ),
+RUBRICS: dict[str, ReviewRubric] = {
+    "codereview": ReviewRubric(
+        id="codereview-answerability",
+        version="1",
+        criteria=(
+            *STACK_EXCHANGE_COMMON_CRITERIA,
+            "Require the code under review and its intended behavior; inspect flattened source for lost "
+            "comparisons, "
+            "markup, links, and abrupt truncation before judging it complete.",
         ),
     ),
-    "glaive_code": tasktrove_source(
-        config="laion__glaive-code-assistant-sandboxes-verified-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="glaive_code-answerability",
-            version="1",
-            criteria=(
-                *STACK_EXCHANGE_COMMON_CRITERIA,
-                "Check required code, table schemas, input, output, dependencies, and runtime assumptions; generic "
-                "programming questions can be answerable, but references to absent specific inputs are defects.",
-            ),
+    "glaive_code": ReviewRubric(
+        id="glaive_code-answerability",
+        version="1",
+        criteria=(
+            *STACK_EXCHANGE_COMMON_CRITERIA,
+            "Check required code, table schemas, input, output, dependencies, and runtime assumptions; generic "
+            "programming questions can be answerable, but references to absent specific inputs are defects.",
         ),
     ),
-    "safety": tasktrove_source(
-        config="laion__nemotron-gym-safety-v3",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="safety-answerability",
-            version="1",
-            criteria=(
-                "Compare each safety principle with the actual request; refusal on a benign request is a rubric "
-                "mismatch.",
-                "Reject missing inputs, contradictions, and rubric requirements absent from the public request.",
-                "The source grades one holistic numeric reward; preserve its rubric, judge policy, and threshold.",
-                "No reference answer is supplied; do not invent one.",
-                "An unavailable semantic judge is a verification limitation, not evidence that the content is bad.",
-            ),
+    "safety": ReviewRubric(
+        id="safety-answerability",
+        version="1",
+        criteria=(
+            "Compare each safety principle with the actual request; refusal on a benign request is a rubric mismatch.",
+            "Reject missing inputs, contradictions, and rubric requirements absent from the public request.",
+            "The source grades one holistic numeric reward; preserve its rubric, judge policy, and threshold.",
+            "No reference answer is supplied; do not invent one.",
+            "An unavailable semantic judge is a verification limitation, not evidence that the content is bad.",
         ),
     ),
-    "stack_overflow": tasktrove_source(
-        config="laion__stackexchange-overflow-sandboxes-verified-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="stack_overflow-answerability",
-            version="1",
-            criteria=(
-                *STACK_EXCHANGE_COMMON_CRITERIA,
-                "Check that error reports include relevant code, versions, input, and observed behavior; distinguish "
-                "plausible advice from an answer justified by supplied context.",
-            ),
+    "stack_overflow": ReviewRubric(
+        id="stack_overflow-answerability",
+        version="1",
+        criteria=(
+            *STACK_EXCHANGE_COMMON_CRITERIA,
+            "Check that error reports include relevant code, versions, input, and observed behavior; distinguish "
+            "plausible advice from an answer justified by supplied context.",
         ),
     ),
-    "superuser": tasktrove_source(
-        config="laion__stackexchange-superuser-sandboxes-verified-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="superuser-answerability",
-            version="1",
-            criteria=(
-                *STACK_EXCHANGE_COMMON_CRITERIA,
-                "Check operating system, application, privileges, and device assumptions; missing environment "
-                "details can make a checklist demand impossible or unsafe.",
-            ),
+    "superuser": ReviewRubric(
+        id="superuser-answerability",
+        version="1",
+        criteria=(
+            *STACK_EXCHANGE_COMMON_CRITERIA,
+            "Check operating system, application, privileges, and device assumptions; missing environment "
+            "details can make a checklist demand impossible or unsafe.",
         ),
     ),
-    "tezos": tasktrove_source(
-        config="laion__stackexchange-tezos-sandboxes-verified-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="tezos-answerability",
-            version="1",
-            criteria=(
-                "Check that Tezos questions supply necessary code, transaction details, versions, and error context.",
-                "Reject missing inputs, contradictions, and rubric requirements absent from the public request.",
-                "The source grades one holistic numeric reward; preserve its rubric, judge policy, and threshold.",
-                "No reference answer is supplied; do not invent one.",
-                "An unavailable semantic judge is a verification limitation, not evidence that the content is bad.",
-            ),
+    "tezos": ReviewRubric(
+        id="tezos-answerability",
+        version="1",
+        criteria=(
+            "Check that Tezos questions supply necessary code, transaction details, versions, and error context.",
+            "Reject missing inputs, contradictions, and rubric requirements absent from the public request.",
+            "The source grades one holistic numeric reward; preserve its rubric, judge policy, and threshold.",
+            "No reference answer is supplied; do not invent one.",
+            "An unavailable semantic judge is a verification limitation, not evidence that the content is bad.",
         ),
     ),
-    "unix": tasktrove_source(
-        config="laion__stackexchange-unix-sandboxes-verified-v2",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="unix-answerability",
-            version="1",
-            criteria=(
-                *STACK_EXCHANGE_COMMON_CRITERIA,
-                "Check shell, distribution, filesystem, quoting, permissions, and tool assumptions; different valid "
-                "commands must not be excluded by an arbitrary checklist.",
-            ),
+    "unix": ReviewRubric(
+        id="unix-answerability",
+        version="1",
+        criteria=(
+            *STACK_EXCHANGE_COMMON_CRITERIA,
+            "Check shell, distribution, filesystem, quoting, permissions, and tool assumptions; different valid "
+            "commands must not be excluded by an arbitrary checklist.",
         ),
     ),
-    "wizard_orca": tasktrove_source(
-        config="laion__wizardlm-orca-v4",
-        revision=REVISION,
-        rubric=ReviewRubric(
-            id="wizard_orca-answerability",
-            version="2",
-            criteria=(
-                "Trace supplied code with each stated example, including actual printed strings, divisions, "
-                "return values, and arithmetic. A purported correct example that disagrees with the code is a "
-                "defect unless the public task explicitly asks to debug or correct that discrepancy.",
-                "Check the complete instruction, facts, and requested reasoning against the original private rubric.",
-                "Reject missing inputs, contradictions, and rubric requirements absent from the public request.",
-                "The source grades one holistic numeric reward; preserve its rubric, judge policy, and threshold.",
-                "No reference answer is supplied; do not invent one.",
-                "An unavailable semantic judge is a verification limitation, not evidence that the content is bad.",
-            ),
+    "wizard_orca": ReviewRubric(
+        id="wizard_orca-answerability",
+        version="2",
+        criteria=(
+            "Trace supplied code with each stated example, including actual printed strings, divisions, "
+            "return values, and arithmetic. A purported correct example that disagrees with the code is a "
+            "defect unless the public task explicitly asks to debug or correct that discrepancy.",
+            "Check the complete instruction, facts, and requested reasoning against the original private rubric.",
+            "Reject missing inputs, contradictions, and rubric requirements absent from the public request.",
+            "The source grades one holistic numeric reward; preserve its rubric, judge policy, and threshold.",
+            "No reference answer is supplied; do not invent one.",
+            "An unavailable semantic judge is a verification limitation, not evidence that the content is bad.",
         ),
     ),
 }
 
 
-def recipe_for_source(
-    name: str,
-) -> DatasetRecipe:
-    source = SOURCES[name]
-    return recipe(name, config=source.config, revision=source.revision, rubric=source.rubric)
+def pipeline(
+    rubric: ReviewRubric,
+    normalize_row: Callable[[RawRow], NormalizedTask | ImportRejection] = normalize,
+) -> TaskPipeline:
+    """Build the original semantic-judge review policy for one rubric source."""
+    return TaskPipeline(
+        normalize=normalize_row,
+        rubric=rubric,
+        check_suite=CheckSuite(
+            id="source-rubric-with-unbound-judge", revision="1", parameters={}, run=verification_report
+        ),
+    )

@@ -6,21 +6,16 @@
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.datasets.calendar_tasks import normalize as normalize_calendar
 from taskcompendium.pipeline.datasets.calendar_tasks import verification_report
-from taskcompendium.pipeline.datasets.instruction_following import REVISION
-from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
     CheckSuite,
-    DatasetRecipe,
-    HFSource,
     ImportRejection,
-    IntendedUse,
     NormalizationChange,
     NormalizedTask,
     RawRow,
     ReviewRubric,
+    TaskPipeline,
 )
 
-CONFIG = "laion__nemotron-gym-instruction-following-calendar-v3"
 RUBRIC = ReviewRubric(
     id="if-calendar-answerability",
     version="1",
@@ -59,15 +54,11 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     return NormalizedTask(task, changes)
 
 
-def recipe() -> DatasetRecipe:
-    return DatasetRecipe(
-        name="tasktrove-if_calendar",
-        version="tasktrove-if_calendar-v1",
-        source=HFSource(TASKTROVE_DATASET, REVISION, CONFIG, "train"),
-        inputs=tasktrove_inputs(CONFIG, REVISION),
+def pipeline() -> TaskPipeline:
+    """Build the source normalization and review policy."""
+    return TaskPipeline(
         normalize=normalize,
         rubric=RUBRIC,
-        intended_use=IntendedUse.TRAIN,
         check_suite=CheckSuite(
             id="calendar-source-witness-controls", revision="1", parameters={}, run=verification_report
         ),
