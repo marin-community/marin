@@ -834,6 +834,79 @@ class MuonHState(NamedTuple):
     """MuonSphere state (``retraction="spectral"``)."""
     hyperball: optax.Updates | None = None
     """Last step's per-sphere ``[decay, cos]`` (``log_hyperball_decay``; see ``hyperball_metrics``)."""
+    step_ref: optax.Updates | None = None
+    """``MuonHStep.GRAD``: each sphere's mean momentum norm over the first ``step_ref_steps`` steps."""
+    step_count: jax.Array | None = None
+
+
+class MuonHStep(StrEnum):
+    """How long each MuonH step is before the projection back onto the matrix's fixed-norm sphere."""
+
+    RELATIVE = "relative"
+    """``lr * |W|``: the same relative step for every matrix (Hyperball / MuonH)."""
+    SPECTRAL = "spectral"
+    """Muon's own size, ``lr * spectral_scale * sqrt(max(1, fan_out / fan_in)) * d`` for the Newton-Schulz
+    direction ``d``: a fixed spectral step, so the relative step varies with the matrix shape and norm."""
+    GRAD = "grad"
+    """``lr * |W| * |m| / m_ref``: the relative step scales with the momentum norm ``|m|`` against its mean over
+    the first ``step_ref_steps`` steps, so it follows the gradient magnitude through training."""
+
+
+def _sphere_norms(tree, per_expert: bool):
+    """Per-sphere Frobenius norms (``_hyperball_sphere_axes``) of every array leaf, in float32."""
+
+    def leaf(x):
+        if x is None or not hasattr(x, "ndim"):
+            return None
+        axes = _hyperball_sphere_axes(x, per_expert)
+        return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=True))
+
+    return jax.tree.map(leaf, tree, is_leaf=lambda x: x is None)
+
+
+def _muonh_step_mults(
+    mode: "MuonHStep",
+    params,
+    directions,
+    momenta,
+    step_ref,
+    step_count,
+    *,
+    per_expert: bool,
+    spectral_scale: float,
+    ref_steps: int,
+):
+    """Per-sphere LR multipliers turning MuonH's ``lr * |W|`` step into ``mode``'s size, and the updated
+    ``(step_ref, step_count)``."""
+    none_leaf = lambda x: x is None  # noqa: E731
+    param_norms = _sphere_norms(params, per_expert)
+    if mode == MuonHStep.SPECTRAL:
+        direction_norms = _sphere_norms(directions, per_expert)
+
+        def spectral(p, pn, dn):
+            if p is None or pn is None or dn is None:
+                return None
+            shape = max(1.0, p.shape[-1] / p.shape[-2]) ** 0.5
+            return spectral_scale * shape * dn / jnp.maximum(pn, 1e-10)
+
+        return jax.tree.map(spectral, params, param_norms, direction_norms, is_leaf=none_leaf), step_ref, step_count
+    momentum_norms = _sphere_norms(momenta, per_expert)
+    count = step_count.astype(jnp.float32)
+    accumulating = step_count < ref_steps
+
+    def new_ref(ref, mn):
+        if ref is None or mn is None:
+            return ref
+        return jnp.where(accumulating, (ref * count + mn) / (count + 1.0), ref)
+
+    step_ref = jax.tree.map(new_ref, step_ref, momentum_norms, is_leaf=none_leaf)
+    mults = jax.tree.map(
+        lambda ref, mn: None if ref is None or mn is None else mn / jnp.maximum(ref, 1e-20),
+        step_ref,
+        momentum_norms,
+        is_leaf=none_leaf,
+    )
+    return mults, step_ref, step_count + 1
 
 
 def scale_with_grug_muonh(
@@ -859,6 +932,9 @@ def scale_with_grug_muonh(
     retraction: str = "frobenius",
     spectral_radius_c: float | None = 2.0,
     log_hyperball_decay: bool = False,
+    step_mode: "MuonHStep" = MuonHStep.RELATIVE,
+    spectral_scale: float = 1.0,
+    step_ref_steps: int = 100,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
 
@@ -879,6 +955,9 @@ def scale_with_grug_muonh(
 
     ``log_hyperball_decay`` keeps each step's per-sphere hyperball decay and radial cosine in
     ``MuonHState.hyperball`` (Frobenius retraction with the external momentum stage only).
+
+    ``step_mode`` (``MuonHStep``) sets each step's length before the projection; the norms stay fixed in every
+    mode (Frobenius retraction with the external momentum stage only, like ``log_hyperball_decay``).
     """
     if retraction not in MUONH_RETRACTIONS:
         raise ValueError(f"retraction must be one of {MUONH_RETRACTIONS}, got {retraction!r}")
@@ -886,6 +965,9 @@ def scale_with_grug_muonh(
     external_momentum = momentum_schedule is not None or bimaxwell_switch_step is not None or magma_keep_prob is not None
     if log_hyperball_decay and (spectral or not external_momentum):
         raise ValueError("log_hyperball_decay needs the Frobenius retraction and the external momentum stage")
+    step_mode = MuonHStep(step_mode)
+    if step_mode != MuonHStep.RELATIVE and (spectral or not external_momentum):
+        raise ValueError("step_mode needs the Frobenius retraction and the external momentum stage")
     muon_transform = _grug_scale_with_muon(
         momentum=0.0 if external_momentum else momentum,
         nesterov=nesterov,
@@ -926,7 +1008,14 @@ def scale_with_grug_muonh(
             return core_init(params) if sphere is None else (core_init(params), sphere)
         magma = _magma_init(params) if magma_keep_prob is not None else None
         hyperball = _hyperball_stats_init(params, hyperball_per_expert) if log_hyperball_decay else None
-        return MuonHState(momentum_stage.init(params), core_init(params), magma, sphere, hyperball)
+        grad_step = step_mode == MuonHStep.GRAD
+        step_ref = (
+            jax.tree.map(lambda n: None if n is None else jnp.zeros_like(n), _sphere_norms(params, hyperball_per_expert))
+            if grad_step
+            else None
+        )
+        step_count = jnp.zeros((), jnp.int32) if grad_step else None
+        return MuonHState(momentum_stage.init(params), core_init(params), magma, sphere, hyperball, step_ref, step_count)
 
     def retract(params, directions, lr_mults, sphere):
         if sphere is None:
@@ -978,13 +1067,38 @@ def scale_with_grug_muonh(
                 keep_prob=magma_keep_prob,
                 seed=magma_seed,
             )
+        step_ref, step_count = state.step_ref, state.step_count
+        if step_mode != MuonHStep.RELATIVE:
+            step_mults, step_ref, step_count = _muonh_step_mults(
+                step_mode,
+                params,
+                directions,
+                mixed,
+                step_ref,
+                step_count,
+                per_expert=hyperball_per_expert,
+                spectral_scale=spectral_scale,
+                ref_steps=step_ref_steps,
+            )
+            lr_mults = (
+                step_mults
+                if lr_mults is None
+                else jax.tree.map(
+                    lambda a, b: None if a is None or b is None else a * b,
+                    lr_mults,
+                    step_mults,
+                    is_leaf=lambda x: x is None,
+                )
+            )
         if log_hyperball_decay:
             muonh_updates, hyperball = _scale_invariant_hyperball_updates(
                 params, directions, learning_rate, hyperball_per_expert, lr_mults, cautious_wd, with_stats=True
             )
-            return muonh_updates, MuonHState(momentum_state, core_state, magma_state, None, hyperball)
+            return muonh_updates, MuonHState(
+                momentum_state, core_state, magma_state, None, hyperball, step_ref, step_count
+            )
         muonh_updates, sphere = retract(params, directions, lr_mults, state.sphere)
-        return muonh_updates, MuonHState(momentum_state, core_state, magma_state, sphere)
+        return muonh_updates, MuonHState(momentum_state, core_state, magma_state, sphere, None, step_ref, step_count)
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -1523,6 +1637,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     pinned, so it only reshapes each matrix toward the update's sign-agreeing coordinates being smaller."""
     hyperball_per_expert: bool = False
     """One MuonH hyperball (Frobenius sphere) per routed expert instead of per layer's expert stack."""
+    muonh_step: str = "relative"
+    """MuonH step length before the projection (``MuonHStep``): ``relative`` (``lr * |W|``), ``spectral`` (Muon's
+    own size, ``muonh_spectral_scale``) or ``grad`` (``lr * |W|`` times the momentum norm over its early mean)."""
+    muonh_spectral_scale: float = 0.5
+    """``MuonHStep.SPECTRAL`` scale; 0.5 matches today's relative step on a 512x512 attention projection."""
+    muonh_step_ref_steps: int = 100
+    """``MuonHStep.GRAD``: steps averaged into each matrix's reference momentum norm."""
     log_hyperball_decay: bool = False
     """Log each MuonH / AdamH matrix's per-step hyperball decay, radial cosine and update rescale
     (``hyperball_metrics``)."""
@@ -1719,6 +1840,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         magma_keep_prob=self.magma_keep_prob if self.magma else None,
                         magma_seed=magma_seed,
                         log_hyperball_decay=self.log_hyperball_decay,
+                        step_mode=MuonHStep(self.muonh_step),
+                        spectral_scale=self.muonh_spectral_scale,
+                        step_ref_steps=self.muonh_step_ref_steps,
                     )
                 )
                 components.append(_match_named_update_sharding())
