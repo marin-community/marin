@@ -3,12 +3,12 @@
 
 """Public schema loading and runtime boundaries preserve private contracts."""
 
-import base64
 import json
 
 import pytest
 from pydantic import ValidationError
 
+from taskcompendium.environment import EnvironmentFile, EnvironmentKind, EnvironmentSpec, ShellVerifierSpec
 from taskcompendium.grading import exact_answer, grade_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
@@ -20,6 +20,7 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
+    VerifierKind,
     VerifierSpec,
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, chat_request
@@ -41,39 +42,8 @@ def specification():
     "update",
     [
         {"environment_requirements": EnvironmentRequirements(capabilities=("browser",))},
-        {"environment_requirements": EnvironmentRequirements(docker_image="org/image@sha256:" + "a" * 64)},
-        {"environment_requirements": EnvironmentRequirements(working_directory="/app")},
-        {"environment_requirements": EnvironmentRequirements(setup_commands=("initialize",))},
-        {"environment_requirements": EnvironmentRequirements(environment_variables={"TASK_MODE": "repair"})},
-        {
-            "environment_requirements": EnvironmentRequirements.model_validate(
-                {
-                    "tool_providers": {
-                        "company": {
-                            "action_interface": "workplace:v1",
-                            "initial_state": {"inbox": [], "company": "example"},
-                        }
-                    },
-                }
-            )
-        },
-    ]
-    + [
-        {"resources": {role: [{"path": "input.txt", "source": {"kind": "inline_file", "content_base64": "eA=="}}]}}
-        for role in ("all", "worker", "oracle")
-    ]
-    + [
-        {
-            "resources": {
-                "worker": [
-                    {
-                        "path": "project/input.txt",
-                        "source": {"kind": "inline_file", "content_base64": "cHVibGljIGlucHV0"},
-                        "mode": "0755",
-                    }
-                ]
-            }
-        },
+        {"environment": EnvironmentSpec(kind=EnvironmentKind.SHELLSIM)},
+        {"environment": EnvironmentSpec(kind=EnvironmentKind.NULL, interaction="company")},
         {"answer_type": AnswerType.FILE},
         {"answer_type": AnswerType.STATE},
         {"answer_type": AnswerType.WORKSPACE_STATE},
@@ -101,71 +71,8 @@ def test_direct_chat_rejects_semantics_it_cannot_preserve_before_export(tmp_path
     assert not destination.exists()
 
 
-@pytest.mark.parametrize("second_path", ["data", "DATA", "data/input.txt"])
-@pytest.mark.parametrize("role", ["worker", "oracle", "verifier"])
-def test_shared_resource_destinations_cannot_overwrite_role_mounts(specification, second_path, role):
-    wire = specification.model_dump()
-    wire["resources"] = {
-        "all": [{"path": "data", "source": {"kind": "inline_file", "content_base64": "c2hhcmVk"}}],
-        role: [{"path": second_path, "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZQ=="}}],
-    }
-    with pytest.raises(ValidationError):
-        TaskSpec.model_validate(wire)
-
-
-def test_private_role_mounts_reuse_paths_without_becoming_worker_visible(tmp_path, specification):
-    wire = specification.model_dump(mode="json")
-    wire["resources"] = {
-        role: [
-            {
-                "path": "fixture.txt",
-                "source": {"kind": "inline_file", "content_base64": base64.b64encode(content.encode()).decode("ascii")},
-            }
-        ]
-        for role, content in (("worker", "public"), ("oracle", "gold"), ("verifier", "hidden test"))
-    }
-    path = tmp_path / "specification.json"
-    path.write_text(json.dumps(wire))
-    resources = read_specification(path).model_dump(mode="json")["resources"]
-    assert resources["all"] == []
-    assert base64.b64decode(resources["worker"][0]["source"]["content_base64"]) == b"public"
-    assert base64.b64decode(resources["oracle"][0]["source"]["content_base64"]) == b"gold"
-    assert base64.b64decode(resources["verifier"][0]["source"]["content_base64"]) == b"hidden test"
-
-
-@pytest.mark.parametrize("initial_state", [None, "company-snapshot", {"inbox": [], "counter": 3}])
-def test_reader_keeps_literal_provider_state_but_direct_chat_cannot_export_it(tmp_path, specification, initial_state):
-    wire = specification.model_dump(mode="json")
-    wire["environment_requirements"]["tool_providers"] = {
-        "company": {"action_interface": "workplace:v1", "initial_state": initial_state}
-    }
-    path = tmp_path / "specification.json"
-    path.write_text(json.dumps(wire))
-    task = read_specification(path)
-    with pytest.raises(NotImplementedError):
-        lower_to_harbor(
-            task,
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-            HarborEnvironmentConfig(),
-            tmp_path / "export",
-        )
-    assert not (tmp_path / "export").exists()
-
-
-def test_reader_rejects_nested_nonfinite_provider_state(tmp_path, specification):
-    wire = specification.model_dump(mode="json")
-    wire["environment_requirements"]["tool_providers"] = {
-        "company": {"action_interface": "workplace:v1", "initial_state": {"counters": [float("nan")]}}
-    }
-    path = tmp_path / "specification.json"
-    path.write_text(json.dumps(wire))
-    with pytest.raises(ValidationError):
-        read_specification(path)
-
-
 @pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e309"])
 def test_private_verifier_config_rejects_nested_nonfinite_json_numbers(tmp_path, specification, number):
-    # JsonValue previously allowed nonfinite values despite allow_inf_nan=False.
     path = tmp_path / "specification.json"
     wire = specification.model_dump(mode="json")
     valid_parameters = ' {"checks": [{"tolerance": 0.125}], "label": "NaN"} '
@@ -180,7 +87,7 @@ def test_private_verifier_config_rejects_nested_nonfinite_json_numbers(tmp_path,
 
 def test_pure_grading_cannot_ignore_a_private_verifier_environment(tmp_path, specification):
     wire = specification.model_dump(mode="json")
-    wire["verifier"]["environment_requirements"] = {"docker_image": "private/grader@sha256:" + "a" * 64}
+    wire["verifier"]["environment_requirements"] = {"capabilities": ["process"]}
     path = tmp_path / "specification.json"
     path.write_text(json.dumps(wire))
     task = read_specification(path)
@@ -223,51 +130,45 @@ async def test_launch_rejects_schema_only_verifier_before_starting_a_trial(tmp_p
     assert not (tmp_path / "trials").exists()
 
 
-@pytest.mark.parametrize(
-    "base_path,alias", [("foo", "foo."), ("foo", "foo "), ("inputs/answer", "inputs/answer:backup")]
-)
-def test_resource_groups_reject_portable_path_aliases_before_mounts_can_overwrite_inputs(
-    specification, base_path, alias
-):
-    wire = specification.model_dump(mode="json")
-    wire["resources"] = {
-        "all": [{"path": base_path, "source": {"kind": "inline_file", "content_base64": "cHVibGlj"}}],
-        "worker": [{"path": alias, "source": {"kind": "inline_file", "content_base64": "b3ZlcndyaXRl"}}],
-    }
-    with pytest.raises(ValidationError):
-        TaskSpec.model_validate(wire)
-
-
 @pytest.mark.parametrize("candidate,reward", [("done", 1.0), ("incorrect", 0.0)])
 def test_pure_per_attempt_grading_accepts_answers_acquired_in_a_worker_workspace(specification, candidate, reward):
-    wire = specification.model_dump(mode="json")
-    wire["environment_requirements"] = {"capabilities": ["shell", "filesystem"], "working_directory": "/app"}
-    wire["resources"] = {
-        "worker": [{"path": "project.txt", "source": {"kind": "inline_file", "content_base64": "d29ya2VyIGlucHV0"}}]
-    }
-    task = TaskSpec.model_validate(wire)
+    task = specification.model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(capabilities=("shell", "filesystem")),
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                workdir="/app",
+                files=(EnvironmentFile(path="/app/project.txt", content=b"worker input"),),
+            ),
+        }
+    )
     conversation = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=candidate)))
     result = grade_answer(task, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), conversation)
     assert (result.status, result.reward) == ("graded", reward)
 
 
-def test_reader_preserves_private_schema_contracts_before_unsupported_export_is_rejected(tmp_path, specification):
-    wire = specification.model_dump(mode="json")
-    wire["environment_requirements"] = {"environment_variables": {"TASK_MODE": "repair"}}
-    wire["verifier"] = {
-        "kind": "private_script",
-        "parameters_json": '{"entrypoint":"checks/grade.py"}',
-        "environment_requirements": {"environment_variables": {"CHECK_MODE": "strict"}},
-    }
-    wire["resources"] = {
-        "worker": [
-            {"path": "project/input.txt", "source": {"kind": "inline_file", "content_base64": "cHVibGljIGlucHV0"}}
-        ],
-        "verifier": [
-            {"path": "checks/grade.py", "source": {"kind": "inline_file", "content_base64": "cHJpdmF0ZSBjaGVja3M="}}
-        ],
-    }
-    task = TaskSpec.model_validate(wire)
+@pytest.mark.parametrize("payload", [b"UTF-8 text: \xe2\x98\x83\n", b"\x00\xff\x80\n"])
+def test_reader_preserves_public_and_private_files_before_unsupported_export_is_rejected(
+    tmp_path, specification, payload
+):
+    task = specification.model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                workdir="/app",
+                env={"TASK_MODE": "repair"},
+                files=(EnvironmentFile(path="/app/input.dat", content=payload, mode=0o500),),
+            ),
+            "verifier": VerifierSpec(
+                kind=VerifierKind.SHELL,
+                parameters_json=ShellVerifierSpec(
+                    argv=("/checks/grade",),
+                    files=(EnvironmentFile(path="/checks/grade", content=b"private checks", mode=0o755),),
+                    timeout=5,
+                ).model_dump_json(),
+            ),
+        }
+    )
     path = tmp_path / "specification.json"
     path.write_text(task.model_dump_json())
     restored = read_specification(path)
@@ -282,23 +183,18 @@ def test_reader_preserves_private_schema_contracts_before_unsupported_export_is_
     assert not (tmp_path / "export").exists()
 
 
-@pytest.mark.parametrize("payload", [b"UTF-8 text: \xe2\x98\x83\n", b"\x00\xff\x80\n"])
-def test_inline_file_bytes_and_metadata_survive_json_reader(tmp_path, specification, payload):
+@pytest.mark.parametrize(
+    "legacy_field,value",
+    [
+        ("environment_requirements", {"working_directory": "/app"}),
+        ("resources", {"worker": [{"path": "input.dat", "source": {"kind": "inline_file", "content_base64": "eA=="}}]}),
+        ("schema_version", "0.22"),
+    ],
+)
+def test_reader_rejects_obsolete_task_records(tmp_path, specification, legacy_field, value):
     wire = specification.model_dump(mode="json")
-    wire["resources"] = {
-        "worker": [
-            {
-                "path": "input.dat",
-                "source": {"kind": "inline_file", "content_base64": base64.b64encode(payload).decode("ascii")},
-                "mode": "0500",
-                "mtime_ns": 1_725_555_600_123_456_789,
-            }
-        ]
-    }
-    task = TaskSpec.model_validate(wire)
+    wire[legacy_field] = value
     path = tmp_path / "specification.json"
-    path.write_text(task.model_dump_json())
-    restored = read_specification(path).resources.worker[0]
-    assert base64.b64decode(restored.source.content_base64) == payload
-    assert restored.mode == "0500"
-    assert restored.mtime_ns == 1_725_555_600_123_456_789
+    path.write_text(json.dumps(wire))
+    with pytest.raises(ValueError):
+        read_specification(path)

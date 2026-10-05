@@ -20,10 +20,10 @@ A task contains:
 - `interaction_tools`: Executable function declarations for the episode runtime.
 - `output_paths`: Absolute paths that the episode runtime captures.
 - `verifier`: Private grading parameters and capability requirements.
-- `environment_requirements`: Semantic capability and resource requirements.
+- `environment_requirements`: Task capabilities.
 - `environment`: Executable machine inputs and an optional task-session selector.
 - `source`: Dataset, revision, row, and importer revision.
-- `metadata`, `resources`, and `tags`: Application data, files by visibility group, and labels.
+- `metadata` and `tags`: Application data and labels.
 
 `TaskSpec.model_dump_json()` serializes a task.
 `TaskSpec.model_validate_json()` validates it. Applications own dataset file formats and storage.
@@ -33,9 +33,9 @@ Conversation events retain tool-call IDs and order. They exclude provider reason
 `answer_type` describes the result, independently of its submission format.
 Importers must remove source instructions that conflict with the supported conventions or reject the row.
 
-The Shellbox engine accepts executable inputs in `environment` and private verifier files.
-It rejects nonempty `TaskSpec.resources`. Place public files in `environment.files`.
-It also rejects runtime settings in `environment_requirements`.
+`environment` is the single machine description. Place public files in `environment.files` and private files in `ShellVerifierSpec.files`.
+Schema `0.23` removes the legacy machine fields and `resources`. `environment_requirements` declares capabilities only.
+Rebuild earlier task exports with the current importer.
 See [task rollouts](../../docs/references/task-rollouts.md) for executable fields, stages, and token contracts.
 
 ## Submissions and grading

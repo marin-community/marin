@@ -187,15 +187,6 @@ async def test_executable_native_action_keeps_final_and_shell_tools():
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
 
 
-async def test_rollout_rejects_legacy_environment_requirements():
-    task = arithmetic_task().model_copy(
-        update={"environment_requirements": EnvironmentRequirements(working_directory="/workspace")}
-    )
-
-    with pytest.raises(ValueError, match="machine inputs"):
-        await engine(ReplayModel([]), {}).run(task)
-
-
 async def test_unknown_executable_tool_returns_an_observation():
     model = ReplayModel(
         [
