@@ -9,6 +9,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 
 import experiments.grug.fast_track.test_ngram_stat as t
 import experiments.grug.fast_track.test_optimizer_group_knobs as knobs
@@ -44,7 +46,8 @@ def test_beta_group_routes_and_updates_w_beta(group):
     mesh, model = t._model(ngram_stat_rows=0)
     params = eqx.filter(model, eqx.is_inexact_array)
     config = GrugMoeMuonHConfig(kda_beta_group=group)
-    assert config.create_mask(params).kda_blocks.stacked.attn.w_beta == group
+    expected = "kda_beta_adam" if group == "adam" else group
+    assert config.create_mask(params).kda_blocks.stacked.attn.w_beta == expected
     with jax.set_mesh(mesh):
         updates = knobs._two_steps(config, params)
     w_beta = np.asarray(params.kda_blocks.stacked.attn.w_beta)
@@ -54,3 +57,25 @@ def test_beta_group_routes_and_updates_w_beta(group):
         # The hyperball groups keep each layer's norm; plain Adam lets it move.
         new_norm = np.linalg.norm((w_beta + step).reshape(w_beta.shape[0], -1), axis=1)
         np.testing.assert_allclose(new_norm, np.linalg.norm(w_beta.reshape(w_beta.shape[0], -1), axis=1), rtol=1e-4)
+
+
+def test_adam_warmup_stretches_only_the_adam_schedule():
+    mesh, model = t._model(ngram_stat_rows=0)
+    params = eqx.filter(model, eqx.is_inexact_array)
+
+    def lrs_at(config, step):
+        opt = config.build(1000)
+        with jax.set_mesh(mesh):
+            # Replicated leaves, as in test_optimizer_group_knobs: the tiny model's layouts are ambiguous for NS.
+            p = jax.tree.map(lambda x: reshard(x, P(*(None,) * x.ndim)), params)
+            state = opt.init(p)
+            state = state._replace(count=jnp.asarray(step, jnp.int32))
+            grads = jax.tree.map(jnp.zeros_like, p)
+            _, state = eqx.filter_jit(opt.update)(grads, state, p)
+        return float(state.hyperparams["learning_rate"]), float(state.hyperparams["adam_lr"])
+
+    base, long = GrugMoeMuonHConfig(warmup=10), GrugMoeMuonHConfig(warmup=10, adam_warmup=100)
+    muon_b, adam_b = lrs_at(base, 50)
+    muon_l, adam_l = lrs_at(long, 50)
+    np.testing.assert_allclose(muon_l, muon_b, rtol=1e-6)
+    np.testing.assert_allclose(adam_l, 0.5 * adam_b, rtol=0.05)

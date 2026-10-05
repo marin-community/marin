@@ -1525,6 +1525,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ``attn_res_query_lr_scale``."""
     kda_beta_lr_mult: float = 2.0
     kda_beta_group: str = "kda_beta"
+    kda_beta_adam_lr_mult: float = 1.0
+    """``kda_beta_group="adam"``: ``w_beta``'s Adam LR as a multiple of ``adam_lr``."""
+    adam_warmup: float | int | None = None
+    """Warmup (fraction or steps) of the Adam LR schedule alone; None shares ``warmup`` with MuonH."""
     """LR group of the KDA write-strength projection ``w_beta``: ``kda_beta`` (MuonH at ``kda_beta_lr_mult``),
     ``adamh`` (AdamH at the MuonH LR, like the lm head) or ``adam`` (plain Adam at the Adam LR)."""
     muon_head_dim: int | None = None
@@ -1785,7 +1789,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 num_train_steps,
                 self.muonh_decay_power,
             )
-        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        adam_schedule_config = self if self.adam_warmup is None else dataclasses.replace(self, warmup=self.adam_warmup)
+        adam_lr_schedule = adam_schedule_config.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
         slow_upper_qk = self.upper_qk_lr_mult != 1.0
         if slow_upper_qk and not any(self.upper_qk_slice_mask):
             raise ValueError("upper_qk_lr_mult needs upper_qk_slice_mask (no upper softmax layer given)")
@@ -1950,6 +1955,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     adam_lr * self.attn_res_query_lr_scale * self.attn_res_token_query_lr_mult
                 ),
                 "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult, 1),
+                "kda_beta_adam": adam_transform_at(adam_lr * self.kda_beta_adam_lr_mult),
                 "okls": optax.chain(
                     scale_with_grug_okls(
                         beta1=self.okls_beta1,
@@ -2219,7 +2225,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "frozen" if self.latent_proj_update == "frozen" else "stiefel"
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
-                return self.kda_beta_group
+                return "kda_beta_adam" if self.kda_beta_group == "adam" else self.kda_beta_group
             if kda_leaf in _KDA_BETA_MLP_LEAVES:
                 return self.kda_beta_mlp_group
             if kda_leaf in _KDA_ADAM_LEAVES:
