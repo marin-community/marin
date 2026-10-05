@@ -232,6 +232,8 @@ def student_row(messages: list[dict], options: dict, tokenizer: MarinTokenizer) 
         for message in messages
     ]
     example = {"messages": clean, "chat_template_kwargs": {**options, "enable_thinking": False}}
+    # write_once and the SFT JSONL sort keys; tokenize that same order.
+    example = json.loads(json.dumps(example, sort_keys=True))
     processor = ChatLmDatasetFormat(
         chat_template=MARIN_CHAT_TEMPLATE, pack=False, mask_user_turns=True, slice_strategy="raise"
     ).build_preprocessor(tokenizer)

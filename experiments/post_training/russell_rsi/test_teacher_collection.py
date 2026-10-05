@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.testing.tokenizer import stage_gpt2_tokenizer
 from levanter.tokenizers import load_tokenizer
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
@@ -267,6 +268,57 @@ def test_student_row_masks_observations_keeps_code_and_does_not_truncate(student
     assert "FINALMARKER" in targets
     assert all(marker not in targets for marker in ("SYSTEMMARKER", "USERMARKER", "TOOLMARKER"))
     assert messages[2]["reasoning_content"] == "REASONINGMARKER"
+
+
+@pytest.mark.parametrize("reverse_properties", [False, True])
+def test_student_row_matches_persisted_nested_tool_schema(tmp_path, student_tokenizer, reverse_properties):
+    properties = {
+        "zeta": {"description": "Second argument", "type": "string"},
+        "alpha": {"type": "string", "description": "First argument"},
+    }
+    if reverse_properties:
+        properties = dict(reversed(list(properties.items())))
+    property_order = list(properties)
+    options = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "inspect",
+                    "description": "Inspect two values",
+                    "parameters": {"type": "object", "properties": properties, "required": ["alpha", "zeta"]},
+                },
+            }
+        ],
+    }
+    messages = [
+        {"role": "user", "content": "Inspect the two values."},
+        {"role": "assistant", "content": "Both values are present."},
+    ]
+    expected_example = {
+        "messages": messages,
+        "chat_template_kwargs": {**options, "enable_thinking": False},
+    }
+    expected_jsonl = json.dumps(expected_example, sort_keys=True) + "\n"
+    row = student_row(messages, options, student_tokenizer)
+    assert json.dumps(row.example, sort_keys=True) + "\n" == expected_jsonl
+    path = StoragePath(str(tmp_path / "student-row.json"))
+    write_once(path, asdict(row))
+    saved = json.loads(path.read_text())
+    processor = ChatLmDatasetFormat(
+        chat_template=MARIN_CHAT_TEMPLATE, pack=False, mask_user_turns=True, slice_strategy="raise"
+    ).build_preprocessor(student_tokenizer)
+    for example in [saved["example"], json.loads(expected_jsonl)]:
+        processed = processor([example])[0]
+        assert list(map(int, processed["input_ids"])) == saved["input_ids"]
+        assert list(map(int, processed["assistant_masks"])) == saved["assistant_mask"]
+    original = processor([expected_example])[0]
+    original_targets = [
+        int(token) for token, mask in zip(original["input_ids"], original["assistant_masks"], strict=True) if mask
+    ]
+    saved_targets = [token for token, mask in zip(saved["input_ids"], saved["assistant_mask"], strict=True) if mask]
+    assert saved_targets == original_targets
+    assert list(options["tools"][0]["function"]["parameters"]["properties"]) == property_order
 
 
 @pytest.mark.parametrize("contract_failure", [None, "empty_prompt", "missing_prompt", "missing_response"])
