@@ -32,6 +32,7 @@ from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.grading import numeric_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    SHELL_CAPABILITY,
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
@@ -54,6 +55,8 @@ from rolloutengine.contracts import (
     RolloutInterrupted,
     RolloutOperation,
     SessionStart,
+    TaskSetupError,
+    TaskSetupTimeout,
     Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
@@ -785,8 +788,66 @@ async def test_machine_setup_failure_releases_resources_and_retains_an_empty_rec
     assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
     assert failure.value.rollout.response_token_ids == ()
     assert failure.value.rollout.steps == ()
+    cause = failure.value.__cause__
+    assert isinstance(cause, TaskSetupError)
+    assert (cause.stage, cause.command, cause.exit_code) == (None, ("false",), 1)
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(("true",)))
+
+
+async def test_environment_healthcheck_failure_reports_task_setup_details():
+    task = file_task().model_copy(
+        update={
+            "environment": EnvironmentSpec(
+                kind=EnvironmentKind.SHELLSIM,
+                healthcheck=HealthcheckSpec(
+                    command=EnvironmentCommand(argv=("false",), timeout=5),
+                    interval=0,
+                    start_period=0,
+                    start_interval=0,
+                    retries=1,
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(RolloutInterrupted) as failure:
+        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: ShellSimMachineFactory()}).run(
+            task, execution=TaskExecution()
+        )
+
+    assert failure.value.operation == RolloutOperation.START
+    cause = failure.value.__cause__
+    assert isinstance(cause, TaskSetupError)
+    assert (cause.stage, cause.command, cause.exit_code) == (None, ("false",), 1)
+
+
+async def test_missing_task_capability_reports_task_setup_error():
+    task = arithmetic_task().model_copy(
+        update={"environment_requirements": EnvironmentRequirements(capabilities=(SHELL_CAPABILITY,))}
+    )
+
+    with pytest.raises(RolloutInterrupted) as failure:
+        await engine(ReplayModel([]), {}).run(task, execution=TaskExecution())
+
+    assert failure.value.operation == RolloutOperation.PREPARE
+    cause = failure.value.__cause__
+    assert isinstance(cause, TaskSetupError)
+    assert (cause.stage, cause.command, cause.exit_code) == (None, None, None)
+
+
+async def test_machine_creation_failure_is_not_a_task_setup_error():
+    class FailedFactory:
+        async def create(self, _spec):
+            raise OSError("scheduler unavailable")
+
+    with pytest.raises(RolloutInterrupted) as failure:
+        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: FailedFactory()}).run(
+            file_task(), execution=TaskExecution()
+        )
+
+    assert failure.value.operation == RolloutOperation.START
+    assert type(failure.value.__cause__) is OSError
 
 
 @pytest.mark.parametrize(
@@ -794,6 +855,7 @@ async def test_machine_setup_failure_releases_resources_and_retains_an_empty_rec
     [
         "upload",
         "healthcheck",
+        "healthcheck_command_timeout",
         "command_timeout",
         "attempt_startup",
         "model",
@@ -817,10 +879,17 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
     class Machine:
         def __init__(self, machine):
             self.machine = machine
+            self.healthcheck_timed_out = False
 
         async def run(self, command):
             if command.argv == ("command-timeout",):
                 loop.call_soon_threadsafe(entered.set)
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+            if command.argv == ("healthcheck-timeout",):
+                loop.call_soon_threadsafe(entered.set)
+                if self.healthcheck_timed_out:
+                    raise RuntimeError("Machine is closed")
+                self.healthcheck_timed_out = True
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             if command.argv == ("stall",):
                 await stall()
@@ -859,13 +928,16 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
         startup_timeout=1 if phase in {"upload", "healthcheck", "cleanup_cancel"} else 10,
         healthcheck=(
             HealthcheckSpec(
-                command=EnvironmentCommand(argv=("stall",), timeout=5),
+                command=EnvironmentCommand(
+                    argv=("healthcheck-timeout",) if phase == "healthcheck_command_timeout" else ("stall",),
+                    timeout=5,
+                ),
                 interval=0,
                 start_period=0,
                 start_interval=0,
-                retries=1,
+                retries=2 if phase == "healthcheck_command_timeout" else 1,
             )
-            if phase == "healthcheck"
+            if phase in {"healthcheck", "healthcheck_command_timeout"}
             else None
         ),
     )
@@ -904,9 +976,22 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
     else:
         with pytest.raises(RolloutInterrupted) as failure:
             await pending
-        assert isinstance(failure.value.__cause__, TimeoutError)
+        assert isinstance(
+            failure.value.__cause__,
+            TaskSetupTimeout if phase in {"command_timeout", "healthcheck_command_timeout"} else TimeoutError,
+        )
+        if phase in {"command_timeout", "healthcheck_command_timeout"}:
+            cause = failure.value.__cause__
+            assert isinstance(cause, TaskSetupTimeout)
+            assert (cause.stage, cause.command, cause.exit_code) == (
+                None,
+                ("healthcheck-timeout",) if phase == "healthcheck_command_timeout" else ("command-timeout",),
+                None,
+            )
         assert failure.value.operation == (
-            RolloutOperation.START if phase in {"upload", "healthcheck", "command_timeout"} else RolloutOperation.ATTEMPT
+            RolloutOperation.START
+            if phase in {"upload", "healthcheck", "healthcheck_command_timeout", "command_timeout"}
+            else RolloutOperation.ATTEMPT
         )
         assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
         assert failure.value.rollout.response_token_ids == failure.value.rollout.loss_mask == ()
