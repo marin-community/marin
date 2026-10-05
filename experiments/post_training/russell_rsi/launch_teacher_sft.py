@@ -20,6 +20,7 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.optim.config import AdamConfig
 from levanter.tokenizers import load_tokenizer
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact
@@ -310,12 +311,18 @@ def teacher_sft_steps(
         pod = cast(TrainLmOnPodConfig, original_build_config(ctx))
         train = cast(TrainLmConfig, pod.train_config)
         watch = WatchConfig(watch_targets=["grads", "updates"], include_per_parameter_norms=False, interval=1)
+        trainer = replace(train.trainer, id=f"russell-rsi-{namespace}-sft-{version}", watch=watch)
+        env_vars = pod.env_vars
+        if "student_context_amendment" in config:
+            trainer = replace(trainer, metrics_start_step=0, tracker=(JsonLoggerConfig(),))
+            env_vars = {**(env_vars or {}), "WANDB_MODE": "disabled"}
         return replace(
             pod,
+            env_vars=env_vars,
             train_config=replace(
                 train,
                 data=replace(train.data, mixture_block_size=STUDENT_ROWS),
-                trainer=replace(train.trainer, id=f"russell-rsi-{namespace}-sft-{version}", watch=watch),
+                trainer=trainer,
             ),
         )
 

@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from levanter.tracker.json_logger import JsonLoggerConfig
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import StepContext, artifact_identity
 from marin.experiment.cli import graph_handles
@@ -288,6 +289,7 @@ def test_four_pass_training_has_four_complete_batches_and_final_reload(study_inp
     assert config.trainer.train_batch_size == 8
     assert config.data.mixture_block_size == 8
     assert config.train_seq_len == 4096
+    assert config.trainer.metrics_start_step == 2
     assert outputs["collect"] in graph_handles([trained])
     reload = outputs["reload"].build_config(
         StepContext.for_run(
@@ -501,7 +503,7 @@ def test_teacher_expansion_preserves_retained_tasks_and_independent_additions(st
         four_pass_teacher_workflow(study)
 
 
-def test_recovery_wrapper_changes_only_explicit_collection_fingerprint(study_inputs):
+def test_recovery_and_context_amendment_bind_collection_and_training(study_inputs):
     study, _ = study_inputs
     original = four_pass_teacher_workflow(study)["collect"]
     original_payload = original.fingerprint_payload()
@@ -537,9 +539,11 @@ def test_recovery_wrapper_changes_only_explicit_collection_fingerprint(study_inp
     )
     amended = outputs["collect"]
     trained = outputs["train"]
-    train_config = trained.build_config(
-        StepContext.for_fingerprint(trained.runtime_args.keys(), trained.deps)
-    ).train_config
+    pod = trained.build_config(StepContext.for_fingerprint(trained.runtime_args.keys(), trained.deps))
+    train_config = pod.train_config
+    assert train_config.trainer.metrics_start_step == 0
+    assert all(isinstance(tracker, JsonLoggerConfig) for tracker in train_config.trainer.tracker)
+    assert pod.env_vars["WANDB_MODE"] == "disabled"
     assert train_config.train_seq_len == amendment.context_tokens
     assert train_config.trainer.num_train_steps == 4
     assert train_config.trainer.train_batch_size == 8
