@@ -201,7 +201,9 @@ def _components_error(components: Sequence[Component], verdicts: Mapping[str, Re
 
 
 def gates_passed(components: Sequence[Component], verdicts: Mapping[str, Reward]) -> bool:
-    """Whether every gate holds a valid scored grade of 1.0, so the other components are worth grading."""
+    """Whether the rubric is valid and every gate holds a scored 1.0, so the other components are worth grading."""
+    if _components_error(components, verdicts) is not None:
+        return False
     for component in components:
         if component.role != ComponentRole.GATE:
             continue

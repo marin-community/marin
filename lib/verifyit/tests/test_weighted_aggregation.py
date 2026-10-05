@@ -31,6 +31,7 @@ def test_weights_and_penalties_combine_over_criterion_weight():
     assert result.detail["penalty_sum"] == pytest.approx(0.5)
     assert result.detail["denominator"] == pytest.approx(4.0)
     assert result.detail["failed_gates"] == []
+    assert result.detail["rewards"] == {"compiles": 1.0, "correct": 1.0, "style": 0.5, "verbose": 0.25}
 
 
 def test_penalties_cannot_drive_reward_below_zero():
@@ -52,6 +53,7 @@ def test_missing_components_score_zero():
     result = aggregate_weighted(RUBRIC, {"compiles": scored(1), "style": scored(1)})
     assert result.reward == pytest.approx(0.25)
     assert result.detail["missing"] == ["correct", "verbose"]
+    assert result.detail["rewards"] == {"compiles": 1.0, "correct": 0.0, "style": 1.0, "verbose": 0.0}
     missing_gate = aggregate_weighted(RUBRIC, {"correct": scored(1), "style": scored(1)})
     assert missing_gate.reward == 0.0
     assert missing_gate.detail["failed_gates"] == ["compiles"]
@@ -128,3 +130,12 @@ def test_gates_passed_requires_every_gate_at_full_credit(gate, expected):
 
 def test_gates_passed_ignores_ungraded_criteria():
     assert gates_passed(RUBRIC, {"compiles": scored(1)})
+
+
+@pytest.mark.parametrize(
+    "rubric",
+    [[GATE, Component("compiles", ComponentRole.CRITERION)], [GATE, VERBOSE]],
+    ids=["duplicate_name", "no_criterion"],
+)
+def test_gates_passed_rejects_malformed_rubric(rubric):
+    assert not gates_passed(rubric, {"compiles": scored(1)})

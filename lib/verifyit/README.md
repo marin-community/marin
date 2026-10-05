@@ -72,9 +72,9 @@ invalid tasks and infrastructure errors discard partial credit. `aggregate_weigh
 `Component`s by role: any `GATE` below 1.0 zeroes the reward; otherwise the reward is the weighted
 `CRITERION` sum minus the weighted `PENALTY` sum, floored at zero and divided by the total criterion
 weight. It applies the same status rules, and a missing component earns zero. Duplicate names,
-nonpositive or non-finite criterion and penalty weights, or a rubric without a criterion make the
-task invalid. `gates_passed` reports whether every gate scored 1.0, so a caller can skip judge
-calls for the remaining components. The judge and Reasoning Gym modes
+grades for undeclared components, nonpositive or non-finite criterion and penalty weights, or a
+rubric without a criterion make the task invalid. `gates_passed` reports whether the rubric is
+valid and every gate scored 1.0, so a caller can skip judge calls for the remaining components. The judge and Reasoning Gym modes
 also expose direct candidate APIs for decoded context and trusted entries. Judge connections carry
 runtime credentials separately from serializable specs. Reasoning Gym's optional `params` file
 configures its scorer; callers own isolation when invoking its direct API.
