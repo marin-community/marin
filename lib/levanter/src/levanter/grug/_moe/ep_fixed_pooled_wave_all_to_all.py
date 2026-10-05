@@ -14,6 +14,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityDrops, split_moe_w13_output
+from levanter.grug.mxfp8 import mx_batched
 from levanter.kernels.pallas.relu2_mlp import fused_relu2, relu2_mlp
 from levanter.grug._moe.ep_common import (
     _assignment_sources,
@@ -567,10 +568,19 @@ def _compute_pooled(
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     activation_fn: Callable[[jax.Array], jax.Array],
+    expert_mxfp8_sim: bool,
 ) -> _PooledOutput:
     with jax.named_scope("moe_up_down"):
         moe_dim = moe_w2_local.shape[1]
-        if moe_w13_local.shape[-1] == moe_dim and activation_fn is fused_relu2:
+        if expert_mxfp8_sim:
+            hidden = mx_batched(dispatch.compacted_x, moe_w13_local)
+            if moe_w13_local.shape[-1] == moe_dim:
+                activated = activation_fn(hidden)
+            else:
+                gate, up = split_moe_w13_output(hidden, intermediate_dim=moe_dim, interleaved=False)
+                activated = activation_fn(gate) * up
+            compacted_output = mx_batched(activated, moe_w2_local)
+        elif moe_w13_local.shape[-1] == moe_dim and activation_fn is fused_relu2:
             # Ungated ReLU^2 with fused-epilogue GEMMs (Pallas Triton on GPU; the same math elsewhere).
             implementation = "pallas_gpu" if jax.default_backend() == "gpu" else "reference"
             compacted_output = relu2_mlp(
@@ -669,6 +679,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     transport_capacity_factor: float,
     num_expert_waves: int,
     fp8_dispatch: bool,
+    expert_mxfp8_sim: bool = False,
     expert_remat: bool = True,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
     report_assignment_keep: bool = False,
@@ -680,6 +691,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
 
     ``fp8_dispatch`` sends the dispatched activations as block-scaled e4m3 (see
     ``_fp8_dispatch_all_to_all``); the combine and all backward collectives stay in the input dtype.
+    ``expert_mxfp8_sim`` runs the expert GEMMs with simulated MXFP8 operands (``levanter.grug.mxfp8``).
     ``expert_remat`` recomputes each wave's expert MLP and combine all-to-all in the backward (saving
     activation memory); off, the backward reuses the forward's intermediates instead.
     ``overlap_fn`` (with the local ``overlap_tokens`` and ``overlap_params``, see ``MoeOverlapWork``) runs under
@@ -786,6 +798,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
             moe_w13_local=moe_w13_local,
             moe_w2_local=moe_w2_local,
             activation_fn=activation_fn,
+            expert_mxfp8_sim=expert_mxfp8_sim,
         )
         combine = partial(
             _combine_pooled,

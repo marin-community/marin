@@ -467,6 +467,7 @@ def moe_mlp(
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
     fp8_dispatch: bool = False,
+    expert_mxfp8_sim: bool = False,
     expert_remat: bool = True,
     overlap: MoeOverlapWork | None = None,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
@@ -492,7 +493,8 @@ def moe_mlp(
     `pooled_transport_capacity_factor` sets the sender capacity for each
     destination pool. `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation. `fp8_dispatch` sends that implementation's
-    dispatched activations as block-scaled FP8 (combine and backward stay bf16).
+    dispatched activations as block-scaled FP8 (combine and backward stay bf16). `expert_mxfp8_sim` runs
+    that implementation's expert GEMMs on simulated MXFP8 operands (`levanter.grug.mxfp8`).
 
     The output width ``O`` (``w_down``'s last dim) may differ from the input width ``D`` only on the
     ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
@@ -508,6 +510,8 @@ def moe_mlp(
         raise ValueError("report_assignment_keep does not support chunked (capacity-dropping) local experts")
     if fp8_dispatch and resolved_implementation != "fixed_pooled_wave_all_to_all":
         raise ValueError(f"fp8_dispatch requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}")
+    if expert_mxfp8_sim and resolved_implementation != "fixed_pooled_wave_all_to_all":
+        raise ValueError(f"expert_mxfp8_sim requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}")
 
     if mesh is None:
         mesh = _current_mesh()
@@ -595,6 +599,7 @@ def moe_mlp(
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
             fp8_dispatch=fp8_dispatch,
+            expert_mxfp8_sim=expert_mxfp8_sim,
             expert_remat=expert_remat,
         )
         side = overlap.fn(overlap.tokens, overlap.params)
@@ -659,6 +664,7 @@ def moe_mlp(
                 transport_capacity_factor=pooled_transport_capacity_factor,
                 num_expert_waves=num_expert_waves,
                 fp8_dispatch=fp8_dispatch,
+                expert_mxfp8_sim=expert_mxfp8_sim,
                 expert_remat=expert_remat,
                 report_assignment_keep=report_assignment_keep,
             )

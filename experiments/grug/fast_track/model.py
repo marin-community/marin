@@ -54,6 +54,7 @@ from levanter.grug.grug_moe import (
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
+from levanter.grug.mxfp8 import mx_dense
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.relu2_mlp import fused_relu2
 from levanter.kernels.pallas.short_conv import short_conv
@@ -246,6 +247,16 @@ class UngatedExpertActivation(StrEnum):
     POLYNORM = "polynorm"
     """PolyNorm (Motif 2.6B / Motif 3, arXiv 2608.09119): ``sum_{n=1..3} (1/3) u^n / RMS(u^n)``, each power
     RMS-normalized per token over the expert's hidden units. Fixed coefficients (Motif learns them per expert)."""
+
+
+class Fp8Recipe(StrEnum):
+    """Low-precision recipe for the projection and expert GEMMs (embeddings, router, lm head, norms, attention
+    core and the optimizer stay in their usual precision)."""
+
+    NONE = "none"
+    MXFP8_SIM = "mxfp8_sim"
+    """Simulated MXFP8 (``levanter.grug.mxfp8``): e4m3 operands with a just-in-time power-of-two scale per 32
+    elements along each GEMM's contraction axis, gradients included. Numerics only; GEMMs still run in bf16."""
 
 
 class MoeCompress(StrEnum):
@@ -1137,6 +1148,9 @@ class GrugModelConfig:
     moe_expert_remat: bool = True
     """Recompute the pooled-wave expert MLP and combine all-to-all in the backward. Off trades activation
     memory for one fewer expert forward and combine all-to-all per wave."""
+    fp8_recipe: Fp8Recipe = Fp8Recipe.NONE
+    """Low-precision recipe for attention/KDA projections, the fused router-latent-shared projection (router
+    columns excluded), the latent up-projection, the shared expert and the routed experts; see ``Fp8Recipe``."""
     moe_fp8_dispatch: bool = False
     """DeepSeek-V3 FP8 dispatch: the EP dispatch all-to-all sends activations as e4m3 with one fp32 scale per
     128-channel block (~0.52x the bf16 bytes); combine and every backward collective stay bf16 (STE)."""
@@ -1441,6 +1455,8 @@ class GrugModelConfig:
     def __post_init__(self) -> None:
         if self.moe_implementation not in MOE_IMPLEMENTATIONS:
             raise ValueError(f"moe_implementation must be one of {MOE_IMPLEMENTATIONS}, got {self.moe_implementation!r}")
+        if self.fp8_recipe != Fp8Recipe.NONE and self.moe_shared_overlap:
+            raise ValueError("fp8_recipe does not cover the moe_shared_overlap shared-expert path")
         if self.moe_fp8_dispatch and self.moe_implementation != "fixed_pooled_wave_all_to_all":
             raise ValueError("moe_fp8_dispatch requires moe_implementation=fixed_pooled_wave_all_to_all")
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -1733,6 +1749,13 @@ class GrugModelConfig:
         return Transformer.init(cfg, key=key)
 
 
+def _proj(cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | None = None) -> jax.Array:
+    """``x[..., k] @ w[k, n]`` under ``cfg.fp8_recipe``."""
+    if cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM:
+        return mx_dense(x, w, out_sharding)
+    return jnp.einsum("...k,kn->...n", x, w, out_sharding=out_sharding)
+
+
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     """Non-parametric RMS norm over the last dimension."""
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
@@ -1984,12 +2007,12 @@ class CausalSelfAttention(eqx.Module):
         head_dim = self.cfg.inferred_head_dim
         proj_inputs = proj_inputs or {}
         q_in = proj_inputs.get("q", x)
-        latent = jnp.einsum("bsh,hl->bsl", x if kv_input is None else kv_input, self.w_dkv)
+        latent = _proj(self.cfg, x if kv_input is None else kv_input, self.w_dkv)
         if self.bias_dkv is not None:
             latent = latent + unshard(self.bias_dkv).astype(x.dtype)
 
         def project_q(w_q: jax.Array) -> jax.Array:
-            q_flat = jnp.einsum("bsh,hd->bsd", q_in, w_q)
+            q_flat = _proj(self.cfg, q_in, w_q)
             if self.bias_q is not None:
                 q_flat = q_flat + unshard(self.bias_q).astype(x.dtype)
             if self.sconv_q is not None:
@@ -2007,18 +2030,14 @@ class CausalSelfAttention(eqx.Module):
         # k / v may read a different stream than the shared latent (attn_res_sum_inputs); each then gets its
         # own latent from that stream (same W_dkv and latent norm).
         k_latent = (
-            kv_latent
-            if "k" not in proj_inputs
-            else self.kv_latent_norm(jnp.einsum("bsh,hl->bsl", proj_inputs["k"], self.w_dkv))
+            kv_latent if "k" not in proj_inputs else self.kv_latent_norm(_proj(self.cfg, proj_inputs["k"], self.w_dkv))
         )
         v_latent = (
-            kv_latent
-            if "v" not in proj_inputs
-            else self.kv_latent_norm(jnp.einsum("bsh,hl->bsl", proj_inputs["v"], self.w_dkv))
+            kv_latent if "v" not in proj_inputs else self.kv_latent_norm(_proj(self.cfg, proj_inputs["v"], self.w_dkv))
         )
 
         def project_k(w_uk: jax.Array) -> jax.Array:
-            k_flat = jnp.einsum("bsl,ld->bsd", k_latent, w_uk)
+            k_flat = _proj(self.cfg, k_latent, w_uk)
             if self.sconv_k is not None:
                 k_flat = self.sconv_k(k_flat, sconv_segment_ids)
             return rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
@@ -2037,7 +2056,7 @@ class CausalSelfAttention(eqx.Module):
                 return rearrange(jnp.repeat(w, group, axis=1), "i n d -> i (n d)")
 
             second_qk = (project_q(tiled(self.w_qn)), project_k(tiled(self.w_ukn)))
-        v = rearrange(jnp.einsum("bsl,ld->bsd", v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
+        v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         if self.value_embed is not None:
             assert self.ve_lambda is not None and token_ids is not None
             ve = _embedding_gather(self.value_embed.astype(x.dtype), token_ids)
@@ -2060,9 +2079,9 @@ class CausalSelfAttention(eqx.Module):
         assert self.w_k is not None and self.w_v is not None
         head_dim = self.cfg.inferred_head_dim
         kv_in = x if kv_input is None else kv_input
-        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", kv_in, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", kv_in, self.w_v)
+        q_flat = _proj(self.cfg, x, self.w_q)
+        k_flat = _proj(self.cfg, kv_in, self.w_k)
+        v_flat = _proj(self.cfg, kv_in, self.w_v)
         # SConv: depthwise causal conv after the K projection.
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
@@ -2774,7 +2793,7 @@ class KimiDeltaAttention(eqx.Module):
 
         def project(w: jax.Array, conv: ShortConv, bias_row: int, name: str) -> jax.Array:
             source = kv_input if kv_input is not None and name in ("k", "v") else proj_inputs.get(name, x)
-            y = jnp.einsum("bsh,hd->bsd", source, w)
+            y = _proj(cfg, source, w)
             if self.bias_qkv is not None:
                 y = y + unshard(self.bias_qkv[bias_row]).astype(x.dtype)
             y = jax.nn.silu(conv(y, segment_ids))
@@ -2805,7 +2824,7 @@ class KimiDeltaAttention(eqx.Module):
             assert kv_share is not None
             v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
         if self.w_write is not None:
-            write = jnp.einsum("bsh,hd->bsd", proj_inputs.get("v", x), self.w_write)
+            write = _proj(cfg, proj_inputs.get("v", x), self.w_write)
             v = v * rearrange(
                 2.0 * jax.nn.sigmoid(write.astype(jnp.float32)), "... (n d) -> ... n d", d=head_dim
             ).astype(v.dtype)
@@ -2854,7 +2873,7 @@ class KimiDeltaAttention(eqx.Module):
             extras["gate_bias"] = reshard(self.dt_bias.astype(jnp.float32), head_spec)
             extra_specs["gate_p"] = extra_specs["gate_bias"] = head_spec
         if self.w_erase is not None:
-            z = jnp.einsum("bsh,hd->bsd", proj_inputs.get("k", x), self.w_erase)
+            z = _proj(cfg, proj_inputs.get("k", x), self.w_erase)
             z = rearrange(z, "... (n d) -> ... n d", d=head_dim)
             erase_logits = z.astype(jnp.float32)
             if cfg.kda_onchip_erase_gate:
@@ -2913,11 +2932,11 @@ class KimiDeltaAttention(eqx.Module):
                 o = o_m if o is None else o + o_m
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
-        gate = jax.nn.sigmoid(jnp.einsum("bsd,de->bse", x, self.w_g))
+        gate = jax.nn.sigmoid(_proj(cfg, x, self.w_g))
         if cfg.kda_gate_per_head:
             gate = jnp.repeat(gate, head_dim, axis=-1, total_repeat_length=cfg.num_heads * head_dim)
         o = o * gate
-        return jnp.einsum("bsh,hd->bsd", o, self.w_o, out_sharding=_batch_spec()), stats
+        return _proj(cfg, o, self.w_o, out_sharding=_batch_spec()), stats
 
 
 class RMSNorm(eqx.Module):
@@ -3845,11 +3864,8 @@ class MoEMLP(eqx.Module):
         if self.latent_out_norm is not None:
             routed_flat = self.latent_out_norm(routed_flat)
         if self.w_latent_up is not None:
-            routed_flat = jnp.einsum(
-                "tl,ld->td",
-                routed_flat,
-                self.w_latent_up.astype(routed_flat.dtype),
-                out_sharding=_batch_spec(),
+            routed_flat = _proj(
+                self.cfg, routed_flat, self.w_latent_up.astype(routed_flat.dtype), out_sharding=_batch_spec()
             )
         elif self.cfg.latent_write_select:
             assert self.cfg.latent_dim is not None
@@ -3892,7 +3908,7 @@ def _shared_experts_tail(
             hidden = jnp.concatenate([polynorm(u) for u in ups], axis=1)
         else:
             hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
-    shared_out = jnp.einsum("tm,md->td", hidden, w_down, out_sharding=out_sharding)
+    shared_out = _proj(cfg, hidden, w_down, out_sharding=out_sharding)
     if shared_gate is not None:
         gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), shared_gate)
         shared_out = shared_out * (2.0 * jax.nn.sigmoid(gate_logit))[:, None].astype(shared_out.dtype)
@@ -3964,7 +3980,16 @@ def moe_and_shared_fused(
         )
     else:
         weights = moe_weights + shared_weights
-    if not part_inputs:
+    router_in_fused = not (mlp.cfg.router_on_latent or mlp.cfg.router_on_embed) and bool(moe_weights)
+    if not part_inputs and mlp.cfg.fp8_recipe != Fp8Recipe.NONE:
+        # The router stays in high precision; the rest of the fused projection takes the low-precision recipe.
+        low = weights[1:] if router_in_fused else weights
+        fused = _proj(mlp.cfg, x_flat, jnp.concatenate(low, axis=1), out_sharding=_batch_spec())
+        parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in low[:-1])), axis=1)
+        if router_in_fused:
+            router = jnp.einsum("td,de->te", x_flat, weights[0], out_sharding=_batch_spec())
+            parts = [router, *parts]
+    elif not part_inputs:
         fused = jnp.einsum("td,de->te", x_flat, jnp.concatenate(weights, axis=1), out_sharding=_batch_spec())
         parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1)
     else:
@@ -5029,9 +5054,12 @@ def _run_expert_bank(
             expert_chunks=em.expert_chunks,
             num_expert_waves=em.num_expert_waves,
             fp8_dispatch=em.fp8_dispatch,
+            expert_mxfp8_sim=cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM,
             expert_remat=em.expert_remat,
             overlap=overlap,
         )
+    if cfg.fp8_recipe != Fp8Recipe.NONE:
+        raise ValueError("fp8_recipe supports ungated ReLU^2 expert banks only")
     return em(
         routed_input,
         selected,
