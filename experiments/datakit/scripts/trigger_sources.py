@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trigger every Datakit source's chain via ``StepRunner``, optionally downloads-only.
+"""Trigger a Datakit source catalog via ``StepRunner``, optionally downloads-only.
 
 For each :class:`marin.datakit.sources.DatakitSource`, hand ``StepRunner`` the
 terminal normalize step (or, with ``--downloads-only``, just the chain's
@@ -11,7 +11,9 @@ family downloads (e.g. Nemotron v2 subsets) are materialized once.
 Already-succeeded steps short-circuit via the on-disk cache check, so this
 is safe to re-run: it advances whatever hasn't completed yet and no-ops
 the rest. ``--list-pending`` prints each source whose terminal step is not
-cached, then exits. The caller pins the staging region. For example, use
+cached, then exits. ``--catalog science-candidates`` selects approved science
+pipelines that have not yet been promoted to the active source registry. The
+caller pins the staging region. For example, use
 ``iris job run --region us-east5 ...``. The Iris worker exports a
 region-appropriate ``MARIN_PREFIX`` automatically.
 """
@@ -19,7 +21,10 @@ region-appropriate ``MARIN_PREFIX`` automatically.
 import argparse
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from enum import StrEnum
 
+from marin.datakit.science_source_candidates import science_source_candidates
+from marin.datakit.sft_sources import all_sft_sources
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
@@ -30,8 +35,24 @@ logger = logging.getLogger(__name__)
 STATUS_CHECK_WORKERS = 8
 
 
+class SourceCatalog(StrEnum):
+    """Source registry selected for materialization."""
+
+    ACTIVE = "active"
+    ACTIVE_SFT = "active-sft"
+    SCIENCE_CANDIDATES = "science-candidates"
+    SCIENCE_SFT_CANDIDATES = "science-sft-candidates"
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--catalog",
+        choices=SourceCatalog,
+        default=SourceCatalog.ACTIVE,
+        type=SourceCatalog,
+        help="Source catalog to run (default: active).",
+    )
     parser.add_argument(
         "--downloads-only",
         action="store_true",
@@ -61,7 +82,14 @@ def _print_pending(source_terminals: list[tuple[DatakitSource, StepSpec]]) -> No
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    registry = all_sources()
+    if args.catalog == SourceCatalog.ACTIVE_SFT:
+        registry = all_sft_sources()
+    elif args.catalog == SourceCatalog.SCIENCE_CANDIDATES:
+        registry = science_source_candidates()
+    elif args.catalog == SourceCatalog.SCIENCE_SFT_CANDIDATES:
+        registry = {"megascience/textbook-reasoning": all_sft_sources()["megascience/textbook-reasoning"]}
+    else:
+        registry = all_sources()
     if args.sources:
         names = [name.strip() for name in args.sources.split(",") if name.strip()]
         unknown = [name for name in names if name not in registry]

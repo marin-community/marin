@@ -28,6 +28,11 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 import experiments.grug.moe.model as gm
+import experiments.june_tpu_67b_a2b.moe.model as june_gm
+from experiments.grug_sft.hf_initialization import (
+    pending_qb_betas_from_export,
+    vendored_transformer_from_snowball,
+)
 
 # Batch sharding for the embedding gather (matches both models' `.at[...].get(out_sharding=...)`).
 _EMBED_SPEC = P(("replica_dcn", "data", "expert"))
@@ -67,7 +72,7 @@ def _snowball_config() -> SnowballConfig:
     return SnowballConfig(**_COMMON, qk_mult=_QK_MULT, layer_norm_eps=_EPS, initializer_std=_STD)
 
 
-def _capture_experiment(model: "gm.Transformer", tokens: jax.Array) -> list[np.ndarray]:
+def _capture_experiment(model: "gm.Transformer", tokens: jax.Array) -> list[jax.Array]:
     """Per-block hidden states for the experiment Transformer (mirrors its __call__)."""
     cfg = model.config
     short = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=None)
@@ -87,7 +92,7 @@ def _capture_experiment(model: "gm.Transformer", tokens: jax.Array) -> list[np.n
     return outs
 
 
-def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> list[np.ndarray]:
+def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> list[jax.Array]:
     """Per-block hidden states for the Snowball transformer (mirrors its __call__)."""
     tf = model.transformer
     cfg = tf.config
@@ -130,6 +135,41 @@ def test_snowball_matches_grug_experiment_per_layer_and_logits():
 
     assert np.allclose(exp_logits, snow_logits, atol=1e-5, rtol=1e-5)
     assert np.array_equal(np.argmax(exp_logits, axis=-1), np.argmax(snow_logits, axis=-1))
+
+
+def test_snowball_export_converts_to_stacked_training_model():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        source = gm.Transformer.init(_experiment_config(), key=jax.random.key(7))
+        snow = SnowballLMHeadModel.init(Axis("vocab", _COMMON["vocab_size"]), _snowball_config(), key=jax.random.key(0))
+        snow = snow.from_state_dict(source.to_state_dict())
+        stacked_config = june_gm.GrugModelConfig(
+            **_COMMON,
+            qk_mult=_QK_MULT,
+            layer_norm_eps=_EPS,
+            initializer_std=_STD,
+            moe_implementation="ring",
+            disable_pko=True,
+            disable_long_rope=True,
+            use_array_stacked_blocks=True,
+        )
+        converted = vendored_transformer_from_snowball(
+            snow.transformer,
+            stacked_config,
+            key=jax.random.key(1),
+        )
+        tokens = (jnp.arange(10, dtype=jnp.int32).reshape(1, 10)) % _COMMON["vocab_size"]
+
+        expected = np.asarray(jax.jit(lambda model, ids: model.logits(ids))(source, tokens))
+        actual = np.asarray(jax.jit(lambda model, ids: model.logits(ids))(converted, tokens))
+        pending_qb_betas = pending_qb_betas_from_export(converted)
+
+    assert converted.blocks is None
+    assert converted.stacked_blocks is not None
+    assert np.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+    assert np.allclose(
+        np.asarray(pending_qb_betas),
+        -np.asarray(converted.stacked_blocks.stacked.mlp.router_bias),
+    )
 
 
 @pytest.mark.parametrize("seq_len", [1, 4, 5, 16])

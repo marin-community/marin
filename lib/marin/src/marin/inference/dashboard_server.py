@@ -53,6 +53,9 @@ from marin.inference.repository_snapshot import repository_snapshot_response
 
 logger = logging.getLogger(__name__)
 
+_UPSTREAM_MAX_CONNECTIONS = 4096
+_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS = 1024
+
 MAX_SHARED_CHAT_BYTES = 512 * 1024
 MAX_SHARED_CHATS = 128
 SHARED_CHAT_ID_BYTES = 12
@@ -131,6 +134,10 @@ def build_dashboard_app(
         state["client"] = httpx.AsyncClient(
             base_url=upstream_base_url,
             timeout=httpx.Timeout(request_timeout_seconds, connect=10.0),
+            limits=httpx.Limits(
+                max_connections=_UPSTREAM_MAX_CONNECTIONS,
+                max_keepalive_connections=_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS,
+            ),
         )
         try:
             yield

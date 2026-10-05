@@ -30,6 +30,7 @@ from marin.datakit.download.rollout_transforms import load_parquet_batched, open
 from marin.execution.step_spec import StepSpec
 
 TRANSFORM_VERSION = "2026.09.17.chat-v4"
+SCIENCE_VENDOR_TRANSFORM_VERSION = "2026.09.20.chat-v5"
 MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 _SKIPPED_JSONL_LINES = MappingProxyType({("agentic_v2", "tool_calling"): frozenset({1095})})
 _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
@@ -264,7 +265,7 @@ def _parse_messages(value: object) -> list[dict]:
 
 
 def _tool_definitions(value: object) -> list[dict]:
-    if value is None:
+    if value is None or value == "":
         return []
     if isinstance(value, str):
         value = json.loads(value)
@@ -422,13 +423,16 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
 
 
 def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str) -> StepSpec:
+    transform_version = TRANSFORM_VERSION
+    if family == "science_v2" and partition_name == "vendor":
+        transform_version = SCIENCE_VENDOR_TRANSFORM_VERSION
     return StepSpec(
         name=f"processed-chat/nemotron_sft_v3/{family}/{partition_name}",
         deps=[download],
         fn=lambda output_path: _transform_chat(
             download.output_path, output_path, family=family, partition_name=partition_name
         ),
-        hash_attrs={"family": family, "partition": partition_name, "version": TRANSFORM_VERSION},
+        hash_attrs={"family": family, "partition": partition_name, "version": transform_version},
     )
 
 

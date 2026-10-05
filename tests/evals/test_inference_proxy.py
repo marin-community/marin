@@ -754,6 +754,40 @@ async def test_inference_worker_preserves_status_for_non_json_upstream_response(
 
 
 @pytest.mark.asyncio
+async def test_inference_proxy_admits_more_than_40_requests_and_rejects_overload() -> None:
+    request_count = 64
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    with _serve_inference_proxy(
+        broker=broker, model="gpt2", request_timeout_seconds=30, max_pending_requests=request_count
+    ) as proxy_model:
+        async with httpx.AsyncClient() as client:
+            requests = [
+                asyncio.create_task(client.post(f"{proxy_model.endpoint.base_url}/completions", json={"index": index}))
+                for index in range(request_count)
+            ]
+            leased = await _fetch_until_requests(broker, count=request_count)
+            overloaded = await client.post(f"{proxy_model.endpoint.base_url}/completions", json={"index": "extra"})
+            assert overloaded.status_code == 429
+            broker.submit_responses(
+                [
+                    _leased_response(
+                        item,
+                        InferenceResponse(
+                            request_id=item.request.request_id,
+                            status_code=200,
+                            payload=item.request.payload,
+                            headers=(("content-type", "application/json"),),
+                        ),
+                    )
+                    for item in leased
+                ]
+            )
+            responses = await asyncio.gather(*requests)
+    assert all(response.status_code == 200 for response in responses)
+    assert [response.json()["index"] for response in responses] == list(range(request_count))
+
+
+@pytest.mark.asyncio
 async def test_inference_proxy_matches_out_of_order_responses_to_inflight_requests() -> None:
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with _serve_inference_proxy(

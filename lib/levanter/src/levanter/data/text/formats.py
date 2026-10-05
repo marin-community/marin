@@ -79,11 +79,13 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     Attributes:
         input_ids_key: Field name containing token ids.
         loss_weights_key: Optional field name containing loss weights.
+        segment_ids_key: Optional field name containing document segment IDs.
         loss_weight_transform: Optional callable to transform loss weights before training.
     """
 
     input_ids_key: str = "input_ids"
     loss_weights_key: str | None = None
+    segment_ids_key: str | None = None
     loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None
 
     @property
@@ -94,7 +96,7 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
         self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         del tokenizer, enforce_eos, enforce_bos
-        return PrebuiltCacheProcessor(self.input_ids_key, self.loss_weights_key)
+        return PrebuiltCacheProcessor(self.input_ids_key, self.loss_weights_key, self.segment_ids_key)
 
 
 class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
@@ -102,12 +104,15 @@ class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
     Processor that normalizes prebuilt cache records to consistent dtypes.
     """
 
-    def __init__(self, input_ids_key: str, loss_weights_key: str | None):
+    def __init__(self, input_ids_key: str, loss_weights_key: str | None, segment_ids_key: str | None = None):
         self.input_ids_key = input_ids_key
         self.loss_weights_key = loss_weights_key
+        self.segment_ids_key = segment_ids_key
         self._exemplar: dict[str, np.ndarray] = {input_ids_key: np.zeros((0,), dtype=np.int32)}
         if loss_weights_key is not None:
             self._exemplar[loss_weights_key] = np.zeros((0,), dtype=np.float32)
+        if segment_ids_key is not None:
+            self._exemplar[segment_ids_key] = np.zeros((0,), dtype=np.int32)
 
     def __call__(self, batch: Sequence[dict]) -> Sequence[dict]:
         out = []
@@ -121,6 +126,10 @@ class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
                 if self.loss_weights_key not in example:
                     raise ValueError(f"Missing required field '{self.loss_weights_key}' in prebuilt example.")
                 item[self.loss_weights_key] = np.asarray(example[self.loss_weights_key], dtype=np.float32)
+            if self.segment_ids_key is not None:
+                if self.segment_ids_key not in example:
+                    raise ValueError(f"Missing required field '{self.segment_ids_key}' in prebuilt example.")
+                item[self.segment_ids_key] = np.asarray(example[self.segment_ids_key], dtype=np.int32)
             out.append(item)
         return out
 
@@ -137,6 +146,7 @@ class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
         return {
             "input_ids_key": self.input_ids_key,
             "loss_weights_key": self.loss_weights_key,
+            "segment_ids_key": self.segment_ids_key,
         }
 
 

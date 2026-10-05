@@ -26,6 +26,7 @@ weights live in the experiment that chose them, not buried in a catalog constant
   the build plan by default and builds the module's handles under ``--run``.
 """
 
+import dataclasses
 from collections.abc import Callable, Mapping, Sequence
 
 import click
@@ -151,6 +152,7 @@ def tokenized(
     sample_count: int | None = None,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> ArtifactStep[TokenizedCache]:
     """A tokenized-dataset handle.
 
@@ -162,7 +164,8 @@ def tokenized(
     already-tokenized data at an existing location instead of recomputing it. ``version`` defers
     to the ambient :class:`~marin.execution.build_context.BuildContext` when omitted — but a large
     corpus should pin an explicit calendar version, since a mutable (``dev``) tokenize rebuilds the
-    whole cache on every run.
+    whole cache on every run. ``resources`` sizes the outer artifact job; ``worker_resources`` sizes
+    each Zephyr tokenizer worker.
     """
     version = resolve_version(name, version)
     if sum(x is not None for x in (source, paths, raw)) != 1:
@@ -174,7 +177,7 @@ def tokenized(
 
     def build_config(ctx: StepContext) -> TokenizeConfigBase:
         if source is not None and _looks_like_hf_id(source):
-            return HfTokenizeConfig(
+            config: TokenizeConfigBase = HfTokenizeConfig(
                 id=source,
                 cache_path=ctx.output_path,
                 tokenizer=tokenizer,
@@ -182,13 +185,16 @@ def tokenized(
                 sample_count=sample_count,
                 tags=[*tags],
             )
+            if worker_resources is not None:
+                config = dataclasses.replace(config, worker_resources=worker_resources)
+            return config
         if raw is not None:
             resolved = [f"{ctx.artifact_path(raw)}/{glob}"]
         elif paths is not None:
             resolved = [_resolve(ctx.prefix, p) for p in paths]
         else:
             resolved = [_resolve(ctx.prefix, source)]
-        return TokenizeConfig(
+        config = TokenizeConfig(
             train_paths=[] if validation else resolved,
             validation_paths=resolved if validation else [],
             cache_path=ctx.output_path,
@@ -197,6 +203,9 @@ def tokenized(
             sample_count=sample_count,
             tags=[*tags],
         )
+        if worker_resources is not None:
+            config = dataclasses.replace(config, worker_resources=worker_resources)
+        return config
 
     return ArtifactStep(
         name=name,
