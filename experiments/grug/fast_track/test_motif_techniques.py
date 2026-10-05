@@ -67,3 +67,36 @@ def test_grouped_diff_shares_noise_maps_and_learns_lambda():
 def test_grouped_diff_needs_a_divisible_head_count():
     with pytest.raises(ValueError):
         t._config(mla=True, mla_grouped_diff=3)
+
+
+def test_gdla_noise_heads_come_from_the_head_budget():
+    # 4 query heads = 1 group of 3 signal heads + 1 noise head sharing one value head.
+    mesh, model = t._model(mla=True, num_heads=4, mla_gdla_noise_heads=1)
+    attn = model.stacked_blocks.stacked.attn
+    head_dim, hidden = model.config.inferred_head_dim, model.config.hidden_dim
+    assert attn.w_q.shape[-1] == 4 * head_dim
+    assert attn.w_uv.shape[-1] == head_dim
+    assert attn.w_o.shape[-2:] == (3 * head_dim, hidden)
+    assert attn.gda_lambda.shape[-2:] == (hidden, 3)
+    tokens = _tokens()
+    perturbed = tokens.at[:, -1].set((tokens[:, -1] + 1) % t._VOCAB)
+    with jax.set_mesh(mesh):
+        grads = eqx.filter_jit(eqx.filter_grad(_loss))(model, tokens)
+        forward = eqx.filter_jit(lambda m, x: m(x)[0])
+        hidden_out, hidden_perturbed = forward(model, tokens), forward(model, perturbed)
+    np.testing.assert_allclose(
+        np.asarray(hidden_out[:, :-1]), np.asarray(hidden_perturbed[:, :-1]), rtol=1e-5, atol=1e-5
+    )
+    attn_grads = grads.stacked_blocks.stacked.attn
+    # The noise head (the last query head of its group) reaches the loss only through the subtraction.
+    noise_q = np.asarray(attn_grads.w_q)[..., 3 * head_dim :]
+    assert np.abs(noise_q).sum() > 0
+    assert np.abs(np.asarray(attn_grads.gda_lambda)).sum() > 0
+    mask = GrugMoeMuonHConfig().create_mask(eqx.filter(model, eqx.is_array))
+    assert mask.stacked_blocks.stacked.attn.gda_lambda == "adam"
+
+
+@pytest.mark.parametrize("overrides", [{"num_heads": 4, "mla_gdla_noise_heads": 3}, {"mla_gdla_noise_heads": 2}])
+def test_gdla_needs_whole_signal_groups(overrides):
+    with pytest.raises(ValueError):
+        t._config(mla=True, **overrides)

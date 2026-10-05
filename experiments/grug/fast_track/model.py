@@ -1080,6 +1080,13 @@ class GrugModelConfig:
     heads, give ``D = H_signal - lambda * H_noise`` over the same values, with a token-dependent
     ``lambda = sigmoid(x W_lambda)`` per head (``W_lambda`` zero-init, so lambda starts at 0.5). The sigmoid keeps
     the subtraction a subtraction (the unconstrained DIFF lambda turned negative, batch 77). 0: off."""
+    mla_gdla_noise_heads: int = 0
+    """Motif 3's GDLA head layout (arXiv 2608.09119) on the MLA layers, inside the head budget: of the ``num_heads``
+    query heads, this many are noise heads, so the attention kernel runs no extra heads. Heads form groups of
+    ``g = (num_heads - m) / m`` signal heads plus one noise head; each group shares one value head (``w_uv`` and
+    the value embeds have ``m`` heads), while keys stay per query head. The output has only the signal heads:
+    ``D = H_signal - lambda * H_noise(group)``, ``lambda = sigmoid(x W_lambda)`` per signal head and token
+    (``W_lambda`` zero-init: 0.5). Unlike ``mla_grouped_diff``, the noise map is computed once per group. 0: off."""
     mla_diff_attn: bool = False
     """Differential attention (DIFF Transformer, arXiv 2410.05258) on the MLA layers:
     ``(softmax(q1 k1^T) - lambda softmax(q2 k2^T)) v`` with a second q projection and key up-projection
@@ -1525,6 +1532,23 @@ class GrugModelConfig:
         if self.mla_grouped_diff:
             if self.mla_diff_attn or self.num_heads % self.mla_grouped_diff:
                 raise ValueError("mla_grouped_diff needs num_heads divisible by it and no mla_diff_attn")
+        if self.mla_gdla_noise_heads:
+            mla_heads = self.mla_num_heads or self.num_heads
+            noise = self.mla_gdla_noise_heads
+            if not self.mla or mla_heads <= noise or (mla_heads - noise) % noise:
+                raise ValueError("mla_gdla_noise_heads needs mla and (MLA heads - noise heads) divisible by it")
+            if (
+                self.mla_diff_attn
+                or self.mla_grouped_diff
+                or self.mla_head_mix
+                or self.mla_v_filter
+                or self.value_residual_layers
+                or self.xsa_mode in ("learned", "tanh", "gated")
+            ):
+                raise ValueError(
+                    "mla_gdla_noise_heads does not combine with mla_diff_attn, mla_grouped_diff, mla_head_mix, "
+                    "mla_v_filter, value_residual_layers or per-head XSA parameters"
+                )
         poly = UngatedExpertActivation.POLYNORM
         if self.moe_ungated_activation == poly and (
             not self.moe_ungated_relu2 or self.expert_leaky_slope or self.moe_fused_relu2
@@ -1894,7 +1918,8 @@ class CausalSelfAttention(eqx.Module):
     diff_lambda_init: Float[Array, ""] | None  # constant lambda_init of this layer (never trained)
     w_qn: Float[Array, "D MH"] | None  # noise-map query projection, M = N / g heads (cfg.mla_grouped_diff)
     w_ukn: Float[Array, "L MH"] | None  # noise-map key up-projection from the KV latent (cfg.mla_grouped_diff)
-    gda_lambda: Float[Array, "D N"] | None  # token-dependent lambda logits per signal head (cfg.mla_grouped_diff)
+    # token-dependent lambda logits per signal head (cfg.mla_grouped_diff / cfg.mla_gdla_noise_heads)
+    gda_lambda: Float[Array, "D N"] | None
     vres_lambda: Float[Array, " 2"] | None  # (l1 on v, l2 on the first layer's v): cfg.value_residual_layers
     bias_q: Float[Array, " NH"] | None
     bias_dkv: Float[Array, " L"] | None
@@ -1928,11 +1953,22 @@ class CausalSelfAttention(eqx.Module):
             diff = cfg.mla_diff_attn
             group = cfg.mla_grouped_diff
             k_qn, k_ukn = random.split(random.fold_in(key, 2))
+            # GDLA: one value head per group and only the signal heads reach the output.
+            n_v = cfg.mla_gdla_noise_heads or n
+            n_out = n - cfg.mla_gdla_noise_heads
+            if cfg.mla_gdla_noise_heads:
+                attn_gate = (
+                    reshard(jnp.zeros((d, n_out * h)), P(None, "model"))
+                    if cfg.attn_gate_elementwise
+                    else reshard(jnp.zeros((d, n_out)), P(None, None))
+                )
+                if attn_gate_up is not None:
+                    raise ValueError("mla_gdla_noise_heads does not combine with attn_gate_rank")
             return CausalSelfAttention(
                 w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
                 w_k=None,
                 w_v=None,
-                w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
+                w_o=reshard(_init_weight(k_o, (n_out * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
                 attn_gate=attn_gate,
                 attn_gate_up=attn_gate_up,
                 sconv_k=(
@@ -1950,12 +1986,14 @@ class CausalSelfAttention(eqx.Module):
                 w_dkv=reshard(_init_weight(k_dkv, (cfg.kv_in_dim, kvl), std), P(_FSDP_AXES, None)),
                 kv_latent_norm=_learned_rms_norm(cfg, kvl, cfg.layer_norm_eps, role="kv_latent"),
                 w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
-                w_uv=reshard(_init_weight(k_uv, (kvl, n * h), std), P(None, "model")),
+                w_uv=reshard(_init_weight(k_uv, (kvl, n_v * h), std), P(None, "model")),
                 value_embed=(
-                    reshard(_init_weight(k_ve, (cfg.vocab_size, n * h), std), P(None, None)) if use_ve else None
+                    reshard(_init_weight(k_ve, (cfg.vocab_size, n_v * h), std), P(None, None)) if use_ve else None
                 ),
                 ve_lambda=_ve_lambda_init(cfg.value_embeds),
-                ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds in _GATED_VALUE_EMBEDS else None),
+                ve_gate=(
+                    reshard(jnp.zeros((d, n_v)), P(None, None)) if cfg.value_embeds in _GATED_VALUE_EMBEDS else None
+                ),
                 qk_mult=_qk_mult_init(cfg, n),
                 xsa_scale=(
                     jnp.full((n,), 1.0 if cfg.xsa_mode == "learned" else 0.0, jnp.float32)
@@ -1971,7 +2009,11 @@ class CausalSelfAttention(eqx.Module):
                 diff_lambda_init=((0.8 - 0.6 * jnp.exp(-0.3 * jnp.asarray(layer_index, jnp.float32))) if diff else None),
                 w_qn=(reshard(_init_weight(k_qn, (d, n // group * h), std), P(_FSDP_AXES, None)) if group else None),
                 w_ukn=reshard(_init_weight(k_ukn, (kvl, n // group * h), std), P(None, None)) if group else None,
-                gda_lambda=reshard(jnp.zeros((d, n)), P(None, None)) if group else None,
+                gda_lambda=(
+                    reshard(jnp.zeros((d, n_out if cfg.mla_gdla_noise_heads else n)), P(None, None))
+                    if group or cfg.mla_gdla_noise_heads
+                    else None
+                ),
                 vres_lambda=_vres_lambda_init(cfg),
                 bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
@@ -2286,14 +2328,31 @@ class CausalSelfAttention(eqx.Module):
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
 
+        gdla_noise = self.cfg.mla_gdla_noise_heads if self.cfg.mla else 0
+        # GDLA: query heads are laid out group by group ([g signal heads, 1 noise head] per group), so each
+        # group's value head expands to its g + 1 query heads.
+        kernel_v = align_kv_heads(v, num_q_heads=q.shape[2]) if gdla_noise else v
+
         def _attend(qh: jax.Array, kh: jax.Array) -> jax.Array:
             if fox_key_bias is None:
-                return attention(qh, kh, v, mask, implementation=attn_impl, rel_bias=rel_bias)
-            qh, kh, vh = _fox_augment(qh, kh, v, fox_key_bias)
+                return attention(qh, kh, kernel_v, mask, implementation=attn_impl, rel_bias=rel_bias)
+            qh, kh, vh = _fox_augment(qh, kh, kernel_v, fox_key_bias)
             return attention(qh, kh, vh, mask, implementation=attn_impl, rel_bias=rel_bias)[..., :head_dim]
 
         attn_out = _attend(q, k)
-        if second_qk is not None and self.gda_lambda is not None:
+        if gdla_noise:
+            assert self.gda_lambda is not None
+            grouped = rearrange(attn_out.astype(jnp.float32), "b s (m j) d -> b s m j d", m=gdla_noise)
+            signal, noise = grouped[..., :-1, :], grouped[..., -1:, :]
+            lam = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.gda_lambda).astype(jnp.float32))
+            lam = rearrange(lam, "b s (m g) -> b s m g", m=gdla_noise)[..., None]
+            attn_out = rearrange(signal - lam * noise, "b s m g d -> b s (m g) d").astype(attn_out.dtype)
+            attn_out = reshard(attn_out, _partition_spec_of(q) or P(_BATCH_AXES, None, "model", None))
+            stats[f"{_LAYER_KNOB_PREFIX}gdla_lambda_mean"] = jax.lax.stop_gradient(jnp.mean(lam))
+            stats[f"{_LAYER_KNOB_PREFIX}gdla_noise_rms_ratio"] = jax.lax.stop_gradient(
+                jnp.sqrt(jnp.mean(jnp.square(noise)) / (jnp.mean(jnp.square(signal)) + 1e-12))
+            )
+        elif second_qk is not None and self.gda_lambda is not None:
             # Grouped differential attention: the shared noise map's read, scaled per token and head.
             attn_noise = _attend(*_transform_qk(*second_qk))
             lam = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.gda_lambda).astype(jnp.float32))[..., None]
