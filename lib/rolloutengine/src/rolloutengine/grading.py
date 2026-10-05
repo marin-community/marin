@@ -7,7 +7,7 @@ import asyncio
 import json
 import math
 import tarfile
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -33,6 +33,7 @@ from taskcompendium.submission import Submission
 from rolloutengine.machines import _install_files, _machine_command, _task_machine
 
 MISSING_FILE_EXIT = 44
+SubmissionSink = Callable[[VerifierArtifact, Path], Awaitable[None]]
 
 
 def _validate_task(task: TaskSpec) -> None:
@@ -59,6 +60,7 @@ async def _grade_rollout(
     messages: tuple[dict[str, Any], ...],
     machine: Machine | None,
     factories: Mapping[EnvironmentKind, MachineFactory],
+    submission_sink: SubmissionSink | None = None,
 ) -> GradeResult:
     """Grade the final transcript and task filesystem without model access to private files."""
     if task.verifier.kind == VerifierKind.SKIPPED:
@@ -78,6 +80,19 @@ async def _grade_rollout(
             )
     if verifier.environment is None:
         return await _shell_grade(verifier, messages, machine)
+    if submission_sink is not None:
+        with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
+            collected = []
+            for index, artifact in enumerate(verifier.artifacts):
+                path = Path(directory) / str(index)
+                if await _download_artifact(machine, artifact, path, verifier.timeout):
+                    await submission_sink(artifact, path)
+                    collected.append((artifact, path))
+            async with _task_machine(verifier.environment, factories) as grading_machine:
+                assert grading_machine is not None
+                for artifact, path in collected:
+                    await grading_machine.upload(path, artifact.target)
+                return await _shell_grade(verifier, messages, grading_machine)
     async with _task_machine(verifier.environment, factories) as grading_machine:
         assert grading_machine is not None
         with TemporaryDirectory(prefix="rollout-artifacts-") as directory:

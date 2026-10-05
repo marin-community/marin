@@ -29,7 +29,7 @@ from rolloutengine.contracts import (
     RolloutStep,
     TaskSession,
 )
-from rolloutengine.grading import _combined_stage_grade, _remove_stage_grader, _validate_task
+from rolloutengine.grading import SubmissionSink, _combined_stage_grade, _remove_stage_grader, _validate_task
 from rolloutengine.machines import _task_machine
 from rolloutengine.task_session import _ShellboxTaskSession
 
@@ -61,6 +61,7 @@ class ShellboxRolloutEngine:
         command_timeout: float,
         convention: Submission,
         sessions: Mapping[str, Callable[[TaskSpec], TaskSession]] | None = None,
+        submission_sink: SubmissionSink | None = None,
     ):
         if max_turns < 1 or command_timeout <= 0:
             raise ValueError("Rollout limits must be positive")
@@ -70,6 +71,7 @@ class ShellboxRolloutEngine:
         self.command_timeout = command_timeout
         self.convention = convention
         self.sessions = {} if sessions is None else sessions
+        self.submission_sink = submission_sink
 
     async def run(self, task: TaskSpec) -> RolloutData:
         """Run one task and always release its session and machine."""
@@ -93,7 +95,14 @@ class ShellboxRolloutEngine:
             assert machine is not None
             return await self._run_stages(task, machine, self.convention)
         if task.environment.interaction is None:
-            session = _ShellboxTaskSession(task, machine, self.convention, self.command_timeout, self.factories)
+            session = _ShellboxTaskSession(
+                task,
+                machine,
+                self.convention,
+                self.command_timeout,
+                self.factories,
+                submission_sink=self.submission_sink,
+            )
         else:
             session = self.sessions[task.environment.interaction](task)
         resources.push_async_callback(session.close)
@@ -118,7 +127,9 @@ class ShellboxRolloutEngine:
             )
             initial_steps = 0 if record is None else len(record.steps)
             initial_tokens = 0 if record is None else len(record.response_token_ids)
-            session = _ShellboxTaskSession(phase, machine, convention, self.command_timeout, self.factories, stage)
+            session = _ShellboxTaskSession(
+                phase, machine, convention, self.command_timeout, self.factories, stage, self.submission_sink
+            )
             try:
                 record = await self._run_session(phase, session, record)
             except RolloutInterrupted as error:

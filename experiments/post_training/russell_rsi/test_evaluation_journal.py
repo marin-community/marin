@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import base64
 import hashlib
 import json
 from dataclasses import asdict, replace
@@ -11,14 +12,17 @@ import pytest
 from rigging.filesystem.storage_path import StoragePath
 from rigging.runtime_bundle import RuntimeBundle
 from shellbox.backends.qemu.image import guest_code_id
+from taskcompendium.environment import ArtifactKind, ShellVerifierSpec, VerifierArtifact
+from taskcompendium.models import VerifierKind
 from taskcompendium.parquet import write_tasks
 
 from experiments.post_training.russell_rsi.contract_tasks import digest
-from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal
+from experiments.post_training.russell_rsi.evaluation_journal import AttemptJournal, EvaluationJournal
 from experiments.post_training.russell_rsi.rollout_eval import (
     DevelopmentEvaluationConfig,
     SupplementaryEvaluationConfig,
     evaluate_development,
+    preserve_supplementary_submission,
     supplementary_evaluation_journal,
 )
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
@@ -58,6 +62,44 @@ def test_issued_http_attempt_cannot_be_repeated_after_failure(tmp_path, failure)
     assert not (tmp_path / "result.json").exists()
     response = tmp_path / "turns/000/response.json"
     assert response.exists() == (failure == "invalid-json")
+
+
+@pytest.mark.parametrize("content", [b"", b"diff --git a/value b/value\n\x00\xff"])
+def test_submission_bytes_survive_grading_failure(tmp_path, content):
+    requests = []
+    source = tmp_path / "collected.patch"
+    source.write_bytes(content)
+    artifact = VerifierArtifact(source="/tmp/model.patch", target="/tmp/model.patch", kind=ArtifactKind.FILE)
+    attempt = AttemptJournal(StoragePath(str(tmp_path / "attempt")), {"slot": "authored/task-1"})
+
+    def server(request):
+        requests.append(request)
+        return httpx.Response(200, json={"saved_response": True})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(server)) as client:
+
+            async def operation():
+                await attempt.post(client, "https://unit.test/v1/completions", {"prompt": [1]})
+                await preserve_supplementary_submission(artifact, source)
+                source.unlink()
+                raise RuntimeError("Authored private grading loss")
+
+            with pytest.raises(RuntimeError, match="grading loss"):
+                await attempt.run(operation)
+            with pytest.raises(RuntimeError, match="incomplete"):
+                await AttemptJournal(attempt.directory, attempt.binding).run(operation)
+
+    asyncio.run(run())
+    saved = json.loads((tmp_path / "attempt/submission.json").read_text())
+    preserved = base64.b64decode(saved["body_base64"], validate=True)
+    assert preserved == content
+    assert saved["sha256"] == hashlib.sha256(preserved).hexdigest()
+    assert saved["binding"] == attempt.binding
+    assert saved["artifact"] == artifact.model_dump(mode="json")
+    assert (tmp_path / "attempt/turns/000/response.json").exists()
+    assert not (tmp_path / "attempt/result.json").exists()
+    assert len(requests) == 1
 
 
 class TokenServer:
@@ -254,3 +296,47 @@ def test_one_failed_http_attempt_preserves_other_tasks_without_resampling(tmp_pa
     asyncio.run(evaluate())
     assert len(server.completions) == count
     assert (tmp_path / "parent/traces.jsonl").read_bytes() == traces
+
+
+@pytest.mark.parametrize("layout", ["multiple", "directory"])
+def test_unsupported_submission_stops_before_http(tmp_path, frozen_comparison, layout):
+    config = frozen_comparison
+    task = preflight_task(101, PREFLIGHT_INSTRUCTION, 23)
+    artifact = VerifierArtifact(source="/workspace/patch", target="/workspace/patch", kind=ArtifactKind.FILE)
+    verifier = ShellVerifierSpec(
+        argv=("true",),
+        timeout=10,
+        environment=task.environment.model_copy(update={"interaction": None}),
+        artifacts=(
+            (artifact, artifact)
+            if layout == "multiple"
+            else (artifact.model_copy(update={"kind": ArtifactKind.DIRECTORY}) if layout == "directory" else artifact,)
+        ),
+    )
+    task = task.model_copy(
+        update={
+            "verifier": task.verifier.model_copy(
+                update={
+                    "kind": VerifierKind.SHELL,
+                    "parameters_json": verifier.model_dump_json(),
+                }
+            ),
+        }
+    )
+    write_tasks(config.evaluation.tasks_path, [task])
+    server = TokenServer(tmp_path / "journal")
+
+    async def evaluate():
+        await evaluate_development(
+            config.evaluation,
+            "https://unit.test/v1",
+            "unit",
+            {},
+            journal=EvaluationJournal(StoragePath(str(tmp_path / "journal")), {"attempts": {}}),
+            http_transport=httpx.MockTransport(server),
+        )
+
+    with pytest.raises(ValueError, match="one collected file"):
+        asyncio.run(evaluate())
+    assert not server.prompts
+    assert not server.completions

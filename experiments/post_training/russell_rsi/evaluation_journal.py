@@ -4,6 +4,7 @@
 """Reserve single-use supplementary attempts before model inference."""
 
 import base64
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -69,6 +70,18 @@ class AttemptJournal:
             },
         )
         return response
+
+    def save_submission(self, artifact: dict, content: bytes) -> None:
+        """Persist exact collected file bytes before private grading."""
+        write_once(
+            self.directory / "submission.json",
+            {
+                "binding": self.binding,
+                "artifact": artifact,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "body_base64": base64.b64encode(content).decode("ascii"),
+            },
+        )
 
 
 ACTIVE_ATTEMPT: ContextVar[AttemptJournal | None] = ContextVar("supplementary_attempt", default=None)

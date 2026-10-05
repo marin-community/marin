@@ -29,7 +29,7 @@ from taskcompendium.submission import (
 )
 
 from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
-from rolloutengine.grading import _grade_rollout
+from rolloutengine.grading import SubmissionSink, _grade_rollout
 from rolloutengine.machines import _install_files, _run_setup_commands, _wait_for_healthcheck
 
 SHELL_TOOL_NAME = "shell"
@@ -83,6 +83,7 @@ class _ShellboxTaskSession:
         command_timeout: float,
         factories: Mapping[EnvironmentKind, MachineFactory],
         stage: TaskStage | None = None,
+        submission_sink: SubmissionSink | None = None,
     ):
         self.task = task
         self.machine = machine
@@ -90,6 +91,7 @@ class _ShellboxTaskSession:
         self.command_timeout = command_timeout
         self.factories = factories
         self.stage = stage
+        self.submission_sink = submission_sink
 
     async def prepare(self) -> SessionStart:
         available = set() if self.machine is None else {SHELL_CAPABILITY, FILESYSTEM_CAPABILITY}
@@ -170,7 +172,9 @@ class _ShellboxTaskSession:
         return Transition(done=False, observations=tuple(observations))
 
     async def grade(self, messages: tuple[dict[str, Any], ...]) -> GradeResult:
-        return await _grade_rollout(self.task, self.convention, messages, self.machine, self.factories)
+        return await _grade_rollout(
+            self.task, self.convention, messages, self.machine, self.factories, self.submission_sink
+        )
 
     async def close(self) -> None:
         pass

@@ -20,6 +20,8 @@ from marin.inference.config import ServedModelConfig, VllmEngineConfig, VllmLaun
 from marin.inference.serve import local_inference
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle
+from taskcompendium.environment import ArtifactKind, ShellVerifierSpec, VerifierArtifact
+from taskcompendium.models import TaskSpec, VerifierKind
 
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.contract_tasks import digest
@@ -38,6 +40,23 @@ from experiments.post_training.russell_rsi.sources import compact_json_sha256
 DEVELOPMENT_MAX_TURNS = 16
 DEVELOPMENT_COMMAND_TIMEOUT = 120
 SUPPLEMENTARY_TASKS = 4
+
+
+def require_journal_submission(task: TaskSpec) -> None:
+    if task.stages:
+        raise ValueError("Supplementary journals do not support staged submissions")
+    if task.verifier.kind != VerifierKind.SHELL:
+        return
+    verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)
+    if verifier.environment is None or len(verifier.artifacts) != 1 or verifier.artifacts[0].kind != ArtifactKind.FILE:
+        raise ValueError("Supplementary journals require one collected file and a private grader")
+
+
+async def preserve_supplementary_submission(artifact: VerifierArtifact, path: Path) -> None:
+    """Persist the collected submission in its reserved attempt journal."""
+    attempt = ACTIVE_ATTEMPT.get()
+    assert attempt is not None
+    attempt.save_submission(artifact.model_dump(mode="json"), path.read_bytes())
 
 
 @dataclass(frozen=True)
@@ -96,6 +115,8 @@ def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> E
         or manifest["runtime_bundle"] != asdict(evaluation.runtime_bundle)
     ):
         raise ValueError("Supplementary evaluation differs from the frozen panel or matched attempt protocol")
+    for task in tasks:
+        require_journal_submission(task)
     root = StoragePath(config.journal_path)
     comparison = {
         "model_identities": list(config.model_identities),
@@ -247,6 +268,9 @@ async def evaluate_development(
     tasks = list(islice(read_tasks(config.tasks_path), config.limit))
     if not tasks:
         raise ValueError("The frozen development cohort is empty")
+    if journal is not None:
+        for task in tasks:
+            require_journal_submission(task)
     categories: Counter[str] = Counter()
     startup_counts: Counter[str] = Counter()
     failed_ids: set[str] = set()
@@ -323,6 +347,7 @@ async def evaluate_development(
             max_turns=DEVELOPMENT_MAX_TURNS,
             command_timeout=DEVELOPMENT_COMMAND_TIMEOUT,
             convention=SubmissionConvention(id="russell-dev", answer_format=AnswerFormat.PLAIN),
+            submission_sink=preserve_supplementary_submission if journal is not None else None,
         )
         semaphore = asyncio.Semaphore(ROLLOUT_CONCURRENCY)
         records = {}
