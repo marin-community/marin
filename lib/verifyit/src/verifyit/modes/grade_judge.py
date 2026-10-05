@@ -320,9 +320,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     if spec.system_prompt:
         messages.append({"role": "system", "content": spec.system_prompt.format(**fields)})
     messages.append({"role": "user", "content": spec.prompt_template.format(**fields)})
-    budgets = [spec.max_completion_tokens]
-    if spec.incomplete_retry_tokens:
-        budgets.append(spec.incomplete_retry_tokens)
+    budgets = _completion_budgets(spec)
     labels = {
         label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
     }
@@ -509,9 +507,7 @@ def _ask(
 ) -> _ScoreResult:
     """Parse a final SCORE, retrying truncated replies with the larger budget."""
     attempts: list[_CompletionAttempt] = []
-    budgets = [spec.max_completion_tokens]
-    if spec.incomplete_retry_tokens:
-        budgets.append(spec.incomplete_retry_tokens)
+    budgets = _completion_budgets(spec)
     for attempt in range(1, ATTEMPTS + 1):
         for index, budget in enumerate(budgets):
             response = _complete(spec, client, model, prompt, budget)
@@ -542,6 +538,12 @@ def _ask(
 
 def _attempt_detail(attempts: tuple[_CompletionAttempt, ...] | list[_CompletionAttempt]) -> dict[str, object]:
     return {"attempt_count": len(attempts), "attempts": [asdict(attempt) for attempt in attempts]}
+
+
+def _completion_budgets(spec: JudgeSpec) -> tuple[int, ...]:
+    if spec.incomplete_retry_tokens:
+        return spec.max_completion_tokens, spec.incomplete_retry_tokens
+    return (spec.max_completion_tokens,)
 
 
 def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, budget: int) -> ChatCompletion:
