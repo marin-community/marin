@@ -135,8 +135,8 @@ stages with valid grades. Missing reward keys count as zero in that mean.
 JSON reward files can supply multiple numeric keys, such as `reward` and `safety`.
 The final strategy uses the last attempted stage.
 
-If a stage fails, the aggregate retains that stage's outcome, failure details,
-and diagnostics. A skipped stage is not a failure.
+If a stage cannot produce a grade, the aggregate retains that stage's outcome,
+failure details, and diagnostics. A skipped grader is not a failure.
 A stage's `minimum_rewards` maps each key to a minimum value. A missing key or
 a value below its minimum stops execution before the next stage.
 When the aggregate is graded, the engine assigns its reward to the last action
@@ -144,7 +144,8 @@ with a valid grade.
 
 All other actions receive zero optimization reward and retain their stage grades.
 The engine masks tokens from a stage without a valid grade.
-Earlier valid stages keep their token evidence and masks, with zero optimization reward after a later stage fails.
+Earlier valid stages keep their exact tokens and masks. When the aggregate has
+no grade, all actions receive zero optimization reward.
 When the aggregate has no grade, the caller decides if earlier valid stages can enter training.
 
 A model failure after a completed turn triggers grading of the completed state.
