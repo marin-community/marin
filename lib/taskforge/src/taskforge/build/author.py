@@ -29,7 +29,7 @@ from types import ModuleType
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
-from taskforge.build.sdk import SDK_EXPORTS, Build, BuildOutput, BuildServices, sdk_reference
+from taskforge.build.sdk import SDK_EXPORTS, Build, BuildOutput, BuildServices, record_completions, sdk_reference
 from taskforge.build.step import SDK_VERSION, Step, StepRole, code_names
 from taskforge.canonical import sha256_hex, write_atomic
 from taskforge.ledger.records import EntryKind, span
@@ -334,11 +334,7 @@ async def author(
         fields.model = services.client.endpoint.model
         fields.attrs["revision"] = str(revision is not None)
         result = await complete_structured(services.client, messages, services.policy, tool)
-        fields.tokens_in = sum(c.usage.prompt_tokens for c in result.completions)
-        fields.tokens_out = sum(c.usage.completion_tokens for c in result.completions)
-        fields.tokens_reasoning = sum(c.usage.reasoning_tokens for c in result.completions)
-        fields.finish_reason = result.completions[-1].finish_reason
-        fields.attrs["requests"] = str(len(result.completions))
+        record_completions(fields, result.completions)
     write_atomic(record_dir / "completions.json", _COMPLETIONS.dump_json(result.completions, indent=2))
     program = compile_program(result.value.source, proposal.digest)
     write_atomic(record_dir / PROGRAM_FILE, program.source.encode())
