@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Snowball • A model family tree</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="mast">
+        <div class="eyebrow">
+          <span class="mark" aria-hidden="true">✳</span> Marin / Model
+          provenance
+        </div>
+        <span class="stamp">RESEARCH SNAPSHOT · 04 OCT 2026</span>
+      </div>
+      <div class="hero">
+        <div>
+          <h1>Snowball, <em>generation by generation.</em></h1>
+          <p class="intro">
+            A shared pretrain. Three canonical cooldowns. The SFT, reinforcement
+            learning, and long-context branches that followed. Every lineage
+            points back to its experiment record.
+          </p>
+        </div>
+        <div class="tally">
+          <strong id="count">—</strong> model / run nodes<br /><span
+            id="edgecount"
+          ></span>
+          provenance connections
+        </div>
+      </div>
+    </header>
+    <div class="toolbar" aria-label="Graph controls">
+      <label class="sr-only" for="search"
+        >Search models, algorithms and experiments</label
+      ><input
+        class="search"
+        id="search"
+        type="search"
+        placeholder="Find a model, algorithm, or issue…"
+      /><label class="sr-only" for="family">Cooldown family</label
+      ><select id="family">
+        <option value="all">Whole family tree</option>
+        <option>2.7T</option>
+        <option>5.7T</option>
+        <option>10T</option></select
+      ><label class="sr-only" for="org">Organization</label
+      ><select id="org">
+        <option value="all">All organizations</option>
+        <option value="open-athena">open-athena</option>
+        <option value="community">Community</option></select
+      ><button class="btn" id="collapse-node" disabled>Collapse node</button>
+      <div class="controls">
+        <button class="btn active" id="mapbutton" aria-pressed="true">
+          Lineage map</button
+        ><button class="btn" id="timelinebutton" aria-pressed="false">
+          Timeline</button
+        ><button class="btn" id="readbutton" aria-pressed="false">
+          Read all</button
+        ><button class="btn" id="fit">Overview</button
+        ><button class="btn" id="reset-tree">Whole tree</button>
+      </div>
+    </div>
+    <div class="legendbar">
+      <span class="legend"><i class="dot"></i> open-athena</span
+      ><span class="legend"><i class="dot orange"></i> Community</span
+      ><span class="legend"><i class="sample"></i> documented lineage</span
+      ><span class="legend"
+        ><i class="sample dashed"></i> inferred / qualified link</span
+      ><span class="hint" id="filter-status" aria-live="polite"
+        >Wheel to zoom · drag to pan · click a node to expand</span
+      >
+    </div>
+    <div class="tree-caption" id="tree-caption" aria-live="polite"></div>
+    <nav class="tree-path" id="tree-path" aria-label="Selected ancestry"></nav>
+    <main class="workspace">
+      <div class="map-pane" id="pane">
+        <div
+          class="results"
+          id="results"
+          hidden
+          aria-label="Search matches"
+        ></div>
+        <div class="viewport" id="viewport">
+          <div class="sizer" id="sizer">
+            <div class="world" id="world">
+              <svg
+                class="edges"
+                id="edges"
+                role="img"
+                aria-label="Directed model lineage relationships"
+              >
+                <defs>
+                  <marker
+                    id="arrow"
+                    viewBox="0 0 10 10"
+                    refX="9"
+                    refY="5"
+                    markerWidth="8"
+                    markerHeight="8"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
+                  </marker>
+                </defs>
+                <g id="paths"></g>
+              </svg>
+              <div class="tree-nodes" id="tree-nodes"></div>
+            </div>
+          </div>
+        </div>
+        <section
+          class="timeline"
+          id="timeline"
+          aria-label="Cooldown family timeline"
+        >
+          <div class="timeline-controls">
+            <label for="timeline-family">Cooldown</label
+            ><select id="timeline-family">
+              <option>2.7T</option>
+              <option>5.7T</option>
+              <option selected>10T</option></select
+            ><button
+              class="btn active"
+              id="timeline-play"
+              aria-keyshortcuts="Space"
+              title="Play or pause · Space"
+            >
+              Pause</button
+            ><button class="btn" id="timeline-restart">Restart</button
+            ><button class="btn" id="timeline-all">Show all</button
+            ><label for="timeline-speed">Pace</label
+            ><select id="timeline-speed">
+              <option value="6000">Fast</option>
+              <option value="12000" selected>Normal</option>
+              <option value="24000">Slow</option></select
+            ><span class="timeline-count" id="timeline-count"></span>
+          </div>
+          <div class="timeline-models">
+            <span class="kicker" id="timeline-model-label"
+              >Model names / source records</span
+            >
+            <div class="timeline-model-list" id="timeline-model-list"></div>
+          </div>
+          <div class="timeline-band">
+            <div class="timeline-origin" id="timeline-origin"></div>
+            <div class="timeline-events" id="timeline-events"></div>
+            <div class="timeline-empty" id="timeline-empty">
+              A cooldown, ready for its next generation.<br />Time flows from
+              left to right.
+            </div>
+          </div>
+          <div class="timeline-bottom">
+            <div
+              class="timeline-ticks"
+              id="timeline-ticks"
+              aria-hidden="true"
+            ></div>
+            <div class="timeline-clock-row">
+              <output
+                class="timeline-clock"
+                id="timeline-clock"
+                aria-live="off"
+              ></output
+              ><label for="timeline-scrub"
+                >Move through time · Space to play/pause<input
+                  type="range"
+                  id="timeline-scrub"
+                  min="0"
+                  max="1000"
+                  value="0"
+                  aria-label="Timeline date"
+              /></label>
+            </div>
+            <p class="timeline-note">
+              Dates use checkpoint labels or dated source records; click a node
+              to see its date basis and full evidence. Columns follow chronology
+              rather than a proportional time scale. Undated nodes appear at the
+              end.
+            </p>
+          </div>
+        </section>
+        <div class="reading" id="reading">
+          <p class="status" id="read-status"></p>
+          <div class="reading-grid" id="read-grid"></div>
+        </div>
+      </div>
+      <aside
+        class="detail"
+        id="detail"
+        aria-label="Graph controls and selected model"
+      >
+        <div class="zoom-panel">
+          <h3>Explore the tree</h3>
+          <div class="zoom-buttons">
+            <button class="btn" id="minus" aria-label="Zoom out">−</button
+            ><span class="zoom" id="zoom"></span
+            ><button class="btn" id="plus" aria-label="Zoom in">+</button
+            ><button class="btn" id="fit-side">Fit tree</button
+            ><button class="btn" id="head">Head node</button>
+          </div>
+          <p>
+            Wheel or pinch to zoom · drag the canvas to pan · click a node to
+            expand it.
+          </p>
+        </div>
+        <div id="detail-content" aria-live="polite"></div>
+      </aside>
+    </main>
+    <section class="methodology">
+      <h2>How to read the evidence</h2>
+      <div class="method-grid">
+        <div>
+          <h3>Parents, siblings, and repairs</h3>
+          <p>
+            An arrow means initialization, or a labeled progression between
+            retained checkpoints of the same run. The three cooldowns branch
+            from the continuous pretrain; they are not successive post-training
+            stages. Export repairs and retained checkpoints are labeled
+            separately from new optimization.
+          </p>
+          <p>
+            Dashed links preserve an inference or an unresolved artifact
+            identity. Canonical GitHub issues take priority; Discord discussion
+            anchors are used for releases without a dedicated issue. Model cards
+            and pinned comments supply finer checkpoint evidence.
+          </p>
+        </div>
+        <div>
+          <h3>Compute is an estimate, with a scope</h3>
+          <p>
+            The early 32K SFT estimates use the reported analytic 2.117×10¹⁰
+            FLOPs/token, including attention and the output head. Other
+            supervised training uses
+            <strong>6 × 2B active parameters × trained token positions</strong>.
+            The 6ND stage proxies exclude inherited pretraining, attention,
+            output projection, optimizer overhead, retries and evaluation. The
+            detail panel states each estimate’s scope. Packed positions can
+            include padding.
+          </p>
+          <p>
+            Long-context attention can be a material extra cost. RL rollout
+            generation, policy updates and reference passes require separate
+            accounting. An unknown FLOP cost remains unknown; step counts or
+            GPU-hours are shown where documented. Do not add incompatible
+            proxies as an audited total.
+          </p>
+        </div>
+        <div>
+          <h3>Coverage and naming</h3>
+          <p>
+            Includes established public checkpoints and relevant internal or
+            failed training branches found in the refreshed GitHub/Discord
+            corpus and Hugging Face cards. A failed trial is a run node, not a
+            released model. Same-run retained checkpoints can share a node with
+            individual links.
+          </p>
+          <p>
+            The canonical 2.7T / 5.7T / 10T labels follow the post-training
+            records. Older pretraining posts use ~2.3T / ~6.55T for the first
+            two; native checkpoint IDs are the stronger identity. September 11
+            SFT uses the 4× LCE branch; September 16/17/20/21 use 8×. September
+            14’s exact LCE variant remains unresolved.
+          </p>
+        </div>
+      </div>
+      <p style="font-size: 12px; line-height: 1.8; color: var(--muted)">
+        <strong>Terms:</strong> SFT = supervised fine-tuning; RLVR =
+        reinforcement learning with verifiable rewards; LCE = long-context
+        extension; QK = attention-logit gain; EOT = end of turn; FTPO =
+        final-token preference optimization. OTA2 = OpenThoughts-Agent traces
+        with IssueTasks removed; RST = Recursive Task Synthesis. TB2 / TB2.1 /
+        TBLite = Terminal-Bench variants. Organization color identifies
+        experiment ownership, independent of the upload namespace. The 2.7T
+        branch belongs to open-athena, including checkpoints hosted under
+        penfever or laion.
+      </p>
+      <div class="unplaced" id="unplaced"></div>
+      <div class="footer">
+        <span
+          >Indexed research corpus: 244,303 text chunks · refreshed October 4,
+          2026<br />26 weekly summaries · latest 2026-09-21_2026-09-27<br />Live
+          model cards / GitHub records checked 2026-10-04</span
+        ><span id="coverage"></span>
+      </div>
+    </section>
+    <script id="graph-data" type="application/json">
+      __DATA__
+    </script>
+    <script src="app.js" defer></script>
+  </body>
+</html>
