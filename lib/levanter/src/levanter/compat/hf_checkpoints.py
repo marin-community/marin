@@ -1442,7 +1442,7 @@ def save_hf_checkpoint_callback(
 
     def cb(step: StepInfo):
         nonlocal hf_upload_kwargs
-        if step.step == 0:
+        if step.next_step == 0:
             return
         if upload_to_hf is not None and "commit_message" not in hf_upload_kwargs:
             my_upload_kwargs = hf_upload_kwargs.copy()

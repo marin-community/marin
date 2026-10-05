@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 import uuid
+from types import SimpleNamespace
 
 import equinox as eqx
 import fsspec
@@ -24,6 +25,7 @@ from levanter.testing.helpers import skip_if_no_torch
 from transformers import GPT2Config as HfGpt2Config
 
 import levanter.compat.hf_checkpoints as hf_checkpoints
+from levanter.callbacks import StepInfo
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
@@ -86,6 +88,30 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path):
             nano_model,
             loaded_model,
         )
+
+
+def test_checkpoint_callback_exports_first_completed_update(tmp_path, local_gpt2_tokenizer_path):
+    config = Gpt2Config(
+        hidden_dim=32, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    converter = config.hf_checkpoint_converter()
+    generation_config = {"eos_token_id": [2, 50]}
+    callback = hf_checkpoints.save_hf_checkpoint_callback(
+        str(tmp_path), converter, generation_config=generation_config
+    )
+
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(3))
+        callback(StepInfo(state=SimpleNamespace(step=0, eval_model=model), loss=0.0, step_duration=0.0))
+        assert list(tmp_path.iterdir()) == []
+
+        callback(StepInfo(state=SimpleNamespace(step=1, eval_model=model), loss=0.5, step_duration=1.0))
+        exported = tmp_path / "step-0"
+        assert (exported / "config.json").is_file()
+        assert json.loads((exported / "generation_config.json").read_text())["eos_token_id"] == [2, 50]
+        loaded = converter.load_pretrained(Gpt2LMHeadModel, ref=str(exported), config=config)
+
+    assert_trees_all_equal(model, loaded)
 
 
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch):

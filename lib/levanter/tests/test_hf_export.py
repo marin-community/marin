@@ -4,7 +4,6 @@
 """Tests for generation config validation and normalization."""
 
 import json
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -18,7 +17,6 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 from levanter.compat.hf_checkpoints import (
     _save_tokenizer_pretrained,
     build_generation_config,
-    save_hf_checkpoint_callback,
 )
 
 
@@ -118,29 +116,6 @@ class TestBuildGenerationConfig:
         tok = _FakeTokenizer(vocab_size=100)
         with pytest.raises(ValueError, match="out of range"):
             build_generation_config(tok, [-1])
-
-
-class _CapturingConverter:
-    def __init__(self):
-        self.calls = []
-
-    def save_pretrained(self, model, path, **kwargs):
-        self.calls.append((model, path, kwargs))
-
-
-def test_save_hf_checkpoint_callback_passes_generation_config():
-    converter = _CapturingConverter()
-    generation_config = {"eos_token_id": [2, 50]}
-    callback = save_hf_checkpoint_callback("/tmp/export", converter, generation_config=generation_config)
-
-    model = object()
-    callback(SimpleNamespace(step=1, eval_model=model))
-
-    assert len(converter.calls) == 1
-    saved_model, saved_path, saved_kwargs = converter.calls[0]
-    assert saved_model is model
-    assert saved_path == "/tmp/export/step-1"
-    assert saved_kwargs["generation_config"] == generation_config
 
 
 class _FakeChatTemplateTokenizer:
