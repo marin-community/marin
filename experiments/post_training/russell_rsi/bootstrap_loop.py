@@ -153,7 +153,7 @@ class RoundResult:
 
 
 def qualified_bank(tasks: tuple[QualifiedTask, ...]) -> tuple[QualifiedTask, ...]:
-    """Keep only distinct task and source identities with sealed admission records."""
+    """Remove identical duplicates and reject conflicting identities or missing admission records."""
     by_hash: dict[str, QualifiedTask] = {}
     contracts: set[str] = set()
     ids: set[str] = set()
