@@ -472,9 +472,10 @@ def build_h100_ladder_run(
         if not model.attn_res:
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
-    model = _apply_settings(model, model_settings or {})
     if router_tie_specs:
+        # Before the settings, so a --model-set router_embed_tie_release_step validates against the ties.
         model = dataclasses.replace(model, router_embed_tie=model.router_embed_tie + router_tie_specs)
+    model = _apply_settings(model, model_settings or {})
     if embed2_rows_frac is not None:
         model = dataclasses.replace(model, embed2_rows=_embed2_rows_for_fraction(model, embed2_rows_frac))
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
