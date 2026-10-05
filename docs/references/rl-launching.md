@@ -153,12 +153,12 @@ open mappings with the shared ownership checks.
 
 `config/update-external.py` copies the flat schema at the commit in the MarinSkyRL external lock
 into `marin.skyrl_recipe`. Its adjacent provenance records that commit, per-file hashes and one
-content hash. Resolve the external lock before running the updater. `--check` compares local Git
-objects at the pinned commit with the exact copied inventory and content, without fetching or
-writing. Use `--schema-source /path/to/MarinSkyRL` when the uv Git cache has no such checkout.
+content hash. The updater verifies the launcher commit and copies its Git blobs. `--check` hashes
+the copied file names and contents and compares the result with the provenance manifest, without
+Git access, fetching or writing.
 
 Marin format, license and type-file checks exclude copied source; callers remain type checked.
-The commit-and-hash check owns the copy. Bot updates admit only the copied inventory and provenance
+The manifest hash check owns the copy. Bot updates admit only the copied inventory and provenance
 alongside the project lock and generated pins. The required unit-test launch-document check builds
 every supported producer configuration and loads each document with the installed pin. A breaking
 pin migration is a human PR that changes the pin, copy and producers together.
