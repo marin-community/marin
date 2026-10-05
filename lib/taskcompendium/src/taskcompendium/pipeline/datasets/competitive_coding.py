@@ -9,7 +9,7 @@ from verifyit.modes.extract import collapse_whitespace
 
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import python_tasks
-from taskcompendium.pipeline.datasets.raw_conversion import RawConverter
+from taskcompendium.pipeline.datasets.executable_tasks import ExecutableConversion
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, ReviewRubric, TaskPipeline, VerificationReport
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -28,22 +28,8 @@ RUBRIC = ReviewRubric(
 )
 
 
-def pipeline(
-    image: str,
-    *,
-    converter: RawConverter,
-    converter_revision: str,
-    timeout: float,
-    memory_mb: int,
-) -> TaskPipeline:
-    source_pipeline = python_tasks.pipeline(
-        image,
-        rubric=RUBRIC,
-        converter=converter,
-        converter_revision=converter_revision,
-        timeout=timeout,
-        memory_mb=memory_mb,
-    )
+def pipeline(conversion: ExecutableConversion) -> TaskPipeline:
+    source_pipeline = python_tasks.pipeline(conversion, rubric=RUBRIC)
     suite = source_pipeline.check_suite
     assert suite is not None
 

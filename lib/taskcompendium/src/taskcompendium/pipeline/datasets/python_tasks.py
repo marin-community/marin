@@ -11,8 +11,8 @@ import sys
 from functools import partial
 
 from taskcompendium.models import ConversationInput, TextMessage
-from taskcompendium.pipeline.datasets.executable_tasks import normalize, verification_report
-from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
+from taskcompendium.pipeline.datasets.executable_tasks import ExecutableConversion, normalize, verification_report
+from taskcompendium.pipeline.datasets.raw_conversion import with_raw_converter
 from taskcompendium.pipeline.models import (
     CheckSuite,
     ImportRejection,
@@ -101,18 +101,14 @@ def normalize_python(row: RawRow, image: str) -> NormalizedTask | ImportRejectio
 
 
 def pipeline(
-    image: str,
+    conversion: ExecutableConversion,
     *,
     rubric: ReviewRubric,
-    converter: RawConverter,
-    converter_revision: str,
-    timeout: float,
-    memory_mb: int,
 ) -> TaskPipeline:
     """Build Python normalization and checks for a selected source."""
 
     def normalize_row(row: RawRow) -> NormalizedTask | ImportRejection:
-        return normalize_python(row, image)
+        return normalize_python(row, conversion.image)
 
     base = TaskPipeline(
         normalize=normalize_row,
@@ -120,11 +116,11 @@ def pipeline(
         check_suite=CheckSuite(
             id="isolated-executable-controls",
             revision="1",
-            parameters={"image": image, "timeout": timeout, "memory_mb": memory_mb},
-            run=partial(verification_report, timeout=timeout, memory_mb=memory_mb),
+            parameters={"image": conversion.image, "timeout": conversion.timeout, "memory_mb": conversion.memory_mb},
+            run=partial(verification_report, timeout=conversion.timeout, memory_mb=conversion.memory_mb),
         ),
     )
-    return with_raw_converter(base, converter, converter_revision)
+    return with_raw_converter(base, conversion.converter, conversion.converter_revision)
 
 
 PYMETHODS_COMMON_CRITERIA = (

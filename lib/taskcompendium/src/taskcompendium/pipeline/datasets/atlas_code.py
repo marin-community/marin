@@ -4,9 +4,9 @@
 """CodeContests and CodeNet policies using the shared executable task boundary."""
 
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.datasets.executable_tasks import normalize
+from taskcompendium.pipeline.datasets.executable_tasks import ExecutableConversion, normalize
 from taskcompendium.pipeline.datasets.executable_tasks import verification_report as executable_verification_report
-from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
+from taskcompendium.pipeline.datasets.raw_conversion import with_raw_converter
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
@@ -36,22 +36,14 @@ def verification_report(
     return report
 
 
-def pipeline(
-    name: str,
-    image: str,
-    *,
-    converter: RawConverter,
-    converter_revision: str,
-    timeout: float,
-    memory_mb: int,
-) -> TaskPipeline:
+def pipeline(name: str, conversion: ExecutableConversion) -> TaskPipeline:
     """Build CodeNet or contest conversion and sandbox controls."""
 
     def normalize_row(row: RawRow) -> TaskSpec | ImportRejection:
-        return normalize(row, image)
+        return normalize(row, conversion.image)
 
     def checks(task: TaskSpec) -> VerificationReport:
-        return verification_report(task, name, timeout, memory_mb)
+        return verification_report(task, name, conversion.timeout, conversion.memory_mb)
 
     base = TaskPipeline(
         normalize=normalize_row,
@@ -59,11 +51,11 @@ def pipeline(
         check_suite=CheckSuite(
             id="isolated-executable-controls",
             revision="1",
-            parameters={"image": image, "timeout": timeout, "memory_mb": memory_mb},
+            parameters={"image": conversion.image, "timeout": conversion.timeout, "memory_mb": conversion.memory_mb},
             run=checks,
         ),
     )
-    return with_raw_converter(base, converter, converter_revision)
+    return with_raw_converter(base, conversion.converter, conversion.converter_revision)
 
 
 RUBRICS: dict[str, ReviewRubric] = {

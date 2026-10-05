@@ -49,6 +49,7 @@ def restore_placeholder(data: dict[str, Any]) -> tuple[dict[str, Any], tuple[Nor
             try:
                 parsed = json.loads(answer)
             except json.JSONDecodeError:
+                # The release's unwrap_answer preserves free-form math such as {1, 2}.
                 parsed = answer
             answer = str(parsed[0]) if isinstance(parsed, list) and parsed else str(parsed)
     else:

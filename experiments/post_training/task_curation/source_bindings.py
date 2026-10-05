@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 
+from taskcompendium.pipeline.datasets.executable_tasks import ExecutableConversion
 from taskcompendium.pipeline.models import DatasetRecipe
 from verifyit.spec import Compare, StdioSpec
 
@@ -109,11 +110,11 @@ def source_recipe(name: str, image: str | None) -> DatasetRecipe:
         converter_revision = "competitive-coding-v1"
     else:
         converter_revision = f"{name}-v1"
-    return archive_sources.executable_recipe(
-        name,
-        image,
+    conversion = ExecutableConversion(
+        image=image,
         converter=converter,
         converter_revision=converter_revision,
         timeout=SANDBOX_TIMEOUT,
         memory_mb=SANDBOX_MEMORY_MB,
     )
+    return archive_sources.executable_recipe(name, conversion)

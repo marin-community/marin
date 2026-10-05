@@ -22,7 +22,7 @@ class GraderPackage:
 
 
 def grader_package(spec: Spec, resources: tuple[TaskResource, ...] = ()) -> GraderPackage:
-    """Build a private grader without registering a TaskCompendium verifier kind."""
+    """Package a VerifyIT specification with its private grading resources."""
     parameters = spec_to_table(spec)
     parameters.pop("mode")
     verifier = VerifierSpec(kind=mode_of(spec).value, parameters_json=json.dumps(parameters, allow_nan=False))

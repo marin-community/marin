@@ -278,12 +278,10 @@ def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) 
 
 
 def multiple_choice_answer(expected: str, options: int) -> VerifierSpec:
-    """Select the shared multiple-choice contract during task conversion."""
     return verifier_descriptor(McqSpec(expected=expected.strip().upper(), options=options))
 
 
 def predicted_action_verifier(expected_calls: tuple[FunctionCall, ...]) -> VerifierSpec:
-    """Select the shared function-call contract during task conversion."""
     return verifier_descriptor(
         PredictedActionSpec(expected_calls=tuple(CandidateCall(call.name, call.arguments) for call in expected_calls))
     )

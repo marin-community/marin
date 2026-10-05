@@ -101,7 +101,7 @@ def resolve_ultra_placeholder(row: dict[str, Any], staged_root: StoragePath) -> 
     return {**row, "placeholder_source": source}
 
 
-def _blend_inputs(blend: str, selector: str, component: str) -> RecipeInputs:
+def _blend_inputs(blend: str, selector: str, _component: str) -> RecipeInputs:
     blend_file = f"{blend}.jsonl"
     return RecipeInputs(
         files=SourceFiles((blend_file,), SourceFormat.JSONL, selector=UltraComponentSelector(selector)),

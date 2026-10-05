@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
+from taskcompendium.grader import grader_config
 from taskcompendium.models import Source, TextMessage
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.pipeline.sources import staged_file_rows
@@ -72,11 +74,19 @@ def test_swe_components_split_by_pinned_membership(tmp_path):
     ]
 
 
-def test_math_placeholder_reconstructs_question_and_answer(tmp_path):
+@pytest.mark.parametrize(
+    "question,ground_truth,expected",
+    [
+        ("What is 2 + 3?", "5", "5"),
+        ("What is 2 + 3?", '["5"]', "5"),
+        ("Give the set of roots of x^2 - 3x + 2 = 0.", "{1, 2}", "{1, 2}"),
+    ],
+)
+def test_math_placeholder_reconstructs_question_and_answer(tmp_path, question, ground_truth, expected):
     placeholder_file = tmp_path / "placeholder-dapo/data/dapo-math-17k.parquet"
     placeholder_file.parent.mkdir(parents=True)
     pq.write_table(
-        pa.Table.from_pylist([{"prompt": [{"content": "What is 2 + 3?"}], "reward_model": {"ground_truth": "5"}}]),
+        pa.Table.from_pylist([{"prompt": [{"content": question}], "reward_model": {"ground_truth": ground_truth}}]),
         placeholder_file,
     )
     _write_jsonl(
@@ -97,8 +107,9 @@ def test_math_placeholder_reconstructs_question_and_answer(tmp_path):
     )
     recipe = RECIPES["nemotron_ultra_mopd_ultra_sft_step3200_math_cot"]
     record = next(staged_file_rows(str(tmp_path), "mopd.jsonl", recipe.inputs.files))
-    assert record["data"]["placeholder_source"]["record"]["reward_model"]["ground_truth"] == "5"
+    assert record["data"]["placeholder_source"]["record"]["reward_model"]["ground_truth"] == ground_truth
     result = recipe.pipeline.normalize(RawRow("math-1", _source(), record["data"]))
     assert isinstance(result, NormalizedTask)
-    assert result.task.context.events == (TextMessage(role="user", content="What is 2 + 3?"),)
+    assert result.task.context.events == (TextMessage(role="user", content=question),)
+    assert grader_config(result.task)["contract"]["expected_answer"] == expected
     assert [change.field for change in result.changes] == ["question", "expected_answer"]

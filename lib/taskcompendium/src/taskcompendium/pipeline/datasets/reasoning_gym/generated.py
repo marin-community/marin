@@ -64,7 +64,7 @@ RUBRIC = ReviewRubric(
 
 
 def generated_rows(archive_path: StoragePath, generator_revision: str) -> Iterator[dict[str, Any]]:
-    """Run the pinned generator checkout without importing it into the audit worker."""
+    """Yield puzzle rows and native-score evidence from the selected generator archive."""
     with TemporaryDirectory() as directory:
         local_archive = os.path.join(directory, "generator.tar.gz")
         with archive_path.open("rb") as source, open(local_archive, "wb") as destination:

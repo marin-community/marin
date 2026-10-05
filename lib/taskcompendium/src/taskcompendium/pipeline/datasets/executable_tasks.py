@@ -7,7 +7,7 @@ import asyncio
 import base64
 import json
 import shlex
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 
 from shellbox.backends.docker.machine import DockerMachineFactory
@@ -72,6 +72,17 @@ CRITERIA = {
 }
 
 
+@dataclass(frozen=True)
+class ExecutableConversion:
+    """Converter and sandbox settings for an executable source."""
+
+    image: str
+    converter: RawConverter
+    converter_revision: str
+    timeout: float
+    memory_mb: int
+
+
 def normalize(row: RawRow, image: str) -> TaskSpec | ImportRejection:
     """Import a converter result while keeping tests and oracle code private."""
     rejection = row.data.get("conversion_rejection")
@@ -117,19 +128,11 @@ def normalize(row: RawRow, image: str) -> TaskSpec | ImportRejection:
     )
 
 
-def pipeline(
-    name: str,
-    image: str,
-    *,
-    converter: RawConverter,
-    converter_revision: str,
-    timeout: float,
-    memory_mb: int,
-) -> TaskPipeline:
+def pipeline(name: str, conversion: ExecutableConversion) -> TaskPipeline:
     """Build executable normalization and controls with explicit sandbox limits."""
 
     def normalize_row(row: RawRow) -> TaskSpec | ImportRejection:
-        return normalize(row, image)
+        return normalize(row, conversion.image)
 
     base = TaskPipeline(
         normalize=normalize_row,
@@ -147,11 +150,11 @@ def pipeline(
         check_suite=CheckSuite(
             id="isolated-executable-controls",
             revision="1",
-            parameters={"image": image, "timeout": timeout, "memory_mb": memory_mb},
-            run=partial(verification_report, timeout=timeout, memory_mb=memory_mb),
+            parameters={"image": conversion.image, "timeout": conversion.timeout, "memory_mb": conversion.memory_mb},
+            run=partial(verification_report, timeout=conversion.timeout, memory_mb=conversion.memory_mb),
         ),
     )
-    return with_raw_converter(base, converter, converter_revision)
+    return with_raw_converter(base, conversion.converter, conversion.converter_revision)
 
 
 def verification_report(

@@ -21,6 +21,7 @@ from taskcompendium.pipeline.datasets import (
     structured_output,
     tasktrove_math,
 )
+from taskcompendium.pipeline.datasets.executable_tasks import ExecutableConversion
 from taskcompendium.pipeline.datasets.nemotron import structured_outputs
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter
 from taskcompendium.pipeline.datasets.source_definitions import tasktrove_files
@@ -253,35 +254,17 @@ EXECUTABLE_SOURCES = {
 
 def executable_recipe(
     name: str,
-    image: str,
-    *,
-    converter: RawConverter,
-    converter_revision: str,
-    timeout: float,
-    memory_mb: int,
+    conversion: ExecutableConversion,
 ) -> DatasetRecipe:
     """Bind an immutable grader image and converter to one archive component."""
     if name in atlas_code.RUBRICS:
-        policy = atlas_code.pipeline(
-            name, image, converter=converter, converter_revision=converter_revision, timeout=timeout, memory_mb=memory_mb
-        )
+        policy = atlas_code.pipeline(name, conversion)
     elif name in python_tasks.RUBRICS:
-        policy = python_tasks.pipeline(
-            image,
-            rubric=python_tasks.RUBRICS[name],
-            converter=converter,
-            converter_revision=converter_revision,
-            timeout=timeout,
-            memory_mb=memory_mb,
-        )
+        policy = python_tasks.pipeline(conversion, rubric=python_tasks.RUBRICS[name])
     elif name == "competitive_coding":
-        policy = competitive_coding.pipeline(
-            image, converter=converter, converter_revision=converter_revision, timeout=timeout, memory_mb=memory_mb
-        )
+        policy = competitive_coding.pipeline(conversion)
     else:
-        policy = executable_tasks.pipeline(
-            name, image, converter=converter, converter_revision=converter_revision, timeout=timeout, memory_mb=memory_mb
-        )
+        policy = executable_tasks.pipeline(name, conversion)
     recipe_name = f"tasktrove-{name}"
     return _recipe(recipe_name, recipe_name + "-v1-raw-conversion-v2", EXECUTABLE_SOURCES[name], policy)
 

@@ -143,8 +143,7 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
         return ImportRejection(reason="invalid_rubric", detail=str(error))
 
 
-def verification_report(task: TaskSpec) -> VerificationReport:
-    del task
+def verification_report(_task: TaskSpec) -> VerificationReport:
     return VerificationReport(
         checks=[
             CheckResult(
