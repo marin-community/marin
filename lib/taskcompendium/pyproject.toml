@@ -29,7 +29,6 @@ marin-finestore = { path = "../finestore", editable = true }
 marin-zephyr = { path = "../zephyr", editable = true }
 marin-fray = { path = "../fray", editable = true }
 marin-iris = { path = "../iris", editable = true }
-marin-rigging = { path = "../rigging", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
