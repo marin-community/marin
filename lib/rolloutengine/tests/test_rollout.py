@@ -586,6 +586,7 @@ async def test_machine_creation_failure_is_not_a_task_setup_error():
     [
         "upload",
         "healthcheck",
+        "healthcheck_command_timeout",
         "command_timeout",
         "attempt_startup",
         "model",
@@ -609,10 +610,17 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
     class Machine:
         def __init__(self, machine):
             self.machine = machine
+            self.healthcheck_timed_out = False
 
         async def run(self, command):
             if command.argv == ("command-timeout",):
                 loop.call_soon_threadsafe(entered.set)
+                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+            if command.argv == ("healthcheck-timeout",):
+                loop.call_soon_threadsafe(entered.set)
+                if self.healthcheck_timed_out:
+                    raise RuntimeError("Machine is closed")
+                self.healthcheck_timed_out = True
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             if command.argv == ("stall",):
                 await stall()
@@ -651,13 +659,16 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
         startup_timeout=1 if phase in {"upload", "healthcheck", "cleanup_cancel"} else 10,
         healthcheck=(
             HealthcheckSpec(
-                command=EnvironmentCommand(argv=("stall",), timeout=5),
+                command=EnvironmentCommand(
+                    argv=("healthcheck-timeout",) if phase == "healthcheck_command_timeout" else ("stall",),
+                    timeout=5,
+                ),
                 interval=0,
                 start_period=0,
                 start_interval=0,
-                retries=1,
+                retries=2 if phase == "healthcheck_command_timeout" else 1,
             )
-            if phase == "healthcheck"
+            if phase in {"healthcheck", "healthcheck_command_timeout"}
             else None
         ),
     )
@@ -690,13 +701,22 @@ async def test_startup_and_attempt_deadlines_release_machines_without_partial_tr
     else:
         with pytest.raises(RolloutInterrupted) as failure:
             await pending
-        assert isinstance(failure.value.__cause__, TaskSetupTimeout if phase == "command_timeout" else TimeoutError)
-        if phase == "command_timeout":
+        assert isinstance(
+            failure.value.__cause__,
+            TaskSetupTimeout if phase in {"command_timeout", "healthcheck_command_timeout"} else TimeoutError,
+        )
+        if phase in {"command_timeout", "healthcheck_command_timeout"}:
             cause = failure.value.__cause__
             assert isinstance(cause, TaskSetupTimeout)
-            assert (cause.stage, cause.command, cause.exit_code) == (None, ("command-timeout",), None)
+            assert (cause.stage, cause.command, cause.exit_code) == (
+                None,
+                ("healthcheck-timeout",) if phase == "healthcheck_command_timeout" else ("command-timeout",),
+                None,
+            )
         assert failure.value.operation == (
-            RolloutOperation.START if phase in {"upload", "healthcheck", "command_timeout"} else RolloutOperation.ATTEMPT
+            RolloutOperation.START
+            if phase in {"upload", "healthcheck", "healthcheck_command_timeout", "command_timeout"}
+            else RolloutOperation.ATTEMPT
         )
         assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
         assert failure.value.rollout.response_token_ids == failure.value.rollout.loss_mask == ()

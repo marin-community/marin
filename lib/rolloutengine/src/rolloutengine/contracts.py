@@ -109,7 +109,7 @@ class TaskSetupError(RuntimeError):
 
 
 class TaskSetupTimeout(TaskSetupError):
-    """A task setup command exceeded its command timeout."""
+    """A task setup or healthcheck command exceeded its command timeout."""
 
 
 class RolloutContractError(ValueError):

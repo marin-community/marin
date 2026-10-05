@@ -71,6 +71,8 @@ async def _wait_for_healthcheck(machine: Machine, healthcheck: HealthcheckSpec, 
     while True:
         in_grace = loop.time() < grace_end
         result = await machine.run(_machine_command(healthcheck.command))
+        if result.reason == ExitReason.TIMED_OUT:
+            raise TaskSetupTimeout("Environment healthcheck timed out", stage=stage, command=healthcheck.command.argv)
         if result.exit_code == 0:
             return
         if not in_grace:
