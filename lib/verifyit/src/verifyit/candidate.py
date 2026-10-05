@@ -115,7 +115,12 @@ def candidate_spec(mode: str, parameters: dict[str, Any], *, files: Mapping[str,
 
 
 def grade_text_candidate(spec: TextSpec, candidate: str, *, files: Mapping[str, bytes] = NO_FILES) -> Reward:
-    """Score text whose presentation has already been removed by the caller."""
+    """Score an extracted candidate under its mode's text contract.
+
+    ``json-schema``, ``xml-elements``, and ``csv-columns`` unwrap the first fenced code block
+    before parsing. Every other mode grades the text as given; ``math`` does not select a boxed
+    expression or final line.
+    """
     if isinstance(spec, ExactSpec):
         return grade_exact_candidate(spec, candidate)
     if isinstance(spec, McqSpec):
