@@ -157,6 +157,24 @@ For preference data that needs repeated tool-call loops as rejected responses, p
 `normalize_chat_to_parquet` or `normalize_chat_step`. This preserves the calls
 and observations while applying the structural validation used by the default policy.
 
+Offline preference traces may contain malformed generated arguments or calls to
+undeclared tools. Pass `invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN`
+to the OpenAI adapter and chat normalizer to retain those predictions without
+inventing tool definitions. Ordinary SFT rejects them by default. Tool
+definitions and call/observation ordering are still validated.
+
+Parsing can lose sampled text even when it produces a nonempty tool call. For
+audited native traces, store `assistant_literals` as a list of strings in
+`CHAT_SCHEMA`, with one string per consecutive assistant turn. Decode captured
+completion IDs with the collection model's pinned tokenizer, remove its terminal
+EOS and translate reasoning delimiters to Marin format before storing the list.
+The normalizer requires explicit offline retention and includes the literals in
+the content hash. Shared rendering and masked tokenization use each literal as
+the complete assistant body, replacing the parsed prose and calls; tool
+observations retain their normal structure and masks. This preserves malformed
+syntax and loops without serializing a duplicate tool call. Literal capture and
+turn alignment must be audited by the source reader before normalization.
+
 ## 5. Register and verify the source
 
 Add the chat step factory to `all_sft_sources()` in `sft_sources.py`. Its

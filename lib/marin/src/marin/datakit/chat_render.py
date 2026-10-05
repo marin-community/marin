@@ -21,7 +21,7 @@ from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.normalize import DEFAULT_MAX_WORKERS
 from marin.execution.step_spec import StepSpec
 
-CHAT_RENDER_VERSION = "marin-v3"
+CHAT_RENDER_VERSION = "marin-v4"
 MARIN_BOS_TOKEN = "<|begin_of_text|>"
 START_THINK = "<|start_think|>"
 END_THINK = "<|end_think|>"
@@ -66,17 +66,26 @@ def _inference_message(message: Message) -> dict:
             return {"role": "tool", "name": name, "content": text}
 
 
-def _inference_messages(messages: Sequence[Message]) -> Iterator[dict]:
+def _inference_messages(messages: Sequence[Message], assistant_literals: Sequence[str] | None = None) -> Iterator[dict]:
     # A tool handoff ends an assistant turn. Analysis, commentary, and parallel
     # calls before that handoff must share one end-of-turn token.
+    literal_index = 0
     for role, group in groupby(messages, key=lambda message: message.author.role):
         if role == Role.ASSISTANT:
+            if assistant_literals is not None:
+                if literal_index >= len(assistant_literals):
+                    raise ValueError("Captured assistant literals lack a turn")
+                yield {"role": "assistant", "content": assistant_literals[literal_index]}
+                literal_index += 1
+                continue
             turn = list(group)
             content = "".join(_assistant_content(message) for message in turn if message.recipient is None)
             calls = [_inference_message(message)["tool_calls"][0] for message in turn if message.recipient is not None]
             yield {"role": "assistant", "content": content, "tool_calls": calls}
         else:
             yield from (_inference_message(message) for message in group)
+    if assistant_literals is not None and literal_index != len(assistant_literals):
+        raise ValueError("Captured assistant literals include extra turns")
 
 
 def render_marin_chat(
@@ -87,6 +96,7 @@ def render_marin_chat(
     enable_thinking: bool | str | None = None,
     custom_instructions: str = "",
     add_generation_prompt: bool = False,
+    assistant_literals: Sequence[str] | None = None,
 ) -> str:
     """Render Harmony as Marin chat text, retaining reasoning from every turn.
 
@@ -98,7 +108,7 @@ def render_marin_chat(
     # reasoning mode from an explicitly supplied value.
     kwargs = {"enable_thinking": enable_thinking} if enable_thinking is not None else {}
     rendered, _ = render_jinja_template(
-        conversations=[list(_inference_messages(messages))],
+        conversations=[list(_inference_messages(messages, assistant_literals))],
         chat_template=MARIN_CHAT_TEMPLATE,
         bos_token=bos_token,
         tools=list(tools),
@@ -113,7 +123,10 @@ def render_chat_record(record: dict) -> dict:
     """Project a normalized chat row into the standard normalizer's id/text input."""
     messages = [Message.from_dict(message) for message in record["messages"]]
     kwargs = json.loads(record["chat_template_kwargs"]) if record.get("chat_template_kwargs") else {}
-    return {"id": record["id"], "text": render_marin_chat(messages, bos_token="", **kwargs)}
+    return {
+        "id": record["id"],
+        "text": render_marin_chat(messages, bos_token="", assistant_literals=record.get("assistant_literals"), **kwargs),
+    }
 
 
 def chat_training_record(record: dict) -> dict:
@@ -122,7 +135,7 @@ def chat_training_record(record: dict) -> dict:
     kwargs = json.loads(record["chat_template_kwargs"]) if record.get("chat_template_kwargs") else {}
     return {
         "id": record["id"],
-        "messages": list(_inference_messages(messages)),
+        "messages": list(_inference_messages(messages, record.get("assistant_literals"))),
         "chat_template_kwargs": kwargs,
     }
 

@@ -8,6 +8,7 @@ import re
 from collections import deque
 from collections.abc import Callable, Iterator
 from enum import StrEnum
+from itertools import groupby
 from typing import Any, NamedTuple
 
 import dupekit
@@ -31,7 +32,7 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.18.1"
+CHAT_NORMALIZE_VERSION = "2026.10.05.1"
 MAX_REJECTED_RECORD_FRACTION = 0.05
 LONG_FINAL_RESPONSE_ESTIMATED_TOKEN_THRESHOLD = 2_000
 
@@ -66,6 +67,7 @@ CHAT_SCHEMA = pa.schema(
         pa.field("source", pa.string()),
         pa.field("source_id", pa.string()),
         pa.field("chat_template_kwargs", pa.string()),
+        pa.field("assistant_literals", pa.list_(pa.string())),
     ]
 )
 
@@ -310,6 +312,17 @@ def _normalize_chat_record(
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")
     validate_tool_definitions(tools, messages, invalid_tool_call_policy)
+    literals = record.get("assistant_literals")
+    if literals is not None:
+        if invalid_tool_call_policy != InvalidToolCallPolicy.RETAIN:
+            raise ValueError("Captured assistant literals require explicit offline retention")
+        turns = sum(role == Role.ASSISTANT for role, _ in groupby(messages, key=lambda message: message.author.role))
+        if (
+            not isinstance(literals, list)
+            or len(literals) != turns
+            or any(not isinstance(text, str) for text in literals)
+        ):
+            raise ValueError("Captured assistant literals must match every assistant turn")
     if repeated_tool_call_policy == RepeatedToolCallPolicy.FILTER and has_stalled_tool_call(messages):
         raise RepeatedToolCallError("A tool call repeated after two identical tool replies")
     serialized_messages = [message.to_dict() for message in messages]
@@ -318,8 +331,11 @@ def _normalize_chat_record(
     if source_id is None:
         source_id = record.get(id_field)
     out = {key: value for key, value in record.items() if key not in {id_field, messages_field, "chat_template_kwargs"}}
+    content_identity = {"messages": serialized_messages, "chat_template_kwargs": kwargs}
+    if literals is not None:
+        content_identity["assistant_literals"] = literals
     identity = json.dumps(
-        {"messages": serialized_messages, "chat_template_kwargs": kwargs},
+        content_identity,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

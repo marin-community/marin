@@ -88,10 +88,15 @@ def _check_source_markup(value: object) -> None:
             _check_source_markup(item)
 
 
+def normalize_reasoning_delimiters(text: str) -> str:
+    """Translate source reasoning tags without repairing or removing sampled text."""
+    text = re.sub(r"<think>", REASONING_START, text, flags=re.IGNORECASE)
+    return re.sub(r"</think>", REASONING_END, text, flags=re.IGNORECASE)
+
+
 def normalize_reasoning_tokens(text: str) -> str:
     """Normalize balanced reasoning tags to the canonical source delimiters."""
-    text = re.sub(r"<think>", REASONING_START, text, flags=re.IGNORECASE)
-    text = re.sub(r"</think>", REASONING_END, text, flags=re.IGNORECASE)
+    text = normalize_reasoning_delimiters(text)
     text = re.sub(r"<\|start_think\|>\s*<\|end_think\|>\s*", "", text)
     depth = 0
     for match in re.finditer(r"<\|(start|end)_think\|>", text):

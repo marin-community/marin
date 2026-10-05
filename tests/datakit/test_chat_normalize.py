@@ -11,12 +11,13 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.chat_normalize import (
     ChatChannel,
+    InvalidToolCallPolicy,
     RepeatedToolCallPolicy,
     _normalize_chat_record,
     normalize_chat_to_parquet,
     validate_chat_messages,
 )
-from marin.datakit.chat_render import render_chat_record
+from marin.datakit.chat_render import chat_training_record, render_chat_record
 from marin.datakit.download.coderforge import SOURCE_CHAT_SCHEMA
 from marin.datakit.download.coderforge import transform_chat as transform_coderforge_chat
 from openai_harmony import Author, Message, Role
@@ -110,6 +111,45 @@ def test_chat_identity_includes_tool_definitions():
         for description in ["First", "Second"]
     ]
     assert ids[0] != ids[1]
+
+
+def test_captured_literals_survive_parquet_dedup_and_replace_parsed_calls(tmp_path: Path):
+    messages = [
+        Message.from_role_and_content(Role.USER, "Run it."),
+        Message.from_role_and_content(Role.ASSISTANT, "{}")
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("functions.run"),
+    ]
+    records = [
+        {
+            "messages": [message.to_dict() for message in messages],
+            "chat_template_kwargs": {"tools": [{"name": "run", "parameters": {"type": "object"}}]},
+            "assistant_literals": ["<tool_call>\n" + "RAW_LOOP " * count],
+        }
+        for count in (20, 21)
+    ]
+    with pytest.raises(ValueError, match="explicit offline retention"):
+        _normalize_chat_record(records[0], "messages", "id")
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "records.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+    normalized = normalize_chat_to_parquet(
+        input_path=str(raw),
+        output_path=str(tmp_path / "normalized"),
+        file_extensions=(".jsonl",),
+        max_workers=1,
+        invalid_tool_call_policy=InvalidToolCallPolicy.RETAIN,
+    )
+    rows = pq.read_table(normalized.main_output_dir).to_pylist()
+    assert len(rows) == 2
+    assert len({row["id"] for row in rows}) == 2
+    for row in rows:
+        literal = row["assistant_literals"][0]
+        rendered = render_chat_record(row)["text"]
+        assert literal.strip() in rendered
+        assert rendered.rsplit("<|start_header_id|>assistant<|end_header_id|>\n", 1)[1] == literal.strip() + "<|eot_id|>"
+        assistant = chat_training_record(row)["messages"][-1]
+        assert assistant == {"role": "assistant", "content": literal}
 
 
 def test_harmony_tool_handoff_requires_matching_observations_before_continuation():

@@ -146,6 +146,7 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     foreign = {**entries[0], "trial_id": "another-trial"}
     auxiliary = {
         **entries[0],
+        "request": {"messages": [{"role": "user", "content": "Auxiliary request"}], "tools": tools},
         "timestamp": -1,
         "literal": {**entries[0]["literal"], "prompt_token_ids": [999], "completion_token_ids": [248999]},
     }
@@ -191,20 +192,19 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
         **entries[0],
         "request": {"messages": [{"role": "user", "content": "ANOTHER_TASK"}], "tools": tools},
     }
-    unmatched = native_model_trace(
-        identity=identity,
-        seed=7,
-        retained_record=continuation_record,
-        retained_uri="continuation",
-        native_trace_uri="literal",
-        trial_result=trial,
-        literal_entries=[changed_root, entries[1]],
-        partition=PARTITION,
-        assistant_prefill="<think>\n",
-        model_tokenizer="unused-model",
-    )
-    assert unmatched.initial_messages == messages[:-1]
-    assert unmatched.initial_prompt_sha256 != trace.initial_prompt_sha256
+    with pytest.raises(ValueError, match="Every native assistant turn"):
+        native_model_trace(
+            identity=identity,
+            seed=7,
+            retained_record=continuation_record,
+            retained_uri="continuation",
+            native_trace_uri="literal",
+            trial_result=trial,
+            literal_entries=[changed_root, entries[1]],
+            partition=PARTITION,
+            assistant_prefill="<think>\n",
+            model_tokenizer="unused-model",
+        )
     with pytest.raises(ValueError, match="differ from retained trainable"):
         native_model_trace(
             identity=identity,
@@ -240,16 +240,29 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     )
     hf_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
     hf_tokenizer.save_pretrained(tokenizer_path)
+    trace = replace(
+        trace,
+        model_tokenizer=str(tokenizer_path),
+        assistant_completion_token_ids=tuple(
+            tuple(hf_tokenizer.encode(text, add_special_tokens=False))
+            for text in (
+                'ASSISTANT_REASONING\n</think>\n<tool_call>\n{"name":"lookup","arguments":{"key":"TOOL_ARGUMENT"}}\n</tool_call>',
+                "VERIFIER_CORRECT",
+            )
+        ),
+    )
+    duplicate = replace(trace, seed=8, identity=duplicate.identity, retained_record=duplicate.retained_record)
+    incorrect = replace(trace, retained_record=incorrect_record)
     raw_loop = "<tool_call>\n" + "RAW_LOOP " * 20
     captured = tuple([*hf_tokenizer.encode(raw_loop, add_special_tokens=False), hf_tokenizer.eos_token_id])
     unparsed = replace(
         trace,
         messages=[*trace.messages[:-1], {"role": "assistant", "content": ""}],
-        final_completion_token_ids=captured,
+        assistant_completion_token_ids=(*trace.assistant_completion_token_ids[:-1], captured),
         model_tokenizer=str(tokenizer_path),
     )
     literal_document = native_chat_document(unparsed)
-    assert literal_document["messages"][-1]["content"] == [{"type": "text", "text": raw_loop}]
+    assert literal_document["assistant_literals"][-1] == raw_loop
     with set_current_client(LocalClient()):
         store = build_verified_sft_store(
             [trace, duplicate, incorrect],
@@ -295,8 +308,8 @@ def test_teacher_harmony_curation_rejects_parity_before_adapting_messages():
         [],
         [],
         "initial-prompt",
-        (),
         "unused-model",
+        (),
     )
     with pytest.raises(ValueError, match="outside the BFCL training complement"):
         verifier_selected_chat(trace, PARTITION)
@@ -496,7 +509,12 @@ def test_completed_native_collection_joins_archives_and_literal_messages(tmp_pat
     config["runtime"].update(experiments_dir=str(tmp_path / "literal"), launcher_commit="pinned-runtime")
     (tmp_path / "terminal.json").write_text(json.dumps(terminal))
     (tmp_path / "resolved.json").write_text(json.dumps(resolved))
-    messages = [{"role": "user", "content": "BFCL instruction"}, {"role": "assistant", "content": "Correct"}]
+    messages = [
+        {"role": "user", "content": "BFCL instruction"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Continue"},
+        {"role": "assistant", "content": "Correct"},
+    ]
     trial = {
         "task_name": TASK.name,
         "exception_info": None,
@@ -520,11 +538,11 @@ def test_completed_native_collection_joins_archives_and_literal_messages(tmp_pat
             "trial_id": "correct-trial",
             "timestamp": index,
             "status_code": 200,
-            "request": {"messages": messages[:1]},
+            "request": {"messages": messages[:1] if index == 0 else messages[:-1]},
             "literal": {
                 "prompt_token_ids": boundary["prompt_token_ids"] + ([20] if index else []),
                 "completion_token_ids": completion,
-                "assistant_message": messages[1],
+                "assistant_message": messages[1] if index == 0 else messages[-1],
             },
         }
         for index, (boundary, completion) in enumerate(
@@ -568,6 +586,10 @@ def _native_pair_collection(
         f"pinned-{model}-snapshot",
         "pinned",
     )
+    locator = replace(locator, model=str(root / "collection-tokenizer"))
+    tokenizer_path = Path(f"{locator.model}@{locator.revision}")
+    _native_pair_tokenizer(tokenizer_path)
+    collection_tokenizer = load_tokenizer(str(tokenizer_path))
     config["inputs"]["model"].update(uri=locator.uri, tokenizer_uri=locator.model, tokenizer_revision=locator.revision)
     config["inputs"]["train_data"][0]["relative_path"] = "bfcl_complement"
     resolved["train_data_sources"][0]["relative_path"] = "bfcl_complement"
@@ -609,14 +631,7 @@ def _native_pair_collection(
                 trial["exception_info"] = {"exception_type": "EnvironmentStartTimeoutError"}
             else:
                 first_prompt = [1000, 1001] if model == "teacher" else [3, 4]
-                # Vocabulary mismatch and a reconstructed second prompt are both deliberate.
                 record["prompt"]["token_ids"] = first_prompt
-                record["response"]["token_ids"] = (
-                    [248000, 248001, 248002, 248003] if model == "teacher" else [30, 31, 20, 21]
-                )
-                boundaries = record["response"]["step_boundaries"]
-                boundaries[0]["prompt_token_ids"] = first_prompt
-                boundaries[1]["prompt_token_ids"] = [999, 998]
                 tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
                 user = {"role": "user", "content": f"BFCL_USER_CONTEXT_{task.name}"}
                 if model == "student" and index == 0 and fault == "context":
@@ -656,6 +671,31 @@ def _native_pair_collection(
                         "The exact model ID is hosted_vllm/teacher-alias"
                     )
                 initial_count = 2 if profile["name"] == "opencode" else 1
+                raw_call = (
+                    f"{model.upper()}_REASONING\n</think>\n<tool_call>\n"
+                    + json.dumps(assistant["tool_calls"][0]["function"])
+                    + "\n</tool_call>"
+                )
+                if model == "student" and index == 0 and fault == "malformed_calls":
+                    raw_call += "RAW_LOOP " * 20
+                completions = [
+                    collection_tokenizer.encode(raw_call),
+                    collection_tokenizer.encode(final["content"]),
+                ]
+                first_end = len(completions[0])
+                record["response"] = {
+                    "token_ids": [*completions[0], 99, *completions[1]],
+                    "loss_mask": [*[1] * first_end, 0, *[1] * len(completions[1])],
+                    "step_boundaries": [
+                        {"prompt_token_ids": first_prompt, "token_start": 0, "token_end": first_end},
+                        {
+                            "prompt_token_ids": [999, 998],
+                            "token_start": first_end,
+                            "token_end": first_end + 1 + len(completions[1]),
+                        },
+                    ],
+                }
+                boundaries = record["response"]["step_boundaries"]
                 for step, boundary in enumerate(boundaries):
                     response = record["response"]["token_ids"][boundary["token_start"] : boundary["token_end"]]
                     masks = record["response"]["loss_mask"][boundary["token_start"] : boundary["token_end"]]
@@ -768,6 +808,8 @@ def test_native_dpo_cache_retokenizes_both_models_and_preserves_pair_and_loss_se
         masked = tok.decode(ids[masks].tolist())
         assert "REASONING" in masked and "ARGUMENT" in masked and "FINAL" in masked
         assert "USER_CONTEXT" not in masked and "TOOL_OBSERVATION" not in masked
+        if fault == "malformed_calls" and role == "rejected":
+            assert masked.count("RAW_LOOP") == 20
         targets = np.roll(np.asarray(branch.tokens.array), -1)[np.asarray(branch.loss_weight.array) > 0]
         np.testing.assert_array_equal(targets, ids[masks])
         assert "TOOL_OBSERVATION" in tok.decode(ids.tolist())
