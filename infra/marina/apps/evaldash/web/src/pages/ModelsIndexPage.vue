@@ -4,8 +4,8 @@
  * and its measurement profile. No card carries a single headline score — a model's quality is not
  * one number, and the card has no room for the panel and missing-data policy one would need.
  */
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { fleetBest } from '@/utils/panel'
@@ -14,10 +14,20 @@ import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
 const router = useRouter()
+const route = useRoute()
 const showArchived = ref(false)
 const query = ref('')
 
-const { data, refresh } = useApi<Panel>(() => (showArchived.value ? 'api/panel?include_archived=1' : 'api/panel'))
+const panelQuery = computed(() => {
+  const params = new URLSearchParams()
+  const raw = route.query.cohort
+  const cohort = Array.isArray(raw) ? raw[0] : raw
+  if (cohort) params.set('cohort', cohort)
+  if (showArchived.value) params.set('include_archived', '1')
+  return `api/panel?${params.toString()}`
+})
+const { data, refresh } = useApi<Panel>(() => panelQuery.value)
+watch(panelQuery, refresh)
 
 onMounted(refresh)
 onViewRefresh(refresh)
@@ -37,7 +47,10 @@ const models = computed<PanelRow[]>(() => {
 })
 
 function open(model: string) {
-  router.push(`/models/${encodeURIComponent(model)}`)
+  router.push({
+    path: `/models/${encodeURIComponent(model)}`,
+    query: { cohort: route.query.cohort || data.value?.request.cohort_version },
+  })
 }
 </script>
 
@@ -58,7 +71,7 @@ function open(model: string) {
         class="rounded border border-surface-border bg-surface px-3 py-1.5 text-sm font-mono min-w-[16rem]"
       />
       <label class="flex items-center gap-2 text-sm text-text-secondary">
-        <input v-model="showArchived" type="checkbox" class="accent-accent" @change="refresh" />
+        <input v-model="showArchived" type="checkbox" class="accent-accent" />
         Show archived
       </label>
       <span class="text-xs text-text-muted ml-auto">{{ models.length }} models</span>
