@@ -266,11 +266,12 @@ Pulumi, and not auto-deleted with the VM. A replacement root disk must use an
 explicit `bootDiskSnapshot`; keep that source snapshot until a newer rollback
 point has been verified.
 
-## Scheduled agents
+## Scheduled watches
 
-The `watches` mapping declares cron or interval tasks. Each occurrence launches
-an automation-safe ACP profile with the declared prompt. `promptFile` reads a
-file below `infra/loom`; Pulumi sends its contents, so Loom does not need the
+The `watches` mapping declares cron or interval tasks. Choose an agent prompt
+for tasks that need judgment, or a mechanical script for deterministic checks.
+Agent occurrences launch an automation-safe ACP profile with the declared
+prompt. `promptFile` reads a file below `infra/loom`; Pulumi sends its contents, so Loom does not need the
 Marin checkout at runtime. Use either `prompt` or `promptFile`.
 
 ```yaml
@@ -290,8 +291,27 @@ five fields and an IANA time zone. Loom validates the complete expression when
 applying the manifest.
 
 Loom coalesces recent missed runs and skips overlaps. Tasks have a five-minute
-timeout; set `runTimeoutSeconds` to override it. Completed sessions stay visible
-for five minutes before automatic archival.
+timeout; set `runTimeoutSeconds` to override it. Completed agent sessions stay
+visible for about five minutes before automatic archival.
+
+Mechanical watches use `program` instead of agent fields:
+
+```yaml
+marin-loom:watches:
+  merge-check:
+    enabled: false
+    every: 30m
+    program: builtin:archive-merged
+    capabilities: [observe]
+    runTimeoutSeconds: 60
+```
+
+Scripts run directly, without an agent session. `program` names a Loom builtin
+or an absolute path on the Loom server; IaC does not upload script files. Use
+`params` and `scope` objects for script configuration. The built-in `watch`
+profile is the default; another profile must be declared and automation-safe.
+Timing, coalescing, overlap, timeout, and history use the same scheduler as
+agents. Interrupted scripts settle as errors without replaying their actions.
 
 The `scheduled-message` profile uses low effort and a one-turn budget. It selects
 `loom/messaging/post@v1` from the `messaging` MCP group for Slack posting and

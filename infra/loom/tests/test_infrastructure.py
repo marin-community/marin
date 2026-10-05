@@ -13,11 +13,11 @@ from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
     ROOT,
-    AgentWatchConfig,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
     RemoteMcpConfig,
+    WatchConfig,
     WorkloadIdentityConfig,
     _deployment_manifest,
     _deployment_profiles,
@@ -476,7 +476,7 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
 
 
 def test_agent_watch_manifest_and_profile_reference() -> None:
-    watch = AgentWatchConfig.parse(
+    watch = WatchConfig.parse(
         "daily",
         {
             "cron": "0 9 * * 1-5",
@@ -504,4 +504,20 @@ def test_agent_watch_prompt_file_cannot_escape_configuration_root() -> None:
         "promptFile": "../pulumi.md",
     }
     with pytest.raises(ValueError):
-        AgentWatchConfig.parse("daily", value)
+        WatchConfig.parse("daily", value)
+
+
+def test_script_watch_manifest_uses_program_without_an_agent() -> None:
+    watch = WatchConfig.parse(
+        "merge-check",
+        {"every": "30m", "program": "builtin:archive-merged", "params": {"archive": False}, "runTimeoutSeconds": 60},
+    )
+    config = replace(deployment_config(), watches=(watch,))
+    manifest = json.loads(_deployment_manifest(config, [], []))
+    declared = manifest["watches"][0]
+    assert "agent" not in declared
+    assert declared["program"] == "builtin:archive-merged"
+    assert declared["params"] == {"archive": False}
+    assert declared["run_timeout_secs"] == 60
+    with pytest.raises(ValueError, match="agent fields"):
+        WatchConfig.parse("merge-check", {"every": "30m", "program": "builtin:archive-merged", "prompt": "Check merges"})

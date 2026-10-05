@@ -109,28 +109,94 @@ class IntervalWatchSchedule:
 
 
 @dataclass(frozen=True)
-class AgentWatchConfig:
-    name: str
+class AgentWatchTarget:
     profile: str
     repo: str
     prompt: str
-    trigger: CronWatchSchedule | IntervalWatchSchedule
     slack_channels: tuple[str, ...]
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "agent": {
+                "profile": self.profile,
+                "repo": self.repo,
+                "prompt": self.prompt,
+                "slack_channels": list(self.slack_channels),
+            }
+        }
+
+
+@dataclass(frozen=True)
+class ScriptWatchTarget:
+    program: str
+    profile: str
+    params: Mapping[str, object]
+    scope: Mapping[str, object]
+    capabilities: tuple[str, ...]
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "program": self.program,
+            "profile": self.profile,
+            "params": dict(self.params),
+            "scope": dict(self.scope),
+            "capabilities": list(self.capabilities),
+        }
+
+
+def _watch_target(name: str, value: Mapping[str, object]) -> AgentWatchTarget | ScriptWatchTarget:
+    program = value.get("program")
+    inline, source = value.get("prompt"), value.get("promptFile")
+    if program is not None:
+        if inline is not None or source is not None or "repo" in value or "slackChannels" in value:
+            raise ValueError("script watches use program, params, and scope; agent fields do not apply")
+        if not isinstance(program, str) or not (program.startswith("builtin:") or Path(program).is_absolute()):
+            raise ValueError("script program must be builtin:name or an absolute server path")
+        params, scope = value.get("params", {}), value.get("scope", {})
+        capabilities = value.get("capabilities", ["observe"])
+        if not isinstance(params, dict) or not isinstance(scope, dict):
+            raise ValueError("script params and scope must be objects")
+        if not isinstance(capabilities, list) or any(
+            not isinstance(capability, str)
+            or capability not in {"observe", "mark", "escalate", "nudge", "interrupt", "launch", "judge"}
+            for capability in capabilities
+        ):
+            raise ValueError("script capabilities must be known watch capabilities")
+        return ScriptWatchTarget(program, str(value.get("profile", "watch")).strip(), params, scope, tuple(capabilities))
+    profile = str(value.get("profile", "")).strip()
+    repo = str(value.get("repo", "")).strip()
+    if not profile or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise ValueError("agent watches require a profile and owner/name repository")
+    if (inline is None) == (source is None):
+        raise ValueError(f"watch {name!r} requires exactly one of prompt or promptFile")
+    prompt = _instruction_text(inline, source, f"watch {name!r}")
+    if not prompt or len(prompt.encode()) > 65536:
+        raise ValueError("watch prompt must be 1..65536 bytes")
+    channels = value.get("slackChannels", [])
+    if (
+        not isinstance(channels, list)
+        or len(channels) > 32
+        or any(
+            not isinstance(channel, str) or not re.fullmatch(r"[CG][A-Za-z0-9]{1,63}", channel) for channel in channels
+        )
+    ):
+        raise ValueError("slackChannels must contain at most 32 Slack channel IDs")
+    return AgentWatchTarget(profile, repo, prompt, tuple(channels))
+
+
+@dataclass(frozen=True)
+class WatchConfig:
+    name: str
+    trigger: CronWatchSchedule | IntervalWatchSchedule
+    target: AgentWatchTarget | ScriptWatchTarget
     enabled: bool
     run_timeout_secs: int | None
 
     @classmethod
-    def parse(cls, name: str, value: Mapping[str, object]) -> AgentWatchConfig:
-        profile = str(value.get("profile", "")).strip()
-        repo = str(value.get("repo", "")).strip()
-        if not name.strip() or not profile or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-            raise ValueError("watches require a name, profile, and owner/name repository")
-        inline, source = value.get("prompt"), value.get("promptFile")
-        if (inline is None) == (source is None):
-            raise ValueError(f"watch {name!r} requires exactly one of prompt or promptFile")
-        prompt = _instruction_text(inline, source, f"watch {name!r}")
-        if not prompt or len(prompt.encode()) > 65536:
-            raise ValueError("watch prompt must be 1..65536 bytes")
+    def parse(cls, name: str, value: Mapping[str, object]) -> WatchConfig:
+        if not name.strip():
+            raise ValueError("watch requires a name")
+        target = _watch_target(name, value)
         cron, every = value.get("cron"), value.get("every")
         if (cron is None) == (every is None):
             raise ValueError("watch requires exactly one of cron or every")
@@ -145,16 +211,6 @@ class AgentWatchConfig:
             if match is None or not 1 <= int(match[1]) * {"s": 1, "m": 60, "h": 3600}[match[2]] <= 31622400:
                 raise ValueError("every must be positive, use s/m/h, and be at most 366 days")
             trigger = IntervalWatchSchedule(str(every))
-        channels = value.get("slackChannels", [])
-        if (
-            not isinstance(channels, list)
-            or len(channels) > 32
-            or any(
-                not isinstance(channel, str) or not re.fullmatch(r"[CG][A-Za-z0-9]{1,63}", channel)
-                for channel in channels
-            )
-        ):
-            raise ValueError("slackChannels must contain at most 32 Slack channel IDs")
         enabled = value.get("enabled", False)
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be boolean")
@@ -163,19 +219,14 @@ class AgentWatchConfig:
             not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 86400
         ):
             raise ValueError("runTimeoutSeconds must be 1..86400 seconds")
-        return cls(name.strip(), profile, repo, prompt, trigger, tuple(channels), enabled, timeout)
+        return cls(name.strip(), trigger, target, enabled, timeout)
 
     def manifest(self) -> dict[str, object]:
         return {
             "name": self.name,
             "trigger": self.trigger.manifest(),
             "enabled": self.enabled,
-            "agent": {
-                "profile": self.profile,
-                "repo": self.repo,
-                "prompt": self.prompt,
-                "slack_channels": list(self.slack_channels),
-            },
+            **self.target.manifest(),
             **({"run_timeout_secs": self.run_timeout_secs} if self.run_timeout_secs is not None else {}),
         }
 
@@ -599,7 +650,7 @@ class DeploymentConfig:
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
-    watches: tuple[AgentWatchConfig, ...] = ()
+    watches: tuple[WatchConfig, ...] = ()
 
     def __post_init__(self) -> None:
         if self.domain != self.domain.strip().rstrip(".") or "://" in self.domain or "/" in self.domain:
@@ -625,8 +676,13 @@ class DeploymentConfig:
         profile_names = {profile.name for profile in self.profiles}
         watch_names: set[str] = set()
         for watch in self.watches:
-            _validate_profile_reference("watch", watch.name, watch.profile, watch_names, profile_names)
-            profile = next(profile for profile in self.profiles if profile.name == watch.profile)
+            if isinstance(watch.target, ScriptWatchTarget) and watch.target.profile == "watch":
+                if watch.name in watch_names:
+                    raise ValueError(f"duplicate watch {watch.name!r}")
+                watch_names.add(watch.name)
+                continue
+            _validate_profile_reference("watch", watch.name, watch.target.profile, watch_names, profile_names)
+            profile = next(profile for profile in self.profiles if profile.name == watch.target.profile)
             if (
                 profile.session_class != "automation"
                 or not profile.strict
@@ -676,7 +732,7 @@ class DeploymentConfig:
         for name, value in raw_watches.items():
             if not isinstance(value, dict):
                 raise ValueError(f"watch {name!r} must be an object")
-            watches.append(AgentWatchConfig.parse(str(name), value))
+            watches.append(WatchConfig.parse(str(name), value))
         raw_profiles = config.get_object("profiles") or {}
         if not isinstance(raw_profiles, dict):
             raise ValueError("profiles must be an object")
