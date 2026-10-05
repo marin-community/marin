@@ -192,6 +192,27 @@ async def test_ids_that_disagree_with_usage_break_the_contract(fake_glm, fake_cl
         await GlmRolloutModel(fake_client, POLICY)(request)
 
 
+async def test_rollout_fails_naming_tokens_the_server_retokenized(fake_glm, fake_client):
+    # Recorded live (.evidence/validate/rollout_model/prefix-bug/record-1.json, turns 3-4): the model
+    # sampled "1" ")," "(" "1" inside smul(2**(n-1),(1,0)); the re-rendered prompt encodes the same
+    # text canonically as "1" "),(" "1".
+    sampled = [12, 16, 701, 7, 16, 11, 15]
+    canonical = [12, 16, 23482, 16, 11, 15]
+    observation = 154829  # <|observation|>
+    fake_glm.responses.append(
+        token_stream(
+            [1, 2, 3],
+            [*sampled, observation],
+            tool_call=("shell", '{"command": "touch /workspace/done.txt"}'),
+            finish="tool_calls",
+        )
+    )
+    fake_glm.responses.append(token_stream([1, 2, 3, *canonical, observation, 9], [10], content="Done."))
+
+    with pytest.raises(RolloutContractError, match=r"index 5 of the 11-token prefix it served \[23482, 16"):
+        await rollout_engine(GlmRolloutModel(fake_client, POLICY)).run(shell_task())
+
+
 async def test_a_continued_completion_has_no_exact_tokens(fake_glm, fake_client):
     fake_glm.responses.append(token_stream([1, 2], [3], content="par", finish="length"))
     fake_glm.responses.append(token_stream([1, 2, 3, 9], [4], content="tial"))

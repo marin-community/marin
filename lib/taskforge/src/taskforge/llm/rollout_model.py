@@ -8,9 +8,16 @@ streams, retries and holds like every other Taskforge call. The served tokens co
 stream events of the call's completed attempt: vLLM sends ``prompt_token_ids`` on the first chunk
 and ``choices[].token_ids`` plus ``choices[].logprobs`` on every chunk that carries tokens. The
 response ids include the stop token (``<|observation|>`` after tool calls, ``<|user|>`` after a
-reply), which is also the first token the chat template renders for the next turn, so the next
-prompt preserves the served prefix. Measured live (``.evidence/validate/rollout_model/``): GLM's
-template re-renders an assistant turn replayed with ``reasoning_content`` token for token.
+reply), which is also the first token the chat template renders for the next turn. Measured live
+(``.evidence/validate/rollout_model/``): GLM's template re-renders a replayed assistant turn token
+for token, including empty reasoning, content beside tool calls, and multi-line arguments.
+
+The served prefix survives only when the sampled response ids are the tokenizer's canonical
+encoding of their text. Chat completions take text, and the router accepts no prompt token ids, so
+the next prompt is the re-tokenized conversation: a sampled ``"),"`` ``"("`` comes back as the
+single token ``"),("`` (``.evidence/validate/rollout_model/prefix-bug/``). No message the client
+sends can restore the sampled ids, so the model raises ``RolloutContractError`` naming where the
+served prompt diverged.
 
 A rollout turn never continues on ``finish_reason == "length"``: a continuation re-renders the
 prompt and would break the token contract. The policy must set ``max_continuations=0``; the engine
@@ -76,6 +83,23 @@ def served_tokens(completion: Completion) -> ServedTokens:
             f"({usage.prompt_tokens}, {usage.completion_tokens})"
         )
     return ServedTokens(prompt, tuple(response), tuple(logprobs))
+
+
+def check_served_prefix(prefix: tuple[int, ...], prompt: tuple[int, ...]) -> None:
+    """Raise if the served ``prompt`` does not start with the rollout's ``prefix`` ids.
+
+    Raises:
+        RolloutContractError: naming the first divergent index and the ids on both sides.
+    """
+    if prompt[: len(prefix)] == prefix:
+        return
+    index = next((i for i, (a, b) in enumerate(zip(prefix, prompt, strict=False)) if a != b), len(prompt))
+    raise RolloutContractError(
+        f"The server re-tokenized the replayed conversation: at index {index} of the {len(prefix)}-token "
+        f"prefix it served {list(prompt[index : index + 8])} where the rollout has {list(prefix[index : index + 8])}. "
+        "Chat completions re-render text, so a sampled response that is not the canonical tokenization of its "
+        "text cannot keep the served prefix"
+    )
 
 
 def assistant_wire_message(completion: Completion) -> dict[str, Any]:
@@ -148,4 +172,6 @@ class GlmRolloutModel:
             completion = await self.client.complete(request.messages, self.policy, {**TOKEN_FIELDS, **request.options})
         except GlmContextExhausted as error:
             raise GenerationLimitReached(request.prefix_token_ids) from error
-        return model_turn(completion)
+        turn = model_turn(completion)
+        check_served_prefix(request.prefix_token_ids, turn.prompt_token_ids)
+        return turn

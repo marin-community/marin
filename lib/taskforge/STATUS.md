@@ -18,10 +18,11 @@ Phase 2 built `llm.agent`, `llm.web`, `llm.rollout_model`, `sandbox.factories`,
 `build`. All of them pass their unit tests and their live checks on the GLM-5.3 interactive
 endpoint, with these failures and gaps:
 
-- **Broken: `llm.rollout_model` breaks the exact-token contract on a longer rollout.** The d01
-  build draft's rollout raised `RolloutContractError: Model transport changed the served token
-  prefix` on turn 5 (prefix 9,733 tokens), twice. Every other live rollout kept the prefix,
-  including 18/18 turns of a reasoning-heavy run. Not diagnosed. See Validate and Build.
+- **Broken: `llm.rollout_model` breaks the exact-token contract when GLM samples a
+  non-canonical tokenization.** The chat endpoint re-tokenizes the replayed text, so sampled ids
+  such as `")," "("` come back as the canonical `"),("`. It failed 2 of 7 reruns of the d01 build
+  draft. No client-side message construction can fix it; it needs a tokens-in path the GLM router
+  does not offer. See Validate.
 - **Broken: the shipped shellbox Iris backend fails every `create`.** Docker tasks run on Iris
   only with the readiness-poll fix from `docs/upstream/shellbox/iris-machine.patch` (unapplied),
   which the cluster probe applied in-process. With it, a docker task graded 3/3 on cw-rno2a.
@@ -113,7 +114,7 @@ resolved in-task; submit command in its docstring and under Cluster probe below)
 |---|---|---|
 | llm (client, structured, store, endpoint) | Works on the laptop endpoint. `GlmClient` reports a tool-call reply that spent its whole budget as `length`. Continuation is lossy at seams. `resolve_glm_base_url` worked inside an Iris task on cw-rno2a. | `.evidence/llm/`, `.evidence/standalone/`, `.evidence/cluster/` |
 | llm.agent, llm.web | Works: 8/8 live checks. Concurrency tested at 20 agents only. ShellSim only. | `.evidence/llm/agent/` |
-| llm.rollout_model | Works on short and reasoning-heavy ShellSim rollouts. **Broke the token-prefix contract on turn 5 of the d01 build draft (reproduced).** | `.evidence/validate/rollout_model/`, `.evidence/build/run-2/` |
+| llm.rollout_model | Works on short and reasoning-heavy ShellSim rollouts. **Breaks the token-prefix contract when GLM samples a non-canonical tokenization (2 of 7 d01 reruns); needs a tokens-in path.** | `.evidence/validate/rollout_model/`, `.evidence/build/run-2/` |
 | ledger | Works locally (JSONL, Finelog round trip on finelog's embedded server). Validate and build emit spans. Cluster Finelog write not run. | `.evidence/ledger/` |
 | sandbox | Factory selection and up-front refusal work. Iris image builder works end to end (build, push, adversarial and failing builds). Iris DOCKER reported unavailable: shipped backend broken. Laptop Docker not run. | `.evidence/sandbox/` |
 | spec | Assembled specs run end to end on ShellSim through `ShellboxRolloutEngine` (unit tests). Docker and Iris specs round-trip only. No model calls. | `tests/spec/`; phase 1 in `.evidence/phase1-spec/` |
@@ -359,14 +360,28 @@ Live, 2026-10-05 20:21 UTC (`pytest tests/validate tests/llm/test_rollout_model.
 | Control replay on both tasks | every control MET, including the workspace control written by shell turns | `c_controls_math-20261005T202147Z/`, `c_controls_shellsim-20261005T202147Z/` |
 | Forced start failures | 2 classified `machine_start` and retried, 3/3 graded; `UnsupportedMachineSpec` not retried | `d_forced_failure-20261005T202148Z/`, `d_forced_unsupported-20261005T202150Z/` |
 
-**Broken:** `GlmRolloutModel` on the d01 build draft (ShellSim, 7-turn task) raised
-`RolloutContractError: Model transport changed the served token prefix` at turn 5 in two runs.
-Turns 1-4 kept the prefix; turn 4 reported 0 reasoning tokens and 1,557 completion tokens; turn 5
-had a 9,733-token prefix (`.evidence/build/run-2/rollout-d01-rerun.json`, script
-`.evidence/build/rollout_only.py <item_dir> <out.json>`). The run-1 inline non-streaming adapter
-kept the prefix on all 7 turns of the same task. Cause not diagnosed (candidates: replay of a turn
-without reasoning, streamed token ids). The last `rollout_model.py` change (20:01 UTC) predates
-the rerun (20:30 UTC), so the committed code has the bug.
+**Broken, not fixable in the client:** a rollout breaks the exact-token contract whenever GLM
+samples a token sequence that is not the tokenizer's canonical encoding of its text. Chat
+completions take messages, so each turn's prompt is the re-rendered conversation re-tokenized, and
+the replayed text comes back with different ids. Recorded live on the d01 build draft
+(`.evidence/validate/rollout_model/prefix-bug/`): `record-1.json` turn 3 sampled `"1" ")," "(" "1"`
+(ids 16, 701, 7, 16) inside `smul(2**(n-1),(1,0))`, and turn 4's prompt carries the canonical
+`"1" "),(" "1"` (16, 23482, 16) at index 6,689; `record-5.json` turn 7 sampled `' "^' "(...)"`
+(39698, 47235) where the canonical encoding is `' "' "^(" "...)"` (330, 13260, 32425).
+`tokenize_probe.json` has the server's canonical encodings. That was the only divergence in each
+failing prompt. The other candidates are ruled out: across 29 recorded turns, assistant turns
+replayed with empty reasoning, content beside tool calls, two tool calls, and multi-line JSON
+arguments all re-rendered token for token. Streaming is not involved: the run-1 non-streaming
+adapter passed by chance, as did 5 of 7 streamed reruns here.
+
+No message the client builds can restore sampled ids that differ from the canonical encoding. A
+fix needs a tokens-in path: the router (SMG 1.10 in front of vLLM 0.28) rejects integer prompts on
+`/v1/completions`, ignores `prompt_token_ids`, and serves no `/generate`, `/inference/v1/generate`
+or `/tokenize`. `GlmRolloutModel` now checks the served prompt itself and raises
+`RolloutContractError` naming the divergent index and the ids on both sides, in place of the
+engine's generic message. Live after the change: the d01 repro (`rollout_only.py`) passed twice
+(`prefix-bug/rollout_only-{1,2}.json`), and `pytest tests/llm/test_rollout_model.py tests/validate
+-m live_glm` passed 8/8 (`prefix-bug/live_pytest.txt`).
 
 Open: staged-task control replay raises `ValueError` (not built). Docker factories not exercised
 on the laptop. `GenerationLimitReached` on a context overflow carries the served prefix, not the
@@ -535,7 +550,8 @@ Known stack issues:
 
 - `llm/rollout_model.py` lives in 01 (the agent imports it) but its tests live in 05, so 01 covers
   it only through `test_agent`.
-- The d01 token-prefix bug is in 01's `llm/rollout_model.py`; the fix belongs in that layer.
+- The d01 token-prefix break is a transport limit (no tokens-in path), not a bug in 01's
+  `llm/rollout_model.py`; that layer now reports the divergent ids.
 - `tests/build` is not collected by `pytest tests`; the fix is `norecursedirs` in
   `lib/taskforge/pyproject.toml` (01). `lib/taskforge/.gitignore` un-ignores `tests/build/`
   (the root `.gitignore` ignores `build/`).
@@ -567,9 +583,9 @@ Each condition names the package it gates. A package starts when its conditions 
 
 ### review/
 
-1. **The rollout model keeps the token contract on real tasks.** The d01 prefix break in
-   `llm.rollout_model` is diagnosed and fixed, and `.evidence/build/rollout_only.py` on the
-   run-2 d01 draft completes. Review decides from validate evidence; a transport that fails on
+1. **The rollout model keeps the token contract on real tasks.** The d01 prefix break is
+   diagnosed (non-canonical sampled tokenization re-tokenized by the chat endpoint, see Validate)
+   but not fixed: it needs a tokens-in generation path on the GLM router. Review decides from validate evidence; a transport that fails on
    7-turn tasks makes that evidence `Incomplete` for the wrong reason.
 2. **Validate produces the evidence review consumes.** DESIGN.md lists `validate/solver.py`,
    `adversary.py` and `calibration.py`; none exists. Decide the solver k, the adversary roles (as
