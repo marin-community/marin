@@ -269,7 +269,7 @@ def test_student_row_masks_observations_keeps_code_and_does_not_truncate(student
     assert messages[2]["reasoning_content"] == "REASONINGMARKER"
 
 
-@pytest.mark.parametrize("contract_failure", [False, True])
+@pytest.mark.parametrize("contract_failure", [None, "empty_prompt", "missing_prompt", "missing_response"])
 def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_families(
     tmp_path, student_tokenizer, contract_failure
 ):
@@ -294,7 +294,14 @@ def test_collection_consumes_interrupted_slots_and_reuses_eight_complete_familie
         body = json.loads(request.content)
         sent.append(body)
         if contract_failure and not body["prompt_cache_key"].endswith("-preflight"):
-            return httpx.Response(200, json=model_response([], [101], {"role": "assistant", "content": "invalid"}))
+            response = model_response([100], [101], {"role": "assistant", "content": "invalid"})
+            if contract_failure == "empty_prompt":
+                response["prompt_token_ids"] = []
+            elif contract_failure == "missing_prompt":
+                del response["prompt_token_ids"]
+            else:
+                del response["choices"][0]["token_ids"]
+            return httpx.Response(200, json=response)
         if body["messages"][-1]["role"] == "tool":
             answer = json.loads(body["messages"][-1]["content"])["stdout"].strip()
             if body["prompt_cache_key"].endswith("-01-0"):

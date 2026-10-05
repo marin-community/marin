@@ -95,8 +95,8 @@ def teacher_model_turn(raw: bytes, request: ModelRequest) -> ModelTurn:
     """Validate actual server tokens and preserve native tools and reasoning."""
     response = json.loads(raw)
     choice = response["choices"][0]
-    prompt_ids = response["prompt_token_ids"]
-    response_ids = choice["token_ids"]
+    prompt_ids = response.get("prompt_token_ids")
+    response_ids = choice.get("token_ids")
     if not all(
         isinstance(tokens, list) and tokens and all(type(token) is int for token in tokens)
         for tokens in (prompt_ids, response_ids)

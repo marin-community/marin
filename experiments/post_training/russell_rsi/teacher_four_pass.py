@@ -60,6 +60,14 @@ def pinned_record(config: dict, name: str) -> dict:
     return json.loads(pinned_bytes(config[f"{name}_uri"], config[f"{name}_sha256"]))
 
 
+def original_retention_task_ids(source: dict, retention_identity: str) -> tuple[str, ...]:
+    """Read the original parent task IDs from pinned retention evidence."""
+    retained = pinned_record(source, "parent_retention")
+    if retained["tasks_identity"] != retention_identity:
+        raise ValueError("Original parent retention evidence identifies a different task artifact")
+    return tuple(sorted(retained["task_rewards"]))
+
+
 def require_four_pass_condition(config: dict) -> dict:
     """Reject stale labels and promoted continuations before any teacher request."""
     decision = pinned_record(config, "continuation_selection")
@@ -86,7 +94,7 @@ def require_four_pass_condition(config: dict) -> dict:
             candidate_identity,
             config["coding_panel_sha256"],
             retention_identity,
-            tuple(sorted(retention["task_rewards"])),
+            original_retention_task_ids(source, retention_identity),
         )
         != candidate
     ):
@@ -338,14 +346,10 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
     )
     baseline = checkpoint_score(decision["incumbent"])
     original_parent = checkpoint_score(decision["original_parent"])
-    retention_task_ids: tuple[str, ...] = ()
+    retention_task_ids = original_retention_task_ids(source_config, artifact_identity(retention))
     for label, score in (("incumbent", baseline), ("parent", original_parent)):
         coding = pinned_record(source_config, f"{label}_coding")
         retained = pinned_record(source_config, f"{label}_retention")
-        ids = tuple(sorted(retained["task_rewards"]))
-        if retention_task_ids and ids != retention_task_ids:
-            raise ValueError("Four-pass baselines use different retention contracts")
-        retention_task_ids = ids
         if (
             evaluated_score(
                 coding,
@@ -353,7 +357,7 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
                 score.checkpoint_identity,
                 study["coding_panel_sha256"],
                 artifact_identity(retention),
-                tuple(sorted(retained["task_rewards"])),
+                retention_task_ids,
             )
             != score
         ):

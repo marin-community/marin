@@ -264,6 +264,16 @@ def test_four_pass_refuses_changed_condition_before_graph_build(study_inputs, de
         four_pass_teacher_workflow(study)
 
 
+def test_four_pass_rejects_changed_candidate_retention_task_ids_with_same_count(study_inputs):
+    study, pin = study_inputs
+    retention = json.loads(Path(study["candidate_retention_uri"]).read_text())
+    retention["task_rewards"]["replacement-task"] = retention["task_rewards"].pop("a")
+    pin(study, "candidate_retention", retention)
+
+    with pytest.raises(ValueError, match="complete identical coding and retention panels"):
+        four_pass_teacher_workflow(study)
+
+
 def test_four_pass_training_has_four_complete_batches_and_final_reload(study_inputs, tmp_path):
     study, _ = study_inputs
     outputs = four_pass_teacher_workflow(study)
