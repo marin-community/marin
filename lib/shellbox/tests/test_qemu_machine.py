@@ -5,6 +5,7 @@
 
 import asyncio
 import importlib.resources
+import os
 import sys
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from shellbox.backends.qemu.machine import Acceleration, QemuMachine
 from shellbox.machine import Command, ExitReason, MachineSpec, QemuBundle
 
 
-async def local_guest(tmp_path: Path) -> QemuMachine:
+async def local_guest(tmp_path: Path, upload_fd: int | None = None) -> QemuMachine:
     # The real guest loop uses host applets and pipes in place of guest devices.
     busybox = tmp_path / "busybox"
     busybox.write_text(
@@ -30,6 +31,14 @@ async def local_guest(tmp_path: Path) -> QemuMachine:
     source = importlib.resources.files("shellbox.backends.qemu").joinpath("guest/init").read_text()
     source = source[source.index("while IFS=") :]
     source = source.replace("/harbor/busybox", str(busybox)).replace("/tmp/harbor-", str(tmp_path / "harbor-"))
+    replacements = f"s|/harbor/busybox|{busybox}|g"
+    if upload_fd is not None:
+        replacements += f";s|/dev/vport0p2|/proc/self/fd/{upload_fd}|g"
+    anchor = f"      $busybox chmod 600 {tmp_path / 'harbor-input'}"
+    source = source.replace(
+        anchor,
+        f"      $busybox sed -i '{replacements}' {tmp_path / 'harbor-command.sh'}\n" + anchor,
+    )
     source = source.replace(" < /dev/ttyS0", "").replace(" > /dev/ttyS0", " >&1")
     init = tmp_path / "init"
     init.write_text(f"busybox={busybox}\n" + source)
@@ -40,6 +49,7 @@ async def local_guest(tmp_path: Path) -> QemuMachine:
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        pass_fds=() if upload_fd is None else (upload_fd,),
     )
     return machine
 
@@ -134,6 +144,44 @@ def test_qemu_unresponsive_guest_raises_infrastructure_error(tmp_path, monkeypat
                 await machine.run(Command(("true",), timeout=0.01))
             with pytest.raises(RuntimeError, match="not running"):
                 await machine.run(Command(("true",)))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+def test_binary_upload_preserves_bytes_modes_and_shell_after_preflight_failure(tmp_path):
+    async def scenario():
+        read_fd, write_fd = os.pipe()
+        try:
+            machine = await local_guest(tmp_path, upload_fd=read_fd)
+        finally:
+            os.close(read_fd)
+        loop = asyncio.get_running_loop()
+        protocol = asyncio.StreamReaderProtocol(asyncio.StreamReader())
+        transport, _ = await loop.connect_write_pipe(lambda: protocol, os.fdopen(write_fd, "wb", buffering=0))
+        machine._upload_writer = asyncio.StreamWriter(transport, protocol, None, loop)
+        source = tmp_path / "source"
+        source.write_bytes(bytes(range(256)) * 8192)
+        source.chmod(0o751)
+        target = tmp_path / "new-parent" / "binary ' quote"
+        try:
+            mask = await machine.run(Command(("sh", "-c", "umask")))
+            await machine.upload(source, str(target))
+            assert target.read_bytes() == source.read_bytes()
+            assert target.stat().st_mode & 0o777 == 0o751
+            assert target.parent.stat().st_mode & 0o777 == 0o777 & ~int(mask.stdout.strip(), 8)
+            for payload in (b"", b"\x00\xff\r\nEND\x04" * 10000):
+                source.write_bytes(payload)
+                await machine.upload(source, str(target))
+                assert target.read_bytes() == payload
+            blocked = tmp_path / "blocked"
+            blocked.write_bytes(b"regular file")
+            with pytest.raises(RuntimeError, match="preparation failed"):
+                await machine.upload(source, str(blocked / "target"))
+            result = await machine.run(Command(("sh", "-c", "printf after-preflight")))
+            assert (result.exit_code, result.stdout) == (0, b"after-preflight")
+            assert blocked.read_bytes() == b"regular file"
         finally:
             await machine.close()
 

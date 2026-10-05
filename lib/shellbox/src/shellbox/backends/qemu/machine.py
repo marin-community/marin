@@ -35,7 +35,8 @@ from shellbox.machine import (
 )
 
 REQUEST_CHUNK_BYTES = 2048
-UPLOAD_CHUNK_BYTES = 48 * 1024
+UPLOAD_CHUNK_BYTES = 256 * 1024
+UPLOAD_PORT = "/dev/vport0p2"
 TRANSFER_LIMIT_BYTES = 128 * 1024 * 1024
 BOOT_DIAGNOSTIC_BYTES = 8192
 PROCESS_STOP_TIMEOUT = 5
@@ -175,6 +176,8 @@ class QemuMachine:
         self.process: asyncio.subprocess.Process | None = None
         self._runtime_dir: tempfile.TemporaryDirectory[str] | None = None
         self._pty_socket: Path | None = None
+        self._upload_writer: asyncio.StreamWriter | None = None
+        self._upload_lock = asyncio.Lock()
         self._shell: QemuShellSession | None = None
         self._lock = asyncio.Lock()
         metadata_path = self.bundle / "image.json"
@@ -218,6 +221,7 @@ class QemuMachine:
         accelerator_args = [value for name in accelerators for value in ("-accel", name)]
         qmp_socket = runtime_path / "qmp.sock"
         pty_socket = runtime_path / "pty.sock"
+        upload_socket = runtime_path / "upload.sock"
         self._pty_socket = pty_socket
         self.process = await asyncio.create_subprocess_exec(
             str(self.bundle / "qemu-system-x86_64"),
@@ -245,8 +249,13 @@ class QemuMachine:
             f"socket,id=harbor-shell,path={pty_socket},server=on,wait=off",
             "-device",
             "virtio-serial-device",
+            # Guest port numbers are an ABI: PTY is vport0p1, upload is vport0p2.
             "-device",
             "virtserialport,chardev=harbor-shell,name=harbor.shell",
+            "-chardev",
+            f"socket,id=harbor-upload,path={upload_socket},server=on,wait=off",
+            "-device",
+            "virtserialport,chardev=harbor-upload,name=harbor.upload",
             "-kernel",
             str(self.bundle / "vmlinuz"),
             "-initrd",
@@ -285,6 +294,7 @@ class QemuMachine:
                     f"stderr={stderr[-BOOT_DIAGNOSTIC_BYTES:]!r}"
                 )
         self.active_acceleration = await query_acceleration(qmp_socket)
+        _, self._upload_writer = await asyncio.open_unix_connection(upload_socket)
 
     async def open_shell(self) -> QemuShellSession:
         if self._shell is not None:
@@ -397,25 +407,54 @@ class QemuMachine:
     async def _upload_bytes(self, payload: bytes, target: str) -> None:
         if len(payload) > TRANSFER_LIMIT_BYTES:
             raise ValueError("QEMU upload exceeds the transfer limit")
-        temporary = f"{target}.harbor-upload-{os.urandom(16).hex()}"
-        quoted = shlex.quote(temporary)
+        writer = self._upload_writer
+        if writer is None:
+            raise RuntimeError("QEMU machine is not running")
         parent = shlex.quote(str(Path(target).parent))
-        try:
-            result = await self.run(Command(("/bin/sh", "-c", f"/harbor/busybox mkdir -p {parent} && : > {quoted}")))
-            if result.exit_code != 0:
-                raise RuntimeError(result.stderr.decode(errors="replace"))
-            # Bound the script argument below Linux MAX_ARG_STRLEN after base64 expansion.
+        template = shlex.quote(f"{target}.harbor-upload-XXXXXX")
+        digest = hashlib.sha256(payload).hexdigest()
+
+        async def send() -> None:
             for offset in range(0, len(payload), UPLOAD_CHUNK_BYTES):
-                encoded = base64.b64encode(payload[offset : offset + UPLOAD_CHUNK_BYTES]).decode()
-                script = f"printf '%s' '{encoded}' | /harbor/busybox base64 -d >> {quoted}"
-                result = await self.run(Command(("/bin/sh", "-c", script)))
-                if result.exit_code != 0:
-                    raise RuntimeError(result.stderr.decode(errors="replace"))
-            result = await self.run(Command(("/harbor/busybox", "mv", "-f", temporary, target)))
+                writer.write(payload[offset : offset + UPLOAD_CHUNK_BYTES])
+                await writer.drain()
+
+        async with self._upload_lock:
+            preflight = (
+                f"/harbor/busybox mkdir -p {parent} && "
+                f"temporary=$(/harbor/busybox mktemp {template}) && "
+                "printf '%s\n' \"$temporary\""
+            )
+            result = await self.run(Command(("/bin/sh", "-c", preflight)))
             if result.exit_code != 0:
-                raise RuntimeError(result.stderr.decode(errors="replace"))
-        finally:
-            await self._remove_upload_temporary(temporary)
+                raise RuntimeError(f"QEMU upload preparation failed: {result.stderr.decode(errors='replace')}")
+            temporary = shlex.quote(result.stdout.decode().removesuffix("\n"))
+            script = (
+                f"trap {shlex.quote(f'/harbor/busybox rm -f -- {temporary}')} EXIT && "
+                f"/harbor/busybox head -c {len(payload)} {UPLOAD_PORT} > {temporary} && "
+                f'test "$(/harbor/busybox wc -c < {temporary})" -eq {len(payload)} && '
+                f"actual=$(/harbor/busybox sha256sum {temporary}) && "
+                f'test "${{actual%% *}}" = {digest} && '
+                f"/harbor/busybox mv -f -- {temporary} {shlex.quote(target)}"
+            )
+            command = asyncio.create_task(self.run(Command(("/bin/sh", "-c", script))))
+            sender = asyncio.create_task(send())
+            try:
+                async with asyncio.timeout(DEFAULT_COMMAND_TIMEOUT + GUEST_RESPONSE_TIMEOUT):
+                    completed, _ = await asyncio.wait((command, sender), return_when=asyncio.FIRST_COMPLETED)
+                    if sender in completed:
+                        sender.result()
+                    result = await command
+                    if result.exit_code != 0:
+                        raise RuntimeError(f"QEMU upload failed validation: {result.stderr.decode(errors='replace')}")
+                    await sender
+            except BaseException:
+                # A failed transfer leaves unknown bytes in the port. Discard the VM.
+                command.cancel()
+                sender.cancel()
+                await asyncio.gather(command, sender, return_exceptions=True)
+                await self.close()
+                raise
 
     async def _remove_upload_temporary(self, path: str) -> None:
         if self.process is None:
@@ -495,6 +534,10 @@ class QemuMachine:
         target.write_bytes(base64.b64decode(result.stdout))
 
     async def close(self) -> None:
+        upload_writer = self._upload_writer
+        self._upload_writer = None
+        if upload_writer is not None:
+            upload_writer.close()
         if self._shell is not None:
             await self._shell.close()
             self._shell = None
@@ -507,6 +550,8 @@ class QemuMachine:
         if self._runtime_dir is not None:
             self._runtime_dir.cleanup()
             self._runtime_dir = None
+        if upload_writer is not None:
+            await upload_writer.wait_closed()
 
 
 class QemuMachineFactory:
