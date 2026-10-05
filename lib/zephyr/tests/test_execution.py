@@ -20,6 +20,7 @@ from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from zephyr import counters
+from zephyr import worker as worker_module
 from zephyr.context import (
     _NON_RETRYABLE_ERRORS,
     MAX_IRIS_WORKER_REPLICAS,
@@ -53,7 +54,7 @@ from zephyr.testing.coordinator import (
     make_test_coordinator,
     start_test_stage,
 )
-from zephyr.worker import ZephyrWorker, attempt_worker_id
+from zephyr.worker import ZephyrWorker
 from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
 
 
@@ -1108,11 +1109,22 @@ def test_worker_reregistration_does_not_count_toward_shard_failures(coordinator)
     assert run.task_error_attempts[0] == 0
 
 
-def test_shard_of_a_dead_replaced_attempt_is_requeued_while_its_successor_lives(coordinator):
-    """A lost Iris attempt that pulls a shard and dies must not strand it.
+def _worker_for_attempt(monkeypatch, attempt_id: int) -> ZephyrWorker:
+    """Construct worker 6 of a group as Iris attempt ``attempt_id``, without its background loops."""
+    actor = MagicMock(group_name="workers", index=6, shutdown_event=None)
+    job_info = MagicMock(job_id="job", attempt_id=attempt_id)
+    monkeypatch.setattr(worker_module, "current_actor", lambda: actor)
+    monkeypatch.setattr(worker_module, "get_job_info", lambda: job_info)
+    monkeypatch.setattr(ZephyrWorker, "_heartbeat_loop", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ZephyrWorker, "_poll_loop", lambda *_args, **_kwargs: None)
+    return ZephyrWorker(MagicMock(), MagicMock(), TEST_WORKER_AVAILABLE)
 
-    Iris can start attempt 1 of a worker task while attempt 0 still runs. With one
-    worker_id for both, attempt 1's heartbeats kept attempt 0's shard in flight forever.
+
+def test_shard_of_a_dead_replaced_attempt_is_requeued_while_its_successor_lives(coordinator, monkeypatch):
+    """Iris can start attempt 1 of a worker task while attempt 0 still runs.
+
+    When both used one worker_id, attempt 0 could pull a shard and die while attempt 1's
+    heartbeats kept that worker_id alive, so the shard stayed in flight forever.
     """
     task = ShardTask(
         shard_idx=0,
@@ -1123,8 +1135,8 @@ def test_shard_of_a_dead_replaced_attempt_is_requeued_while_its_successor_lives(
         cost=TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    old = attempt_worker_id("workers", 6, 0)
-    new = attempt_worker_id("workers", 6, 1)
+    old = _worker_for_attempt(monkeypatch, 0)._worker_id
+    new = _worker_for_attempt(monkeypatch, 1)._worker_id
     coordinator.register_worker(old, MagicMock())
     coordinator.register_worker(new, MagicMock())
 
