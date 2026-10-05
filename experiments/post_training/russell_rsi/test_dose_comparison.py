@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
+from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, artifact_identity
 from marin.experiment.cli import graph_handles
@@ -84,7 +86,19 @@ def test_every_dose_evaluation_waits_for_both_checkpoint_exports():
     assert artifact_identity(outputs["coding-4"]) != artifact_identity(outputs["coding-8"])
 
 
-def test_saved_four_export_reads_immutable_request_and_waits_for_completion(tmp_path, monkeypatch):
+@pytest.fixture(params=["local", "coordinator"])
+def export_submission_context(request):
+    previous = get_job_info()
+    set_job_info(JobInfo(JobName.from_wire("/test/export/0")) if request.param == "coordinator" else None)
+    try:
+        yield request.param
+    finally:
+        set_job_info(previous)
+
+
+def test_saved_four_export_reads_immutable_request_and_waits_for_completion(
+    tmp_path, monkeypatch, export_submission_context
+):
     root = tmp_path / "checkpoints"
     checkpoint = root / "global_step_4"
     checkpoint.mkdir(parents=True)
@@ -113,11 +127,14 @@ def test_saved_four_export_reads_immutable_request_and_waits_for_completion(tmp_
         assert argv[argv.index("--request") + 1] == str(checkpoint)
         assert "--no-wait" not in argv
         assert yaml.safe_load(Path(argv[argv.index("--launch-config") + 1]).read_text()) == launch_config
+        assert ("--target-cluster" in argv) == (export_submission_context == "local")
+        assert ("--parent-cluster-config" in argv) == (export_submission_context == "local")
         # The pinned export subprocess changes to its installed package directory.
         with monkeypatch.context() as exporter:
             exporter.chdir(tmp_path)
             for option in ("--cluster-config", "--parent-cluster-config"):
-                assert yaml.safe_load(Path(argv[argv.index(option) + 1]).read_text())
+                if option in argv:
+                    assert yaml.safe_load(Path(argv[argv.index(option) + 1]).read_text())
         request_file.write_text(json.dumps({**request, "status": "complete", "last_exit_code": 0}))
 
     monkeypatch.setattr("experiments.post_training.russell_rsi.launch_dose_comparison.subprocess.run", completed_export)

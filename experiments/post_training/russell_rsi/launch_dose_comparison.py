@@ -12,6 +12,7 @@ from pathlib import Path
 import click
 import yaml
 from fray.types import ResourceConfig
+from iris.cluster.client.job_info import get_job_info
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
@@ -144,6 +145,11 @@ def export_saved_four(config: SavedExportConfig) -> SkyRLRun:
     request = json.loads(StoragePath(request_uri).read_text())
     if request["step"] != 4 or request["checkpoint_path"] != checkpoint:
         raise ValueError("Saved export request does not identify dose checkpoint four")
+    submission_args = (
+        ["--target-cluster", CLUSTER, "--parent-cluster-config", str(Path(IRIS_HUB_CLUSTER_CONFIG).resolve(strict=True))]
+        if get_job_info() is None
+        else []
+    )
     with tempfile.TemporaryDirectory() as directory:
         launch = Path(directory) / "resolved-launch.yaml"
         resolved = yaml.safe_load(StoragePath(config.resolved_launch_uri).read_text())
@@ -170,10 +176,7 @@ def export_saved_four(config: SavedExportConfig) -> SkyRLRun:
                 CLUSTER,
                 "--cluster-config",
                 str(Path(f"lib/iris/config/{CLUSTER}.yaml").resolve(strict=True)),
-                "--target-cluster",
-                CLUSTER,
-                "--parent-cluster-config",
-                str(Path(IRIS_HUB_CLUSTER_CONFIG).resolve(strict=True)),
+                *submission_args,
                 "--gpu-variant",
                 "H100",
                 "--allocation-gpus-per-node",
