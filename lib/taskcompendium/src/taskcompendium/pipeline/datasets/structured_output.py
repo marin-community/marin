@@ -3,18 +3,24 @@
 
 """Preserve TaskTrove's explicit any-valid-instance contract and JSON Schema."""
 
+import base64
 import json
+import re
+from typing import Any
 
-from pydantic import ValidationError
-from verifyit.spec import SchemaFormat
+from jsonschema.exceptions import SchemaError
+from jsonschema.validators import validator_for
+from verifyit.spec import JsonSchemaSpec, SchemaFormat
 
+from taskcompendium.grader import grader_package
+from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
@@ -31,8 +37,28 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.constraints import JsonSchemaVerifier, required_object_conflicts
+from taskcompendium.runtime.resources import inline_resource
+
+
+def required_object_conflicts(schema: dict[str, Any], path: str = "$") -> list[str]:
+    """Identify mandatory object properties forbidden by their own schema."""
+    if schema.get("type") != "object":
+        return []
+    properties = schema.get("properties", {})
+    patterns = schema.get("patternProperties", {})
+    conflicts = []
+    for name in schema.get("required", []):
+        if (
+            schema.get("additionalProperties") is False
+            and name not in properties
+            and not any(re.search(pattern, name) for pattern in patterns)
+        ):
+            conflicts.append(f"{path}.{name}: required but forbidden by additionalProperties=false")
+        child = properties.get(name)
+        if isinstance(child, dict):
+            conflicts.extend(required_object_conflicts(child, f"{path}.{name}"))
+    return conflicts
+
 
 CONFIG = "laion__nemotron-gym-instruction-following-structured-v3"
 DELIVERY = "Write your final JSON to `/app/answer.txt`."
@@ -71,9 +97,13 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     if data.get("schema_type") != "json" or not isinstance(data.get("schema"), dict):
         return ImportRejection(reason="unsupported_schema", detail="Expected an explicit JSON Schema object")
     try:
-        verifier = JsonSchemaVerifier(document_schema_json=json.dumps(data["schema"]), schema_format=SchemaFormat.JSON)
-    except (ValidationError, ValueError) as error:
+        validator_for(data["schema"]).check_schema(data["schema"])
+    except SchemaError as error:
         return ImportRejection(reason="invalid_schema", detail=str(error))
+    package = grader_package(
+        JsonSchemaSpec(schema="schema.json", format=SchemaFormat.JSON),
+        (inline_resource("schema.json", json.dumps(data["schema"]).encode()),),
+    )
     return TaskSpec(
         id=row.id,
         context=ConversationInput(
@@ -86,7 +116,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         ),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.JSON_SCHEMA, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
 
@@ -110,8 +141,10 @@ def recipe() -> DatasetRecipe:
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    verifier = JsonSchemaVerifier.model_validate_json(task.verifier.parameters_json)
-    conflicts = required_object_conflicts(json.loads(verifier.document_schema_json))
+    spec = resolve_verifier(task.verifier)
+    assert isinstance(spec, JsonSchemaSpec)
+    schema_resource = next(resource for resource in task.resources.verifier if resource.path == spec.schema)
+    conflicts = required_object_conflicts(json.loads(base64.b64decode(schema_resource.source.content_base64)))
     checks = [
         CheckResult(check="required_object_contract", status=CheckStatus.FAIL, detail=conflict) for conflict in conflicts
     ]

@@ -38,7 +38,6 @@ from verifyit.grade import (
     Reward,
     aggregate_rewards,
     empty_output_policy,
-    infra_error,
     read_output,
     scored,
 )
@@ -67,8 +66,6 @@ MODEL_ENV = "VERIFYIT_JUDGE_MODEL"
 ATTEMPTS = 2
 REASONING_LIMIT = 400
 CONTEXT_LIMIT = 60_000
-ABSTENTION_LIMIT = 64 * 1024
-ABSTENTIONS = frozenset({"idk", "i dont know", "unknown", "unanswerable", "cannot answer"})
 
 REFERENCE_PROMPT = """You are an impartial grader for open-ended short-answer questions. Compare the \
 candidate response with the reference answer(s) below. Judge the substantive answer only: ignore \
@@ -429,35 +426,6 @@ def normalize(text: str) -> str:
     text = "".join(character for character in text if character not in string.punctuation)
     text = re.sub(r"\b(?:a|an|the)\b", " ", text)
     return re.sub(r"\s+", " ", text).strip()
-
-
-def grade_reference_candidate(references: tuple[str, ...], candidate: str) -> Reward:
-    """Score exact open-QA answers and leave semantic paraphrases ungraded."""
-    if not candidate.strip():
-        return scored(0.0)
-    if normalize(boxed_answer(candidate)) in {normalize(reference) for reference in references}:
-        return scored(1.0)
-    return infra_error("The source semantic reference judge is not bound")
-
-
-def abstention_normalized(text: str) -> str:
-    """Use the source abstention gate's narrower normalization, without LaTeX or Unicode folding."""
-    text = re.sub(r"(?<=\d),(?=\d)", "", text.lower())
-    text = "".join(character for character in text if character not in string.punctuation)
-    text = re.sub(r"\b(?:a|an|the)\b", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def grade_abstention_candidate(references: tuple[str, ...], abstention_token: str | None, candidate: str) -> Reward:
-    """Keep source exact matches ahead of abstention rejection and an unbound semantic judge."""
-    normalized = abstention_normalized(boxed_answer(candidate[:ABSTENTION_LIMIT]))
-    if normalized in {abstention_normalized(reference) for reference in references}:
-        return scored(1.0)
-    if not normalized:
-        return scored(0.0)
-    if normalized in ABSTENTIONS and not abstention_token:
-        return scored(0.0)
-    return infra_error("The source semantic abstention judge is not bound")
 
 
 def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai.OpenAI, str]:

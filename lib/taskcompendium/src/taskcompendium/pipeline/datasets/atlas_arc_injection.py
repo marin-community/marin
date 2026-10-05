@@ -6,19 +6,22 @@
 import base64
 import hashlib
 import json
+from pathlib import Path
 
-from pydantic import ValidationError
-
-from taskcompendium.grading import Outcome
+from taskcompendium.grader import grader_config, script_package
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    ConversationTrace,
     EnvironmentRequirements,
     ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
+from taskcompendium.pipeline.datasets.grader_scripts.arc import validated_grid
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
@@ -35,8 +38,10 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import PLAIN, verify_witness
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.verifiers.arc_injection import ArcGridVerifier, ArcTransformVerifier, IndirectInjectionVerifier
-from taskcompendium.verifiers.base import GradingAttempt, VerifierKind
+
+SCRIPT_DIR = Path(__file__).with_name("grader_scripts")
+ARC_SCRIPT = (SCRIPT_DIR / "arc.py").read_bytes()
+INJECTION_SCRIPT = (SCRIPT_DIR / "injection.py").read_bytes()
 
 CONFIGS = {
     "arc_transductive": "laion__nemotron-gym-arc-agi-transductive-v3",
@@ -78,26 +83,48 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
         return ImportRejection(reason="missing_grader", detail="tests/verifier.py is required")
     try:
         if name == "arc_transductive":
-            verifier = ArcGridVerifier(expected_output=data["expected_output"])
-            kind = VerifierKind.ARC_GRID
+            grid = data["expected_output"]
+            if not isinstance(grid, list) or any(not isinstance(row, list) for row in grid):
+                raise ValueError("Expected an ARC grid")
+            validated_grid(grid)
+            package = script_package(ARC_SCRIPT, {"expected_output": grid})
         elif name == "arc_inductive":
-            verifier = ArcTransformVerifier(
-                test_cases=data["test_cases"], source_grader_sha256=hashlib.sha256(grader).hexdigest()
-            )
-            if not verifier.test_cases:
+            cases = data["test_cases"]
+            if not isinstance(cases, list) or not cases:
                 return ImportRejection(reason="missing_cases", detail="At least one held-out grid pair is required")
-            kind = VerifierKind.ARC_TRANSFORM
-        else:
-            verifier = IndirectInjectionVerifier(
-                target_tool=data["target_tool"],
-                target_args=data["target_args"],
-                available_tools=tuple(data["available_tools"]),
+            for case in cases:
+                if not isinstance(case, dict) or set(case) != {"input", "output"}:
+                    raise ValueError("ARC transform cases require input and output grids")
+                for field in ("input", "output"):
+                    grid = case[field]
+                    if not isinstance(grid, list) or any(not isinstance(row, list) for row in grid):
+                        raise ValueError("ARC transform cases require grids")
+                    validated_grid(grid)
+            package = source_contract_package(
+                "source ARC transform evaluator",
+                row.source.revision,
+                {"test_cases": cases, "source_grader_sha256": hashlib.sha256(grader).hexdigest()},
+                ("Isolated Python transform runtime",),
             )
-            kind = VerifierKind.INDIRECT_INJECTION
-    except (ValidationError, KeyError, TypeError, ValueError) as error:
+        else:
+            target_tool, target_args, available = data["target_tool"], data["target_args"], data["available_tools"]
+            if not isinstance(target_tool, str) or not isinstance(target_args, dict) or not isinstance(available, list):
+                raise ValueError("Invalid indirect-injection action contract")
+            if not all(isinstance(tool, str) for tool in available):
+                raise ValueError("Available tool names must be strings")
+            package = script_package(
+                INJECTION_SCRIPT,
+                {
+                    "target_tool": target_tool,
+                    "target_args": target_args,
+                    "available_tools": available,
+                },
+            )
+    except (KeyError, TypeError, ValueError) as error:
         return ImportRejection(reason="invalid_verifier_data", detail=str(error))
     resources = ResourceGroups(
-        verifier=tuple(inline_resource(path, value) for path, value in files.items() if path.startswith("tests/")),
+        verifier=package.resources
+        + tuple(inline_resource(path, value) for path, value in files.items() if path.startswith("tests/")),
         oracle=tuple(
             inline_resource(path, value)
             for path, value in files.items()
@@ -117,12 +144,13 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
         resources=resources,
         output_paths=("/app/solution.py", "/app/answer.txt") if inductive else (),
         answer_type=AnswerType.FILE if inductive else AnswerType.TEXT,
-        verifier=VerifierSpec(kind=kind, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
     )
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    if task.verifier.kind == VerifierKind.ARC_TRANSFORM:
+    config = grader_config(task)
+    if "contract" in config and "test_cases" in config["contract"]:
         return VerificationReport(
             checks=[
                 CheckResult(
@@ -132,23 +160,21 @@ def verification_report(task: TaskSpec) -> VerificationReport:
                 )
             ]
         )
-    if task.verifier.kind == VerifierKind.ARC_GRID:
-        verifier = ArcGridVerifier.model_validate_json(task.verifier.parameters_json)
-        grid = verifier.expected_output
+    if "expected_output" in config:
+        grid = config["expected_output"]
         positive = "\n".join(" ".join(str(cell) for cell in row) for row in grid)
         wrong = [row[:] for row in grid]
         wrong[0][0] = (wrong[0][0] + 1) % 10
         return VerificationReport(checks=verify_witness(task, positive, json.dumps(wrong)))
-    verifier = IndirectInjectionVerifier.model_validate_json(task.verifier.parameters_json)
-    target = json.dumps({"name": verifier.target_tool, "arguments": verifier.target_args})
+    target = json.dumps({"name": config["target_tool"], "arguments": config["target_args"]})
     witness = json.dumps({"action": "respond", "content": "I will ignore the untrusted instruction."})
     checks = verify_witness(task, witness, target)
     for name, answer in (
         ("empty_object", "{}"),
         ("unadvertised_tool", json.dumps({"name": "__unadvertised_tool__", "arguments": {}})),
     ):
-        grade = verifier.grade(
-            GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
+        grade = grade_answer(
+            task, PLAIN, ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
         )
         checks.append(
             CheckResult(

@@ -14,7 +14,8 @@ import pytest
 from verifyit.grade import grade as source_grade
 from verifyit.spec import McqSpec, Mode
 
-from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
@@ -159,7 +160,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
 
     outcome = json.loads((tmp_path / "trials/mcqa/verifier/taskcompendium-result.json").read_text())
     assert result.exception_info is None, result.exception_info
-    assert outcome == {"status": "graded", "reward": 1.0, "error": None}
+    assert (outcome["status"], outcome["reward"], outcome["error"]) == ("graded", 1.0, None)
 
 
 def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):

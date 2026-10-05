@@ -4,9 +4,9 @@
 """Behavioral contracts for imported calendar and shell-output scorers."""
 
 from verifyit.grade import Status
-from verifyit.modes.grade_calendar import CalendarEvent, score_calendar
+from taskcompendium.pipeline.datasets.grader_scripts.calendar import CalendarEvent, score_calendar
 from verifyit.modes.grade_nl2bash import score_capture
-from verifyit.modes.grade_schedule import score_schedule
+from taskcompendium.pipeline.datasets.grader_scripts.schedule import score_schedule
 
 
 def test_schedule_accepts_alternate_slots_but_rejects_overlap():

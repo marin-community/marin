@@ -17,11 +17,12 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     FunctionDefinition,
     ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
     ToolResult,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
 from taskcompendium.pipeline.datasets.nemotron.placeholders import restore_placeholder
 from taskcompendium.pipeline.models import (
     ImportRejection,
@@ -29,8 +30,6 @@ from taskcompendium.pipeline.models import (
     NormalizedTask,
     RawRow,
 )
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 DATASET = "nvidia/Nemotron-RL-Ultra-Training-Blends"
 REVISION = "482392c14c6418e26804ea2e5d10359df9877df4"
@@ -158,11 +157,11 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
     reasoning = [item for item in request["input"] if item.get("type") == "reasoning"]
     if reasoning:
         contract["provider_reasoning"] = reasoning
-    verifier = SourceContractVerifier(
-        evaluator="MarinSkyRL NemotronUltraEnv " + row.data["agent_ref"]["name"],
-        source_revision=VERIFIER_REVISION,
-        contract=contract,
-        runtime_requirements=requirements,
+    package = source_contract_package(
+        "MarinSkyRL NemotronUltraEnv " + row.data["agent_ref"]["name"],
+        VERIFIER_REVISION,
+        contract,
+        requirements,
     )
     state = {key: data[key] for key in ("environment", "scenario", "info", "metadata", "exp_cal_state") if key in data}
     providers = (
@@ -182,6 +181,7 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
             if data.get("expected_action", {}).get("type") == "function_call" and tools
             else AnswerType.TEXT
         ),
-        verifier=VerifierSpec(kind=VerifierKind.SOURCE_CONTRACT, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
     )
     return NormalizedTask(task, (*placeholder_changes, *changes))

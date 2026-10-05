@@ -3,6 +3,10 @@
 
 """Score a final calendar JSON value against TaskTrove scheduling constraints."""
 
+import os
+from pathlib import Path
+from dataclasses import asdict
+
 import json
 import re
 import unicodedata
@@ -145,3 +149,16 @@ def score_schedule(expected: Mapping[str, Mapping[str, object]], events: object)
         if current[0] < previous[1]:
             errors.append(f"events {previous[2]} and {current[2]} overlap")
     return scored(float(not errors), error="; ".join(errors) or None)
+
+
+def main() -> None:
+    tests = Path(os.environ["VERIFYIT_TESTS_DIR"])
+    workspace = Path(os.environ["VERIFYIT_WORKSPACE"])
+    config = json.loads((tests / "config.json").read_text())
+    answer = (workspace / "answer.txt").read_text()
+    verdict = grade_schedule_candidate(config["expected_events"], answer)
+    (Path(os.environ["VERIFYIT_LOGS_DIR"]) / "verdict.json").write_text(json.dumps(asdict(verdict)))
+
+
+if __name__ == "__main__":
+    main()

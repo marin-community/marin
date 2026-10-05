@@ -10,17 +10,40 @@ state when an explicit episode check runs.
 import json
 from dataclasses import dataclass, field
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
-from taskcompendium.models import AssistantToolCalls, FunctionCall, ResourceGroups, TaskSpec
+from taskcompendium.models import AssistantToolCalls, FunctionCall, TaskSpec
 from taskcompendium.runtime.controls import Control, tool_turn
 from taskcompendium.runtime.models import RuntimeEvidence
-from taskcompendium.verifiers.runtime import CalendarEvent, CalendarState, CalendarStateVerifier
 
 INTERFACE = "calendar:v1"
 
 
-def calendar_controls(verifier: CalendarStateVerifier) -> tuple[Control, ...]:
+class CalendarEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str
+    title: str
+    start: int
+    end: int
+    participants: tuple[str, ...]
+
+
+class CalendarState(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    events: tuple[CalendarEvent, ...]
+
+
+class CalendarGoal(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    title: str
+    participants: tuple[str, ...]
+    duration: int
+    earliest: int
+    latest: int
+    original_events: tuple[CalendarEvent, ...]
+
+
+def calendar_controls(verifier: CalendarGoal) -> tuple[Control, ...]:
     """Choose valid and invalid schedule actions for the calendar episode check."""
     slots = []
     for start in range(verifier.earliest, verifier.latest - verifier.duration + 1):
@@ -110,7 +133,9 @@ class CalendarFactory:
             or requirements.setup_commands
             or requirements.environment_variables
             or set(requirements.tool_providers) != {"calendar"}
-            or task.resources != ResourceGroups()
+            or task.resources.all
+            or task.resources.worker
+            or task.resources.oracle
         ):
             raise ValueError("Calendar factory cannot satisfy these environment requirements")
         state = CalendarState.model_validate(provider.initial_state)

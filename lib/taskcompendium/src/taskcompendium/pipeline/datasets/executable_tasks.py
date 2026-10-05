@@ -8,11 +8,14 @@ import base64
 import json
 import shlex
 from dataclasses import replace
+from functools import partial
 
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.machine import DockerImage, MachineSpec, NetworkPolicy
+from verifyit.spec import spec_from_table
 
-from taskcompendium.grading import Outcome
+from taskcompendium.grader import grader_package
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -22,7 +25,6 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
@@ -40,10 +42,9 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
+from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import INTERFACE, ShellFactory
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier, grade_submission
 
 CONFIGS = {
     "nl2bash": "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
@@ -81,7 +82,7 @@ CRITERIA = {
 }
 
 
-def normalize(row: RawRow, image: str, timeout: float, memory_mb: int) -> TaskSpec | ImportRejection:
+def normalize(row: RawRow, image: str) -> TaskSpec | ImportRejection:
     """Import a converter result while keeping tests and oracle code private."""
     rejection = row.data.get("conversion_rejection")
     if isinstance(rejection, dict):
@@ -94,27 +95,21 @@ def normalize(row: RawRow, image: str, timeout: float, memory_mb: int) -> TaskSp
     worker = []
     oracle = []
     trusted = []
-    private = []
     for path, encoded in converted["data_files"].items():
         data = base64.b64decode(encoded, validate=True)
         destination = trusted if path.startswith("tests/") else worker
         if path.startswith("tests/setup_files/"):
             destination = oracle
-        resource = inline_resource(path, data)
+        resource = inline_resource(path.removeprefix("tests/") if destination is trusted else path, data)
         destination.append(resource)
-        private.append(resource)
     oracle.extend(
         inline_resource(path, base64.b64decode(encoded, validate=True))
         for path, encoded in converted["control_files"].items()
     )
     paths = ("/output/command_capture.txt",) if spec["mode"] == "script" else ("/app/solution.py", "/app/solution.cpp")
-    verifier = TaskTroveExecutableVerifier(
-        grader_spec_json=json.dumps(spec),
-        resources=tuple(private),
-        submission_paths=paths,
-        image=image,
-        timeout=timeout,
-        memory_mb=memory_mb,
+    package = grader_package(spec_from_table(spec), tuple(trusted))
+    verifier = package.verifier.model_copy(
+        update={"environment_requirements": EnvironmentRequirements(docker_image=image)}
     )
     return TaskSpec(
         id=row.id,
@@ -128,7 +123,7 @@ def normalize(row: RawRow, image: str, timeout: float, memory_mb: int) -> TaskSp
         resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle), verifier=tuple(trusted)),
         output_paths=paths,
         answer_type=AnswerType.FILE,
-        verifier=VerifierSpec(kind=VerifierKind.TASKTROVE_EXECUTABLE, parameters_json=verifier.model_dump_json()),
+        verifier=verifier,
     )
 
 
@@ -144,7 +139,7 @@ def recipe(
     """Bind one converted source and explicit sandbox limits to the common stages."""
 
     def normalize_row(row: RawRow) -> TaskSpec | ImportRejection:
-        return normalize(row, image, timeout, memory_mb)
+        return normalize(row, image)
 
     source_recipe = DatasetRecipe(
         name=f"tasktrove-{name}",
@@ -168,28 +163,30 @@ def recipe(
             id="isolated-executable-controls",
             revision="1",
             parameters={"image": image, "timeout": timeout, "memory_mb": memory_mb},
-            run=verification_report,
+            run=partial(verification_report, timeout=timeout, memory_mb=memory_mb),
         ),
     )
     return with_raw_converter(source_recipe, converter, converter_revision)
 
 
-def verification_report(task: TaskSpec) -> VerificationReport:
-    return asyncio.run(executable_checks(task))
+def verification_report(task: TaskSpec, *, timeout: float = 600, memory_mb: int = 4096) -> VerificationReport:
+    return asyncio.run(executable_checks(task, timeout=timeout, memory_mb=memory_mb))
 
 
-async def executable_checks(task: TaskSpec) -> VerificationReport:
+async def executable_checks(task: TaskSpec, *, timeout: float = 600, memory_mb: int = 4096) -> VerificationReport:
     """Check missing, empty, wrong, and oracle submissions in fresh machines."""
-    verifier = TaskTroveExecutableVerifier.model_validate_json(task.verifier.parameters_json)
+    image = task.verifier.environment_requirements.docker_image
+    if image is None:
+        raise ValueError("Executable controls require a pinned image")
     checks = []
-    path = verifier.submission_paths[0]
+    path = task.output_paths[0]
     wrong = b"raise RuntimeError('__negative_control__')\n" if path.endswith(".py") else b"unexpected error\n"
     for name, files in (
         ("missing_submission", {}),
         ("empty_submission", {path: b""}),
         ("wrong_submission", {path: wrong}),
     ):
-        result = await grade_submission(verifier, files, DockerMachineFactory())
+        result = await grade_submission(task, files, DockerMachineFactory(), timeout=timeout, memory_mb=memory_mb)
         status = (
             CheckStatus.INFRA_ERROR
             if result.status == Outcome.INFRA_ERROR
@@ -208,17 +205,17 @@ async def executable_checks(task: TaskSpec) -> VerificationReport:
             )
         )
         return VerificationReport(checks)
-    spec = json.loads(verifier.grader_spec_json)
+    spec = json.loads(task.verifier.parameters_json)
     factory = ShellFactory(
         machine_factory=DockerMachineFactory(),
         machine_spec=MachineSpec(
-            DockerImage(verifier.image),
+            DockerImage(image),
             workdir="/",
             network=NetworkPolicy.DENY,
-            memory_mb=verifier.memory_mb,
+            memory_mb=memory_mb,
         ),
-        backend_identity={"backend": "docker", "image": verifier.image},
-        command_timeout=verifier.timeout,
+        backend_identity={"backend": "docker", "image": image},
+        command_timeout=timeout,
         output_limit_bytes=1_048_576,
     )
     try:
@@ -248,7 +245,7 @@ async def executable_checks(task: TaskSpec) -> VerificationReport:
         evidence = await environment.evidence()
     finally:
         await environment.close()
-    result = await grade_submission(verifier, evidence.files, DockerMachineFactory())
+    result = await grade_submission(task, evidence.files, DockerMachineFactory(), timeout=timeout, memory_mb=memory_mb)
     status = (
         CheckStatus.INFRA_ERROR
         if result.status == Outcome.INFRA_ERROR

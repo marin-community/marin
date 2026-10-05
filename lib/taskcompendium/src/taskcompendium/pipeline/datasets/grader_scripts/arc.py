@@ -3,6 +3,10 @@
 
 """Parse ARC grids and score the final boxed grid or whole answer."""
 
+import os
+from pathlib import Path
+from dataclasses import asdict
+
 import json
 import re
 
@@ -76,3 +80,16 @@ def grade_arc_grid(text: str, expected_output: list[list[int]]) -> Reward:
     candidates = (boxed, text) if boxed is not None else (text,)
     grid = next((parsed for candidate in candidates if (parsed := parse_grid(candidate)) is not None), None)
     return scored(float(grid == expected_output))
+
+
+def main() -> None:
+    tests = Path(os.environ["VERIFYIT_TESTS_DIR"])
+    workspace = Path(os.environ["VERIFYIT_WORKSPACE"])
+    config = json.loads((tests / "config.json").read_text())
+    answer = (workspace / "answer.txt").read_text()
+    verdict = grade_arc_grid(answer, config["expected_output"])
+    (Path(os.environ["VERIFYIT_LOGS_DIR"]) / "verdict.json").write_text(json.dumps(asdict(verdict)))
+
+
+if __name__ == "__main__":
+    main()

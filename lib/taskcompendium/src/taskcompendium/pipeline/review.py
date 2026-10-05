@@ -16,7 +16,6 @@ from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewSta
 from taskcompendium.pipeline.query_cache import cached_batch_output
 from taskcompendium.pipeline.review_transport import BatchClient, batch_output, typed_batch_records
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.verifiers.base import VerifierKind
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -109,6 +108,14 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
                 state[field] = private_evidence_summary(
                     value, f"Shared evidence is represented in verifier.contract.{field}; full value retained in audit"
                 )
+    for field in ("source_judge_data", "source_judge_toml"):
+        if field in contract:
+            contract[field] = private_evidence_summary(
+                contract[field], "Original retained in audit; parsed rules retained separately"
+            )
+    question = contract.get("question")
+    if isinstance(question, str) and any(question == message["content"] for message in messages):
+        contract["question"] = private_evidence_summary(question, "Complete question occurs in public conversation")
     context = contract.get("context")
     if isinstance(context, str) and duplicate_public_context(context, messages):
         contract["context"] = private_evidence_summary(context, "Complete transcript occurs in public context.events")
@@ -230,32 +237,12 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
         "omitted_count": len(resources) - len(previews),
         "sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
     }
-    parameters = json.loads(task.verifier.parameters_json)
-    if "resources" in parameters:
-        parameters["resources"] = {
-            "count": len(parameters["resources"]),
-            "evidence": "Matching top-level resource previews; complete hashed fixtures are retained in the audit",
-        }
-    if task.verifier.kind == VerifierKind.RUBRIC_JUDGE:
-        # Parsed aggregation preserves the original judge rules. Its raw files also
-        # repeat the entire conversation per criterion, overwhelming the review.
-        for field in ("source_judge_data", "source_judge_toml"):
-            encoded = json.dumps(parameters[field], sort_keys=True).encode()
-            parameters[field] = {
-                "sha256": hashlib.sha256(encoded).hexdigest(),
-                "byte_count": len(encoded),
-                "evidence": "Original retained in task audit; full parsed judge rules appear in aggregation",
-            }
-        question = parameters["question"]
-        public_text = "\n".join(event.content for event in task.context.events if event.type == "message")
-        if question in public_text:
-            parameters["question"] = {
-                "sha256": hashlib.sha256(question.encode()).hexdigest(),
-                "evidence": "Complete question occurs in public conversation context",
-            }
-    if task.verifier.kind == VerifierKind.SOURCE_CONTRACT:
-        project_source_contract(parameters, payload)
-    payload["verifier"]["parameters_json"] = json.dumps(parameters)
+    for resource in task.resources.verifier:
+        if resource.path == "config.json":
+            parameters = json.loads(resource_bytes(resource))
+            if "contract" in parameters:
+                project_source_contract(parameters, payload)
+            payload["grader_data"] = parameters
     payload["resource_preview_policy"] = (
         "Resources are private reviewer evidence, with roles identifying what the actor sees. "
         "Text previews are bounded and carry truncation markers; original bytes remain in the audit. "

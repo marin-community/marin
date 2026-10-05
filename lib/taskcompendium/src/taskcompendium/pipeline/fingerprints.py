@@ -3,17 +3,14 @@
 
 """Curation code and task-content identities."""
 
-import json
-
 from verifyit.spec import Mode
 
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
 from taskcompendium.pipeline.models import DatasetRecipe
-from taskcompendium.verifiers.base import VerifierKind
 
-NORMALIZATION_STAGE_REVISION = "3"
-VERIFICATION_STAGE_REVISION = "2"
+NORMALIZATION_STAGE_REVISION = "4"
+VERIFICATION_STAGE_REVISION = "3"
 REVIEW_STAGE_REVISION = "2"
 
 
@@ -34,13 +31,9 @@ def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
     content = task.model_dump(mode="json", exclude={"id", "source"})
     # Oracle scripts are executable witnesses, not task semantics.
     content["resources"]["oracle"] = []
-    if include_reference and task.verifier.kind in (VerifierKind.MATH_ANSWER, Mode.MCQ):
+    if include_reference and task.verifier.kind in (Mode.MATH, Mode.MCQ):
         # These graders read only their parameters; derivations and provenance are audit evidence.
         content["resources"]["verifier"] = []
-    if include_reference and task.verifier.kind == VerifierKind.PREFERENCE_EVIDENCE:
-        parameters = json.loads(content["verifier"]["parameters_json"])
-        parameters.pop("source_metadata")
-        content["verifier"]["parameters_json"] = json.dumps(parameters, sort_keys=True)
     if not include_reference:
         content.pop("verifier")
         content["resources"]["verifier"] = []
@@ -53,5 +46,5 @@ def deduplication_key(task: TaskSpec) -> str:
     # quality review checks reference agreement; exact copies still deduplicate.
     return semantic_digest(
         task,
-        include_reference=task.verifier.kind in {VerifierKind.PREFERENCE_EVIDENCE, VerifierKind.SOURCE_CONTRACT},
+        include_reference=task.verifier.kind == Mode.SCRIPT,
     )

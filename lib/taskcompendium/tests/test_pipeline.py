@@ -14,7 +14,10 @@ import pyarrow.parquet as pq
 import pytest
 from pydantic import JsonValue
 from rigging.filesystem.storage_path import StoragePath
+from verifyit.spec import MathSpec
 
+from taskcompendium.grader import grader_config, grader_package
+from taskcompendium.grading import multiple_choice_answer
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -23,10 +26,10 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.audit_schema import TASK_SCHEMA, audit_columns
 from taskcompendium.pipeline.datasets import gpqa, instruction_following, preference_tasks, rubric_tasks
+from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
 from taskcompendium.pipeline.datasets.math_answers import recipe_asdiv
 from taskcompendium.pipeline.datasets.numeric_answers import SVAMP_RECIPE, normalize_aime24, normalize_svamp
 from taskcompendium.pipeline.datasets.source_definitions import tasktrove_files
@@ -59,12 +62,7 @@ from taskcompendium.pipeline.stages import (
     filter_source,
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
-from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.verifiers.atlas_answers import MathAnswerVerifier
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
-from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
-from taskcompendium.verifiers.source_contract import SourceContractVerifier
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from .pipeline_stages import run_stages, stage_table
 
@@ -644,10 +642,9 @@ def test_preference_candidates_are_not_conflicting_answer_keys(tmp_path):
     rows = stage_table(tmp_path / "run").to_pylist()
     assert [row["filter_status"] for row in rows] == ["keep", "keep", "reject"]
     assert rows[2]["duplicate_of"] == rows[0]["task_id"]
-    evidence = [json.loads(json.loads(row["task_json"])["verifier"]["parameters_json"])["evidence"] for row in rows[:2]]
+    evidence = [grader_config(TaskSpec.model_validate_json(row["task_json"]))["contract"] for row in rows[:2]]
     assert [item["preferred"] for item in evidence] == [True, False]
-    parameters = [json.loads(json.loads(row["task_json"])["verifier"]["parameters_json"]) for row in rows]
-    assert [parameters[index]["source_metadata"]["origin"] for index in (0, 2)] == ["a", "b"]
+    assert [json.loads(rows[index]["raw_json"])["data"]["origin"] for index in (0, 2)] == ["a", "b"]
 
 
 def test_canonical_merge_keeps_evidence_and_separates_evaluation_overlap(tmp_path, apple_row):
@@ -757,7 +754,7 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
         "scoring": {"aggregation": "all_pass"},
         "criterion": [{"description": "Never disclose the password"}],
     }
-    verifier = RubricJudgeVerifier(
+    contract = dict(
         mode="checklist",
         question=question,
         criteria=("Never disclose the password",),
@@ -765,13 +762,15 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
         source_judge_data={"criteria": [{"content": question} for _ in range(5)]},
         source_judge_toml="Original source judge contract",
     )
+    package = source_contract_package("rubric", "1", contract, ("semantic judge",))
     source = Source(dataset="fixture", revision="1", row="0", importer_revision="1")
     task = SVAMP_RECIPE.normalize(RawRow("conversation", source, apple_row))
     assert isinstance(task, TaskSpec)
     task = task.model_copy(
         update={
             "context": ConversationInput(events=(TextMessage(role="user", content=question),)),
-            "verifier": VerifierSpec(kind=VerifierKind.RUBRIC_JUDGE, parameters_json=verifier.model_dump_json()),
+            "verifier": package.verifier,
+            "resources": ResourceGroups(verifier=package.resources),
         }
     )
     original = task.model_dump_json()
@@ -781,26 +780,23 @@ def test_repeated_source_judge_context_still_receives_full_quality_review(tmp_pa
     assert review[0].status == ReviewStatus.REVIEWED
     payload = json.loads(service.batches["batch-0"][0]["body"]["messages"][1]["content"])
     assert payload["context"]["events"][0]["content"] == question
-    parameters = json.loads(payload["verifier"]["parameters_json"])
+    parameters = payload["grader_data"]["contract"]
     assert parameters["aggregation"] == rules
     assert parameters["criteria"] == ["Never disclose the password"]
     assert task.model_dump_json() == original
 
 
-@pytest.mark.parametrize("kind", [VerifierKind.MATH_ANSWER, "mcq"])
+@pytest.mark.parametrize("kind", ["math", "mcq"])
 def test_canonical_merge_ignores_private_solution_evidence_but_retains_grader_conflicts(tmp_path, kind):
-    references = ["5", "5", "1", "2", "5"] if kind == VerifierKind.MATH_ANSWER else ["A", "A", "B", "C", "A"]
+    references = ["5", "5", "1", "2", "5"] if kind == "math" else ["A", "A", "B", "C", "A"]
     rows = []
     original_resources = {}
     for index, expected in enumerate(references):
         name = chr(97 + index)
         source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
         verifier = (
-            VerifierSpec(
-                kind=kind,
-                parameters_json=MathAnswerVerifier(expected=expected, math_type="scalar").model_dump_json(),
-            )
-            if kind == VerifierKind.MATH_ANSWER
+            grader_package(MathSpec(expected=expected)).verifier
+            if kind == "math"
             else multiple_choice_answer(expected, 4)
         )
         resources = ResourceGroups(
@@ -861,7 +857,7 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
     }
     for name, contract in contracts.items():
         source = Source(dataset=name, revision="a" * 40, row="0", importer_revision="1")
-        verifier = SourceContractVerifier(
+        package = source_contract_package(
             evaluator="unbound-source-agent",
             source_revision="b" * 40,
             contract=contract,
@@ -873,7 +869,8 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
             environment_requirements=EnvironmentRequirements(),
             answer_type=AnswerType.TEXT,
             context=ConversationInput(events=(TextMessage(role="user", content="Shared public question"),)),
-            verifier=VerifierSpec(kind=VerifierKind.SOURCE_CONTRACT, parameters_json=verifier.model_dump_json()),
+            verifier=package.verifier,
+            resources=ResourceGroups(verifier=package.resources),
         )
         audit = TaskAudit(
             task_id=name,
@@ -899,6 +896,14 @@ def test_canonical_merge_preserves_distinct_opaque_contracts_and_deduplicates_ex
     assert {name for name, row in audited.items() if row["filter_status"] == "keep"} == {"a", "b"}
     assert audited["c"]["duplicate_of"] == "a"
     assert {
-        name: json.loads(json.loads(row["task_json"])["verifier"]["parameters_json"])["contract"]
+        name: json.loads(
+            resource_bytes(
+                next(
+                    resource
+                    for resource in TaskSpec.model_validate_json(row["task_json"]).resources.verifier
+                    if resource.path == "config.json"
+                )
+            )
+        )["contract"]
         for name, row in audited.items()
     } == contracts

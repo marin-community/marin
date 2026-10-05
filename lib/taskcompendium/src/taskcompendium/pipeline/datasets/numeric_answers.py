@@ -5,7 +5,9 @@
 
 from math import isfinite
 
-from taskcompendium.grading import numeric_answer
+from verifyit.spec import NumericSpec
+
+from taskcompendium.grader import grader_package
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import DatasetRecipe, HFSource, ImportRejection, IntendedUse, RawRow, ReviewRubric
@@ -27,7 +29,7 @@ def normalize_aime24(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=problem.strip()),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=numeric_answer(float(answer), tolerance_abs=0.0, tolerance_rel=0.0),
+        verifier=grader_package(NumericSpec(float(answer), tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
         source=row.source,
     )
 
@@ -72,7 +74,7 @@ def normalize_svamp(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=f"{body.strip()} {question.strip()}"),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=numeric_answer(expected, tolerance_abs=0.0, tolerance_rel=0.0),
+        verifier=grader_package(NumericSpec(expected, tolerance_abs=0.0, tolerance_rel=0.0)).verifier,
         source=row.source,
     )
 

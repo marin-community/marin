@@ -6,17 +6,21 @@
 import base64
 import csv
 import io
+import json
 
-from pydantic import ValidationError
-from verifyit.spec import SchemaFormat
+from jsonschema.exceptions import SchemaError
+from jsonschema.validators import validator_for
+from verifyit.spec import CsvColumnsSpec, JsonSchemaSpec, SchemaFormat, XmlElementsSpec
 
+from taskcompendium.grader import grader_package
+from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
@@ -35,9 +39,7 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.constraints import JsonSchemaVerifier
-from taskcompendium.verifiers.structured_fields import NamedFieldsVerifier
+from taskcompendium.runtime.resources import inline_resource
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 RUBRIC = ReviewRubric(
@@ -77,21 +79,29 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     if not isinstance(converted, dict):
         return ImportRejection(reason="missing_conversion", detail="Run the structured-outputs converter binding first")
     spec = converted["grader_spec"]
-    verifier: JsonSchemaVerifier | NamedFieldsVerifier
     try:
         if spec["mode"] == "json-schema":
             schema_path = "tests/" + spec["schema"]
             schema = base64.b64decode(converted["data_files"][schema_path], validate=True).decode()
-            verifier = JsonSchemaVerifier(document_schema_json=schema, schema_format=SchemaFormat(spec["format"]))
-            kind = VerifierKind.JSON_SCHEMA
-        elif spec["mode"] in ("xml-elements", "csv-columns"):
-            verifier = NamedFieldsVerifier(
-                mode=spec["mode"], required=tuple(spec["required"]), any_of=tuple(spec["any_of"])
+            schema_value = json.loads(schema)
+            if not isinstance(schema_value, dict):
+                raise ValueError("The verifier requires a JSON Schema object")
+            validator_for(schema_value).check_schema(schema_value)
+            package = grader_package(
+                JsonSchemaSpec(schema="schema.json", format=SchemaFormat(spec["format"])),
+                (inline_resource("schema.json", schema.encode()),),
             )
-            kind = VerifierKind.STRUCTURED_FIELDS
+        elif spec["mode"] in ("xml-elements", "csv-columns"):
+            required, any_of = tuple(spec["required"]), tuple(spec["any_of"])
+            if not required and not any_of:
+                raise ValueError("At least one field name is required")
+            if any(not isinstance(name, str) or not name for name in (*required, *any_of)):
+                raise ValueError("Required and alternative names must be nonempty strings")
+            selected = XmlElementsSpec if spec["mode"] == "xml-elements" else CsvColumnsSpec
+            package = grader_package(selected(required=required, any_of=any_of))
         else:
             return ImportRejection(reason="unsupported_structured_mode", detail=f"Unknown mode: {spec['mode']}")
-    except (ValidationError, ValueError) as error:
+    except (SchemaError, ValueError, KeyError) as error:
         return ImportRejection(reason="invalid_structured_contract", detail=str(error))
     original = converted["instruction"]
     instruction = original.replace(
@@ -108,7 +118,8 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=kind, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
     )
     changes = (
         ()
@@ -143,11 +154,12 @@ def recipe(*, converter: RawConverter, converter_revision: str) -> DatasetRecipe
 
 def verification_report(task: TaskSpec) -> VerificationReport:
     """Check schema contradictions or the preserved named-fields runtime contract."""
-    if task.verifier.kind == VerifierKind.JSON_SCHEMA:
+    spec = resolve_verifier(task.verifier)
+    if isinstance(spec, JsonSchemaSpec):
         return schema_verification_report(task)
-    verifier = NamedFieldsVerifier.model_validate_json(task.verifier.parameters_json)
-    names = (*verifier.required, *(verifier.any_of[:1]))
-    if verifier.mode == "xml-elements":
+    assert isinstance(spec, (XmlElementsSpec, CsvColumnsSpec))
+    names = (*spec.required, *(spec.any_of[:1]))
+    if isinstance(spec, XmlElementsSpec):
         witness = "<control>" + "".join(f"<{name}/>" for name in names) + "</control>"
         negative = "<control>"
     else:

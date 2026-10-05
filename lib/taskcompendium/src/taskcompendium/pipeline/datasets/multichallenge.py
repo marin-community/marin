@@ -15,7 +15,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
-from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 RUBRIC = ReviewRubric(
@@ -41,15 +40,17 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
     criteria = tuple(criterion["description"] for criterion in configuration.get("criterion", []))
     if not criteria or any(not criterion.strip() for criterion in criteria):
         return ImportRejection(reason="empty_criteria", detail="The source provides no complete checklist criteria")
-    verifier = RubricJudgeVerifier(
-        mode="checklist",
-        question=conversation,
-        criteria=criteria,
-        aggregation=configuration,
-        source_judge_data=row.data["verifier_data"],
-        source_judge_toml=judge_toml,
+    return rubric_tasks.normalized_task(
+        row,
+        {
+            "mode": "checklist",
+            "question": conversation,
+            "criteria": criteria,
+            "aggregation": configuration,
+            "source_judge_data": row.data["verifier_data"],
+            "source_judge_toml": judge_toml,
+        },
     )
-    return rubric_tasks.normalized_task(row, verifier)
 
 
 def recipe() -> DatasetRecipe:

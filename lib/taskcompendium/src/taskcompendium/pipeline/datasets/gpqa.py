@@ -5,10 +5,12 @@
 
 import hashlib
 
+from verifyit.spec import McqSpec
+
+from taskcompendium.grader import grader_package
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import DatasetRecipe, HFSource, ImportRejection, IntendedUse, RawRow, ReviewRubric
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 DATASET = "Idavidrein/gpqa"
 REVISION = "83022cefff930aea54f654c0b282e74b9eeda5c6"
@@ -38,7 +40,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=prompt),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=multiple_choice_answer(expected, options=len(texts)),
+        verifier=grader_package(McqSpec(expected, options=len(texts))).verifier,
         source=row.source,
     )
 

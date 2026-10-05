@@ -16,14 +16,12 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 
+from taskcompendium.grader import grader_config
 from taskcompendium.models import (
-    AnswerType,
-    ConversationInput,
-    EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.direct_contracts import contract_task
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat, UrlDownload
 from taskcompendium.pipeline.models import (
     CheckResult,
@@ -38,8 +36,6 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 DATASET = "open-thought/reasoning-gym"
 REVISION = "49b07130b3fcd12f2d064bba7c43869543a0e7e7"
@@ -131,36 +127,28 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
             raise ValueError("Generated entry and generation provenance must identify the same native task")
         recorded = row.data.get("recorded_pinned_generator_controls")
         controls = RecordedControls.model_validate(recorded) if recorded is not None else None
-        context = ConversationInput(events=(TextMessage(role="user", content=entry["question"]),))
-        verifier = SourceContractVerifier(
-            evaluator="MarinSkyRL:skyrl_gym.envs.reasoning_gym.scoring.score_response",
-            source_revision=VERIFIER_REVISION,
-            contract={
-                "task": task_name,
-                "entry": entry,
-                "generation": generation,
-                "generator_revision": REVISION,
-                "answer_extraction": "Text after the last Answer: marker, stripped; otherwise stripped whole response",
-                "reward": "float(reasoning_gym.get_score_answer_fn(task)(answer, entry))",
-                "recorded_pinned_generator_controls": controls.model_dump(mode="json") if controls is not None else None,
-            },
-            runtime_requirements=(f"Native reasoning-gym scorer at generator revision {REVISION}",),
-        )
+        contract = {
+            "task": task_name,
+            "entry": entry,
+            "generation": generation,
+            "generator_revision": REVISION,
+            "answer_extraction": "Text after the last Answer: marker, stripped; otherwise stripped whole response",
+            "reward": "float(reasoning_gym.get_score_answer_fn(task)(answer, entry))",
+            "recorded_pinned_generator_controls": controls.model_dump(mode="json") if controls is not None else None,
+        }
     except (ValidationError, ValueError, KeyError, TypeError) as error:
         return ImportRejection(reason="invalid_generated_reasoning_entry", detail=str(error))
-    return TaskSpec(
-        id=row.id,
-        source=row.source,
-        context=context,
-        environment_requirements=EnvironmentRequirements(),
-        answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.SOURCE_CONTRACT, parameters_json=verifier.model_dump_json()),
+    return contract_task(
+        row,
+        (TextMessage(role="user", content=entry["question"]),),
+        "MarinSkyRL:skyrl_gym.envs.reasoning_gym.scoring.score_response",
+        contract,
+        (f"Native reasoning-gym scorer at generator revision {REVISION}",),
     )
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    verifier = SourceContractVerifier.model_validate_json(task.verifier.parameters_json)
-    controls = verifier.contract.get("recorded_pinned_generator_controls")
+    controls = grader_config(task)["contract"].get("recorded_pinned_generator_controls")
     checks = verify_task(task)
     if controls is None:
         return VerificationReport(checks=checks)

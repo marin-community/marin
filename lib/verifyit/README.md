@@ -111,24 +111,6 @@ uv run --group test pytest lib/verifyit/tests
 
 ## Candidate scoring
 
-Callers that already extracted an answer can use the candidate scorers in
-`verifyit.modes` without constructing a TaskSpec. ARC grids, indirect-injection
-actions, final schedules, calendar postconditions, reference/abstention gates,
-puzzle contracts, IFEval and JSON Schema share the same `Reward` and `Status`
-contract as file-based grading. Captured shell output uses `score_capture` in
-`grade_nl2bash`, which returns the source reward and diagnostic messages.
+Callers that already extracted an answer can use generic candidate scorers in `verifyit.candidate` and `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset policy belongs to the converter that emits a grader: source parsing conventions, calendar postconditions and abstention rules should be packaged as task-owned scripts.
 
-For example:
-
-```python
-from verifyit.modes.grade_arc import grade_arc_grid
-
-result = grade_arc_grid("[[1, 2], [3, 4]]", [[1, 2], [3, 4]])
-assert result.reward == 1.0
-```
-
-Taskcompendium calls these scorers after extracting a submission or captured
-state. An exact reference mismatch can still require an unavailable semantic
-judge; that result remains an infrastructure error, not an incorrect answer.
-These Python entry points do not add TOML modes. A task using script grading can
-import them from its grader script.
+A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Private fixtures are relative to the tests directory; candidate evidence belongs to the workspace.

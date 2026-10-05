@@ -8,8 +8,9 @@ import base64
 import json
 import re
 import sys
+from functools import partial
 
-from taskcompendium.models import ConversationInput, TextMessage, VerifierSpec
+from taskcompendium.models import ConversationInput, TextMessage
 from taskcompendium.pipeline.datasets.executable_tasks import normalize, verification_report
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.raw_conversion import RawConverter, with_raw_converter
@@ -25,7 +26,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
-from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier
 
 PUBLIC_FIXTURE_CRITERION = (
     "Oracle solutions and private tests must remain hidden; explicitly public setup tests are part of the contract."
@@ -50,7 +50,7 @@ def submission_paths(instruction: str) -> tuple[str, ...]:
 
 
 def normalize_python(row: RawRow, image: str, timeout: float, memory_mb: int) -> NormalizedTask | ImportRejection:
-    task = normalize(row, image, timeout, memory_mb)
+    task = normalize(row, image)
     if isinstance(task, ImportRejection):
         return task
     instruction = row.data["converted"]["instruction"]
@@ -92,14 +92,7 @@ def normalize_python(row: RawRow, image: str, timeout: float, memory_mb: int) ->
             reason="unsupported_public_output_contract",
             detail="No explicit public Python filename and private imports require APIs absent from the request",
         )
-    verifier = TaskTroveExecutableVerifier.model_validate_json(task.verifier.parameters_json)
-    verifier = verifier.model_copy(update={"submission_paths": paths})
-    task = task.model_copy(
-        update={
-            "output_paths": paths,
-            "verifier": VerifierSpec(kind=task.verifier.kind, parameters_json=verifier.model_dump_json()),
-        }
-    )
+    task = task.model_copy(update={"output_paths": paths})
     changes.append(
         NormalizationChange(
             field="output_paths",
@@ -140,7 +133,7 @@ def recipe(
             id="isolated-executable-controls",
             revision="1",
             parameters={"image": image, "timeout": timeout, "memory_mb": memory_mb},
-            run=verification_report,
+            run=partial(verification_report, timeout=timeout, memory_mb=memory_mb),
         ),
     )
     return with_raw_converter(source_recipe, converter, converter_revision)

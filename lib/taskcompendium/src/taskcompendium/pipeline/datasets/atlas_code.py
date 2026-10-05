@@ -33,8 +33,8 @@ CODENET_EXIT_PARITY = CheckResult(
 )
 
 
-def verification_report(task: TaskSpec, name: str) -> VerificationReport:
-    report = executable_verification_report(task)
+def verification_report(task: TaskSpec, name: str, timeout: float = 600, memory_mb: int = 4096) -> VerificationReport:
+    report = executable_verification_report(task, timeout=timeout, memory_mb=memory_mb)
     if name == "codenet":
         return VerificationReport(checks=[*report.checks, CODENET_EXIT_PARITY], rollouts=report.rollouts)
     return report
@@ -53,10 +53,10 @@ def recipe(
     """Bind a converted source to static quality review and sandbox diagnostics."""
 
     def normalize_row(row: RawRow) -> TaskSpec | ImportRejection:
-        return normalize(row, image, timeout, memory_mb)
+        return normalize(row, image)
 
     def checks(task: TaskSpec) -> VerificationReport:
-        return verification_report(task, name)
+        return verification_report(task, name, timeout, memory_mb)
 
     source_recipe = DatasetRecipe(
         name=f"tasktrove-{name}",

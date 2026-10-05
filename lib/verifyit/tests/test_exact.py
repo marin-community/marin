@@ -7,7 +7,6 @@ import pytest
 from verifyit.grade import InvalidTask, Status
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_exact
-from verifyit.modes.grade_puzzle import puzzle_spec
 from verifyit.spec import EmptyOutputPolicy, ExactSpec
 
 
@@ -72,14 +71,6 @@ def test_exact_reward_detail_carries_the_extracted_candidate(tmp_path):
 def test_exact_without_an_expected_string_is_an_invalid_task(tmp_path):
     _answer(tmp_path, "Paris\n")
     assert dispatch(ExactSpec(expected=()), tmp_path, tmp_path).status == Status.INVALID_TASK
-
-
-def test_puzzle_ordered_list_accepts_line_breaks_but_rejects_reordering(tmp_path):
-    spec = puzzle_spec("Defect, Salt, chair, donate", "ordered_list")
-    _answer(tmp_path, "Defect\nSalt\nchair\ndonate")
-    assert dispatch(spec, tmp_path, tmp_path).reward == 1.0
-    _answer(tmp_path, "chair, Defect, donate, Salt")
-    assert dispatch(spec, tmp_path, tmp_path).reward == 0.0
 
 
 @pytest.mark.parametrize(

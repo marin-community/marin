@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import Json, JsonValue, TypeAdapter
 
+from taskcompendium.grading import predicted_action_verifier
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -23,7 +24,6 @@ from taskcompendium.models import (
     ToolResult,
 )
 from taskcompendium.submission import FinalAction, Submission
-from taskcompendium.verifiers.predicted_action import predicted_action_verifier
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"

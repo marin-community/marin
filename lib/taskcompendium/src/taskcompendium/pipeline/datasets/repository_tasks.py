@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 
+from taskcompendium.grader import grader_config
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -16,8 +17,8 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.shell_files import BASH
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
@@ -35,8 +36,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import INTERFACE
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.repository_patch import RepositoryPatchVerifier
 
 CHECKOUT = re.compile(r"\bgit checkout\s+([^\s;&]+)")
 WORKSPACE = "/testbed"
@@ -64,13 +63,18 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         return ImportRejection(
             reason="missing_repository_tests", detail="No source FAIL_TO_PASS or PASS_TO_PASS test IDs"
         )
-    verifier = RepositoryPatchVerifier(
-        repository=repository,
-        source_ref=checkout[1],
-        workspace=WORKSPACE,
-        source_config=config,
-        source_grader_paths=tuple(sorted("/" + path for path in files if path.startswith("tests/"))),
-        source_environment_sha256=hashlib.sha256(files["environment/Dockerfile"]).hexdigest(),
+    package = source_contract_package(
+        "source repository patch grader",
+        row.source.revision,
+        {
+            "repository": repository,
+            "source_ref": checkout[1],
+            "workspace": WORKSPACE,
+            "source_config": config,
+            "source_grader_paths": sorted("/" + path for path in files if path.startswith("tests/")),
+            "source_environment_sha256": hashlib.sha256(files["environment/Dockerfile"]).hexdigest(),
+        },
+        ("Isolated repository checkout and patch capture",),
     )
     resources = ResourceGroups(
         worker=tuple(
@@ -81,7 +85,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
             for path, content in files.items()
             if path.startswith(("environment/", "solution/"))
         ),
-        verifier=tuple(inline_resource(path, content) for path, content in files.items() if path.startswith("tests/")),
+        verifier=package.resources
+        + tuple(inline_resource(path, content) for path, content in files.items() if path.startswith("tests/")),
     )
     return TaskSpec(
         id=row.id,
@@ -104,19 +109,22 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         interaction_tools=(BASH,),
         resources=resources,
         answer_type=AnswerType.STATE,
-        verifier=VerifierSpec(kind=VerifierKind.REPOSITORY_PATCH, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
     )
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    verifier = RepositoryPatchVerifier.model_validate_json(task.verifier.parameters_json)
+    contract = grader_config(task)["contract"]
     return VerificationReport(
         checks=[
             CheckResult(
                 check="isolated_repository_patch_runtime",
                 status=CheckStatus.UNSUPPORTED,
-                detail=f"Source {verifier.repository}@{verifier.source_ref}, trusted tests, and environment retained; "
-                "checkout, dependencies, patch capture, and isolated source grading are not bound",
+                detail=(
+                    f"Source {contract['repository']}@{contract['source_ref']}, "
+                    "trusted tests and environment retained; "
+                    "checkout, dependencies, patch capture, and isolated source grading are not bound"
+                ),
             )
         ]
     )

@@ -6,20 +6,19 @@
 import base64
 import json
 
-from taskcompendium.grading import Outcome
-from taskcompendium.models import Source, TaskSpec, TextMessage
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_arc_injection
 from taskcompendium.pipeline.models import CheckStatus, RawRow
-from taskcompendium.pipeline.verification import PLAIN
-from taskcompendium.verifiers.arc_injection import ArcGridVerifier, ArcTransformVerifier
-from taskcompendium.verifiers.base import GradingAttempt
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
-def grade(verifier, answer):
-    return verifier.grade(
-        GradingAttempt(
-            PLAIN, (TextMessage(role="user", content="task"), TextMessage(role="assistant", content=answer)), None
-        )
+def grade(task, answer):
+    return grade_answer(
+        task,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
     )
 
 
@@ -36,9 +35,8 @@ def test_arc_grid_ingestion_binds_a_scored_verifier():
     )
     task = atlas_arc_injection.normalize(row, "arc_transductive")
     assert isinstance(task, TaskSpec)
-    verifier = ArcGridVerifier.model_validate_json(task.verifier.parameters_json)
-    assert grade(verifier, "\\boxed{12\n34}").reward == 1.0
-    assert grade(verifier, "12\n43").reward == 0.0
+    assert grade(task, "\\boxed{12\n34}").reward == 1.0
+    assert grade(task, "12\n43").reward == 0.0
 
 
 def test_injection_ingestion_keeps_target_private_and_filters_grader_exploit():
@@ -75,7 +73,17 @@ def test_injection_ingestion_keeps_target_private_and_filters_grader_exploit():
 
 
 def test_arc_transform_without_isolated_runtime_does_not_invent_a_grade():
-    verifier = ArcTransformVerifier(test_cases=[{"input": [[1, 2]], "output": [[2, 1]]}], source_grader_sha256="pinned")
-    result = grade(verifier, "def transform(grid): return [row[::-1] for row in grid]")
+    row = RawRow(
+        "transform",
+        Source(dataset="test/tasks", revision="1", row="0", importer_revision="1"),
+        {
+            "instruction": "Write a Python transform in /app/solution.py.",
+            "verifier_data": {"test_cases": [{"input": [[1, 2]], "output": [[2, 1]]}]},
+            "files": {"tests/verifier.py": base64.b64encode(b"# source scorer").decode()},
+        },
+    )
+    task = atlas_arc_injection.normalize(row, "arc_inductive")
+    assert isinstance(task, TaskSpec)
+    result = grade(task, "def transform(grid): return [row[::-1] for row in grid]")
     assert result.status == Outcome.INFRA_ERROR
     assert result.reward is None

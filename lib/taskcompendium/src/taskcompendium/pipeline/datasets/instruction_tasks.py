@@ -8,13 +8,11 @@ import json
 from pydantic import ValidationError
 
 from taskcompendium.models import (
-    AnswerType,
     ConversationInput,
-    EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.direct_contracts import contract_task
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
     DatasetRecipe,
@@ -24,8 +22,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 NEMOTRON_IF_SOURCE = HFSource(
     "nvidia/Llama-Nemotron-Post-Training-Dataset",
@@ -62,7 +58,7 @@ CRITERIA = (
 def _normalize(row: RawRow, messages_key: str, constraints_key: str) -> TaskSpec | ImportRejection:
     try:
         messages = tuple(TextMessage.model_validate(message) for message in row.data[messages_key])
-        context = ConversationInput(events=messages)
+        ConversationInput(events=messages)
         constraints = row.data[constraints_key]
         if constraints_key == "ground_truth":
             constraints = json.loads(constraints)
@@ -73,32 +69,26 @@ def _normalize(row: RawRow, messages_key: str, constraints_key: str) -> TaskSpec
             arguments = constraints["instruction_kwargs"]
             if not names or len(names) != len(arguments):
                 raise ValueError("Instruction identifiers and arguments must be nonempty and aligned")
-        verifier = SourceContractVerifier(
-            evaluator=EVALUATOR,
-            source_revision=VERIFIER_REVISION,
-            contract={
-                "constraints": constraints,
-                "aggregation": "fraction_satisfied",
-                "source_metadata": {
-                    key: value for key, value in row.data.items() if key not in {messages_key, constraints_key, "path"}
-                },
-                "source_transform": (
-                    "infra/rl_data/sources.py:_prepare_nemotron_if"
-                    if constraints_key == "args"
-                    else "infra/rl_data/sources.py:_prepare_rlvr_ifeval"
-                ),
+        contract = {
+            "constraints": constraints,
+            "aggregation": "fraction_satisfied",
+            "source_metadata": {
+                key: value for key, value in row.data.items() if key not in {messages_key, constraints_key, "path"}
             },
-            runtime_requirements=("Pinned SkyRL canonical IFEval functions and source-specific argument normalization",),
-        )
+            "source_transform": (
+                "infra/rl_data/sources.py:_prepare_nemotron_if"
+                if constraints_key == "args"
+                else "infra/rl_data/sources.py:_prepare_rlvr_ifeval"
+            ),
+        }
     except (ValidationError, ValueError, KeyError, TypeError) as error:
         return ImportRejection(reason="invalid_instruction_contract", detail=str(error))
-    return TaskSpec(
-        id=row.id,
-        source=row.source,
-        context=context,
-        environment_requirements=EnvironmentRequirements(),
-        answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.SOURCE_CONTRACT, parameters_json=verifier.model_dump_json()),
+    return contract_task(
+        row,
+        messages,
+        EVALUATOR,
+        contract,
+        ("Pinned SkyRL canonical IFEval functions and source-specific argument normalization",),
     )
 
 

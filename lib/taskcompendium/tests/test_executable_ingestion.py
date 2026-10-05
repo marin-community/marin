@@ -16,8 +16,8 @@ from verifyit.spec import StdioSpec, spec_to_table
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.datasets.executable_tasks import normalize
 from taskcompendium.pipeline.models import RawRow
+from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.shell import ShellFactory
-from taskcompendium.verifiers.executable import TaskTroveExecutableVerifier, grade_submission
 
 from .test_runtime import FileMachine, FileMachines
 
@@ -43,7 +43,7 @@ def executable_task():
             }
         },
     )
-    task = normalize(row, "sha256:test-image", 30.0, 256)
+    task = normalize(row, "test@sha256:" + "a" * 64)
     assert isinstance(task, TaskSpec)
     return TaskSpec.model_validate_json(task.model_dump_json())
 
@@ -94,10 +94,9 @@ class GradingMachines:
 
 @pytest.mark.parametrize("program,reward", [(b"print(7)\n", 1.0), (b"print(0)\n", 0.0)])
 async def test_captured_submission_cannot_supply_its_own_reward(executable_task, program, reward):
-    verifier = TaskTroveExecutableVerifier.model_validate_json(executable_task.verifier.parameters_json)
     machines = GradingMachines()
     grade = await grade_submission(
-        verifier,
+        executable_task,
         {
             "/app/solution.py": program,
             "/logs/verifier/verdict.json": b'{"status":"scored","reward":1,"detail":{}}',

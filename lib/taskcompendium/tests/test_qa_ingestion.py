@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from taskcompendium.grading import Outcome
-from taskcompendium.models import Source, TaskSpec, TextMessage
+from taskcompendium.grader import grader_config
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import nemo_actions, qa_tasks
 from taskcompendium.pipeline.filtering import task_decision
 from taskcompendium.pipeline.models import (
@@ -25,9 +27,15 @@ from taskcompendium.pipeline.models import (
     ReviewStatus,
     ReviewVerdict,
 )
-from taskcompendium.pipeline.verification import PLAIN
-from taskcompendium.verifiers.base import GradingAttempt
-from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
+
+
+def grade(task, answer):
+    return grade_answer(
+        task,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
+    )
 
 
 @pytest.fixture(params=["knowledge", "science"])
@@ -58,26 +66,16 @@ def qa_row(request):
 def test_openqa_gate_accepts_source_answer_shapes_and_preserves_private_judge(qa_row, answer):
     task = qa_tasks.normalize(qa_row)
     assert isinstance(task, TaskSpec)
-    verifier = ReferenceAnswersVerifier.model_validate_json(task.verifier.parameters_json)
-    result = verifier.grade(
-        GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
-    )
+    result = grade(task, answer)
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
     assert "Accept substantive equivalence" not in task.context.events[0].content
-    assert verifier.source_judge_data == qa_row.data["verifier_data"]
+    assert grader_config(task)["source_judge_data"] == qa_row.data["verifier_data"]
 
 
 def test_openqa_static_quality_acceptance_preserves_unbound_answer_grading(qa_row):
     task = qa_tasks.normalize(qa_row)
     assert isinstance(task, TaskSpec)
-    verifier = ReferenceAnswersVerifier.model_validate_json(task.verifier.parameters_json)
-    result = verifier.grade(
-        GradingAttempt(
-            PLAIN,
-            (*task.context.events, TextMessage(role="assistant", content="France's capital is Paris.")),
-            None,
-        )
-    )
+    result = grade(task, "France's capital is Paris.")
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
     report = qa_tasks.verification_report(task)
     review = ReviewRecord(

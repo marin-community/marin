@@ -6,16 +6,20 @@
 import base64
 import json
 
-from pydantic import ValidationError
+from verifyit.spec import ExactSpec, MathSpec
 
+from taskcompendium.grader import grader_package
+from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
+from taskcompendium.pipeline.datasets.grader_scripts.puzzle import puzzle_spec
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
@@ -28,9 +32,7 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
-from taskcompendium.pipeline.verification import verify_witness
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.reasoning import PuzzleAnswerVerifier, ReasoningGymVerifier
+from taskcompendium.pipeline.verification import verify_task, verify_witness
 
 REASONING_CONFIG = "laion__nemotron-gym-reasoning-gym-v2"
 PUZZLE_CONFIG = "laion__all-puzzles-v2"
@@ -101,11 +103,15 @@ def normalize_reasoning(row: RawRow) -> TaskSpec | ImportRejection:
         return ImportRejection(
             reason="known_broken_scorer", detail=f"Cleanup identified {dataset!r} as unable to score its own reference"
         )
-    try:
-        verifier = ReasoningGymVerifier(dataset=dataset, entry=data)
-    except ValidationError as error:
-        return ImportRejection(reason="invalid_entry", detail=str(error))
-    return _task(row, direct_instruction(instruction), VerifierKind.REASONING_GYM, verifier.model_dump_json())
+    if not isinstance(data.get("answer"), str) or not data["answer"].strip():
+        return ImportRejection(reason="invalid_entry", detail="Entry answer must be a nonempty string")
+    package = source_contract_package(
+        "reasoning_gym.get_score_answer_fn",
+        row.source.revision,
+        {"dataset": dataset, "entry": data},
+        ("Pinned isolated Reasoning Gym scorer runtime",),
+    )
+    return _task(row, direct_instruction(instruction), package)
 
 
 def normalize_puzzle(row: RawRow) -> TaskSpec | ImportRejection:
@@ -115,33 +121,40 @@ def normalize_puzzle(row: RawRow) -> TaskSpec | ImportRejection:
         return ImportRejection(reason="missing_input", detail="Instruction and tests/gold.json are required")
     try:
         data = json.loads(gold_file)
-        verifier = PuzzleAnswerVerifier(expected=data["gold"], answer_type=data["answer_type"])
-    except (ValidationError, ValueError, KeyError, TypeError) as error:
+        expected = data["gold"]
+        answer_type = data["answer_type"]
+        if (
+            not isinstance(expected, str)
+            or not expected.strip()
+            or answer_type not in {"choice", "exact", "ordered_list", "number", "coords"}
+        ):
+            raise ValueError("Puzzle reference must contain a nonempty answer and supported answer type")
+    except (ValueError, KeyError, TypeError) as error:
         return ImportRejection(reason="invalid_puzzle_key", detail=str(error))
-    return _task(row, direct_instruction(instruction), VerifierKind.PUZZLE_ANSWER, verifier.model_dump_json())
+    return _task(row, direct_instruction(instruction), grader_package(puzzle_spec(expected, answer_type)))
 
 
-def _task(row: RawRow, instruction: str, kind: VerifierKind, parameters_json: str) -> TaskSpec:
+def _task(row: RawRow, instruction: str, package) -> TaskSpec:
     return TaskSpec(
         id=row.id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=kind, parameters_json=parameters_json),
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
 
 
 def reasoning_checks(task: TaskSpec) -> VerificationReport:
-    verifier = ReasoningGymVerifier.model_validate_json(task.verifier.parameters_json)
-    answer = verifier.entry["answer"]
-    assert isinstance(answer, str)
-    return VerificationReport(checks=verify_witness(task, answer, "__incorrect_reasoning_answer__"))
+    return VerificationReport(checks=verify_task(task))
 
 
 def puzzle_checks(task: TaskSpec) -> VerificationReport:
-    verifier = PuzzleAnswerVerifier.model_validate_json(task.verifier.parameters_json)
-    return VerificationReport(checks=verify_witness(task, verifier.expected, "__incorrect_puzzle_answer__"))
+    spec = resolve_verifier(task.verifier)
+    assert isinstance(spec, (ExactSpec, MathSpec))
+    expected = ", ".join(spec.expected) if isinstance(spec, ExactSpec) else spec.expected
+    return VerificationReport(checks=verify_witness(task, expected, "__incorrect_puzzle_answer__"))
 
 
 def reasoning_recipe() -> DatasetRecipe:

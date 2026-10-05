@@ -13,7 +13,10 @@ from typing import Any, Literal
 from pydantic import JsonValue
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.modes.extract import extract_boxed
+from verifyit.spec import MathSpec, MathType
 
+from taskcompendium.grader import grader_package
+from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -21,7 +24,6 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat, UrlDownload, hub_inputs
 from taskcompendium.pipeline.models import (
@@ -36,8 +38,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.verifiers.atlas_answers import MathAnswerVerifier
-from taskcompendium.verifiers.base import VerifierKind
 
 
 def answer_type(expected: str) -> Literal["scalar", "equation", "interval", "set", "tuple", "list"]:
@@ -60,27 +60,27 @@ def normalize_math(row: RawRow, problem_field: str, reference_field: str) -> Tas
     if not isinstance(reference, str) or not reference.strip():
         return ImportRejection(reason="invalid_reference", detail=f"{reference_field} must be a nonempty string")
     expected = extract_boxed(reference) or reference.strip()
-    verifier = MathAnswerVerifier(expected=expected, math_type=answer_type(expected))
+    spec = MathSpec(expected=expected, math_type=MathType(answer_type(expected)))
     private = json.dumps(
         {key: row.data[key] for key in ("solution", "answer_type", "extracted_answer", "source") if key in row.data},
         ensure_ascii=False,
     ).encode()
+    package = grader_package(spec, (inline_resource("reference/source-evidence.json", private),))
     return TaskSpec(
         id=row.id,
         source=row.source,
         context=ConversationInput(events=(TextMessage(role="user", content=problem),)),
         environment_requirements=EnvironmentRequirements(),
-        resources=ResourceGroups(verifier=(inline_resource("reference/source-evidence.json", private),)),
+        resources=ResourceGroups(verifier=package.resources),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.MATH_ANSWER, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
     )
 
 
 def math_controls(task: TaskSpec) -> VerificationReport:
-    verifier = MathAnswerVerifier.model_validate_json(task.verifier.parameters_json)
-    return VerificationReport(
-        checks=verify_witness(task, rf"\boxed{{{verifier.expected}}}", "__incorrect_math_answer__")
-    )
+    spec = resolve_verifier(task.verifier)
+    assert isinstance(spec, MathSpec)
+    return VerificationReport(checks=verify_witness(task, rf"\boxed{{{spec.expected}}}", "__incorrect_math_answer__"))
 
 
 def math_task(
@@ -92,8 +92,12 @@ def math_task(
     if isinstance(task, ImportRejection):
         return task
     resource = inline_resource("reference/source-evidence.json", json.dumps(evidence, ensure_ascii=False).encode())
+    package = grader_package(resolve_verifier(task.verifier), (resource,))
     return task.model_copy(
-        update={"context": ConversationInput(events=events), "resources": ResourceGroups(verifier=(resource,))}
+        update={
+            "context": ConversationInput(events=events),
+            "resources": ResourceGroups(verifier=package.resources),
+        }
     )
 
 

@@ -9,17 +9,19 @@ a final JSON schedule without interactive tools.
 
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
+from taskcompendium.grader import script_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
     FunctionDefinition,
     ProviderRequirement,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -30,9 +32,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
-from taskcompendium.runtime.calendar import INTERFACE
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.runtime import CalendarState, CalendarStateVerifier
+from taskcompendium.runtime.calendar import INTERFACE, CalendarGoal, CalendarState
 
 TOOLS = (
     FunctionDefinition(
@@ -73,7 +73,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         return ImportRejection(reason="malformed_calendar", detail="Goal must be an object")
     try:
         state = CalendarState.model_validate(row.data["initial_state"])
-        verifier = CalendarStateVerifier.model_validate_json(
+        verifier = CalendarGoal.model_validate_json(
             json.dumps({**row.data["goal"], "original_events": state.model_dump(mode="json")["events"]})
         )
     except (KeyError, ValueError) as error:
@@ -83,6 +83,9 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         f"It must last {verifier.duration} minutes and fit within minutes {verifier.earliest} through {verifier.latest} "
         "after midnight. Read the current calendar, avoid overlapping events for any participant, "
         "and preserve every existing event. Any valid slot is acceptable. Use the calendar tools to save it."
+    )
+    package = script_package(
+        Path(__file__).with_name("grader_scripts").joinpath("calendar.py").read_bytes(), verifier.model_dump(mode="json")
     )
     return TaskSpec(
         id=row.id,
@@ -94,7 +97,8 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         ),
         interaction_tools=TOOLS,
         answer_type=AnswerType.STATE,
-        verifier=VerifierSpec(kind=VerifierKind.CALENDAR_STATE, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
 

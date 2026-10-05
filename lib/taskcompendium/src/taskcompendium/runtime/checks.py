@@ -10,28 +10,27 @@ does not use them.
 import asyncio
 from dataclasses import replace
 
-from taskcompendium.grading import Outcome
-from taskcompendium.models import TaskSpec
+from taskcompendium.grader import grader_config
+from taskcompendium.grading import grade_task
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import ConversationTrace, TaskSpec
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, CheckSuite, VerificationReport
 from taskcompendium.pipeline.verification import PLAIN
-from taskcompendium.runtime.calendar import calendar_controls
+from taskcompendium.runtime.calendar import CalendarFactory, CalendarGoal, calendar_controls
 from taskcompendium.runtime.controls import Control, tool_turn
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
 from taskcompendium.runtime.models import EnvironmentFactory, Termination
 from taskcompendium.runtime.shell import CONTROL_PATH, OUTPUT_PATH, ShellFactory
-from taskcompendium.verifiers.base import GradingAttempt
-from taskcompendium.verifiers.dispatch import resolve_custom_verifier
-from taskcompendium.verifiers.runtime import CalendarStateVerifier, CaptureOutputVerifier
 
 
 async def check_episodes(task: TaskSpec, factory: EnvironmentFactory, *, max_steps: int) -> VerificationReport:
-    verifier = resolve_custom_verifier(task.verifier)
-    if isinstance(verifier, CalendarStateVerifier):
-        controls = calendar_controls(verifier)
-    elif isinstance(verifier, CaptureOutputVerifier) and isinstance(factory, ShellFactory):
+    config = grader_config(task)
+    if isinstance(factory, CalendarFactory):
+        controls = calendar_controls(CalendarGoal.model_validate(config))
+    elif isinstance(factory, ShellFactory):
         wrong = (
             "__incorrect_record__"
-            if verifier.expected_output.strip() != "__incorrect_record__"
+            if config["expected_output"].strip() != "__incorrect_record__"
             else "__another_record__"
         )
         controls = (
@@ -55,7 +54,9 @@ async def check_episodes(task: TaskSpec, factory: EnvironmentFactory, *, max_ste
         if rollout.termination == Termination.INFRA_ERROR:
             results.append(CheckResult(check=control.name, status=CheckStatus.INFRA_ERROR, detail=rollout.detail))
             continue
-        grade = verifier.grade(GradingAttempt(PLAIN, rollout.events, rollout.evidence()))
+        grade = await asyncio.to_thread(
+            grade_task, task, PLAIN, ConversationTrace(events=rollout.events), rollout.evidence()
+        )
         passed = (
             rollout.termination == Termination.FINAL_MESSAGE
             and grade.status == Outcome.GRADED

@@ -3,15 +3,18 @@
 
 """Snapshot adapters for TaskTrove knowledge and science open-ended QA."""
 
-from pydantic import ValidationError
+from pathlib import Path
 
+from verifyit.modes.grade_judge import normalize as normalize_reference
+
+from taskcompendium.grader import grader_config, script_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
@@ -28,8 +31,8 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import answer_checks
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
+
+GRADER_SCRIPT = (Path(__file__).with_name("grader_scripts") / "references.py").read_bytes()
 
 KNOWLEDGE_CONFIG = "laion__nemotron-gym-knowledge-openqa-v4"
 SCIENCE_CONFIG = "laion__nemotron-gym-science-so-openq-v3"
@@ -78,10 +81,11 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     question = data.get("instruction")
     if not isinstance(question, str) or not question.strip():
         return ImportRejection(reason="missing_question", detail="The semantic judge requires its source question")
-    try:
-        verifier = ReferenceAnswersVerifier(references=references, question=question, source_judge_data=data)
-    except (ValidationError, ValueError) as error:
-        return ImportRejection(reason="invalid_references", detail=str(error))
+    if not references:
+        return ImportRejection(reason="invalid_references", detail="At least one reference is required")
+    if any(not normalize_reference(reference) for reference in references):
+        return ImportRejection(reason="invalid_references", detail="A reference becomes empty under normalization")
+    package = script_package(GRADER_SCRIPT, {"references": references, "question": question, "source_judge_data": data})
     instruction = instruction.replace(SOURCE_DELIVERY, "Return your concise final answer in the assistant response.")
     instruction = instruction.replace(
         SCIENCE_DELIVERY, "Work through it and return your full answer in the assistant response."
@@ -92,15 +96,16 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.REFERENCE_ANSWERS, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
         source=row.source,
     )
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
     """Exercise the exact gate and preserve semantic fallback as unresolved."""
-    verifier = ReferenceAnswersVerifier.model_validate_json(task.verifier.parameters_json)
-    checks = answer_checks(task, verifier, (("empty", "", 0.0), ("reference", verifier.references[0], 1.0)))
+    config = grader_config(task)
+    checks = answer_checks(task, (("empty", "", 0.0), ("reference", config["references"][0], 1.0)))
     checks.append(
         CheckResult(
             check="semantic_reference_judge",

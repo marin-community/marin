@@ -5,8 +5,10 @@
 
 import base64
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
+from taskcompendium.grader import script_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -16,7 +18,6 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.inputs import RecipeInputs, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import (
@@ -29,8 +30,6 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import CONTROL_PATH, INTERFACE, OUTPUT_PATH
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.runtime import CaptureOutputVerifier
 
 BASH = FunctionDefinition(
     name="Bash",
@@ -80,7 +79,10 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
                 inline_resource(path.lstrip("/"), base64.b64decode(encoded, validate=True))
                 for path, encoded in mapping.items()
             )
-        verifier = CaptureOutputVerifier(output_path=OUTPUT_PATH, expected_output=data["expected_output"])
+        package = script_package(
+            Path(__file__).with_name("grader_scripts").joinpath("capture.py").read_bytes(),
+            {"output_path": OUTPUT_PATH, "expected_output": data["expected_output"]},
+        )
         return TaskSpec(
             id=row.id,
             context=ConversationInput(events=(TextMessage(role="user", content=data["instruction"]),)),
@@ -89,10 +91,10 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
                 tool_providers={"shell": ProviderRequirement(action_interface=INTERFACE, initial_state={})},
             ),
             interaction_tools=(BASH,),
-            resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle)),
+            resources=ResourceGroups(worker=tuple(worker), oracle=tuple(oracle), verifier=package.resources),
             output_paths=(OUTPUT_PATH,),
             answer_type=AnswerType.FILE,
-            verifier=VerifierSpec(kind=VerifierKind.CAPTURE_OUTPUT, parameters_json=verifier.model_dump_json()),
+            verifier=package.verifier,
             source=row.source,
         )
     except ValueError as error:

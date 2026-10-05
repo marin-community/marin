@@ -3,6 +3,11 @@
 
 """Score the postcondition of a calendar tool episode."""
 
+import os
+from pathlib import Path
+from dataclasses import asdict
+import json
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -52,3 +57,16 @@ def score_calendar(
         for event in original_events
     )
     return scored(float(valid and not conflict))
+
+
+def main() -> None:
+    tests = Path(os.environ["VERIFYIT_TESTS_DIR"])
+    workspace = Path(os.environ["VERIFYIT_WORKSPACE"])
+    config = json.loads((tests / "config.json").read_text())
+    state = json.loads((workspace / "state.json").read_text())
+    verdict = score_calendar(tuple(CalendarEvent(**event) for event in state["events"]), tuple(CalendarEvent(**event) for event in config["original_events"]), **{key: value for key, value in config.items() if key != "original_events"})
+    (Path(os.environ["VERIFYIT_LOGS_DIR"]) / "verdict.json").write_text(json.dumps(asdict(verdict)))
+
+
+if __name__ == "__main__":
+    main()

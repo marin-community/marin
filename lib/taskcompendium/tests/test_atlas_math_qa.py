@@ -8,15 +8,13 @@ import json
 
 import pytest
 
-from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_math_qa
 from taskcompendium.pipeline.models import ImportRejection, RawRow
-from taskcompendium.pipeline.verification import PLAIN
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
-from taskcompendium.verifiers.base import GradingAttempt
-from taskcompendium.verifiers.dispatch import resolve_custom_verifier
 
 
 def row(name, instruction, data):
@@ -34,14 +32,10 @@ def row(name, instruction, data):
 
 
 def grade(task, answer):
-    if task.verifier.kind in {"numeric", "mcq"}:
-        return grade_answer(
-            task,
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-            ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
-        )
-    return resolve_custom_verifier(task.verifier).grade(
-        GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
+    return grade_answer(
+        task,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
     )
 
 
@@ -65,7 +59,10 @@ def test_typed_math_grades_equivalent_expressions_without_losing_answer_type(mat
     assert isinstance(task, TaskSpec)
     assert (grade(task, equivalent).status, grade(task, equivalent).reward) == (Outcome.GRADED, 1.0)
     assert grade(task, wrong).reward == 0.0
-    assert json.loads(resource_bytes(task.resources.verifier[0])) == {
+    source_evidence = next(
+        resource for resource in task.resources.verifier if resource.path == "source/tests/verifier_data.json"
+    )
+    assert json.loads(resource_bytes(source_evidence)) == {
         "answer_type": math_type,
         "expected_answer": reference,
     }

@@ -5,11 +5,14 @@
 
 import base64
 import re
+from pathlib import Path
 
-from pydantic import ValidationError
 from verifyit.grade import InvalidTask
+from verifyit.modes.grade_judge import normalize as normalize_reference
+from verifyit.spec import MathSpec, MathType, McqSpec, NumericSpec
 
-from taskcompendium.grading import numeric_answer
+from taskcompendium.grader import grader_config, grader_package, script_package
+from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -17,7 +20,6 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
@@ -35,10 +37,8 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_task, verify_witness
 from taskcompendium.runtime.resources import inline_resource
-from taskcompendium.verifiers.atlas_answers import AbstentionAnswersVerifier, MathAnswerVerifier
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
-from taskcompendium.verifiers.reference_answers import ReferenceAnswersVerifier
+
+REFERENCE_SCRIPT = (Path(__file__).with_name("grader_scripts") / "references.py").read_bytes()
 
 CONFIGS = {
     "math_openreasoning": "laion__nemotron-gym-math-openmathreasoning-v2",
@@ -117,11 +117,10 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             expected = data["expected_answer"]
             if not isinstance(expected, str) or not expected.strip():
                 raise ValueError("A nonempty typed math reference is required")
-            verifier = MathAnswerVerifier(expected=expected, math_type=data["answer_type"])
-            spec = VerifierSpec(kind=VerifierKind.MATH_ANSWER, parameters_json=verifier.model_dump_json())
+            spec = grader_package(MathSpec(expected=expected, math_type=MathType(data["answer_type"])))
         elif name == "advanced_calculations":
-            spec = numeric_answer(
-                float(data["expected_value"]), float(data["tolerance_abs"]), float(data["tolerance_rel"])
+            spec = grader_package(
+                NumericSpec(float(data["expected_value"]), float(data["tolerance_abs"]), float(data["tolerance_rel"]))
             )
         elif name in {"knowledge_mcqa", "web_search_mcqa"}:
             supported_patterns = {
@@ -133,21 +132,30 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
             options = max((ord(letter) - 64 for letter in letters), default=0)
             if letters != {chr(65 + index) for index in range(options)} or not letters:
                 raise ValueError("Options must be a contiguous labeled sequence beginning at A")
-            spec = multiple_choice_answer(data["expected_answer"], options)
+            spec = grader_package(McqSpec(data["expected_answer"], options))
         elif name == "qa_abstention":
-            reference = ReferenceAnswersVerifier(
-                references=(data["expected_answer"],), question=data["question"], source_judge_data=data
+            if not isinstance(data["expected_answer"], str) or not normalize_reference(data["expected_answer"]):
+                raise ValueError("A nonempty reference answer is required")
+            if not isinstance(data["question"], str) or not data["question"].strip():
+                raise ValueError("The source question is required")
+            spec = script_package(
+                REFERENCE_SCRIPT,
+                {
+                    "references": [data["expected_answer"]],
+                    "question": data["question"],
+                    "source_judge_data": data,
+                    "abstention_token": data["abstention_token"],
+                },
             )
-            verifier = AbstentionAnswersVerifier(reference=reference, abstention_token=data["abstention_token"])
-            spec = VerifierSpec(kind=VerifierKind.ABSTENTION_ANSWERS, parameters_json=verifier.model_dump_json())
         else:
             raise ValueError(f"Unknown source: {name}")
         public = _instruction(instruction, name, options)
-    except (KeyError, ValueError, TypeError, ValidationError) as error:
+    except (KeyError, ValueError, TypeError) as error:
         return ImportRejection(reason="unsupported_answer_contract", detail=str(error))
     files = row.data.get("files", {})
     resources = ResourceGroups(
-        verifier=tuple(
+        verifier=spec.resources
+        + tuple(
             inline_resource("source/" + path, base64.b64decode(encoded, validate=True))
             for path, encoded in files.items()
             if path.startswith("tests/")
@@ -165,13 +173,13 @@ def normalize(row: RawRow, name: str) -> TaskSpec | ImportRejection:
         environment_requirements=EnvironmentRequirements(),
         resources=resources,
         answer_type=AnswerType.TEXT,
-        verifier=spec,
+        verifier=spec.verifier,
     )
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    if task.verifier.kind == VerifierKind.MATH_ANSWER:
-        verifier = MathAnswerVerifier.model_validate_json(task.verifier.parameters_json)
+    verifier = resolve_verifier(task.verifier)
+    if isinstance(verifier, MathSpec):
         try:
             checks = verify_witness(task, rf"\boxed{{{verifier.expected}}}", "__incorrect_math_answer__")
         except InvalidTask as error:
@@ -183,9 +191,9 @@ def verification_report(task: TaskSpec) -> VerificationReport:
                 detail="Cleanup math-verify comparator is not certified equivalent to original SymPy scorer",
             )
         )
-    elif task.verifier.kind == VerifierKind.ABSTENTION_ANSWERS:
-        verifier = AbstentionAnswersVerifier.model_validate_json(task.verifier.parameters_json)
-        checks = verify_witness(task, verifier.reference.references[0], r"\boxed{[IDK]}")
+    elif task.verifier.kind == "script":
+        config = grader_config(task)
+        checks = verify_witness(task, config["references"][0], r"\boxed{[IDK]}")
         checks.append(
             CheckResult(
                 check="semantic_reference_judge",

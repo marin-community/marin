@@ -13,9 +13,7 @@ Reusable readers, normalizers, checks and review logic live under
 ## Task contracts
 
 Tasks use the shared TaskSpec schema. Standard exact, numeric, multiple-choice and
-final-action contracts use VerifyIT candidate specs. Source-specific adapters live
-in `taskcompendium/verifiers/`; unknown or unbound evaluators remain explicit in
-the audit. Resources use `all`, `worker`, `oracle` and `verifier` groups with
+final-action contracts use VerifyIT candidate specs. Recipes emit standard VerifyIT specs or ordinary grading scripts with private fixtures; no TaskCompendium verifier registry is required. Unbound evaluators remain explicit in the audit. Resources use `all`, `worker`, `oracle` and `verifier` groups with
 relative paths. Executable prototypes bind named tool providers and retain their
 interaction-tool declarations and capture paths. Direct-chat export rejects those
 execution requirements.
@@ -100,12 +98,28 @@ Examples of source families:
 Family `RECIPES` mappings contain static recipes. Factories remain for sources
 that need runtime images or converter adapters. Existing TaskTrove conversion
 adapters are supplied by the experiment; library families compose them with
-normalization and preserve conversion edits. Grading rules live in `lib/verifyit`: ARC grids, injection actions, schedule and
-calendar checks, capture comparison, reference/abstention gates, puzzles, IFEval
-and JSON Schema. Taskcompendium adapters extract submissions, validate private
-configuration and translate scoring results. Environment capture and isolated
-execution remain taskcompendium responsibilities. VerifyIT does not import
-TaskSpec or taskcompendium. Shared format readers remain separate. SQL and structured tool actions retain their distinct contracts.
+normalization and preserve conversion edits. VerifyIT owns generic comparisons, format validation, execution and the structured verdict contract. Recipes own source-specific scoring policy and package it as script resources when a standard specification is insufficient. `taskcompendium.grader` builds these packages; `taskcompendium.grading` extracts evidence and executes them. Environment capture and isolated execution live under `taskcompendium.runtime`. SQL and structured tool actions retain their distinct contracts.
+
+### Grader packages
+
+`GraderPackage` pairs a standard VerifyIT descriptor with private files. Assign its descriptor to `task.verifier` and its files to `task.resources.verifier`. File paths are relative to the private tests directory. A math recipe can emit a `MathSpec`; a schema recipe emits `JsonSchemaSpec` and its schema. Neither requires a new registered kind.
+
+For custom policy, `script_package(script_bytes, config)` emits `ScriptSpec`, `grader.py` and `config.json`. The script reads `VERIFYIT_TESTS_DIR` and `VERIFYIT_WORKSPACE` and writes a structured verdict to `VERIFYIT_LOGS_DIR/verdict.json`. A script may import generic VerifyIT components or implement the comparison itself. Recipe templates live alongside the dataset families in `pipeline/datasets/grader_scripts/` and are embedded into the task; execution does not import the converter module.
+
+```mermaid
+flowchart LR
+    R[Recipe] --> P[Standard spec and private files]
+    R --> S[ScriptSpec and recipe-owned script]
+    P --> V[VerifyIT execution]
+    S --> V
+    A[Extracted answer or captured evidence] --> V
+    V --> O[Structured verdict]
+    O --> C[Grader controls and readiness]
+```
+
+Direct-chat evidence is written to `answer.txt`; captured state is written to `state.json`. Captured files under `/app` retain their relative paths; other paths appear below `captured/`. Private resources never become worker mounts. Coding tasks declare a pinned private grading image and run in a fresh network-disabled machine. This prototype does not prevent submitted programs from reading hidden tests within that grading machine.
+
+Unbound source evaluators preserve their private contract and emit infrastructure errors. Quality filtering can keep an understandable task while the executable view excludes it. Positive and negative controls exercise the same emitted package used for grading.
 
 For example, the Python-test family owns the `pymethods` and `pymethods_large`
 source definitions. Both use the same converter and common privacy/test criteria.

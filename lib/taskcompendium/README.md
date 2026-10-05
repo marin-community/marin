@@ -172,11 +172,12 @@ Each spec selects a private verifier and stores its configuration in `VerifierSp
 
 `verifier` grades one acquired answer. Comparative scoring across several attempts, cohort membership, and grading phase belong to the trainer. The ordinary per-attempt grader can score an already acquired answer regardless of worker workspace requirements.
 
-Schema loading accepts descriptors without a grader implementation. Shared verifier validation, export, and launch validate executable configuration separately; an unimplemented kind raises `NotImplementedError`. Future kinds such as `script`, `test_suite`, or `llm_judge` can carry private entrypoints, paths referencing `TaskSpec.resources`, or rubrics in `parameters_json`. These graders have no implementation in this package. Direct chat rejects nonempty verifier environment requirements before export or launch, including for its implemented pure graders.
+Schema loading accepts descriptors independently of execution. Grading parses standard VerifyIT specifications; no TaskCompendium verifier registry exists. Direct chat supports answer-file graders and trusted recipe-owned scripts with private fixtures. Candidate-executing graders require a pinned isolated grading image. Unsupported environment requirements remain explicit errors.
 
-Standard verifier contracts and pure candidate scoring live in `verifyit`. Conversion pipelines select a shared spec and store its parameters in the task's private `verifier` slot. TaskCompendium extracts submission evidence and translates shared rewards into Harbor outcomes; it has no separate standard verifier schema. Optional curation/runtime adapters for source-specific contracts live in `verifiers/`; their dispatch is separate from direct-chat shared candidate grading.
+Conversion pipelines use `grader_package(spec, resources)` for standard graders or `script_package(script, config)` for task-specific policy. The returned descriptor goes in `task.verifier`; files go in `task.resources.verifier` relative to the private tests root. Scripts use VerifyIT's structured verdict contract and need no central registration. Exact, numeric, MCQ and final-action grading retain their pure candidate path; other supported modes consume file evidence.
 
-The implemented canonical kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `mcq` for a single option letter, and `predicted_action` for final function calls. `structured_exact` is a schema descriptor without an implementation in this package. The expected answer and grading settings stay out of the model-visible instruction.
+VerifyIT owns reusable comparison, validation and execution components. Recipe families own special parsing, source-specific reward rules and private evaluator data. Grader scripts are embedded in emitted tasks and can run independently of the converter. `grade_task` extracts submissions and captured runtime evidence, runs the package and preserves scored, invalid-task and infrastructure outcomes.
+
 
 ## What is a lowering?
 

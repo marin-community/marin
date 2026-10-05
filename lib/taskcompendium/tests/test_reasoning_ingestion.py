@@ -7,13 +7,13 @@ from dataclasses import replace
 
 import pytest
 
-from taskcompendium.grading import Outcome
-from taskcompendium.models import Source, TaskSpec, TextMessage
+from taskcompendium.grader import grader_config
+from taskcompendium.grading import grade_answer
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import calendar_tasks, reasoning_tasks
 from taskcompendium.pipeline.models import CheckStatus, RawRow
-from taskcompendium.pipeline.verification import PLAIN
-from taskcompendium.verifiers.base import GradingAttempt
-from taskcompendium.verifiers.dispatch import resolve_custom_verifier
+from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
 @pytest.fixture
@@ -26,8 +26,10 @@ def encoded_file(value):
 
 
 def answer_grade(task, answer):
-    return resolve_custom_verifier(task.verifier).grade(
-        GradingAttempt(PLAIN, (*task.context.events, TextMessage(role="assistant", content=answer)), None)
+    return grade_answer(
+        task,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer))),
     )
 
 
@@ -64,7 +66,7 @@ def test_puzzle_ingestion_preserves_order_and_symbolic_coordinates(row_source):
     assert answer_grade(coordinates, "(3, 2)").reward == 0.0
 
 
-def test_reasoning_ingestion_preserves_upstream_partial_credit(row_source):
+def test_reasoning_ingestion_preserves_upstream_contract_without_local_execution(row_source):
     task = reasoning_tasks.normalize_reasoning(
         RawRow(
             "equation",
@@ -76,10 +78,9 @@ def test_reasoning_ingestion_preserves_upstream_partial_credit(row_source):
         )
     )
     assert isinstance(task, TaskSpec)
-    assert answer_grade(task, "42").reward == 1.0
-    assert 0.0 < answer_grade(task, "x = 42").reward < 1.0
-    assert answer_grade(task, "41").reward == 0.0
-    assert all(check.status == CheckStatus.PASS for check in reasoning_tasks.reasoning_checks(task).checks)
+    assert grader_config(task)["contract"]["entry"]["answer"] == "42"
+    assert answer_grade(task, "42").status == Outcome.INFRA_ERROR
+    assert all(check.status == CheckStatus.UNSUPPORTED for check in reasoning_tasks.reasoning_checks(task).checks)
 
 
 def test_calendar_ingestion_accepts_alternatives_rejects_overlap_and_keeps_missing_witness_pending(row_source):

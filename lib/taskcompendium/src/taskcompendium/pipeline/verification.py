@@ -3,12 +3,12 @@
 
 """Apply positive and negative controls to task graders."""
 
-from verifyit.candidate import CandidateSpec, supports_candidate_mode
 from verifyit.grade import negative_candidate
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import ExactSpec, McqSpec, NumericSpec, PredictedActionSpec
 
-from taskcompendium.grading import GradeResult, Outcome, grade_answer, resolve_verifier
+from taskcompendium.grading import grade_task, resolve_verifier
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AssistantToolCalls,
     ConversationToolCall,
@@ -19,9 +19,6 @@ from taskcompendium.models import (
 )
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, GraderReadiness
 from taskcompendium.submission import AnswerFormat, FinalAction, SubmissionConvention
-from taskcompendium.verifiers.base import GradingAttempt, Verifier
-from taskcompendium.verifiers.dispatch import resolve_custom_verifier
-from taskcompendium.verifiers.source_contract import SourceContractVerifier
 
 PLAIN = SubmissionConvention(id="pipeline-plain", answer_format=AnswerFormat.PLAIN)
 
@@ -35,12 +32,6 @@ def grader_readiness(checks: list[CheckResult]) -> GraderReadiness:
     return GraderReadiness.READY
 
 
-def _control_verifier(task: TaskSpec) -> CandidateSpec | Verifier:
-    if supports_candidate_mode(task.verifier.kind):
-        return resolve_verifier(task.verifier)
-    return resolve_custom_verifier(task.verifier)
-
-
 def verify_task(task: TaskSpec) -> list[CheckResult]:
     """Check the answer grader and record unsupported runtime requirements."""
     if task.verifier.environment_requirements != EnvironmentRequirements():
@@ -50,19 +41,10 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
             )
         ]
     try:
-        verifier = _control_verifier(task)
+        verifier = resolve_verifier(task.verifier)
     except ValueError as error:
         return [CheckResult(check="verifier_contract", status=CheckStatus.FAIL, detail=str(error))]
 
-    if isinstance(verifier, SourceContractVerifier):
-        return [
-            CheckResult(
-                check="source_evaluator",
-                status=CheckStatus.UNSUPPORTED,
-                detail=f"{verifier.evaluator}@{verifier.source_revision} is unbound; requires "
-                + "; ".join(verifier.runtime_requirements),
-            )
-        ]
     if task.environment_requirements != EnvironmentRequirements():
         return [CheckResult(check="runtime", status=CheckStatus.UNSUPPORTED, detail="An isolated runtime is required")]
 
@@ -82,25 +64,19 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
     else:
         return [CheckResult(check="grader_controls", status=CheckStatus.UNSUPPORTED, detail=task.verifier.kind)]
 
-    return answer_checks(
-        task, verifier, (("empty", "", 0.0), ("reference", positive, 1.0), ("perturbed", negative, 0.0))
-    )
+    return answer_checks(task, (("empty", "", 0.0), ("reference", positive, 1.0), ("perturbed", negative, 0.0)))
 
 
-def _grade_control(task: TaskSpec, verifier: CandidateSpec | Verifier, answer: str) -> GradeResult:
+def _grade_control(task: TaskSpec, answer: str) -> GradeResult:
     events = (*task.context.events, TextMessage(role="assistant", content=answer))
-    if isinstance(verifier, Verifier):
-        return verifier.grade(GradingAttempt(PLAIN, events, None))
-    return grade_answer(task, PLAIN, ConversationTrace(events=events))
+    return grade_task(task, PLAIN, ConversationTrace(events=events))
 
 
-def answer_checks(
-    task: TaskSpec, verifier: CandidateSpec | Verifier, controls: tuple[tuple[str, str, float], ...]
-) -> list[CheckResult]:
+def answer_checks(task: TaskSpec, controls: tuple[tuple[str, str, float], ...]) -> list[CheckResult]:
     """Grade plain-response controls while retaining unavailable graders as unsupported."""
     results = []
     for name, answer, expected in controls:
-        result = _grade_control(task, verifier, answer)
+        result = _grade_control(task, answer)
         passed = (
             result.reward == expected
             if result.status == Outcome.GRADED
@@ -115,8 +91,7 @@ def answer_checks(
 
 def verify_witness(task: TaskSpec, witness: str, negative: str) -> list[CheckResult]:
     """Check a separately supplied feasible answer and two failing submissions."""
-    verifier = _control_verifier(task)
-    return answer_checks(task, verifier, (("empty", "", 0.0), ("witness", witness, 1.0), ("negative", negative, 0.0)))
+    return answer_checks(task, (("empty", "", 0.0), ("witness", witness, 1.0), ("negative", negative, 0.0)))
 
 
 def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckResult]:
@@ -133,7 +108,7 @@ def _action_checks(task: TaskSpec, verifier: PredictedActionSpec) -> list[CheckR
         ("reference", reference, 1.0),
         ("perturbed", wrong, 0.0),
     ):
-        grade = grade_answer(task, convention, ConversationTrace(events=(*task.context.events, response)))
+        grade = grade_task(task, convention, ConversationTrace(events=(*task.context.events, response)))
         passed = grade.reward == expected or (expected == 0.0 and grade.status == Outcome.EXTRACTION_ERROR)
         results.append(
             CheckResult(

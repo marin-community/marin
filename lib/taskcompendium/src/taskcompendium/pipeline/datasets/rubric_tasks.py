@@ -9,16 +9,15 @@ import re
 import tomllib
 from collections.abc import Callable
 
-from pydantic import ValidationError
-
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs, tasktrove_source
 from taskcompendium.pipeline.models import (
@@ -35,8 +34,6 @@ from taskcompendium.pipeline.models import (
     ReviewRubric,
     VerificationReport,
 )
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.rubric_judge import RubricJudgeVerifier
 
 NUMBERED = re.compile(r"^\s*\d+[.)]\s*")
 DELIVERY_SENTENCE = (
@@ -70,7 +67,7 @@ def response_instruction(instruction: str) -> str:
     return prefix + separator + request
 
 
-def normalized_task(row: RawRow, verifier: RubricJudgeVerifier) -> NormalizedTask | ImportRejection:
+def normalized_task(row: RawRow, contract: dict) -> NormalizedTask | ImportRejection:
     """Bind a private judge contract to the public response task."""
     instruction = row.data.get("instruction")
     if not isinstance(instruction, str) or not instruction.strip():
@@ -88,6 +85,9 @@ def normalized_task(row: RawRow, verifier: RubricJudgeVerifier) -> NormalizedTas
             ),
         )
     )
+    package = source_contract_package(
+        "source rubric judge", row.source.revision, contract, ("Source semantic judge binding",)
+    )
     return NormalizedTask(
         TaskSpec(
             id=row.id,
@@ -95,7 +95,8 @@ def normalized_task(row: RawRow, verifier: RubricJudgeVerifier) -> NormalizedTas
             context=ConversationInput(events=(TextMessage(role="user", content=replacement),)),
             environment_requirements=EnvironmentRequirements(),
             answer_type=AnswerType.TEXT,
-            verifier=VerifierSpec(kind=VerifierKind.RUBRIC_JUDGE, parameters_json=verifier.model_dump_json()),
+            verifier=package.verifier,
+            resources=ResourceGroups(verifier=package.resources),
         ),
         changes,
     )
@@ -128,22 +129,22 @@ def normalize(row: RawRow) -> NormalizedTask | ImportRejection:
         return ImportRejection(reason="missing_judge_config", detail="Original source judge.toml is required")
     source_toml = base64.b64decode(encoded_toml, validate=True).decode()
     config = tomllib.loads(source_toml)
+    contract = {
+        "mode": (
+            "holistic_numeric"
+            if any(item.get("type") == "numeric" for item in config.get("criterion", []))
+            else "checklist"
+        ),
+        "question": question,
+        "criteria": criteria,
+        "aggregation": config,
+        "source_judge_data": data,
+        "source_judge_toml": source_toml,
+    }
     try:
-        verifier = RubricJudgeVerifier(
-            mode=(
-                "holistic_numeric"
-                if any(item.get("type") == "numeric" for item in config.get("criterion", []))
-                else "checklist"
-            ),
-            question=question,
-            criteria=criteria,
-            aggregation=config,
-            source_judge_data=data,
-            source_judge_toml=source_toml,
-        )
-    except ValidationError as error:
+        return normalized_task(row, contract)
+    except (TypeError, ValueError) as error:
         return ImportRejection(reason="invalid_rubric", detail=str(error))
-    return normalized_task(row, verifier)
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:

@@ -5,7 +5,8 @@
 
 import pytest
 
-from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading import grade_answer, multiple_choice_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -16,7 +17,6 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 
 @pytest.mark.parametrize(

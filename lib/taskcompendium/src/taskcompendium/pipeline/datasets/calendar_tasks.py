@@ -4,9 +4,9 @@
 """Normalize actual TaskTrove calendar conversations and final-schedule contracts."""
 
 import json
+from pathlib import Path
 
-from pydantic import ValidationError
-
+from taskcompendium.grader import script_package
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -14,8 +14,8 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.grader_scripts.schedule import normalized_name, parse_time
 from taskcompendium.pipeline.datasets.instruction_following import REVISION
 from taskcompendium.pipeline.datasets.reasoning_tasks import snapshot_file
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
@@ -33,8 +33,8 @@ from taskcompendium.pipeline.models import (
 )
 from taskcompendium.pipeline.verification import verify_witness
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.schedule import ScheduleAnswerVerifier
+
+SCHEDULE_SCRIPT = (Path(__file__).with_name("grader_scripts") / "schedule.py").read_bytes()
 
 CONFIG = "laion__nemotron-gym-agent-calendar-v2"
 WITNESS_PATH = "/control/calendar-answer.json"
@@ -62,10 +62,27 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     if not isinstance(instruction, str) or not instruction.strip() or not isinstance(data, dict):
         return ImportRejection(reason="missing_input", detail="Instruction and calendar verifier data are required")
     witness = snapshot_file(row, "solution/answer.json")
-    try:
-        verifier = ScheduleAnswerVerifier.model_validate({"expected_events": data.get("expected_events")})
-    except (ValidationError, ValueError) as error:
-        return ImportRejection(reason="invalid_calendar", detail=str(error))
+    expected_events = data.get("expected_events")
+    if not isinstance(expected_events, dict) or not expected_events:
+        return ImportRejection(reason="invalid_calendar", detail="Expected nonempty event constraints")
+    for key, event in expected_events.items():
+        try:
+            int(key)
+        except (ValueError, TypeError) as error:
+            return ImportRejection(reason="invalid_calendar", detail=str(error))
+        if not isinstance(event, dict):
+            return ImportRejection(reason="invalid_calendar", detail=f"Malformed calendar event {key}")
+        duration = event.get("duration")
+        if (
+            not isinstance(duration, int)
+            or isinstance(duration, bool)
+            or duration <= 0
+            or normalized_name(event.get("event_name")) is None
+            or parse_time(event.get("min_time")) is None
+            or parse_time(event.get("max_time")) is None
+        ):
+            return ImportRejection(reason="invalid_calendar", detail=f"Malformed calendar event {key}")
+    package = script_package(SCHEDULE_SCRIPT, {"expected_events": expected_events})
     instruction = instruction.replace(
         "write your final calendar as a JSON list to `/app/answer.txt`",
         "return your final calendar as a JSON list in the assistant response",
@@ -75,9 +92,10 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.SCHEDULE_ANSWER, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
         resources=ResourceGroups(
-            oracle=(inline_resource(WITNESS_PATH.lstrip("/"), witness),) if witness is not None else ()
+            oracle=(inline_resource(WITNESS_PATH.lstrip("/"), witness),) if witness is not None else (),
+            verifier=package.resources,
         ),
         source=row.source,
     )

@@ -5,15 +5,18 @@
 
 import re
 
-from pydantic import ValidationError
+from verifyit.grade import InvalidTask
+from verifyit.modes.grade_ifeval import resolve_checks
+from verifyit.spec import Constraint, IfevalSpec
 
+from taskcompendium.grader import grader_package
+from taskcompendium.grading import resolve_verifier
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
 from taskcompendium.pipeline.datasets.source_definitions import TASKTROVE_DATASET, tasktrove_inputs
 from taskcompendium.pipeline.models import (
@@ -29,8 +32,6 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.constraints import IfevalVerifier, InstructionConstraint
 
 REVISION = "02923004846e4e73862c20962f823a6d05100e7a"
 CONFIG = "laion__nemotron-gym-instruction-following-v3"
@@ -98,21 +99,22 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
     names, parameters = data.get("instruction_id_list"), data.get("kwargs")
     if not isinstance(names, list) or not isinstance(parameters, list) or len(names) != len(parameters):
         return ImportRejection(reason="invalid_constraints", detail="Constraint names and parameters must align")
+    if any(
+        not isinstance(name, str) or not isinstance(params, dict) for name, params in zip(names, parameters, strict=True)
+    ):
+        return ImportRejection(reason="invalid_constraints", detail="Constraint names and parameters must be objects")
     try:
-        verifier = IfevalVerifier(
-            constraints=tuple(
-                InstructionConstraint(name=name, parameters=params)
-                for name, params in zip(names, parameters, strict=True)
-            )
-        )
-    except (ValidationError, ValueError) as error:
+        constraints = tuple(Constraint(name=name, params=params) for name, params in zip(names, parameters, strict=True))
+        resolve_checks(constraints)
+        package = grader_package(IfevalSpec(constraints=constraints))
+    except (InvalidTask, ValueError) as error:
         return ImportRejection(reason="invalid_constraints", detail=str(error))
     return TaskSpec(
         id=row.id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction.strip()),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.IFEVAL, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
         source=row.source,
     )
 
@@ -144,10 +146,11 @@ def verification_report(task: TaskSpec) -> VerificationReport:
     """
     event = task.context.events[0]
     assert isinstance(event, TextMessage)
-    verifier = IfevalVerifier.model_validate_json(task.verifier.parameters_json)
+    verifier = resolve_verifier(task.verifier)
+    assert isinstance(verifier, IfevalSpec)
     languages = set()
     for constraint in verifier.constraints:
-        language = constraint.parameters.get("language")
+        language = constraint.params.get("language")
         if constraint.name == "language:response_language" and isinstance(language, str):
             languages.add(language)
     checks = []
@@ -155,7 +158,7 @@ def verification_report(task: TaskSpec) -> VerificationReport:
         if languages & NON_LATIN_LANGUAGES:
             for constraint in verifier.constraints:
                 parameter = POSITIONAL_WORDS.get(constraint.name)
-                word = constraint.parameters.get(parameter) if parameter is not None else None
+                word = constraint.params.get(parameter) if parameter is not None else None
                 if isinstance(word, str) and LATIN_WORD.fullmatch(word):
                     checks.append(
                         CheckResult(

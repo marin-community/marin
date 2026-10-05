@@ -13,10 +13,11 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    ResourceGroups,
     TaskSpec,
     TextMessage,
-    VerifierSpec,
 )
+from taskcompendium.pipeline.datasets.direct_contracts import source_contract_package
 from taskcompendium.pipeline.datasets.source_definitions import SourceDefinition
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat, hub_inputs
 from taskcompendium.pipeline.models import (
@@ -27,8 +28,6 @@ from taskcompendium.pipeline.models import (
     RawRow,
     ReviewRubric,
 )
-from taskcompendium.verifiers.base import VerifierKind
-from taskcompendium.verifiers.preference import BinaryPreference, PairwisePreference, PreferenceEvidenceVerifier
 
 PREFERENCE_CRITERIA = (
     "The public context contains every shared prior turn and the final user request; final candidates stay private.",
@@ -52,14 +51,21 @@ def hh_conversation(text: str) -> tuple[TextMessage, ...]:
     )
 
 
-def preference_task(row: RawRow, context: ConversationInput, verifier: PreferenceEvidenceVerifier) -> TaskSpec:
+def preference_task(row: RawRow, context: ConversationInput, evidence: dict) -> TaskSpec:
+    package = source_contract_package(
+        "source preference reward model",
+        row.source.revision,
+        evidence,
+        ("Source preference reward model binding",),
+    )
     return TaskSpec(
         id=row.id,
         source=row.source,
         context=context,
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=VerifierSpec(kind=VerifierKind.PREFERENCE_EVIDENCE, parameters_json=verifier.model_dump_json()),
+        verifier=package.verifier,
+        resources=ResourceGroups(verifier=package.resources),
     )
 
 
@@ -77,11 +83,12 @@ def normalize_hh(row: RawRow) -> TaskSpec | ImportRejection:
         return ImportRejection(reason="preference_prompt_conflict", detail="Candidates have different public histories")
     if not chosen[:-1] or chosen[-2].role != "user":
         return ImportRejection(reason="invalid_preference_prompt", detail="Public history must end in a user request")
-    verifier = PreferenceEvidenceVerifier(
-        evidence=PairwisePreference(chosen=(chosen[-1],), rejected=(rejected[-1],)),
-        source_metadata={key: value for key, value in row.data.items() if key not in {"chosen", "rejected", "path"}},
-    )
-    return preference_task(row, ConversationInput(events=chosen[:-1]), verifier)
+    evidence = {
+        "kind": "pairwise",
+        "chosen": [chosen[-1].model_dump(mode="json")],
+        "rejected": [rejected[-1].model_dump(mode="json")],
+    }
+    return preference_task(row, ConversationInput(events=chosen[:-1]), evidence)
 
 
 def normalize_binary(row: RawRow) -> TaskSpec | ImportRejection:
@@ -91,19 +98,21 @@ def normalize_binary(row: RawRow) -> TaskSpec | ImportRejection:
         completion = row.data["completion"]
         transcript = chat_conversation(prompt + completion)
         context = ConversationInput(events=transcript.events[: len(prompt)])
-        verifier = PreferenceEvidenceVerifier(
-            evidence=BinaryPreference(response=transcript.events[len(prompt) :], preferred=row.data["label"]),
-            source_metadata={
-                key: value for key, value in row.data.items() if key not in {"prompt", "completion", "label", "path"}
-            },
-        )
+        label = row.data["label"]
+        if not isinstance(label, bool):
+            raise ValueError("Preference label must be a boolean")
+        evidence = {
+            "kind": "binary",
+            "response": [event.model_dump(mode="json") for event in transcript.events[len(prompt) :]],
+            "preferred": label,
+        }
     except (ValidationError, ValueError, KeyError, TypeError) as error:
         return ImportRejection(reason="invalid_binary_preference", detail=str(error))
     if not context.events or not completion:
         return ImportRejection(
             reason="missing_preference_messages", detail="Public prompt and labeled completion required"
         )
-    return preference_task(row, ConversationInput(events=context.events), verifier)
+    return preference_task(row, ConversationInput(events=context.events), evidence)
 
 
 def recipe(
