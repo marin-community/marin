@@ -10,14 +10,14 @@ from typing import Any
 from shellbox.machine import Command, Machine, MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.environment import EnvironmentKind
-from taskcompendium.grading import GradeResult
+from taskcompendium.execution import StageExecution
+from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
     FILESYSTEM_CAPABILITY,
     SHELL_CAPABILITY,
     AnswerType,
     AssistantToolCalls,
     TaskSpec,
-    TaskStage,
 )
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
@@ -84,7 +84,7 @@ class _ShellboxTaskSession:
         command_timeout: float,
         factories: Mapping[EnvironmentKind, MachineFactory],
         cleanup: _Cleanup,
-        stage: TaskStage | None = None,
+        execution: StageExecution,
     ):
         self.task = task
         self.machine = machine
@@ -92,17 +92,17 @@ class _ShellboxTaskSession:
         self.command_timeout = command_timeout
         self.factories = factories
         self.cleanup = cleanup
-        self.stage = stage
+        self.execution = execution
 
     async def prepare(self) -> SessionStart:
         available = set() if self.machine is None else {SHELL_CAPABILITY, FILESYSTEM_CAPABILITY}
         if not set(self.task.environment_requirements.capabilities) <= available:
             raise ValueError("The task environment does not supply its required capabilities")
-        if self.stage is not None:
+        if self.execution.workdir_files or self.execution.setup or self.execution.healthcheck is not None:
             assert self.machine is not None
-            if self.stage.workdir_files:
+            if self.execution.workdir_files:
                 result = await self.machine.run(
-                    Command(("pwd",), user=self.task.agent_user, timeout=self.command_timeout)
+                    Command(("pwd",), user=self.execution.agent_user, timeout=self.command_timeout)
                 )
                 if result.exit_code != 0:
                     raise RuntimeError("Cannot find the stage working directory")
@@ -111,12 +111,12 @@ class _ShellboxTaskSession:
                     self.machine,
                     tuple(
                         file.model_copy(update={"path": f"{workdir.rstrip('/')}{file.path}"})
-                        for file in self.stage.workdir_files
+                        for file in self.execution.workdir_files
                     ),
                 )
-            await _run_setup_commands(self.machine, self.stage.setup, f"Task stage {self.stage.name} setup")
-            if self.stage.healthcheck is not None:
-                await _wait_for_healthcheck(self.machine, self.stage.healthcheck)
+            await _run_setup_commands(self.machine, self.execution.setup, "Task stage setup")
+            if self.execution.healthcheck is not None:
+                await _wait_for_healthcheck(self.machine, self.execution.healthcheck)
         return session_start(self.task, self.convention)
 
     async def advance(self, turn: ModelTurn) -> Transition:
@@ -153,7 +153,7 @@ class _ShellboxTaskSession:
                 )
                 continue
             result = await self.machine.run(
-                Command(argv=("sh", "-c", command), timeout=self.command_timeout, user=self.task.agent_user)
+                Command(argv=("sh", "-c", command), timeout=self.command_timeout, user=self.execution.agent_user)
             )
             observations.append(
                 {

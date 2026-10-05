@@ -13,7 +13,6 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -67,10 +66,15 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=prompt + "\n\nReturn one option letter."),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        resources=ResourceGroups(
-            verifier=(inline_resource("reference/generated-response.json", json.dumps({"output": reference}).encode()),)
+        verifier=multiple_choice_answer(expected, options=len(choices)).model_copy(
+            update={
+                "files": (
+                    inline_resource(
+                        "tests/reference/generated-response.json", json.dumps({"output": reference}).encode()
+                    ),
+                ),
+            }
         ),
-        verifier=multiple_choice_answer(expected, options=len(choices)),
     )
 
 

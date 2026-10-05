@@ -11,7 +11,6 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import python_tasks
 from taskcompendium.pipeline.datasets.executable_tasks import ExecutableConversion
 from taskcompendium.pipeline.models import CheckResult, CheckStatus, ReviewRubric, TaskPipeline, VerificationReport
-from taskcompendium.runtime.resources import resource_bytes
 
 RUBRIC = ReviewRubric(
     id="competitive-coding-answerability",
@@ -36,9 +35,9 @@ def pipeline(conversion: ExecutableConversion) -> TaskPipeline:
     def checks(task: TaskSpec) -> VerificationReport:
         report = suite.run(task)
         inputs = [
-            resource_bytes(resource).decode()
-            for resource in task.resources.verifier
-            if resource.path.startswith("tests/cases/input_")
+            resource.content.decode()
+            for resource in task.verifier.files
+            if resource.path.startswith("/tests/cases/input_")
         ]
         instruction = task.context.events[0]
         assert isinstance(instruction, TextMessage)

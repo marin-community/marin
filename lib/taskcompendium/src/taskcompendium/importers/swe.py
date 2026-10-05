@@ -72,7 +72,6 @@ def swe_task(
         }
     )
     verifier = ShellVerifierSpec(
-        environment=environment,
         collect=(
             EnvironmentCommand(
                 argv=(
@@ -86,7 +85,6 @@ def swe_task(
             ),
         ),
         artifacts=(VerifierArtifact(source=PATCH_PATH, target=PATCH_PATH, kind=ArtifactKind.FILE),),
-        files=(EnvironmentFile(path=GRADER_PATH, content=instance.eval_script.encode()),),
         argv=("sh", "-c", 'git apply --binary "$1" && bash "$2"', "evaluate-patch", PATCH_PATH, GRADER_PATH),
         timeout=verifier_timeout,
         reward=ExitCodeReward(),
@@ -108,6 +106,11 @@ def swe_task(
         environment_requirements=EnvironmentRequirements(capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY)),
         answer_type=AnswerType.STATE,
         environment=task_environment,
-        verifier=VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
+        verifier=VerifierSpec(
+            kind=VerifierKind.SHELL,
+            parameters_json=verifier.model_dump_json(),
+            environment=environment,
+            files=(EnvironmentFile(path=GRADER_PATH, content=instance.eval_script.encode()),),
+        ),
         source=source,
     )

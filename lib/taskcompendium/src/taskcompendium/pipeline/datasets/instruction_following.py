@@ -109,7 +109,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction.strip()),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
+        verifier=package,
         source=row.source,
     )
 

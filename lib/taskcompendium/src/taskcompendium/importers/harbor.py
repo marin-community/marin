@@ -31,6 +31,7 @@ from taskcompendium.environment import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
+from taskcompendium.execution import StageExecution, TaskExecution
 from taskcompendium.models import (
     FILESYSTEM_CAPABILITY,
     SHELL_CAPABILITY,
@@ -146,11 +147,9 @@ def _shell_verifier(config: TaskConfig, directory: Path, tests: Path) -> Verifie
         artifact_configs.append(ArtifactConfig(source=ARTIFACTS_PATH))
     verifier = ShellVerifierSpec(
         argv=("bash", GRADER_PATH),
-        files=private_files,
         timeout=config.verifier.timeout_sec,
         env=config.verifier.env,
         user=None if config.verifier.user is None else str(config.verifier.user),
-        environment=verifier_environment,
         collect=tuple(
             EnvironmentCommand(
                 argv=("sh", "-c", hook.command),
@@ -181,7 +180,12 @@ def _shell_verifier(config: TaskConfig, directory: Path, tests: Path) -> Verifie
             ),
         ),
     )
-    return VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json())
+    return VerifierSpec(
+        kind=VerifierKind.SHELL,
+        parameters_json=verifier.model_dump_json(),
+        files=private_files,
+        environment=verifier_environment,
+    )
 
 
 def _stage_config(config: TaskConfig, step: StepConfig) -> TaskConfig:
@@ -240,26 +244,12 @@ def harbor_task(directory: Path, *, source: Source, verifier_override: VerifierS
             raise ValueError("Harbor step names must be path components")
         effective = _stage_config(config, step)
         step_dir = directory / "steps" / step.name
-        user = None if effective.agent.user is None else str(effective.agent.user)
         tests = step_dir / "tests" if (step_dir / "tests").is_dir() else directory / "tests"
         stages.append(
             TaskStage(
                 name=step.name,
                 context=None if index == 0 else _conversation(step_dir / "instruction.md"),
                 verifier=verifier_override or _shell_verifier(effective, directory, tests),
-                workdir_files=_directory_files(step_dir / "workdir", "/"),
-                setup=(
-                    (
-                        EnvironmentCommand(
-                            argv=("bash", "setup.sh"), timeout=config.environment.build_timeout_sec, user=user
-                        ),
-                    )
-                    if (step_dir / "workdir/setup.sh").is_file()
-                    else ()
-                ),
-                healthcheck=None if step.healthcheck is None else _healthcheck(step.healthcheck, user),
-                agent_timeout=effective.agent.timeout_sec,
-                agent_user=user,
                 minimum_rewards=(
                     step.min_reward
                     if isinstance(step.min_reward, dict)
@@ -284,10 +274,36 @@ def harbor_task(directory: Path, *, source: Source, verifier_override: VerifierS
         environment_requirements=EnvironmentRequirements(capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY)),
         answer_type=AnswerType.STATE,
         environment=environment,
-        agent_timeout=config.agent.timeout_sec,
-        agent_user=None if config.agent.user is None else str(config.agent.user),
         verifier=verifier,
         stages=tuple(stages),
         source=source,
         metadata={"harbor": config.metadata},
+    )
+
+
+def harbor_execution(directory: Path) -> TaskExecution:
+    """Convert Harbor deadlines and stage preparation to execution settings."""
+    config = TaskConfig.model_validate_toml((directory / "task.toml").read_text())
+    stages = {}
+    for step in config.steps or []:
+        if Path(step.name).name != step.name or step.name in {".", ".."}:
+            raise ValueError("Harbor step names must be path components")
+        effective = _stage_config(config, step)
+        workdir = directory / "steps" / step.name / "workdir"
+        user = None if effective.agent.user is None else str(effective.agent.user)
+        stages[step.name] = StageExecution(
+            workdir_files=_directory_files(workdir, "/"),
+            setup=(
+                (EnvironmentCommand(argv=("bash", "setup.sh"), timeout=config.environment.build_timeout_sec, user=user),)
+                if (workdir / "setup.sh").is_file()
+                else ()
+            ),
+            healthcheck=None if step.healthcheck is None else _healthcheck(step.healthcheck, user),
+            agent_timeout=effective.agent.timeout_sec,
+            agent_user=user,
+        )
+    return TaskExecution(
+        agent_timeout=config.agent.timeout_sec,
+        agent_user=None if config.agent.user is None else str(config.agent.user),
+        stages=stages,
     )

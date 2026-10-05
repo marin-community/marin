@@ -11,7 +11,6 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -28,7 +27,7 @@ from taskcompendium.pipeline.models import (
     VerificationReport,
 )
 from taskcompendium.pipeline.verification import verify_witness
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.runtime.resources import inline_resource
 
 SCHEDULE_SCRIPT = (Path(__file__).with_name("grader_scripts") / "schedule.py").read_bytes()
 
@@ -87,17 +86,14 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
-        resources=ResourceGroups(
-            oracle=(inline_resource(WITNESS_PATH.lstrip("/"), witness),) if witness is not None else (),
-            verifier=package.resources,
-        ),
+        verifier=package,
+        oracle_files=(inline_resource(WITNESS_PATH.lstrip("/"), witness),) if witness is not None else (),
         source=row.source,
     )
 
 
 def verification_report(task: TaskSpec) -> VerificationReport:
-    witness = next((resource for resource in task.resources.oracle if resource.path == WITNESS_PATH.lstrip("/")), None)
+    witness = next((resource for resource in task.oracle_files if resource.path == WITNESS_PATH), None)
     if witness is None:
         return VerificationReport(
             checks=[
@@ -109,7 +105,7 @@ def verification_report(task: TaskSpec) -> VerificationReport:
             ]
         )
     try:
-        witness_json = resource_bytes(witness).decode()
+        witness_json = witness.content.decode()
         events = json.loads(witness_json)
     except ValueError as error:
         return VerificationReport(
