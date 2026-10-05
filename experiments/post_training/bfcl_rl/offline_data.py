@@ -121,6 +121,20 @@ def native_model_trace(
     if assistant is None or assistant["role"] != "assistant":
         raise ValueError("Native capture lacks the parsed final assistant message")
     initial = selected[0]["request"]
+    # A retained continuation can start after tool-call serialization changes or
+    # context compaction. Compare the original task request when the final chat
+    # still preserves it exactly, with the same tool definitions.
+    for entry in entries:
+        candidate = entry["request"]
+        messages = candidate["messages"]
+        if (
+            any(message["role"] == "user" for message in messages)
+            and all(message["role"] in ("system", "developer", "user") for message in messages)
+            and request["messages"][: len(messages)] == messages
+            and (candidate.get("tools") or []) == (request.get("tools") or [])
+        ):
+            initial = candidate
+            break
     return NativeModelTrace(
         identity,
         seed,

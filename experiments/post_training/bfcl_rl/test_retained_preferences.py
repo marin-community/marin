@@ -161,6 +161,46 @@ def test_verified_teacher_traces_reuse_harmony_store_with_student_masks(tmp_path
     )
     assert trace.messages == messages
     assert trace.initial_messages == messages[:2]
+    continuation_prompt = [1, 2, 9, 248000, 248001, 99]
+    continuation_record = {
+        **teacher_record,
+        "prompt": {"token_ids": continuation_prompt},
+        "response": {
+            "token_ids": [248002, 248003, 42],
+            "loss_mask": [0, 1, 0],
+            "step_boundaries": [{"prompt_token_ids": continuation_prompt, "token_start": 0, "token_end": 3}],
+        },
+    }
+    continuation = native_model_trace(
+        identity=identity,
+        seed=7,
+        retained_record=continuation_record,
+        retained_uri="continuation",
+        native_trace_uri="literal",
+        trial_result=trial,
+        literal_entries=entries,
+        partition=PARTITION,
+        assistant_prefill="<think>\n",
+    )
+    assert continuation.messages == messages
+    assert continuation.initial_prompt_sha256 == trace.initial_prompt_sha256
+    changed_root = {
+        **entries[0],
+        "request": {"messages": [{"role": "user", "content": "ANOTHER_TASK"}], "tools": tools},
+    }
+    unmatched = native_model_trace(
+        identity=identity,
+        seed=7,
+        retained_record=continuation_record,
+        retained_uri="continuation",
+        native_trace_uri="literal",
+        trial_result=trial,
+        literal_entries=[changed_root, entries[1]],
+        partition=PARTITION,
+        assistant_prefill="<think>\n",
+    )
+    assert unmatched.initial_messages == messages[:-1]
+    assert unmatched.initial_prompt_sha256 != trace.initial_prompt_sha256
     with pytest.raises(ValueError, match="differ from retained trainable"):
         native_model_trace(
             identity=identity,
