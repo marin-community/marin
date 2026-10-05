@@ -14,7 +14,8 @@ import pytest
 from verifyit.grade import grade as source_grade
 from verifyit.spec import McqSpec, Mode
 
-from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading import grade_task
+from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
@@ -70,7 +71,7 @@ def test_imported_mcqa_matches_source_grading(tmp_path):
     ):
         (tmp_path / "source-answer.txt").write_text(source_response)
         assert source_grade(source_contract, tmp_path, tmp_path).reward == reward
-        result = grade_answer(
+        result = grade_task(
             specification,
             convention,
             ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
@@ -81,14 +82,14 @@ def test_imported_mcqa_matches_source_grading(tmp_path):
 def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
     specification = import_task(_archive())
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
-    json_result = grade_answer(
+    json_result = grade_task(
         specification,
         SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
         ConversationTrace(
             events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
         ),
     )
-    malformed = grade_answer(
+    malformed = grade_task(
         specification,
         convention,
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="Answer: C"))),
@@ -159,7 +160,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
 
     outcome = json.loads((tmp_path / "trials/mcqa/verifier/taskcompendium-result.json").read_text())
     assert result.exception_info is None, result.exception_info
-    assert outcome == {"status": "graded", "reward": 1.0, "error": None}
+    assert (outcome["status"], outcome["reward"], outcome["error"]) == ("graded", 1.0, None)
 
 
 def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
@@ -171,12 +172,12 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     )
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.grading import grade_answer; "
+        "from taskcompendium.grading import grade_task; "
         "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "specification = read_specification(root / 'specification.json'); "
-        "result = grade_answer(specification, "
+        "result = grade_task(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "ConversationTrace(events=(*specification.context.events, "
         "TextMessage(role='assistant', content='C')))); "

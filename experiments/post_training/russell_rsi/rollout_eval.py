@@ -264,7 +264,7 @@ async def evaluate_development(
         render_exact_chat_continuation,
     )
     from taskcompendium.environment import EnvironmentKind  # noqa: PLC0415
-    from taskcompendium.grading import Outcome  # noqa: PLC0415
+    from taskcompendium.grading_result import Outcome  # noqa: PLC0415
     from taskcompendium.parquet import read_tasks  # noqa: PLC0415
     from taskcompendium.submission import (  # noqa: PLC0415
         AnswerFormat,

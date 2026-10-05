@@ -35,7 +35,7 @@ from taskcompendium.environment import (
     RegistryImage,
     ShellVerifierSpec,
 )
-from taskcompendium.grading import Outcome
+from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import PATCH_PATH, SWEInstance, swe_task
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.parquet import write_tasks

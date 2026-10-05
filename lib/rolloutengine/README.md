@@ -18,7 +18,7 @@ implements Shellbox task operations. `engine.py` controls model calls, token
 accumulation, and stage progression.
 
 TaskCompendium owns task definitions, serialization, importers, and grading
-contracts. It does not depend on this package or Shellbox.
+contracts. Its captured-submission grader uses Shellbox; it does not depend on this package.
 SkyRL supplies inference, schedules rollout workers, and converts rollout
 records to training batches.
 

@@ -11,7 +11,7 @@ from dataclasses import asdict, replace
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.environment import EnvironmentKind
-from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import StageVerifierSpec, TaskSpec, VerifierKind
 from taskcompendium.submission import Submission, conversation_messages
 

@@ -22,10 +22,14 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
         )
         if value
     ]
+    if specification.interaction_tools:
+        features.append("interaction_tools")
+    if specification.output_paths:
+        features.append("output_paths")
     if specification.verifier.environment_requirements != EnvironmentRequirements():
         features.append("verifier.environment_requirements")
     resources = specification.resources
-    if resources.all or resources.worker or resources.oracle or resources.verifier:
+    if resources.all or resources.worker or resources.oracle:
         features.append("resources")
     if specification.answer_type in {AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE}:
         features.append(specification.answer_type.value)

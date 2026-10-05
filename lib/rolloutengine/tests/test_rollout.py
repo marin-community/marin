@@ -28,7 +28,8 @@ from taskcompendium.environment import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.grading import Outcome, numeric_answer
+from taskcompendium.grading import numeric_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -189,10 +190,16 @@ async def test_executable_native_action_keeps_final_and_shell_tools():
     assert result.response_token_ids == (20,)
 
 
-async def test_rollout_rejects_legacy_environment_requirements():
-    task = arithmetic_task().model_copy(
-        update={"environment_requirements": EnvironmentRequirements(working_directory="/workspace")}
-    )
+@pytest.mark.parametrize(
+    "runtime_inputs",
+    [
+        {"environment_requirements": EnvironmentRequirements(working_directory="/workspace")},
+        {"interaction_tools": (FunctionDefinition(name="run", parameters={"type": "object"}),)},
+        {"output_paths": ("/app/submission.py",)},
+    ],
+)
+async def test_rollout_rejects_unsupported_runtime_inputs(runtime_inputs):
+    task = arithmetic_task().model_copy(update=runtime_inputs)
 
     with pytest.raises(ValueError, match="machine inputs"):
         await engine(ReplayModel([]), {}).run(task)

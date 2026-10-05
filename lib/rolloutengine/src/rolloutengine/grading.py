@@ -26,7 +26,8 @@ from taskcompendium.environment import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.grading import GradeResult, GradingFailure, Outcome, grade_answer, validate_verifier
+from taskcompendium.grading import grade_task, validate_verifier
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
 from taskcompendium.submission import Submission
 
@@ -45,6 +46,8 @@ def _validate_task(task: TaskSpec) -> None:
         or requirements.setup_commands
         or requirements.environment_variables
         or requirements.tool_providers
+        or task.interaction_tools
+        or task.output_paths
         or any((task.resources.all, task.resources.worker, task.resources.oracle, task.resources.verifier))
     ):
         raise ValueError("The rollout engine requires machine inputs in environment")
@@ -68,7 +71,7 @@ async def _grade_rollout(
         return GradeResult(Outcome.SKIPPED, None, parameters.reason)
     if task.verifier.kind != VerifierKind.SHELL:
         conversation = chat_conversation(list(messages))
-        return await asyncio.to_thread(grade_answer, task, convention, conversation)
+        return await asyncio.to_thread(grade_task, task, convention, conversation)
     if machine is None:
         raise ValueError("Shell grading requires a task machine")
     verifier = ShellVerifierSpec.model_validate_json(task.verifier.parameters_json)

@@ -5,7 +5,8 @@
 
 import pytest
 
-from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading import grade_task, multiple_choice_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -16,7 +17,6 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 
 @pytest.mark.parametrize(
@@ -34,7 +34,7 @@ def test_hand_authored_multiple_choice_answer(response, reward):
     )
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
-    result = grade_answer(
+    result = grade_task(
         specification,
         convention,
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from shellbox.machine import ExitReason, Result
 from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, RegistryImage
-from taskcompendium.grading import Outcome
+from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import Source
 from taskcompendium.parquet import read_tasks, write_tasks

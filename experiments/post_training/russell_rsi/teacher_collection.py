@@ -26,7 +26,7 @@ from rolloutengine.task_session import session_start
 from shellbox.machine import MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.environment import EnvironmentKind
-from taskcompendium.grading import Outcome
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 

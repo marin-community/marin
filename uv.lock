@@ -6128,7 +6128,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
-    { name = "taskcompendium" },
+    { name = "taskcompendium", extra = ["pipeline"] },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
@@ -6163,7 +6163,7 @@ test = [
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "taskcompendium" },
+    { name = "taskcompendium", extra = ["pipeline"] },
     { name = "verifyit", extra = ["answer", "reasoning-gym", "schema"] },
 ]
 
@@ -6270,6 +6270,7 @@ dev = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
     { name = "taskcompendium", editable = "lib/taskcompendium" },
+    { name = "taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
@@ -6305,6 +6306,7 @@ test = [
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "taskcompendium", editable = "lib/taskcompendium" },
+    { name = "taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "verifyit", extras = ["answer", "reasoning-gym", "schema"], editable = "lib/verifyit" },
 ]
 
@@ -11475,20 +11477,34 @@ version = "0.1.0"
 source = { editable = "lib/taskcompendium" }
 dependencies = [
     { name = "marin-rigging" },
+    { name = "marin-shellbox" },
     { name = "pyarrow" },
     { name = "pydantic" },
-    { name = "verifyit" },
+    { name = "verifyit", extra = ["answer", "judge", "reasoning-gym", "schema"] },
+]
+
+[package.optional-dependencies]
+pipeline = [
+    { name = "datasets" },
+    { name = "marin-finestore" },
+    { name = "marin-zephyr" },
+    { name = "numpy" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
+    { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "lib/finestore" },
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-shellbox", editable = "lib/shellbox" },
+    { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "lib/zephyr" },
+    { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", specifier = ">=17" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "verifyit", editable = "lib/verifyit" },
+    { name = "verifyit", extras = ["answer", "judge", "reasoning-gym", "schema"], editable = "lib/verifyit" },
 ]
-provides-extras = ["harbor"]
+provides-extras = ["harbor", "pipeline"]
 
 [package.metadata.requires-dev]
 test = [

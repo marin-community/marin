@@ -10,7 +10,7 @@ from typing import Any
 from shellbox.machine import Command, Machine, MachineFactory
 from taskcompendium.chat import assistant_message
 from taskcompendium.environment import EnvironmentKind
-from taskcompendium.grading import GradeResult
+from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
     FILESYSTEM_CAPABILITY,
     SHELL_CAPABILITY,

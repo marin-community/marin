@@ -783,11 +783,14 @@ def prepare_contract_tasks(config: ContractTasksConfig) -> None:
             terminal = json.loads(
                 pinned_bytes(recovery["terminal_job_metadata"]["uri"], recovery["terminal_job_metadata"]["sha256"])
             )
+            output_storage = StoragePath(config.output_path)
             for predecessor_uri in (recovery["original_artifact_uri"], recovery["predecessor_output_uri"]):
-                if config.output_path.rstrip("/") == predecessor_uri.rstrip("/") or config.output_path.startswith(
-                    predecessor_uri.rstrip("/") + "/"
-                ):
-                    raise ValueError("Recovery requires a separate output namespace")
+                predecessor_namespace = StoragePath(predecessor_uri)
+                try:
+                    output_storage.relative_to(predecessor_namespace)
+                except ValueError:
+                    continue
+                raise ValueError("Recovery requires a separate output namespace")
             predecessor_storage = StoragePath(recovery["predecessor_output_uri"])
             actual_files = {}
             for source in (predecessor_storage / "**/*").glob():
