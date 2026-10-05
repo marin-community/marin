@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, ProviderRequirement
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -16,8 +17,6 @@ from taskcompendium.models import (
     ConversationToolCall,
     EnvironmentRequirements,
     FunctionDefinition,
-    ProviderRequirement,
-    ResourceGroups,
     TaskSpec,
     TextMessage,
     ToolResult,
@@ -171,7 +170,8 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
         id=row.id,
         source=row.source,
         context=context,
-        environment_requirements=EnvironmentRequirements(capabilities=requirements, tool_providers=providers),
+        environment_requirements=EnvironmentRequirements(capabilities=requirements),
+        environment=EnvironmentSpec(kind=EnvironmentKind.NULL, tool_providers=providers),
         final_tools=tools,
         interaction_tools=tools,
         answer_type=(
@@ -179,7 +179,6 @@ def normalize(row: RawRow, selector: str, family: str) -> NormalizedTask | Impor
             if data.get("expected_action", {}).get("type") == "function_call" and tools
             else AnswerType.TEXT
         ),
-        verifier=package.verifier,
-        resources=ResourceGroups(verifier=package.resources),
+        verifier=package,
     )
     return NormalizedTask(task, (*placeholder_changes, *changes))

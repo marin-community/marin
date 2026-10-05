@@ -20,6 +20,7 @@ from taskcompendium.chat import chat_conversation
 from taskcompendium.environment import (
     ArtifactKind,
     EnvironmentCommand,
+    EnvironmentFile,
     EnvironmentKind,
     ExitCodeReward,
     FileReward,
@@ -28,8 +29,10 @@ from taskcompendium.environment import (
     ShellVerifierSpec,
     VerifierArtifact,
 )
-from taskcompendium.grading import GradeResult, GradingFailure, Outcome, grade_answer, validate_verifier
-from taskcompendium.models import SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading import grade_answer, validate_verifier
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.models import AnswerType, SkippedVerifierSpec, StageRewardStrategy, TaskSpec, TaskStage, VerifierKind
 from taskcompendium.submission import Submission
 
 from rolloutengine.cleanup import _Cleanup
@@ -38,12 +41,40 @@ from rolloutengine.machines import _install_files, _machine_command, _run_setup_
 MISSING_FILE_EXIT = 44
 
 
-def _validate_task(task: TaskSpec) -> None:
+def _validate_task(task: TaskSpec, execution: TaskExecution) -> None:
     """Reject task features that this engine cannot execute."""
     if task.verifier.kind == VerifierKind.EXTERNAL and task.environment.interaction is None:
         raise ValueError("External verifiers require an interaction session")
-    for specification in (task.verifier, *(stage.verifier for stage in task.stages)):
+    stage_names = {stage.name for stage in task.stages}
+    missing = stage_names - execution.stages.keys()
+    extra = execution.stages.keys() - stage_names
+    if missing or extra:
+        raise ValueError(f"Execution stages disagree with the task: missing={sorted(missing)}, extra={sorted(extra)}")
+    verifiers = (task.verifier, *(stage.verifier for stage in task.stages))
+    file_groups = [
+        (task.environment, task.environment.files),
+        *((task.environment, stage.workdir_files) for stage in execution.stages.values()),
+        *((verifier.environment or task.environment, verifier.files) for verifier in verifiers),
+        *((verifier.environment, verifier.environment.files) for verifier in verifiers if verifier.environment),
+    ]
+    for environment, files in file_groups:
+        if environment.kind == EnvironmentKind.SHELLSIM and any(file.mtime_ns is not None for file in files):
+            raise ValueError("ShellSim cannot preserve explicit file timestamps")
+    if task.environment.interaction is None and (task.environment.tool_providers or task.interaction_tools):
+        raise NotImplementedError("Native tool providers require an application-supplied task session")
+    for specification in verifiers:
         validate_verifier(specification)
+        if task.environment.interaction is None and specification.kind not in {
+            VerifierKind.SHELL,
+            VerifierKind.STAGED,
+            VerifierKind.SKIPPED,
+        }:
+            if specification.environment is not None or task.answer_type in {
+                AnswerType.FILE,
+                AnswerType.STATE,
+                AnswerType.WORKSPACE_STATE,
+            }:
+                raise NotImplementedError("Native workspace grading requires an application-supplied task session")
 
 
 async def _grade_rollout(
@@ -70,16 +101,16 @@ async def _grade_rollout(
             return GradeResult(
                 Outcome.INFRA_ERROR, None, "Cannot collect grading inputs", failure=GradingFailure.EXECUTION
             )
-    if verifier.environment is None:
-        return await _shell_grade(verifier, messages, machine)
-    async with _task_machine(verifier.environment, factories, cleanup) as grading_machine:
+    if task.verifier.environment is None:
+        return await _shell_grade(verifier, messages, machine, task.verifier.files)
+    async with _task_machine(task.verifier.environment, factories, cleanup) as grading_machine:
         assert grading_machine is not None
         with TemporaryDirectory(prefix="rollout-artifacts-") as directory:
             for index, artifact in enumerate(verifier.artifacts):
                 path = Path(directory) / str(index)
                 if await _download_artifact(machine, artifact, path, verifier.timeout, cleanup):
                     await grading_machine.upload(path, artifact.target)
-        return await _shell_grade(verifier, messages, grading_machine)
+        return await _shell_grade(verifier, messages, grading_machine, task.verifier.files)
 
 
 async def _download_artifact(
@@ -149,7 +180,10 @@ async def _download_artifact(
 
 
 async def _shell_grade(
-    verifier: ShellVerifierSpec, messages: tuple[dict[str, Any], ...], machine: Machine
+    verifier: ShellVerifierSpec,
+    messages: tuple[dict[str, Any], ...],
+    machine: Machine,
+    files: tuple[EnvironmentFile, ...],
 ) -> GradeResult:
     if isinstance(verifier.reward, FileReward):
         paths = tuple(file.path for file in verifier.reward.files)
@@ -160,7 +194,7 @@ async def _shell_grade(
                 return GradeResult(
                     Outcome.INFRA_ERROR, None, "Cannot prepare private reward files", failure=GradingFailure.EXECUTION
                 )
-    await _install_files(machine, verifier.files)
+    await _install_files(machine, files)
     result = await machine.run(
         Command(
             argv=verifier.argv,
@@ -303,9 +337,9 @@ async def _remove_stage_grader(stage: TaskStage, machine: Machine) -> None:
     if stage.verifier.kind != VerifierKind.SHELL:
         return
     verifier = ShellVerifierSpec.model_validate_json(stage.verifier.parameters_json)
-    if verifier.environment is not None:
+    if stage.verifier.environment is not None:
         return
-    paths = [file.path for file in verifier.files]
+    paths = [file.path for file in stage.verifier.files]
     if isinstance(verifier.reward, FileReward):
         paths.extend(file.path for file in verifier.reward.files)
     if not paths:

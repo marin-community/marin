@@ -12,9 +12,9 @@ from tempfile import TemporaryDirectory
 from shellbox.machine import Command, DockerImage, MachineFactory, MachineSpec, NetworkPolicy
 from verifyit.spec import GotestSpec, JunitSpec, PytestSpec, ScriptSpec, StdioSpec, render_spec, spec_from_table
 
+from taskcompendium.environment import RegistryImage
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskSpec
-from taskcompendium.runtime.resources import resource_bytes
 
 GRADING_TIMEOUT = 600.0
 GRADING_MEMORY_MB = 4096
@@ -42,6 +42,24 @@ async def _sandbox_grade(
     task: TaskSpec, files: dict[str, bytes], factory: MachineFactory, *, timeout: float, memory_mb: int
 ) -> GradeResult:
     spec = spec_from_table({"mode": task.verifier.kind, **json.loads(task.verifier.parameters_json)})
+    environment = task.verifier.environment
+    if environment is None or not isinstance(environment.image, RegistryImage):
+        raise ValueError("Isolated grading requires a registry image")
+    if (
+        environment.files
+        or environment.env
+        or environment.setup
+        or environment.healthcheck is not None
+        or environment.startup_timeout is not None
+        or environment.memory_mb is not None
+        or environment.cpus is not None
+        or environment.storage_mb is not None
+        or environment.gpus
+        or environment.network
+        or environment.tool_providers
+        or set(task.verifier.environment_requirements.capabilities) - {"process", "shell", "filesystem"}
+    ):
+        raise ValueError("Isolated grading cannot apply the declared environment settings")
     paths = task.output_paths
     if not isinstance(spec, StdioSpec | PytestSpec | ScriptSpec | JunitSpec | GotestSpec):
         paths = (*paths, spec.output)
@@ -58,24 +76,15 @@ async def _sandbox_grade(
         submissions["/app/state.json"] = files["/app/state.json"]
     if not submissions:
         return GradeResult(Outcome.GRADED, 0.0, "Missing submission")
-    requirements = task.verifier.environment_requirements
-    if (
-        requirements.capabilities
-        or requirements.setup_commands
-        or requirements.environment_variables
-        or requirements.tool_providers
-    ):
-        raise ValueError("Unsupported private grading environment requirements")
     workspace = (
         spec.workspace if isinstance(spec, StdioSpec | PytestSpec | ScriptSpec | JunitSpec | GotestSpec) else "/app"
     )
-    if requirements.working_directory is not None and requirements.working_directory != workspace:
+    if environment.workdir != workspace:
         raise ValueError("Private grading workspace disagrees with verifier specification")
-    image = requirements.docker_image
-    if image is None:
-        raise ValueError("Isolated grading requires a pinned image")
     machine = await factory.create(
-        MachineSpec(DockerImage(image), workdir=workspace, network=NetworkPolicy.DENY, memory_mb=memory_mb)
+        MachineSpec(
+            DockerImage(environment.image.reference), workdir=workspace, network=NetworkPolicy.DENY, memory_mb=memory_mb
+        )
     )
     try:
         with TemporaryDirectory() as directory:
@@ -84,23 +93,20 @@ async def _sandbox_grade(
             # crosses the machine boundary rather than one RPC per fixture.
             archive_path = root / "submission.tar"
             metadata = {
-                **{"tests/" + resource.path: resource for resource in task.resources.verifier},
-                **{resource.path: resource for resource in task.resources.all + task.resources.worker},
+                **{resource.path.removeprefix("/"): resource for resource in task.environment.files},
+                **{resource.path.removeprefix("/"): resource for resource in task.verifier.files},
             }
             with tarfile.open(archive_path, "w") as archive:
                 for path, data in [
-                    *(("tests/" + resource.path, resource_bytes(resource)) for resource in task.resources.verifier),
-                    *(
-                        (resource.path, resource_bytes(resource))
-                        for resource in task.resources.all + task.resources.worker
-                    ),
+                    *((resource.path, resource.content) for resource in task.environment.files),
                     *submissions.items(),
+                    *((resource.path, resource.content) for resource in task.verifier.files),
                     (SPEC_PATH, render_spec(spec).encode()),
                 ]:
                     member = tarfile.TarInfo(path.removeprefix("/"))
                     member.size = len(data)
                     resource = metadata.get(path.removeprefix("/"))
-                    member.mode = int(resource.mode, 8) if resource is not None and resource.mode is not None else 0o644
+                    member.mode = resource.mode if resource is not None else 0o644
                     if resource is not None and resource.mtime_ns is not None:
                         seconds, nanos = divmod(resource.mtime_ns, 1_000_000_000)
                         member.pax_headers = {"mtime": f"{seconds}.{nanos:09d}"}

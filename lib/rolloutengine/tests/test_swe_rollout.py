@@ -12,7 +12,8 @@ import subprocess
 import pytest
 from shellbox.machine import ExitReason, Result
 from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, RegistryImage
-from taskcompendium.grading import Outcome
+from taskcompendium.execution import TaskExecution
+from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import Source, TaskSpec
 
@@ -122,7 +123,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await engine(model, {EnvironmentKind.DOCKER: Factory()}).run(task)
+    result = await engine(model, {EnvironmentKind.DOCKER: Factory()}).run(task, execution=TaskExecution())
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert (git_image / "value.txt").read_text() == "broken\n"
     assert len(machines) == 2

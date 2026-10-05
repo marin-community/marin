@@ -7,12 +7,11 @@ import re
 
 from pydantic import ValidationError
 
-from taskcompendium.harbor.protocol import chat_conversation
+from taskcompendium.chat import chat_conversation
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -58,8 +57,7 @@ def preference_task(row: RawRow, context: ConversationInput, evidence: dict) -> 
         context=context,
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=package.verifier,
-        resources=ResourceGroups(verifier=package.resources),
+        verifier=package,
     )
 
 

@@ -48,10 +48,7 @@ async def test_calendar_alternative_solutions_preserve_state_and_reset(calendar_
     reference_state, alternate_state = json.loads(reference.state_json), json.loads(alternate.state_json)
     assert reference_state["events"][-1]["start"] != alternate_state["events"][-1]["start"]
     assert reference.state_json == reset.state_json
-    assert (
-        reference_state["events"][:2]
-        == calendar_task.environment_requirements.tool_providers["calendar"].initial_state["events"]
-    )
+    assert reference_state["events"][:2] == calendar_task.environment.tool_providers["calendar"].initial_state["events"]
     saved = RolloutRecord.model_validate_json(reference.model_dump_json())
     assert saved.evidence() == reference.evidence()
 
@@ -86,7 +83,7 @@ async def test_episode_budget_keeps_tool_observations_without_private_actor_inpu
     assert rollout.termination == Termination.STEP_LIMIT
     assert (
         json.loads(rollout.events[-1].content)["events"]
-        == calendar_task.environment_requirements.tool_providers["calendar"].initial_state["events"]
+        == calendar_task.environment.tool_providers["calendar"].initial_state["events"]
     )
     assert actor.public[0].tools[0].name == "list_events"
 

@@ -60,7 +60,7 @@ def test_injection_ingestion_keeps_target_private_and_filters_grader_exploit():
     )
     task = atlas_arc_injection.normalize(row, "indirect_injection")
     assert isinstance(task, TaskSpec)
-    assert task.resources.verifier and not task.resources.worker and not task.resources.all
+    assert task.verifier.files and not task.environment.files
     assert "external@example.org" not in task.context.events[0].content
     checks = {check.check: check.status for check in atlas_arc_injection.verification_report(task).checks}
     assert checks == {

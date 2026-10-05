@@ -12,7 +12,8 @@ from functools import partial
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.environment import EnvironmentKind
-from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.execution import StageExecution, TaskExecution
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import StageVerifierSpec, TaskSpec
 from taskcompendium.submission import Submission, conversation_messages
 
@@ -74,17 +75,17 @@ class ShellboxRolloutEngine:
         self.convention = convention
         self.sessions = {} if sessions is None else sessions
 
-    async def run(self, task: TaskSpec) -> RolloutData:
+    async def run(self, task: TaskSpec, *, execution: TaskExecution) -> RolloutData:
         """Run one task with bounded session and machine cleanup."""
-        _validate_task(task)
-        deadline = asyncio.timeout(task.attempt_timeout)
+        _validate_task(task, execution)
+        deadline = asyncio.timeout(execution.attempt_timeout)
         cleanup = _Cleanup(self.cleanup_timeout)
         operation = None
         cause = None
         async with AsyncExitStack() as resources:
             try:
                 async with deadline:
-                    record = await self._run_task(task, resources, cleanup)
+                    record = await self._run_task(task, execution, resources, cleanup)
             except TimeoutError as error:
                 if not deadline.expired():
                     raise
@@ -109,23 +110,33 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(record, operation) from cause
         return record
 
-    async def _run_task(self, task: TaskSpec, resources: AsyncExitStack, cleanup: _Cleanup) -> RolloutData:
+    async def _run_task(
+        self, task: TaskSpec, execution: TaskExecution, resources: AsyncExitStack, cleanup: _Cleanup
+    ) -> RolloutData:
         try:
             machine = await resources.enter_async_context(_task_machine(task.environment, self.factories, cleanup))
         except Exception as error:
             raise RolloutInterrupted(_empty_rollout(task), RolloutOperation.START) from error
         if task.stages:
             assert machine is not None
-            return await self._run_stages(task, machine, self.convention, cleanup)
+            return await self._run_stages(task, execution, machine, self.convention, cleanup)
         if task.environment.interaction is None:
-            session = _ShellboxTaskSession(task, machine, self.convention, self.command_timeout, self.factories, cleanup)
+            session = _ShellboxTaskSession(
+                task,
+                machine,
+                self.convention,
+                self.command_timeout,
+                self.factories,
+                cleanup,
+                StageExecution(agent_user=execution.agent_user),
+            )
         else:
             session = self.sessions[task.environment.interaction](task, machine)
         resources.push_async_callback(cleanup.run, "session_close", session.close)
-        return await self._run_session(task, session)
+        return await self._run_session(task, session, agent_timeout=execution.agent_timeout)
 
     async def _run_stages(
-        self, task: TaskSpec, machine: Machine, convention: Submission, cleanup: _Cleanup
+        self, task: TaskSpec, execution: TaskExecution, machine: Machine, convention: Submission, cleanup: _Cleanup
     ) -> RolloutData:
         specification = StageVerifierSpec.model_validate_json(task.verifier.parameters_json)
         record = None
@@ -140,17 +151,24 @@ class ShellboxRolloutEngine:
                     "context": stage.context or task.context,
                     "verifier": stage.verifier,
                     "stages": (),
-                    "agent_timeout": task.agent_timeout if stage.agent_timeout is None else stage.agent_timeout,
-                    "agent_user": task.agent_user if stage.agent_user is None else stage.agent_user,
                 }
             )
             initial_steps = 0 if record is None else len(record.steps)
             initial_tokens = 0 if record is None else len(record.response_token_ids)
+            stage_execution = execution.stages[stage.name]
+            stage_execution = stage_execution.model_copy(
+                update={
+                    "agent_timeout": stage_execution.agent_timeout or execution.agent_timeout,
+                    "agent_user": (
+                        execution.agent_user if stage_execution.agent_user is None else stage_execution.agent_user
+                    ),
+                }
+            )
             session = _ShellboxTaskSession(
-                phase, machine, convention, self.command_timeout, self.factories, cleanup, stage
+                phase, machine, convention, self.command_timeout, self.factories, cleanup, stage_execution
             )
             try:
-                record = await self._run_session(phase, session, record)
+                record = await self._run_session(phase, session, record, agent_timeout=stage_execution.agent_timeout)
             except RolloutInterrupted as error:
                 record = error.rollout
                 operation, cause = error.operation, error.__cause__
@@ -223,7 +241,9 @@ class ShellboxRolloutEngine:
             raise RolloutInterrupted(record, operation) from cause
         return record
 
-    async def _run_session(self, task: TaskSpec, session: TaskSession, prefix: RolloutData | None = None) -> RolloutData:
+    async def _run_session(
+        self, task: TaskSpec, session: TaskSession, prefix: RolloutData | None = None, *, agent_timeout: float | None
+    ) -> RolloutData:
         completed = _empty_rollout(task)
         if prefix is not None:
             completed = replace(prefix, grade=completed.grade)
@@ -253,7 +273,7 @@ class ShellboxRolloutEngine:
         stop_reason = MAX_TURNS_STOP_REASON
         model_error = None
         pending_turn = None
-        deadline = asyncio.timeout(task.agent_timeout)
+        deadline = asyncio.timeout(agent_timeout)
         try:
             async with deadline:
                 for index in range(self.max_turns):

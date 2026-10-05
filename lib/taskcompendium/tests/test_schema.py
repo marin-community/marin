@@ -163,9 +163,9 @@ def test_reader_preserves_public_and_private_files_before_unsupported_export_is_
                 kind=VerifierKind.SHELL,
                 parameters_json=ShellVerifierSpec(
                     argv=("/checks/grade",),
-                    files=(EnvironmentFile(path="/checks/grade", content=b"private checks", mode=0o755),),
                     timeout=5,
                 ).model_dump_json(),
+                files=(EnvironmentFile(path="/checks/grade", content=b"private checks", mode=0o755),),
             ),
         }
     )

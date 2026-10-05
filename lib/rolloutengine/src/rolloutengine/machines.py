@@ -4,6 +4,7 @@
 """Machine creation, setup, and cleanup for task execution."""
 
 import asyncio
+import os
 from collections.abc import Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -32,6 +33,8 @@ async def _install_files(machine: Machine, files: tuple[EnvironmentFile, ...]) -
             source = Path(directory) / str(index)
             source.write_bytes(file.content)
             source.chmod(file.mode)
+            if file.mtime_ns is not None:
+                os.utime(source, ns=(file.mtime_ns, file.mtime_ns))
             await machine.upload(source, file.path)
 
 
@@ -84,11 +87,11 @@ async def _create_machine(environment: EnvironmentSpec, factories: Mapping[Envir
             assert isinstance(environment.image, DockerBuild)
             directory = Path(resources.enter_context(TemporaryDirectory(prefix="rollout-build-")))
             for file in environment.image.files:
-                path = directory / file.path.lstrip("/")
+                path = directory / file.path.removeprefix("/")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(file.content)
                 path.chmod(file.mode)
-            source = DockerfileSource(directory, directory / environment.image.dockerfile.lstrip("/"))
+            source = DockerfileSource(directory, directory / environment.image.dockerfile.removeprefix("/"))
         return await factories[environment.kind].create(
             MachineSpec(
                 source=source,
