@@ -160,5 +160,6 @@
       ]
     }
   ],
-  "interval": "1m"
+  "interval": "1m",
+  "maxDataPoints": 100
 }

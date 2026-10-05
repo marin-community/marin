@@ -31,7 +31,7 @@ from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
-from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.auth import FEDERATION_PEER_ROLE, authorize_method
 from iris.testing.controller import (
     MockController,
     dispatch_task,
@@ -387,3 +387,32 @@ def test_tombstoned_handle_resolves_not_found_without_a_peer_round_trip(tmp_path
         assert exc.value.code == Code.NOT_FOUND
         # The dropped mirror short-circuits to NOT_FOUND before any peer call.
         assert connection.profile_calls == 0
+
+
+@pytest.mark.parametrize("actor", ["parent", "intruder"])
+def test_kick_scopes_federation_peer_to_received_job(tmp_path, log_client, actor):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
+        job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
+        enforcing_peer = ControllerServiceImpl(
+            controller=peer_service._controller,
+            bundle_store=BundleStore(storage_dir=str(tmp_path / "peer" / "bundles")),
+            log_client=log_client,
+            db=peer_state._db,
+            endpoint_service=peer_service._endpoint_service,
+            auth=ControllerAuth(provider="iap"),
+        )
+        identity = VerifiedIdentity(user_id=actor, role=FEDERATION_PEER_ROLE)
+        request = controller_pb2.Controller.KickTasksRequest(
+            targets=[job_id.task(0).to_wire()], desired_state=job_pb2.TASK_STATE_PREEMPTED
+        )
+        with identity_scope(identity):
+            authorize_method(identity, "KickTasks")
+            if actor == "parent":
+                assert enforcing_peer.kick_tasks(request, None).results[0].queued
+            else:
+                with pytest.raises(ConnectError) as exc:
+                    enforcing_peer.kick_tasks(request, None)
+                assert exc.value.code == Code.PERMISSION_DENIED

@@ -10,7 +10,7 @@ from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from pydantic import BaseModel, ConfigDict, Field
 
-from taskcompendium.grading import validate_verifier
+from taskcompendium.grading import supports_verifier
 from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
@@ -49,7 +49,8 @@ async def run_trial(
         raise ValueError("Launch environment configuration differs from the exported task")
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     validate_environment_config(specification, environment_config)
-    validate_verifier(specification.verifier)
+    if not supports_verifier(specification.verifier):
+        raise NotImplementedError("Direct chat cannot run this verifier")
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
     agent = {
         "import_path": "taskcompendium.harbor.adapter:ChatAgent",

@@ -1620,7 +1620,7 @@ def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
             if self._timeouts > 0:
                 self._timeouts -= 1
                 raise TimeoutError
-            return ()
+            return None
 
     rpc = _RegistrationRpc()
     worker = ZephyrWorker.__new__(ZephyrWorker)
@@ -1628,13 +1628,11 @@ def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
     worker._task_id = ""
     worker._worker_id = "test-worker-0"
     worker._actor_handle = MagicMock()
-    worker._memory_store = MagicMock()
     worker._shutdown_event = threading.Event()
     worker._host_shutdown_event = None
 
     assert worker._register() is True
     assert rpc.calls == 2, "one retry for the failed RPC, none for the slow answer"
-    worker._memory_store.restore.assert_called_once_with(())
 
 
 def test_zephyr_context_custom_map_and_reduce_resources_executes_successfully(local_client):

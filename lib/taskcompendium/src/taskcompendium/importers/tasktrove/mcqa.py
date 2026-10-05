@@ -9,10 +9,10 @@ import tomllib
 
 from verifyit.spec import McqSpec, parse_spec
 
+from taskcompendium.grading import multiple_choice_answer
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
