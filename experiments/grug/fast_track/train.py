@@ -202,12 +202,17 @@ def restore_template_from(state):
     return template
 
 
-def _apply_runtime_defaults(*, inline_watch_enabled: bool, ragged_transport: RaggedTransport | None) -> None:
-    """Set the runtime env and XLA flag defaults; ``ragged_transport`` is None unless the MoE is ragged."""
+def _apply_runtime_defaults(
+    *, inline_watch_enabled: bool, ragged_transport: RaggedTransport | None, collective_overlap_limit: int | None
+) -> None:
+    """Set the runtime env and XLA flag defaults; ``ragged_transport`` is None unless the MoE is ragged, and
+    ``collective_overlap_limit`` (None: by mode) overrides the concurrent-collective limit."""
     for name, value in RUNTIME_ENV.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    if ragged_transport is not None:
+    if collective_overlap_limit is not None:
+        overlap_limit = collective_overlap_limit
+    elif ragged_transport is not None:
         overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
     elif inline_watch_enabled:
         overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
@@ -404,6 +409,8 @@ class GrugRunConfig:
     processes_per_task: int = 1
     # XLA kernel behind the ragged all-to-all; read only when `model.moe_implementation` is ragged.
     ragged_transport: RaggedTransport = RaggedTransport.DEVICE
+    # XLA's concurrent-collective limit; None takes the mode default (ragged 1, inline watch 1, otherwise 4).
+    collective_overlap_limit: int | None = None
     # Retry budgets for the training job. The two are separate gates and the job fails when either
     # one trips, thus raise them together. The defaults make a failure terminal, which is what a run
     # that cannot resume wants: a retry would repeat it from step 0. Only a run that both saves and
@@ -2920,7 +2927,9 @@ def run_grug(config: GrugRunConfig) -> None:
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
     ragged = config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION
     _apply_runtime_defaults(
-        inline_watch_enabled=inline_watch_enabled, ragged_transport=config.ragged_transport if ragged else None
+        inline_watch_enabled=inline_watch_enabled,
+        ragged_transport=config.ragged_transport if ragged else None,
+        collective_overlap_limit=config.collective_overlap_limit,
     )
     local_entrypoint = _run_grug_local
     if config.trainer.xla_memory_report_path is not None:

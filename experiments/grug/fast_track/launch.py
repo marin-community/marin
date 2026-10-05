@@ -408,6 +408,7 @@ def build_h100_ladder_run(
     optimizer_settings: Mapping[str, str] | None = None,
     z_loss_weight: float = Z_LOSS_WEIGHT,
     ragged_transport: RaggedTransport = RaggedTransport.DEVICE,
+    collective_overlap_limit: int | None = None,
     single_process: bool = False,
     routing_dump_steps: tuple[int, ...] = (),
     routing_dump_batches: int = 8,
@@ -435,6 +436,7 @@ def build_h100_ladder_run(
     end only. Permanent checkpoints
     default to the final step, with one rolling checkpoint every ``RESUME_SAVE_INTERVAL`` on region-local
     temporary storage.
+    ``collective_overlap_limit`` overrides XLA's concurrent-collective limit (None: the mode default).
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
     ``routing_dump_steps`` writes expert-routing count dumps to ``<output>/routing/`` (see
@@ -662,6 +664,7 @@ def build_h100_ladder_run(
             stop_after_steps=num_steps,
             processes_per_task=1 if single_process else rung.gpus_per_task,
             ragged_transport=ragged_transport,
+            collective_overlap_limit=collective_overlap_limit,
             max_retries_failure=max_retries_failure,
             max_task_failures=MAX_TASK_FAILURES,
         )
@@ -868,6 +871,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="XLA kernel for --model-set moe_implementation=ragged_all_to_all. device/one_shot need --single-process.",
 )
 @click.option(
+    "--collective-overlap-limit",
+    type=int,
+    default=None,
+    help="XLA's concurrent-collective limit (default: 1 for ragged MoE or inline watch, else 4).",
+)
+@click.option(
     "--single-process",
     is_flag=True,
     help="Run one JAX process owning every GPU (default: one process per GPU), so XLA can write peer buffers.",
@@ -1020,6 +1029,7 @@ def main(
     max_retries: int,
     z_loss_weight: float,
     ragged_transport: str,
+    collective_overlap_limit: int | None,
     single_process: bool,
     routing_dump_steps: str,
     routing_dump_batches: int,
@@ -1080,6 +1090,7 @@ def main(
         optimizer_settings=_parse_settings(opt_set),
         z_loss_weight=z_loss_weight,
         ragged_transport=RaggedTransport(ragged_transport),
+        collective_overlap_limit=collective_overlap_limit,
         single_process=single_process,
         routing_dump_steps=tuple(int(step) for step in routing_dump_steps.split(",") if step),
         routing_dump_batches=routing_dump_batches,
