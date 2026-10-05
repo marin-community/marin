@@ -1828,11 +1828,15 @@ jax.lax.ragged_all_to_all = emulated_ragged_all_to_all
 
 
 @pytest.mark.parametrize("activation", ["relu2", "fused_relu2"])
-@pytest.mark.parametrize("padded", [False, True], ids=["all_valid", "padded"])
+@pytest.mark.parametrize(
+    ("padded", "chunks"), [(False, 2), (True, 2), (True, 1)], ids=["all_valid", "padded", "padded-one_chunk"]
+)
 @pytest.mark.parametrize("out_dim", [8, 16], ids=["square", "wider_write"])
-def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(activation: str, padded: bool, out_dim: int):
+def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(
+    activation: str, padded: bool, chunks: int, out_dim: int
+):
     """Ragged EP on ungated ReLU^2 experts (``w13`` is ``W_up`` alone) agrees with pooled-wave and dense, also
-    when the experts write ``out_dim`` channels instead of the ``hidden`` they read."""
+    when the experts write ``out_dim`` channels instead of the ``hidden`` they read, and with one expert chunk."""
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
@@ -1907,6 +1911,7 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(activat
                     capacity_factor=4.0,
                     pooled_transport_capacity_factor=4.0,
                     report_capacity_overflow=True,
+                    ragged_expert_chunks=__CHUNKS__,
                 )
                 dropped[implementation] = counts.dropped
                 return out
@@ -1930,6 +1935,7 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(activat
         script.replace("__ACTIVATION__", activation)
         .replace("__PADDED__", repr(padded))
         .replace("__OUT_DIM__", repr(out_dim))
+        .replace("__CHUNKS__", repr(chunks))
     )
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script)],

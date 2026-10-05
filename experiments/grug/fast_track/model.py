@@ -1179,6 +1179,9 @@ class GrugModelConfig:
     moe_fp8_dispatch: bool = False
     """DeepSeek-V3 FP8 dispatch: the EP dispatch all-to-all sends activations as e4m3 with one fp32 scale per
     128-channel block (~0.52x the bf16 bytes); combine and every backward collective stay bf16 (STE)."""
+    moe_ragged_chunks: int = 2
+    """Sequential local-expert chunks of the ``ragged_all_to_all`` backend (each a dispatch, expert MLP and
+    return); fewer chunks mean fewer, larger collectives at more transport-buffer memory."""
     moe_implementation: str = "fixed_pooled_wave_all_to_all"
     """Expert-parallel transport, one of ``MOE_IMPLEMENTATIONS``. ``ragged_all_to_all`` ignores the pooled-wave
     knobs (``pooled_transport_capacity_factor``, ``moe_expert_waves``, ``moe_expert_remat``) and sizes its receiver
@@ -5095,6 +5098,7 @@ def _run_expert_bank(
             expert_mxfp8_sim=cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM,
             expert_remat=em.expert_remat,
             overlap=overlap,
+            ragged_expert_chunks=cfg.moe_ragged_chunks,
         )
     if cfg.fp8_recipe != Fp8Recipe.NONE:
         raise ValueError("fp8_recipe supports ungated ReLU^2 expert banks only")

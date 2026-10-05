@@ -65,9 +65,9 @@ logger = logging.getLogger(__name__)
 # QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
 _SM100_COMPUTE_CAPABILITY = 10.0
 
-# Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
-# back to a single chunk when the local expert count is not divisible.
-_EXPERT_CHUNKS = 2
+# Default sequential local-expert chunks per MoE layer (``expert_chunks``); capacity splits evenly
+# across chunks. Falls back to a single chunk when the local expert count is not divisible.
+DEFAULT_RAGGED_EXPERT_CHUNKS = 2
 
 # Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
 # every other collective keeps NCCL's host-launched kernels.
@@ -664,6 +664,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -684,7 +685,9 @@ def _moe_mlp_ep_ragged_a2a_local(
     # collectives), so unchunked they pin [capacity, H] + [TK, H] per block window and the
     # hero step no longer fits next to NCCL's pools. Capacity splits evenly across chunks,
     # which also makes drop clipping per-chunk.
-    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    if expert_chunks < 1:
+        raise ValueError(f"expert_chunks must be positive, got {expert_chunks}")
+    chunks = expert_chunks if local_experts % expert_chunks == 0 else 1
     chunk_experts = local_experts // chunks
     chunk_capacity = max(chunk_experts, int(math.ceil(physical_capacity / chunks)))
 

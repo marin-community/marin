@@ -54,7 +54,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     MoeOverlapWork,
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
 )
-from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import DEFAULT_RAGGED_EXPERT_CHUNKS, _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
@@ -470,6 +470,7 @@ def moe_mlp(
     expert_mxfp8_sim: bool = False,
     expert_remat: bool = True,
     overlap: MoeOverlapWork | None = None,
+    ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -503,6 +504,8 @@ def moe_mlp(
     fixed pooled-wave implementation. `fp8_dispatch` sends that implementation's
     dispatched activations as block-scaled FP8 (combine and backward stay bf16). `expert_mxfp8_sim` runs
     that implementation's expert GEMMs on simulated MXFP8 operands (`levanter.grug.mxfp8`).
+    `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
+    dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
 
     The output width ``O`` (``w_down``'s last dim) may differ from the input width ``D`` only on the
     ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
@@ -661,7 +664,7 @@ def moe_mlp(
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
-            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+            shard_local_fn = partial(_moe_mlp_ep_ragged_a2a_local, expert_chunks=ragged_expert_chunks)
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":
