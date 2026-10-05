@@ -21,7 +21,7 @@ from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 
 from verifyit.file_ops.read import read_text
-from verifyit.grade import InvalidTask, Reward, read_output, scored
+from verifyit.grade import InvalidTask, Reward, answer_text, read_output, scored
 from verifyit.modes.extract import unwrap_fence
 from verifyit.spec import JsonSchemaSpec, SchemaFormat
 
@@ -52,20 +52,25 @@ def load_schema(path: Path) -> dict:
     """The JSON Schema at ``path``. Raises ``InvalidTask`` when it is absent or not a schema."""
     if not path.is_file():
         raise InvalidTask(f"schema file not found: {path}")
+    return parse_schema(read_text(path), str(path))
+
+
+def parse_schema(text: str, source: str) -> dict:
+    """The JSON Schema in ``text``, read from ``source``. Raises ``InvalidTask`` when it is not a schema."""
     try:
-        schema = json.loads(read_text(path))
+        schema = json.loads(text)
     except (ValueError, RecursionError) as error:
-        raise InvalidTask(f"schema file {path} is not JSON: {error}") from error
+        raise InvalidTask(f"schema file {source} is not JSON: {error}") from error
     if not isinstance(schema, dict):
-        raise InvalidTask(f"schema file {path} must hold a JSON object")
+        raise InvalidTask(f"schema file {source} must hold a JSON object")
     try:
         if has_nonfinite_number(schema):
-            raise InvalidTask(f"schema file {path} contains a nonfinite number")
+            raise InvalidTask(f"schema file {source} contains a nonfinite number")
         validator_for(schema).check_schema(schema)
     except RecursionError as error:
-        raise InvalidTask(f"schema file {path} exceeds nesting limit") from error
+        raise InvalidTask(f"schema file {source} exceeds nesting limit") from error
     except SchemaError as error:
-        raise InvalidTask(f"schema file {path} is not a valid JSON Schema: {error.message}") from error
+        raise InvalidTask(f"schema file {source} is not a valid JSON Schema: {error.message}") from error
     return schema
 
 
@@ -119,6 +124,14 @@ def grade_json_document(schema: dict, candidate_format: SchemaFormat, text: str)
     except (ValueError, yaml.YAMLError, RecursionError) as error:
         return scored(0.0, reason="parse_error", error=str(error))
     return grade_json_schema_candidate(schema, instance)
+
+
+def grade_json_schema_text(spec: JsonSchemaSpec, schema: dict, candidate: str) -> Reward:
+    """Grade answer text in the spec's format; blank text follows ``empty_output``."""
+    text = answer_text(spec, candidate)
+    if text is None:
+        return scored(0.0, reason="no_output")
+    return grade_json_document(schema, spec.format, text)
 
 
 def grade(spec: JsonSchemaSpec, tests_dir: Path, workspace: Path) -> Reward:

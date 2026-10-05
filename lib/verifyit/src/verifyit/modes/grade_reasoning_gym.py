@@ -30,13 +30,34 @@ def load_entry(path: Path) -> dict:
     if not path.is_file():
         raise InvalidTask(f"reasoning-gym entry not found: {path}")
     try:
-        entry = json.loads(read_text(path), object_pairs_hook=unique_object)
-        json.dumps(entry, allow_nan=False)
+        text = read_text(path)
     except ValueError as error:
         raise InvalidTask(f"reasoning-gym entry {path} is not JSON: {error}") from error
+    return parse_entry(text, str(path))
+
+
+def parse_entry(text: str, source: str) -> dict:
+    """The reasoning-gym entry in ``text``, read from ``source``. Raises ``InvalidTask`` when malformed."""
+    try:
+        entry = json.loads(text, object_pairs_hook=unique_object)
+        json.dumps(entry, allow_nan=False)
+    except ValueError as error:
+        raise InvalidTask(f"reasoning-gym entry {source} is not JSON: {error}") from error
     if not isinstance(entry, dict) or "metadata" not in entry:
-        raise InvalidTask(f"reasoning-gym entry {path} must be an object with a metadata field")
+        raise InvalidTask(f"reasoning-gym entry {source} must be an object with a metadata field")
     return entry
+
+
+def parse_params(text: str) -> dict:
+    """The scorer configuration object in ``text``. Raises ``InvalidTask`` when malformed."""
+    try:
+        params = json.loads(text, object_pairs_hook=unique_object)
+        if not isinstance(params, dict):
+            raise ValueError("params must be an object")
+        json.dumps(params, allow_nan=False)
+    except ValueError as error:
+        raise InvalidTask(f"invalid reasoning-gym params: {error}") from error
+    return params
 
 
 def _load_params(spec: ReasoningGymSpec, tests_dir: Path) -> dict | None:
@@ -48,13 +69,10 @@ def _load_params(spec: ReasoningGymSpec, tests_dir: Path) -> dict | None:
     if not params_path.is_file():
         raise InvalidTask(f"reasoning-gym params not found: {params_path}")
     try:
-        params = json.loads(read_text(params_path), object_pairs_hook=unique_object)
-        if not isinstance(params, dict):
-            raise ValueError("params must be an object")
-        json.dumps(params, allow_nan=False)
-    except (ValueError, UnicodeError) as error:
+        text = read_text(params_path)
+    except UnicodeError as error:
         raise InvalidTask(f"invalid reasoning-gym params: {error}") from error
-    return params
+    return parse_params(text)
 
 
 def _score_answer(dataset: str, params: dict | None) -> Callable[[str, dict], float]:

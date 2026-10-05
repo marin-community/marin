@@ -271,14 +271,19 @@ def empty_output_policy(spec: Spec) -> EmptyOutputPolicy:
     return policy
 
 
+def answer_text(spec: Spec, text: str) -> str | None:
+    """Return ``text`` when the task's policy grades it, or ``None`` when blank text scores zero."""
+    policy = empty_output_policy(spec)
+    return text if text.strip() or policy is EmptyOutputPolicy.GRADE else None
+
+
 def read_output(spec: Spec, workspace: Path) -> str | None:
     """Read a present answer under its task policy; an absent file is never an answer."""
-    policy = empty_output_policy(spec)
+    empty_output_policy(spec)
     output = local_output_path(spec.output, workspace)  # type: ignore[union-attr]
     if not output.is_file():
         return None
-    text = read_text(output, errors="replace")
-    return text if text.strip() or policy is EmptyOutputPolicy.GRADE else None
+    return answer_text(spec, read_text(output, errors="replace"))
 
 
 def positive_candidate(spec: Spec) -> str | None:

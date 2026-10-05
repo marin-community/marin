@@ -13,7 +13,7 @@ import csv
 import io
 from pathlib import Path
 
-from verifyit.grade import InvalidTask, Reward, read_output, scored
+from verifyit.grade import InvalidTask, Reward, answer_text, read_output, scored
 from verifyit.modes.extract import unwrap_fence
 from verifyit.spec import CsvColumnsSpec
 
@@ -27,11 +27,15 @@ def data_rows(text: str) -> list[list[str]]:
     return [row for row in csv.reader(io.StringIO(text)) if any(cell.strip() for cell in row)]
 
 
-def grade(spec: CsvColumnsSpec, tests_dir: Path, workspace: Path) -> Reward:
+def validate_names(spec: CsvColumnsSpec) -> None:
     if not spec.required and not spec.any_of:
         raise InvalidTask("csv-columns expects required or any_of names")
 
-    text = read_output(spec, workspace)
+
+def grade_csv_candidate(spec: CsvColumnsSpec, candidate: str) -> Reward:
+    """Score answer text the caller already holds; blank text follows the spec's ``empty_output``."""
+    validate_names(spec)
+    text = answer_text(spec, candidate)
     if text is None:
         return scored(0.0, reason="no_output")
     try:
@@ -48,3 +52,11 @@ def grade(spec: CsvColumnsSpec, tests_dir: Path, workspace: Path) -> Reward:
     if spec.any_of and headers.isdisjoint(spec.any_of):
         return scored(0.0, reason="no_expected_column", expected=list(spec.any_of[:MAX_REPORTED_NAMES]))
     return scored(1.0, reason="columns_present", rows=len(rows) - 1)
+
+
+def grade(spec: CsvColumnsSpec, tests_dir: Path, workspace: Path) -> Reward:
+    validate_names(spec)
+    text = read_output(spec, workspace)
+    if text is None:
+        return scored(0.0, reason="no_output")
+    return grade_csv_candidate(spec, text)

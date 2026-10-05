@@ -82,10 +82,27 @@ Harbor's error categories from the pinned config-only `harbor-config` dependency
 float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
 
-`candidate_spec(mode, parameters)` validates the shared exact, numeric, MCQ and predicted-action
-contracts for callers that already extracted a submission. `grade_text_candidate` scores extracted
-text; `grade_predicted_action_candidate` scores decoded function calls. These APIs perform no
-filesystem or harness operations. Predicted-action matching preserves duplicate calls and requires
+`candidate_spec(mode, parameters, files=...)` validates a mode's private contract for callers that
+already extracted a submission. It accepts `exact`, `numeric`, `mcq`, `predicted_action`, `math`,
+`json-schema`, `xml-elements`, `csv-columns`, `ifeval`, and `reasoning-gym`.
+`grade_text_candidate(spec, candidate, files=...)` scores extracted text;
+`grade_predicted_action_candidate` scores decoded function calls. These APIs perform no
+filesystem or harness operations. Spec fields that name verifier files (`schema`, `entry`,
+`params`) resolve against `files`, which maps each spec-relative path to its bytes; a missing path
+raises `InvalidTask`. Blank candidates follow the same `empty_output` policy as file grading, and
+each mode applies its own contract to the text, so a fenced JSON, XML, or CSV document is
+unwrapped. `math` grades the text as given; unlike file grading, it does not select the last
+`\boxed{}` expression or final line.
+
+```python
+from verifyit.candidate import candidate_spec, grade_text_candidate
+
+files = {"schema.json": schema_bytes}
+spec = candidate_spec("json-schema", {"schema": "schema.json"}, files=files)
+reward = grade_text_candidate(spec, extracted_answer, files=files)
+```
+
+Predicted-action matching preserves duplicate calls and requires
 all calls to match one to one. Argument objects stay decoded in JSON descriptors; `render_spec`
 encodes each argument object as a JSON string in TOML so nested JSON null values survive
 `parse_spec`.
