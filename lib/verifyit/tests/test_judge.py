@@ -360,6 +360,7 @@ def test_reply_truncated_at_the_retry_budget_is_unscored(tmp_path, fake_judge, r
         {"max_completion_tokens": 0},
         {"incomplete_retry_tokens": 8192},
         {"request_timeout": float("inf")},
+        {"reasoning_effort": 1},
     ],
 )
 def test_score_rubric_invalid_budget_never_calls_model(tmp_path, fake_judge, rubric, overrides):
@@ -738,6 +739,28 @@ def test_paired_ordinal_json_integer_indices_and_huge_trusted_bounds():
     assert [v.detail["raw_score"] for v in verdicts] == [3, 3]
     with pytest.raises(InvalidTask, match="bounds"):
         grade_judge.grade_paired_ordinal(2, [(0, 1)], ratings, rating_bounds=(1, 10**400))
+
+
+def test_labels_record_each_call_including_the_truncated_one(tmp_path, fake_judge):
+    fake_judge.replies = ["[[A=", "[[A=B]]"]
+    fake_judge.finish_reasons = ["length", "stop"]
+    fake_judge.usage = [_usage(1024), _usage(700)]
+    spec = _label_spec(max_completion_tokens=1024, incomplete_retry_tokens=4096)
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "candidate text"))
+    assert (reward.status, reward.reward) == (Status.SCORED, 1.0)
+    assert reward.detail["calls"] == [
+        {"max_completion_tokens": 1024, "finish_reason": "length", "completion_tokens": 1024},
+        {"max_completion_tokens": 4096, "finish_reason": "stop", "completion_tokens": 700},
+    ]
+
+
+def test_responses_labels_record_output_tokens(tmp_path, fake_judge):
+    fake_judge.replies = ["[[A=B]]"]
+    fake_judge.response_fields = {"usage": {"input_tokens": 50, "output_tokens": 12, "total_tokens": 62}}
+    spec = _label_spec(api="responses", max_completion_tokens=1024)
+    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "candidate text"))
+    assert (reward.status, reward.reward) == (Status.SCORED, 1.0)
+    assert reward.detail["calls"] == [{"max_completion_tokens": 1024, "finish_reason": "stop", "completion_tokens": 12}]
 
 
 @pytest.mark.parametrize(

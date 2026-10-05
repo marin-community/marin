@@ -62,9 +62,10 @@ Every judge rubric sends the spec's `max_completion_tokens` (default 8192) and, 
 `reasoning_effort` with each request. A reply cut off at that budget is asked again with
 `incomplete_retry_tokens` when it is nonzero, and stays an infrastructure error if it is
 truncated again. The `reference` and `checklist` rubrics also re-ask once when the reply has no
-valid `SCORE` line. Their verdict detail keeps the raw reply as `completion` and one `calls`
+valid `SCORE` line. Every verdict detail keeps the raw reply as `completion` and one `calls`
 record per request with the budget, finish reason, and completion tokens from `usage`; the
-checklist rubric keeps these per criterion.
+checklist rubric keeps these per criterion. For the Responses API, a reply truncated at
+`max_output_tokens` is recorded as finish reason `length` and a completed reply as `stop`.
 
 The mode modules expose direct candidate graders for callers holding extracted values.
 `aggregate_rewards` combines required components with ALL, MEAN, MAX, MIN, or PRODUCT;

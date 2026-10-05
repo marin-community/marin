@@ -35,6 +35,7 @@ from typing import Any, cast
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
+from openai.types.chat.chat_completion import Choice
 
 from verifyit.file_ops.read import read_text
 from verifyit.grade import (
@@ -317,8 +318,9 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     labels = {
         label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
     }
+    calls: list[dict[str, Any]] = []
     for index, budget in enumerate(budgets):
-        content, incomplete = _label_completion(spec, client, model, messages, budget)
+        content, incomplete = _label_completion(spec, client, model, messages, budget, calls)
         if incomplete:
             if index + 1 < len(budgets):
                 continue
@@ -339,7 +341,14 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             }
         if final not in labels or observed != {final}:
             raise RuntimeError("judge returned malformed or contradictory verdict labels")
-        return scored(float(labels[final]), model=model, verdict=final, reasoning=_reasoning(answer), completion=content)
+        return scored(
+            float(labels[final]),
+            model=model,
+            verdict=final,
+            reasoning=_reasoning(answer),
+            completion=content,
+            calls=calls,
+        )
     raise RuntimeError("judge exhausted completion budgets")
 
 
@@ -350,25 +359,20 @@ def _budgets(spec: JudgeSpec) -> list[int]:
     return [spec.max_completion_tokens]
 
 
+def _call_record(budget: int, finish_reason: str | None, completion_tokens: int | None) -> dict[str, Any]:
+    return {"max_completion_tokens": budget, "finish_reason": finish_reason, "completion_tokens": completion_tokens}
+
+
 def _label_completion(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int
+    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, calls: list[dict[str, Any]]
 ) -> tuple[str, bool]:
+    """Request one label reply, record the request in ``calls``, and report whether it was truncated."""
     if spec.api == "chat_completions":
-        options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        response = _chat_completion(
-            client,
-            model=model,
-            messages=messages,
-            temperature=0.0,
-            timeout=spec.request_timeout,
-            max_completion_tokens=budget,
-            **options,
-        )
-        choice = _completion_choice(response)
+        choice = _chat_reply(spec, client, model, messages, budget, calls)
         if choice.finish_reason == "length":
             return "", True
         return _completed_text(choice), False
-    options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
+    options: dict[str, Any] = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
     response = client.responses.with_raw_response.create(
         model=model,
         input=messages if spec.system_prompt else messages[0]["content"],
@@ -380,7 +384,14 @@ def _label_completion(
     json.dumps(payload, allow_nan=False)
     if not isinstance(payload, dict) or payload.get("error") is not None:
         raise RuntimeError("judge transport returned an error")
-    if payload.get("status") == "incomplete" and payload.get("incomplete_details") == {"reason": "max_output_tokens"}:
+    truncated = payload.get("status") == "incomplete" and payload.get("incomplete_details") == {
+        "reason": "max_output_tokens"
+    }
+    usage = payload.get("usage")
+    output_tokens = usage.get("output_tokens") if isinstance(usage, dict) else None
+    # The Responses API has no finish_reason; record truncation and completion as the chat equivalents.
+    calls.append(_call_record(budget, "length" if truncated else "stop", output_tokens))
+    if truncated:
         return "", True
     if payload.get("status") != "completed" or payload.get("incomplete_details") is not None:
         raise RuntimeError("judge response is incomplete")
@@ -518,29 +529,37 @@ def _ask(
 
 def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, calls: list[dict[str, Any]]) -> str:
     """Request one reply, retrying a truncated reply with the larger budget, and record each request."""
-    options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
     budgets = _budgets(spec)
     for budget in budgets:
-        response = _chat_completion(
-            client,
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            timeout=spec.request_timeout,
-            max_completion_tokens=budget,
-            **options,
-        )
-        choice = _completion_choice(response)
-        calls.append(
-            {
-                "max_completion_tokens": budget,
-                "finish_reason": choice.finish_reason,
-                "completion_tokens": response.usage.completion_tokens if response.usage else None,
-            }
-        )
+        choice = _chat_reply(spec, client, model, [{"role": "user", "content": prompt}], budget, calls)
         if choice.finish_reason != "length":
             return _completed_text(choice)
     raise RuntimeError(f"judge {model!r} reply was truncated at {budgets[-1]} completion tokens")
+
+
+def _chat_reply(
+    spec: JudgeSpec,
+    client: openai.OpenAI,
+    model: str,
+    messages: list[ChatCompletionMessageParam],
+    budget: int,
+    calls: list[dict[str, Any]],
+) -> Choice:
+    """Send one chat request with the spec's budget and reasoning effort, and record it in ``calls``."""
+    options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
+    response = _chat_completion(
+        client,
+        model=model,
+        messages=messages,
+        temperature=0.0,
+        timeout=spec.request_timeout,
+        max_completion_tokens=budget,
+        **options,
+    )
+    choice = _completion_choice(response)
+    tokens = response.usage.completion_tokens if response.usage else None
+    calls.append(_call_record(budget, choice.finish_reason, tokens))
+    return choice
 
 
 def _chat_completion(client: openai.OpenAI, **options: Any) -> ChatCompletion:
@@ -552,7 +571,7 @@ def _chat_completion(client: openai.OpenAI, **options: Any) -> ChatCompletion:
     return cast(ChatCompletion, response.parse())
 
 
-def _completion_choice(response: ChatCompletion):
+def _completion_choice(response: ChatCompletion) -> Choice:
     if len(response.choices) != 1:
         raise RuntimeError("judge must return exactly one completion choice")
     choice = response.choices[0]
@@ -562,7 +581,7 @@ def _completion_choice(response: ChatCompletion):
     return choice
 
 
-def _completed_text(choice) -> str:
+def _completed_text(choice: Choice) -> str:
     content = choice.message.content
     if choice.finish_reason != "stop" or not isinstance(content, str) or not content.strip():
         raise RuntimeError("judge completion is incomplete or has no text")
