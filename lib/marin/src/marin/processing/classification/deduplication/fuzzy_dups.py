@@ -207,7 +207,7 @@ def _make_cluster_member_emitter(num_entries: int):
     return emit
 
 
-def _make_per_shard_writer(counter_prefix: str):
+def _make_per_shard_writer():
     """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
 
     Skips the per-shard sentinel row. For every cluster member, writes
@@ -232,10 +232,10 @@ def _make_per_shard_writer(counter_prefix: str):
                 if record["id"] == _SENTINEL_ID:
                     continue
                 cluster_members += 1
-                counters.pipeline.update_counter(f"{counter_prefix}/cluster_members", 1)
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_members", 1)
                 if record["is_canonical"]:
                     canonicals += 1
-                    counters.pipeline.update_counter(f"{counter_prefix}/canonicals", 1)
+                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/canonicals", 1)
                 yield {
                     "id": record["id"],
                     "dup_cluster_id": record["component_id"],
@@ -373,7 +373,7 @@ def compute_fuzzy_dups_attrs(
         )
 
     ctx.put(_SHARED_ENTRIES_KEY, entries)
-    aggregator = _make_per_shard_writer(counter_prefix=_COUNTER_PREFIX)
+    aggregator = _make_per_shard_writer()
 
     shard_pipeline = (
         Dataset.from_list(cc_files)
