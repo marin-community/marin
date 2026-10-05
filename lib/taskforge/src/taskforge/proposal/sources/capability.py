@@ -11,7 +11,6 @@ Slots the plan marks null become proposals with ``null_reason`` set and no model
 """
 
 import asyncio
-import hashlib
 import json
 from collections import Counter
 from collections.abc import Mapping
@@ -22,6 +21,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
+from taskforge.canonical import digest, pretty_json
 from taskforge.llm.client import Completion, GlmClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, StructuredTool, complete_structured
@@ -47,8 +47,8 @@ class CapabilityIdea:
     """One catalog capability with the learning-progression edges that point at it.
 
     ``capability`` and ``prerequisite_edges`` are source records shown to the model verbatim, so they
-    stay as the catalog's JSON objects. ``capability_hash`` is the sha256 of the capability record's
-    canonical JSON.
+    stay as the catalog's JSON objects. ``capability_hash`` is the ``taskforge.canonical.digest``
+    of the capability record.
     """
 
     capability_id: str
@@ -58,12 +58,6 @@ class CapabilityIdea:
     capability: Mapping[str, object]
     prerequisite_edges: tuple[Mapping[str, object], ...]
     capability_hash: str
-
-
-def canonical_sha256(value: object) -> str:
-    return hashlib.sha256(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
 
 
 def load_capability_ideas(path: Path) -> dict[str, CapabilityIdea]:
@@ -96,7 +90,7 @@ def load_capability_ideas(path: Path) -> dict[str, CapabilityIdea]:
                 catalog_version=version,
                 capability=section,
                 prerequisite_edges=tuple(edges.get(capability_id, ())),
-                capability_hash=canonical_sha256(section),
+                capability_hash=digest(section),
             )
     return ideas
 
@@ -218,10 +212,6 @@ def capability_prompt_record(idea: CapabilityIdea) -> dict[str, object]:
     }
 
 
-def encode(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
-
-
 def plan_prompt(idea: CapabilityIdea, n: int) -> str:
     return f"""Design a portfolio of exactly {n} genuinely different task proposals for this capability.
 Diversity means different workflows, artifacts, failure modes, and reasoning, not renamed entities or
@@ -245,7 +235,7 @@ research_priorities lists what the builders should look up first.
 Record the portfolio by calling the `plan_slots` tool.
 
 CAPABILITY RECORD:
-{encode(capability_prompt_record(idea))}"""
+{pretty_json(capability_prompt_record(idea))}"""
 
 
 DOCUMENT_TEMPLATE = """---
@@ -323,13 +313,13 @@ front-matter keys (research, build, and resources may be empty lists), and write
 explaining why. A null proposal is better than a contrived or ungradable one.
 
 CAPABILITY RECORD:
-{encode(capability_prompt_record(idea))}
+{pretty_json(capability_prompt_record(idea))}
 
 PORTFOLIO:
-{encode(plan.model_dump(mode="json"))}
+{pretty_json(plan.model_dump(mode="json"))}
 
 SLOT TO DEVELOP:
-{encode(slot.model_dump(mode="json"))}"""
+{pretty_json(slot.model_dump(mode="json"))}"""
 
 
 DOCUMENT_REPAIR_PROMPT = """Your previous reply, shown above, is not a valid proposal document:
