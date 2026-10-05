@@ -8,7 +8,7 @@ TaskCompendium defines executable tasks. The `marin-rolloutengine` package owns 
 
 `TaskSpec.model_dump_json()` serializes a task.
 `TaskSpec.model_validate_json()` validates a serialized task.
-Schema `0.22` stores the session selector only in `environment.interaction`.
+Schema `0.23` stores the session selector only in `environment.interaction` and removes the legacy machine fields.
 Rebuild task files created with older schemas before launch.
 TaskCompendium and the rollout engine do not select a dataset file format.
 SkyRL converts source rows through Hugging Face `Dataset.map` without an
@@ -26,7 +26,7 @@ the public conversation, submission instructions, and tool definitions.
 | `environment.image` | Docker source: `RegistryImage` or `DockerBuild`. |
 | `environment.workdir` | Working directory for commands. The default is `/workspace`. An empty value uses the Docker image's working directory. |
 | `environment.files` | Files that the engine installs before inference. JSON uses base64 content and retains permission bits. |
-| `environment.env` | Environment variables for task commands. `${VAR}` and `${VAR:-default}` resolve at execution. |
+| `environment.env` | Environment variables for task commands. Entire values `${VAR}` and `${VAR:-default}` resolve from the rollout process environment. |
 | `environment.setup` | Commands that prepare a fresh task machine. |
 | `environment.healthcheck` | Readiness command, startup grace period, interval, and retry limit. |
 | `environment.network` | Network access. The default is disabled. |
@@ -40,6 +40,11 @@ the public conversation, submission instructions, and tool definitions.
 | `agent_user` | Optional execution user for agent shell commands. Docker accepts a username or numeric UID as a string. |
 | `stages` | Ordered phases with separate instructions, setup, graders, and minimum reward requirements. All phases use the same machine. |
 | `metadata` | Application data that does not change the execution contract. |
+
+`environment` is the single machine description. `environment_requirements` declares task capabilities only.
+Rebuild task exports that contain the removed machine fields or `resources`.
+Iris does not provide per-job network denial. Tasks on Iris must explicitly set `environment.network=True`.
+The engine does not change a task's network policy to match its backend.
 
 `null` creates no machine. `shellsim` uses ShellSim's virtual filesystem and
 built-in commands. It does not load a Docker image.
@@ -55,7 +60,7 @@ Null environments pass no machine. The engine closes the session before it close
 Without that value, the engine uses its shell-tool session.
 
 The caller supplies a `MachineFactory` for each executable environment kind.
-Each task gets a fresh machine. The engine closes the machine after completion,
+Each task gets a fresh machine. The engine attempts machine cleanup after completion,
 failure, or cancellation.
 The default session exposes `shell(command: string)` for executable environments.
 Files persist between commands. Each command starts a new shell process.
@@ -71,13 +76,28 @@ SkyRL uses those bounds for normalized score metrics. Score normalization leaves
 optimization rewards and reward shaping unchanged.
 
 Grading starts when the session reports completion, the model reaches its token
-limit, or the engine reaches `max_turns`. Execution failures raise
-`RolloutInterrupted`, with the failed operation, the last completed rollout,
-and the original exception as the cause. The engine releases task resources
+limit, or the engine reaches `max_turns`. An agent deadline also ends the turn
+loop and starts grading. It applies to model calls and task transitions.
+The rollout retains generated tokens and reports `stop_reason="agent_timeout"`.
+If no model response exists for the current stage, its grade is unavailable.
+An interrupted task transition records `advance_incomplete=1` in its step metrics.
+That terminal step has no task observations or intermediate grade.
+The verifier has its own deadline. Docker task images must supply `setsid`.
+Docker command interruption stops its process group and retains task files and
+other services for grading. If Docker cannot identify or stop the command, it
+disposes the task container and reports the original interruption.
+One rollout step contains one model response and its task transition.
+An action is one model response.
+A task transition executes the session's operations after that response, including its tool calls.
+Execution failures raise `RolloutInterrupted`, with the failed operation, the completed steps of the current task,
+and the original exception as the cause. The engine attempts resource cleanup
 before the caller receives that exception. Token-contract violations propagate
 as `RolloutContractError`.
 Machine startup and setup failures use the `start` operation and retain an empty
-rollout record. The engine releases resources before it raises the interruption.
+rollout record. Cancelled creation retains its build context until the factory finishes.
+If the factory returns a machine after cancellation, the engine closes that machine.
+Creation continues until the factory finishes because cancellation can lose a machine from a background thread.
+The cleanup deadline applies when the factory returns that machine.
 
 `ShellVerifierSpec` defines a command, private files, a timeout, environment
 variables, and a reward source. The engine installs private files after the last
@@ -128,7 +148,11 @@ verifier and can install files relative to the machine's working directory.
 The first stage uses the task's public conversation. Later stages append their
 instructions to the conversation and retain the exact token prefix.
 The turn limit and agent deadline apply separately to each stage.
+An agent deadline ends the stage chain after grading the current stage.
 The engine removes shared private grader files before the next stage starts.
+If removal fails before another stage can run, the engine stops the chain with a `cleanup` interruption.
+The last stage retains its grade and records removal failures as cleanup errors.
+An earlier execution failure retains its original operation and cause.
 
 `StageVerifierSpec.strategy` selects `mean` or `final`. The mean includes only
 stages with valid grades. Missing reward keys count as zero in that mean.
@@ -139,6 +163,7 @@ If a stage cannot produce a grade, the aggregate retains that stage's outcome,
 failure details, and diagnostics. A skipped grader is not a failure.
 A stage's `minimum_rewards` maps each key to a minimum value. A missing key or
 a value below its minimum stops execution before the next stage.
+The gate controls stage progression. It does not change the grade of the attempted stage.
 When the aggregate is graded, the engine assigns its reward to the last action
 with a valid grade.
 
@@ -170,17 +195,23 @@ If no turn completed, it returns an empty response with no grade.
 It does not include the observation that exceeded the limit in a retained response.
 
 `RolloutData` contains the conversation, grade, token IDs, loss mask, optional log
-probabilities, and per-step records. Model tokens have mask value `1`.
+probabilities, and per-step records. Model tokens initially have mask value `1`.
+Stage grading can set that value to `0` when the stage has no valid grade.
 Observation tokens have mask value `0` and log probability `0`.
 A session can request a conversation reset through `Transition.reset_conversation`.
-When another turn is available, that reset discards earlier attempts from the
+When another turn is available, that reset removes all earlier turns from the
 training record. Lean refinement uses this operation after a failed proof attempt.
 
 `ShellboxRolloutEngine.run(TaskSpec)` asynchronously returns one `RolloutData`.
 The caller starts one coroutine for each active task and controls concurrency.
 Model, machine, and session operations run on the caller's event loop. A caller
-cancels the task that awaits `run`; the coroutine does not finish until session
-and machine cleanup finishes. Cleanup errors propagate.
+cancels the task that awaits `run`. Each cleanup action has the caller-supplied
+`cleanup_timeout` deadline. Repeated cancellation cannot extend that deadline.
+A cleanup error does not remove a completed grade or replace an execution failure.
+`grade.diagnostics.cleanup_errors` records the cleanup operation and exception type.
+`metrics.cleanup_error_count` records the number of cleanup errors.
+A cleanup deadline cancels the cleanup action. If that action ignores cancellation,
+the engine retains it until completion and reports the timeout without an unbounded wait.
 
 The caller controls storage of completed records.
 
@@ -210,6 +241,7 @@ async def run_task(
         },
         max_turns=20,
         command_timeout=120,
+        cleanup_timeout=30,
         convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     )
     return await engine.run(task)
@@ -222,7 +254,13 @@ Application-supplied sessions require an additional `sessions` mapping.
 TaskCompendium contains importers for Harbor, SWE, and SkyRL source rows. The
 rollout engine does not own batching, group grading, retry policy, or training
 projection. Applications implement those policies around `ShellboxRolloutEngine`.
-See the MarinSkyRL rollout modules for the SkyRL integration.
+See the MarinSkyRL [rollout modules](https://github.com/marin-community/MarinSkyRL/tree/rollout-engine/skyrl-train/skyrl_train/rollouts)
+for the SkyRL integration. SkyRL sets `trajectory_runner.cleanup_timeout` in
+[its base configuration](https://github.com/marin-community/MarinSkyRL/blob/rollout-engine/skyrl-train/skyrl_train/config/ppo_base_config.yaml).
+
+The SWE importer saves the initial Git revision in `refs/taskcompendium/base` before inference.
+Patch collection compares the final index with that revision, so agent commits remain in the repair.
+Rebuild SWE task exports that do not contain the initial-revision setup command.
 
 ## Local checks
 
