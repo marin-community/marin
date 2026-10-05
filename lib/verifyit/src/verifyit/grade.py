@@ -63,6 +63,12 @@ class ComponentRole(StrEnum):
     PENALTY = "penalty"
 
 
+class GateState(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    INVALID_RUBRIC = "invalid_rubric"
+
+
 @dataclass(frozen=True)
 class Component:
     """A named reward component. ``weight`` must be finite and positive; gates ignore it."""
@@ -200,20 +206,25 @@ def _components_error(components: Sequence[Component], verdicts: Mapping[str, Re
     return None
 
 
-def gates_passed(components: Sequence[Component], verdicts: Mapping[str, Reward]) -> bool:
-    """Whether the rubric is valid and every gate holds a scored 1.0, so the other components are worth grading."""
+def gate_state(components: Sequence[Component], verdicts: Mapping[str, Reward]) -> GateState:
+    """Report whether the remaining components are worth grading.
+
+    ``INVALID_RUBRIC`` means ``aggregate_weighted`` would return ``invalid_task``.
+    ``FAILED`` means some gate is ungraded or lacks a scored 1.0. ``PASSED`` means
+    every gate holds a scored 1.0.
+    """
     if _components_error(components, verdicts) is not None:
-        return False
+        return GateState.INVALID_RUBRIC
     for component in components:
         if component.role != ComponentRole.GATE:
             continue
         verdict = verdicts.get(component.name)
         if verdict is None:
-            return False
+            return GateState.FAILED
         verdict = _validated_reward(verdict)
         if verdict.status != Status.SCORED or verdict.reward < 1.0:
-            return False
-    return True
+            return GateState.FAILED
+    return GateState.PASSED
 
 
 def aggregate_weighted(
@@ -221,9 +232,8 @@ def aggregate_weighted(
 ) -> Reward:
     """Combine gates, weighted criteria, and weighted penalties into one reward.
 
-    Status rules match ``aggregate_rewards``: an infrastructure error, then an
-    invalid task, discards all credit, and a missing component earns zero. Any
-    gate below 1.0 zeroes the reward, so components after a failed gate may stay
+    An infrastructure error, then an invalid task, discards all credit, and a
+    missing component earns zero. Any gate below 1.0 zeroes the reward, so components after a failed gate may stay
     ungraded. Otherwise the reward is the criterion-weighted sum minus the
     penalty-weighted sum, floored at zero and divided by the total criterion weight.
     """

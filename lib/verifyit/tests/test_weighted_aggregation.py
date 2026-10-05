@@ -5,10 +5,11 @@ import pytest
 from verifyit.grade import (
     Component,
     ComponentRole,
+    GateState,
     Reward,
     Status,
     aggregate_weighted,
-    gates_passed,
+    gate_state,
     infra_error,
     invalid_task,
     scored,
@@ -116,20 +117,20 @@ def test_malformed_rubric_is_an_invalid_task(rubric, verdicts):
 @pytest.mark.parametrize(
     "gate,expected",
     [
-        (scored(1), True),
-        (scored(0.5), False),
-        (infra_error("down"), False),
-        (Reward(float("nan"), Status.SCORED), False),
-        (None, False),
+        (scored(1), GateState.PASSED),
+        (scored(0.5), GateState.FAILED),
+        (infra_error("down"), GateState.FAILED),
+        (Reward(float("nan"), Status.SCORED), GateState.FAILED),
+        (None, GateState.FAILED),
     ],
 )
-def test_gates_passed_requires_every_gate_at_full_credit(gate, expected):
+def test_gate_state_requires_every_gate_at_full_credit(gate, expected):
     verdicts = {} if gate is None else {"compiles": gate}
-    assert gates_passed(RUBRIC, verdicts) is expected
+    assert gate_state(RUBRIC, verdicts) == expected
 
 
-def test_gates_passed_ignores_ungraded_criteria():
-    assert gates_passed(RUBRIC, {"compiles": scored(1)})
+def test_gate_state_ignores_ungraded_criteria():
+    assert gate_state(RUBRIC, {"compiles": scored(1)}) == GateState.PASSED
 
 
 @pytest.mark.parametrize(
@@ -137,5 +138,5 @@ def test_gates_passed_ignores_ungraded_criteria():
     [[GATE, Component("compiles", ComponentRole.CRITERION)], [GATE, VERBOSE]],
     ids=["duplicate_name", "no_criterion"],
 )
-def test_gates_passed_rejects_malformed_rubric(rubric):
-    assert not gates_passed(rubric, {"compiles": scored(1)})
+def test_gate_state_reports_malformed_rubric(rubric):
+    assert gate_state(rubric, {"compiles": scored(1)}) == GateState.INVALID_RUBRIC
