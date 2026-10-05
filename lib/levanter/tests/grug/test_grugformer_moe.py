@@ -38,7 +38,14 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
-from levanter.grug._moe.ep_ragged_all_to_all import _loop_local_zeros, _LoopLocalZeroSite
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    _accepted_assignments,
+    _gather_dispatch_rows,
+    _ragged_dot_expert_mlp,
+    _transport_buffer,
+    _TransportBufferSite,
+    _unpermute_from_global_expert,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -568,6 +575,132 @@ def test_deepep_local_assignment_packing_uses_local_expert_ids():
     )
     np.testing.assert_allclose(np.asarray(local_assignments.x_dispatch[3:]), 0, rtol=0, atol=0)
     np.testing.assert_allclose(np.asarray(local_assignments.assignment_weights[3:]), 0, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("topk", [1, 2, 8])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("drop_every", [0, 3], ids=["all-accepted", "some-dropped"])
+def test_dispatch_gradient_sums_each_tokens_accepted_assignments(topk, dtype, drop_every):
+    tokens, hidden = 7, 3
+    indices = np.random.default_rng(1).permutation(tokens * topk).astype(np.int32)
+    accepted = np.ones((tokens, topk), dtype=bool)
+    if drop_every:
+        accepted.reshape(-1)[::drop_every] = False
+    positions = np.argsort(indices)
+    x = jnp.arange(tokens * hidden, dtype=dtype).reshape(tokens, hidden)
+    cotangent = np.arange(tokens * topk * hidden, dtype=np.float32).reshape(tokens * topk, hidden) / 256
+    # The transport never writes a dropped slot's cotangent row, so it may hold anything.
+    cotangent[positions[~accepted.reshape(-1)]] = np.nan
+    cotangent = jnp.asarray(cotangent, dtype=dtype)
+
+    @jax.jit
+    def evaluate(x, cotangent):
+        output, backward = jax.vjp(
+            lambda value: _gather_dispatch_rows(value, jnp.asarray(indices), jnp.asarray(accepted, jnp.float32), topk),
+            x,
+        )
+        return output, backward(cotangent)[0]
+
+    actual_output, actual_gradient = evaluate(x, cotangent)
+    expected_gradient = np.zeros((tokens, hidden), dtype=np.float32)
+    kept = accepted.reshape(-1)[indices]  # per sorted row
+    np.add.at(expected_gradient, indices[kept] // topk, np.asarray(cotangent, dtype=np.float32)[kept])
+    np.testing.assert_array_equal(np.asarray(actual_output), np.asarray(x)[indices // topk])
+    np.testing.assert_array_equal(np.asarray(actual_gradient), np.asarray(expected_gradient, dtype=dtype))
+
+
+def test_accepted_assignments_keep_each_groups_accepted_prefix():
+    num_experts, tokens, topk = 5, 9, 2
+    rng = np.random.default_rng(3)
+    selected = rng.integers(0, num_experts, size=tokens * topk).astype(np.int32)
+    selected[[4, 11]] = num_experts  # invalid assignments
+    group_sizes = np.bincount(selected, minlength=num_experts + 1)[:num_experts].astype(np.int32)
+    accepted_sizes = np.minimum(group_sizes, [0, 1, 2, 9, 3]).astype(np.int32)
+    sorted_indices = np.argsort(selected, kind="stable").astype(np.int32)
+
+    actual = jax.jit(_accepted_assignments)(
+        jnp.asarray(selected), jnp.asarray(sorted_indices), jnp.asarray(group_sizes), jnp.asarray(accepted_sizes)
+    )
+
+    expected = np.zeros(tokens * topk, dtype=bool)
+    for expert in range(num_experts):
+        members = sorted_indices[selected[sorted_indices] == expert]
+        expected[members[: accepted_sizes[expert]]] = True
+    np.testing.assert_array_equal(np.asarray(actual), expected)
+
+
+def test_combine_skips_dropped_rows_and_differentiates_accepted_zero_weights():
+    tokens, topk, hidden = 6, 3, 4
+    rng = np.random.default_rng(4)
+    sorted_indices = rng.permutation(tokens * topk).astype(np.int32)
+    weights = rng.random((tokens, topk)).astype(np.float32)
+    accepted = np.ones((tokens, topk), dtype=bool)
+    accepted[[0, 2, 5], [1, 0, 2]] = False
+    # Accepted assignments with weight zero still have the weight gradient <dout, y>.
+    weights[[1, 4], [2, 0]] = 0
+    rows = rng.standard_normal((tokens * topk, hidden)).astype(np.float32)
+    cotangent = rng.standard_normal((tokens, hidden)).astype(np.float32)
+    # Assignment a's row sits at sorted position positions[a].
+    positions = np.argsort(sorted_indices).reshape(tokens, topk)
+    expected = np.einsum("tkh,tk->th", rows[positions], np.where(accepted, weights, 0))
+    expected_weight_gradient = np.where(accepted, np.einsum("th,tkh->tk", cotangent, rows[positions]), 0)
+    # A dropped slot's row is never written, so it may hold anything.
+    rows[positions[~accepted]] = np.nan
+
+    def combine(weights):
+        # As in the ragged MoE, the `where` zeroes the dropped weights and discards their gradients.
+        return _unpermute_from_global_expert(
+            jnp.asarray(rows),
+            jnp.asarray(sorted_indices),
+            jnp.where(accepted, weights, 0),
+            jnp.asarray(accepted),
+            tokens_per_shard=tokens,
+            topk=topk,
+        )
+
+    actual, pullback = jax.vjp(jax.jit(combine), jnp.asarray(weights))
+    (actual_weight_gradient,) = pullback(jnp.asarray(cotangent))
+
+    np.testing.assert_allclose(np.asarray(actual), expected, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(actual_weight_gradient), expected_weight_gradient, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("w13_width_multiple", "activation_fn"),
+    [(2, jax.nn.silu), (1, lambda x: jnp.square(jax.nn.relu(x)))],
+    ids=["gated-silu", "ungated-relu2"],
+)
+def test_portable_expert_mlp_ignores_rows_past_the_active_count(w13_width_multiple, activation_fn):
+    capacity, hidden, inter, experts = 10, 4, 6, 2
+    active_group_sizes = jnp.asarray([3, 4], dtype=jnp.int32)
+    physical_group_sizes = jnp.asarray([3, 7], dtype=jnp.int32)
+    k_x, k_w13, k_w2, k_ct = jax.random.split(jax.random.key(5), 4)
+    x = jax.random.normal(k_x, (capacity, hidden))
+    w13 = jax.random.normal(k_w13, (experts, hidden, w13_width_multiple * inter))
+    w2 = jax.random.normal(k_w2, (experts, inter, hidden))
+    cotangent = jax.random.normal(k_ct, (capacity, hidden))
+    # Rows 7.. are past the active count: their input rows and output cotangent rows are unspecified.
+    x_unspecified = x.at[7:].set(jnp.nan)
+    cotangent_unspecified = cotangent.at[7:].set(jnp.nan)
+
+    def run(x, w13, w2, cotangent):
+        out, backward = jax.vjp(
+            lambda x, w13, w2: _ragged_dot_expert_mlp(
+                x, w13, w2, physical_group_sizes, active_group_sizes, activation_fn
+            ),
+            x,
+            w13,
+            w2,
+        )
+        return out, backward(cotangent)
+
+    clean_out, (clean_dx, clean_dw13, clean_dw2) = run(x.at[7:].set(0), w13, w2, cotangent.at[7:].set(0))
+    out, (dx, dw13, dw2) = run(x_unspecified, w13, w2, cotangent_unspecified)
+
+    np.testing.assert_array_equal(np.asarray(out[:7]), np.asarray(clean_out[:7]))
+    np.testing.assert_array_equal(np.asarray(dx[:7]), np.asarray(clean_dx[:7]))
+    np.testing.assert_array_equal(np.asarray(dw13), np.asarray(clean_dw13))
+    np.testing.assert_array_equal(np.asarray(dw2), np.asarray(clean_dw2))
 
 
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
@@ -2206,24 +2339,7 @@ def test_ragged_a2a_receiver_clipping_respects_capacity(capacity, expected, trac
     np.testing.assert_array_equal(clipped, np.asarray(expected, dtype=np.int32))
 
 
-@pytest.mark.parametrize("site", list(_LoopLocalZeroSite))
-@pytest.mark.parametrize(
-    "tie",
-    [
-        np.array([0, 0, 0, 0], dtype=np.int32),
-        np.array([1, 7, 0, 3], dtype=np.int32),
-        np.array([2**20, 5, 5, 5], dtype=np.int32),
-    ],
-    ids=["all-empty-groups", "mixed", "large-first-group"],
-)
-def test_loop_local_zeros_fills_exact_zeros(site: _LoopLocalZeroSite, tie: np.ndarray):
-    filled = _loop_local_zeros(4, 3, jnp.float32, jnp.asarray(tie), site=site)
-
-    assert filled.shape == (4, 3)
-    np.testing.assert_array_equal(np.asarray(filled), np.zeros((4, 3), dtype=np.float32))
-
-
-# The zero fill's traced minimum, as XLA names the opcode in optimized HLO.
+# The transport buffer's traced minimum, as XLA names the opcode in optimized HLO.
 MINIMUM_OPCODE = "kMinimum"
 
 
@@ -2238,10 +2354,10 @@ def _optimized_hlo_opcode_count(fill_fn, opcode_name: str) -> int:
     )
 
 
-def test_loop_local_zeros_is_not_a_foldable_constant():
+def test_transport_buffer_is_not_a_foldable_constant():
     assert (
         _optimized_hlo_opcode_count(
-            lambda tie: _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
+            lambda tie: _transport_buffer(4, 3, jnp.float32, tie, site=_TransportBufferSite.DISPATCH_OUTPUT),
             MINIMUM_OPCODE,
         )
         == 1
@@ -2254,15 +2370,15 @@ def test_loop_local_zeros_is_not_a_foldable_constant():
     ), "the folding probe no longer folds, so this test can no longer detect a foldable fill"
 
 
-def test_loop_local_zeros_sites_prevent_cse():
+def test_transport_buffer_sites_prevent_cse():
     def distinct_sites(tie):
         return (
-            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT),
-            _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.OPERAND_COTANGENT),
+            _transport_buffer(4, 3, jnp.float32, tie, site=_TransportBufferSite.DISPATCH_OUTPUT),
+            _transport_buffer(4, 3, jnp.float32, tie, site=_TransportBufferSite.OPERAND_COTANGENT),
         )
 
     def repeated_site(tie):
-        fill = _loop_local_zeros(4, 3, jnp.float32, tie, site=_LoopLocalZeroSite.DISPATCH_OUTPUT)
+        fill = _transport_buffer(4, 3, jnp.float32, tie, site=_TransportBufferSite.DISPATCH_OUTPUT)
         return fill, fill
 
     assert _optimized_hlo_opcode_count(distinct_sites, MINIMUM_OPCODE) == 2

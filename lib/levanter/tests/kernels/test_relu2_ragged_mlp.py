@@ -61,6 +61,34 @@ def test_relu2_ragged_mlp_matches_per_group_reference(implementation, group_size
     assert not jnp.any(got_grads[0][covered:]), "rows past sum(group_sizes) must get zero gradient"
 
 
+def test_relu2_ragged_mlp_kernel_never_reads_rows_past_the_group_sizes():
+    """The ragged MoE transport leaves the rows past ``sum(group_sizes)`` unwritten: in the dispatched
+    input and in the output cotangent they may hold anything, including NaN."""
+    rows, k, n, m = 57, 32, 64, 32
+    group_sizes = jnp.asarray((9, 0, 20, 3), jnp.int32)
+    covered = int(jnp.sum(group_sizes))
+    x, w_up, w_down, cotangent = _inputs(rows, k, n, m, group_sizes.shape[0])
+
+    def run(x, cotangent):
+        out, backward = jax.vjp(
+            lambda a, b, c: relu2_ragged_mlp(
+                a, b, c, group_sizes, implementation="pallas_interpret", block_sizes=_BLOCKS
+            ),
+            x,
+            w_up,
+            w_down,
+        )
+        return out, backward(cotangent)
+
+    clean_out, clean_grads = run(x.at[covered:].set(0), cotangent.at[covered:].set(0))
+    out, grads = run(x.at[covered:].set(jnp.nan), cotangent.at[covered:].set(jnp.nan))
+
+    assert jnp.array_equal(out, clean_out)
+    assert not jnp.any(out[covered:])
+    for name, got, want in zip(["dx", "dw_up", "dw_down"], grads, clean_grads, strict=True):
+        assert jnp.array_equal(got, want), name
+
+
 def test_relu2_ragged_mlp_rejects_misaligned_width():
     x, w_up, w_down, _ = _inputs(16, 32, 48, 32, 2)
     with pytest.raises(ValueError, match="multiple of its block size"):
