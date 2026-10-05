@@ -27,7 +27,7 @@ from marin.rl.skyrl import SkyRLRun
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.readers import load_parquet
 
-from experiments.post_training.bfcl_rl.collect import MODELS, ModelSource, complement_data_step
+from experiments.post_training.bfcl_rl.collect import COLLECTION_EXECUTION, MODELS, ModelSource, complement_data_step
 from experiments.post_training.bfcl_rl.data import PARTITION_MANIFEST_SHA256, BFCLPartition
 from experiments.post_training.bfcl_rl.launch import recovered_model
 from experiments.post_training.bfcl_rl.offline_collect import TEACHER_MODEL, TEACHER_REVISION
@@ -258,7 +258,10 @@ def run_native_preference_cache(config: NativePreferenceConfig) -> RecoveryPrefe
 
 
 def dispatch_native_preference_cache(config: NativePreferenceConfig) -> RecoveryPreferenceCache:
-    return remote(run_native_preference_cache, resources=ResourceConfig.with_cpu(cpu=4, ram="32Gi", disk="64Gi"))(config)
+    resources = ResourceConfig.with_cpu(
+        cpu=4, ram="32Gi", disk="64Gi", target_cluster=COLLECTION_EXECUTION.target_cluster
+    )
+    return remote(run_native_preference_cache, resources=resources)(config)
 
 
 def native_preference_step(
@@ -323,6 +326,7 @@ def native_preference_step(
         run=dispatch_native_preference_cache,
         build_config=build_config,
         deps=(*teachers, student, policy.step, data),
+        runtime_args={"execution": COLLECTION_EXECUTION},
     )
 
 
