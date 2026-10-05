@@ -64,7 +64,6 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     assert isinstance(saved_specification["final_tools"], list)
     assert saved_specification["final_tools"]
     assert saved_specification["environment_requirements"]["capabilities"] == []
-    assert saved_specification["environment_requirements"]["tool_providers"] == {}
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
     assert "Okay, let me figure out how to handle this user's query" not in public

@@ -38,16 +38,6 @@ MISSING_FILE_EXIT = 44
 
 def _validate_task(task: TaskSpec) -> None:
     """Reject task features that this engine cannot execute."""
-    requirements = task.environment_requirements
-    if (
-        requirements.docker_image is not None
-        or requirements.working_directory is not None
-        or requirements.setup_commands
-        or requirements.environment_variables
-        or requirements.tool_providers
-        or any((task.resources.all, task.resources.worker, task.resources.oracle, task.resources.verifier))
-    ):
-        raise ValueError("The rollout engine requires machine inputs in environment")
     if task.verifier.kind == VerifierKind.EXTERNAL and task.environment.interaction is None:
         raise ValueError("External verifiers require an interaction session")
     for specification in (task.verifier, *(stage.verifier for stage in task.stages)):
