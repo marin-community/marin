@@ -4,6 +4,7 @@
 import json
 import threading
 from dataclasses import replace
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -353,25 +354,6 @@ def test_reply_truncated_at_the_retry_budget_is_unscored(tmp_path, fake_judge, r
     assert [request["max_completion_tokens"] for request in fake_judge.requests] == [1024, 4096]
 
 
-@pytest.mark.parametrize("rubric", ["reference", "checklist"])
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"max_completion_tokens": 0},
-        {"incomplete_retry_tokens": 8192},
-        {"request_timeout": float("inf")},
-        {"reasoning_effort": 1},
-    ],
-)
-def test_score_rubric_invalid_budget_never_calls_model(tmp_path, fake_judge, rubric, overrides):
-    spec = JudgeSpec(rubric=rubric, references=(REFERENCE,), criteria=("Be correct",), exact_gate=False, **overrides)
-    spec_path = tmp_path / "verifier.toml"
-    spec_path.write_text(render_spec(spec))
-    reward = run(spec_path, _workspace(tmp_path, "a paraphrase"))
-    assert reward.status is Status.INVALID_TASK
-    assert fake_judge.requests == []
-
-
 @pytest.mark.parametrize(
     ("rubric", "reply"),
     [
@@ -463,27 +445,47 @@ def test_configured_judge_only_retries_incomplete_completion_budget(tmp_path, fa
     assert [request["max_completion_tokens"] for request in fake_judge.requests] == [8192, 16384]
 
 
+def _score_rubric_spec(rubric: str, **overrides) -> JudgeSpec:
+    return JudgeSpec(rubric=rubric, references=(REFERENCE,), criteria=("Be correct",), exact_gate=False, **overrides)
+
+
+SCORE_RUBRIC_INVALID_OVERRIDES = [
+    {"max_completion_tokens": 0},
+    {"incomplete_retry_tokens": 8192},
+    {"request_timeout": float("inf")},
+    {"reasoning_effort": 1},
+]
+LABEL_INVALID_OVERRIDES = [
+    {"references": ()},
+    {"references": ("",)},
+    {"references": ("", "reference")},
+    {"prompt_template": "{unknown}"},
+    {"system_prompt": "", "prompt_template": "{candidate}"},
+    {"label_scores": {}},
+    {"label_scores": {"[[A=B]]": True}},
+    {"label_scores": {"[[A=B]]": 1.5}},
+    {"label_scores": {"": 1.0}},
+    {"request_timeout": -1.0},
+    {"request_timeout": float("inf")},
+    {"incomplete_retry_tokens": 8192},
+]
+
+
 @pytest.mark.parametrize(
-    "overrides",
+    "build_spec",
     [
-        {"references": ()},
-        {"references": ("",)},
-        {"references": ("", "reference")},
-        {"prompt_template": "{unknown}"},
-        {"system_prompt": "", "prompt_template": "{candidate}"},
-        {"label_scores": {}},
-        {"label_scores": {"[[A=B]]": True}},
-        {"label_scores": {"[[A=B]]": 1.5}},
-        {"label_scores": {"": 1.0}},
-        {"request_timeout": -1.0},
-        {"request_timeout": float("inf")},
-        {"incomplete_retry_tokens": 8192},
+        *(
+            partial(_score_rubric_spec, rubric, **overrides)
+            for rubric in ("reference", "checklist")
+            for overrides in SCORE_RUBRIC_INVALID_OVERRIDES
+        ),
+        *(partial(_label_spec, **overrides) for overrides in LABEL_INVALID_OVERRIDES),
     ],
 )
-def test_configured_judge_invalid_contract_never_calls_model(tmp_path, fake_judge, overrides):
+def test_invalid_judge_contract_never_calls_model(tmp_path, fake_judge, build_spec):
     _workspace(tmp_path, "candidate")
     spec_path = tmp_path / "verifier.toml"
-    spec_path.write_text(render_spec(_label_spec(**overrides)))
+    spec_path.write_text(render_spec(build_spec()))
     result = run(spec_path, tmp_path)
     assert result.status is Status.INVALID_TASK
     assert result.reward == 0.0

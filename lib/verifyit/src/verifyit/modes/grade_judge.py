@@ -16,8 +16,9 @@ The judge is any OpenAI-compatible chat endpoint, configured through ``VERIFYIT_
 without a configured endpoint returns an infrastructure failure.
 
 Every request carries the spec's output budget and reasoning effort. A truncated reply is asked
-again with ``incomplete_retry_tokens`` when the spec sets it, and a reply without a valid ``SCORE``
-line is asked again once. Each scored reply keeps its raw text and one record per request (budget,
+again with ``incomplete_retry_tokens`` when the spec sets it. Under ``reference`` and ``checklist``,
+a reply without a valid ``SCORE`` line is asked again once; a malformed ``labels`` verdict raises
+without a re-ask. Each scored reply keeps its raw text and one record per request (budget,
 finish reason, completion tokens) in the verdict detail.
 """
 
@@ -70,6 +71,8 @@ API_KEY_ENV = "VERIFYIT_JUDGE_API_KEY"
 MODEL_ENV = "VERIFYIT_JUDGE_MODEL"
 
 ATTEMPTS = 2
+FINISH_LENGTH = "length"
+FINISH_STOP = "stop"
 REASONING_LIMIT = 400
 CONTEXT_LIMIT = 60_000
 
@@ -125,6 +128,22 @@ class _ValidatedJudgeSpec:
     references: tuple[str, ...]
     criteria: tuple[str, ...]
     checks: list[tuple[Constraint, Check]]
+
+
+@dataclass(frozen=True)
+class _JudgeCall:
+    """One judge request: its output token budget, finish reason, and reported completion tokens."""
+
+    budget: int
+    finish_reason: str | None
+    completion_tokens: int | None
+
+
+@dataclass(frozen=True)
+class _ScoredReply:
+    score: float
+    reply: str
+    calls: list[_JudgeCall]
 
 
 def grade(
@@ -318,7 +337,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     labels = {
         label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
     }
-    calls: list[dict[str, Any]] = []
+    calls: list[_JudgeCall] = []
     for index, budget in enumerate(budgets):
         content, incomplete = _label_completion(spec, client, model, messages, budget, calls)
         if incomplete:
@@ -347,7 +366,7 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
             verdict=final,
             reasoning=_reasoning(answer),
             completion=content,
-            calls=calls,
+            calls=_calls_detail(calls),
         )
     raise RuntimeError("judge exhausted completion budgets")
 
@@ -359,17 +378,24 @@ def _budgets(spec: JudgeSpec) -> list[int]:
     return [spec.max_completion_tokens]
 
 
-def _call_record(budget: int, finish_reason: str | None, completion_tokens: int | None) -> dict[str, Any]:
-    return {"max_completion_tokens": budget, "finish_reason": finish_reason, "completion_tokens": completion_tokens}
+def _calls_detail(calls: list[_JudgeCall]) -> list[dict[str, Any]]:
+    return [
+        {
+            "max_completion_tokens": call.budget,
+            "finish_reason": call.finish_reason,
+            "completion_tokens": call.completion_tokens,
+        }
+        for call in calls
+    ]
 
 
 def _label_completion(
-    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, calls: list[dict[str, Any]]
+    spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int, calls: list[_JudgeCall]
 ) -> tuple[str, bool]:
     """Request one label reply, record the request in ``calls``, and report whether it was truncated."""
     if spec.api == "chat_completions":
         choice = _chat_reply(spec, client, model, messages, budget, calls)
-        if choice.finish_reason == "length":
+        if choice.finish_reason == FINISH_LENGTH:
             return "", True
         return _completed_text(choice), False
     options: dict[str, Any] = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
@@ -390,7 +416,7 @@ def _label_completion(
     usage = payload.get("usage")
     output_tokens = usage.get("output_tokens") if isinstance(usage, dict) else None
     # The Responses API has no finish_reason; record truncation and completion as the chat equivalents.
-    calls.append(_call_record(budget, "length" if truncated else "stop", output_tokens))
+    calls.append(_JudgeCall(budget, FINISH_LENGTH if truncated else FINISH_STOP, output_tokens))
     if truncated:
         return "", True
     if payload.get("status") != "completed" or payload.get("incomplete_details") is not None:
@@ -482,8 +508,14 @@ def _judge_reference(
         references="\n".join(f"- {reference}" for reference in references),
         candidate=candidate.strip(),
     )
-    score, reply, calls = _ask(spec, client, model, prompt, allowed_scores=(0.0, 0.5, 1.0))
-    return scored(score, model=model, reasoning=_reasoning(reply), completion=reply, calls=calls)
+    answer = _ask(spec, client, model, prompt, allowed_scores=(0.0, 0.5, 1.0))
+    return scored(
+        answer.score,
+        model=model,
+        reasoning=_reasoning(answer.reply),
+        completion=answer.reply,
+        calls=_calls_detail(answer.calls),
+    )
 
 
 def _judge_checklist(
@@ -495,14 +527,14 @@ def _judge_checklist(
         prompt = CHECKLIST_PROMPT.format(
             context=context_block, question=_question(spec), candidate=candidate.strip(), criterion=criterion.strip()
         )
-        score, reply, calls = _ask(spec, client, model, prompt, allowed_scores=(0.0, 1.0))
+        answer = _ask(spec, client, model, prompt, allowed_scores=(0.0, 1.0))
         results.append(
             {
                 "criterion": criterion,
-                "passed": score >= 1.0,
-                "reasoning": _reasoning(reply),
-                "completion": reply,
-                "calls": calls,
+                "passed": answer.score >= 1.0,
+                "reasoning": _reasoning(answer.reply),
+                "completion": answer.reply,
+                "calls": _calls_detail(answer.calls),
             }
         )
     passed = sum(1 for result in results if result["passed"])
@@ -511,28 +543,27 @@ def _judge_checklist(
 
 def _ask(
     spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, *, allowed_scores: tuple[float, ...]
-) -> tuple[float, str, list[dict[str, Any]]]:
+) -> _ScoredReply:
     """Parse a final allowed SCORE label; re-ask once, then raise if no valid score appears.
 
-    Returns the score, the scored reply, and one record per request with its output token
-    budget, finish reason, and the completion tokens the endpoint reported.
+    The result keeps the score, the scored reply, and one record per request made.
     """
-    calls: list[dict[str, Any]] = []
+    calls: list[_JudgeCall] = []
     for attempt in range(1, ATTEMPTS + 1):
         reply = _complete(spec, client, model, prompt, calls)
         score = _score(reply, allowed_scores)
         if score is not None:
-            return score, reply, calls
+            return _ScoredReply(score, reply, calls)
         logger.warning("judge %s returned no SCORE line on attempt %d", model, attempt)
     raise RuntimeError(f"judge {model!r} returned no valid SCORE after {ATTEMPTS} attempts")
 
 
-def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, calls: list[dict[str, Any]]) -> str:
+def _complete(spec: JudgeSpec, client: openai.OpenAI, model: str, prompt: str, calls: list[_JudgeCall]) -> str:
     """Request one reply, retrying a truncated reply with the larger budget, and record each request."""
     budgets = _budgets(spec)
     for budget in budgets:
         choice = _chat_reply(spec, client, model, [{"role": "user", "content": prompt}], budget, calls)
-        if choice.finish_reason != "length":
+        if choice.finish_reason != FINISH_LENGTH:
             return _completed_text(choice)
     raise RuntimeError(f"judge {model!r} reply was truncated at {budgets[-1]} completion tokens")
 
@@ -543,7 +574,7 @@ def _chat_reply(
     model: str,
     messages: list[ChatCompletionMessageParam],
     budget: int,
-    calls: list[dict[str, Any]],
+    calls: list[_JudgeCall],
 ) -> Choice:
     """Send one chat request with the spec's budget and reasoning effort, and record it in ``calls``."""
     options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
@@ -558,7 +589,7 @@ def _chat_reply(
     )
     choice = _completion_choice(response)
     tokens = response.usage.completion_tokens if response.usage else None
-    calls.append(_call_record(budget, choice.finish_reason, tokens))
+    calls.append(_JudgeCall(budget, choice.finish_reason, tokens))
     return choice
 
 
@@ -583,7 +614,7 @@ def _completion_choice(response: ChatCompletion) -> Choice:
 
 def _completed_text(choice: Choice) -> str:
     content = choice.message.content
-    if choice.finish_reason != "stop" or not isinstance(content, str) or not content.strip():
+    if choice.finish_reason != FINISH_STOP or not isinstance(content, str) or not content.strip():
         raise RuntimeError("judge completion is incomplete or has no text")
     return content
 
