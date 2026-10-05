@@ -17,6 +17,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.contracts import RolloutContractError
 
 from experiments.post_training.russell_rsi import teacher_chat_study as study
+from experiments.post_training.russell_rsi import test_teacher_collection, test_teacher_four_pass
 from experiments.post_training.russell_rsi.bootstrap_loop import write_once
 from experiments.post_training.russell_rsi.calibration_recovery import PinnedFile
 from experiments.post_training.russell_rsi.contract_tasks import digest
@@ -25,10 +26,9 @@ from experiments.post_training.russell_rsi.teacher_chat_study import collect_rem
 from experiments.post_training.russell_rsi.teacher_collection import TeacherTask
 from experiments.post_training.russell_rsi.token_preflight import PREFLIGHT_INSTRUCTION, preflight_task
 
-pytest_plugins = [
-    "experiments.post_training.russell_rsi.test_teacher_collection",
-    "experiments.post_training.russell_rsi.test_teacher_four_pass",
-]
+student_tokenizer = test_teacher_collection.student_tokenizer
+continuation_inputs = test_teacher_four_pass.continuation_inputs
+study_inputs = test_teacher_four_pass.study_inputs
 
 
 def inputs(tokenizer):
