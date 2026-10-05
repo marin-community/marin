@@ -1,23 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded sources shared by the asynchronous RL post-training dashboard."""
+"""Bounded attempt sources shared by synchronous and asynchronous RL runs."""
 
 from dashboard_dataset import DashboardDataset, SourceQuery, bounded_bucket_ms, validate_value, validate_values
 from vllm_observability import sql_string, sql_values
 
-ASYNC_RL_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-ASYNC_RL_MAX_POINTS = 360
-ASYNC_RL_MIN_BUCKET_MS = 30_000
-ASYNC_RL_MAX_CLUSTERS = 16
-ASYNC_RL_MAX_EXECUTIONS = 32
-ASYNC_RL_MAX_IDENTITY_LENGTH = 512
-ASYNC_RL_MAX_CORE_ROWS = 100_000
-ASYNC_RL_MAX_METRIC_ROWS = 100_000
-ASYNC_RL_MAX_SPAN_ROWS = 50_000
-ASYNC_RL_MAX_STEP_ROWS = 50_000
-ASYNC_RL_MAX_PROCESS_ROWS = 10_000
-ASYNC_RL_MAX_RESULT_ROWS = 200_000
+RL_ATTEMPT_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+RL_ATTEMPT_MAX_POINTS = 360
+RL_ATTEMPT_MIN_BUCKET_MS = 30_000
+RL_ATTEMPT_MAX_CLUSTERS = 16
+RL_ATTEMPT_MAX_EXECUTIONS = 32
+RL_ATTEMPT_MAX_IDENTITY_LENGTH = 512
+RL_ATTEMPT_MAX_CORE_ROWS = 100_000
+RL_ATTEMPT_MAX_METRIC_ROWS = 100_000
+RL_ATTEMPT_MAX_SPAN_ROWS = 50_000
+RL_ATTEMPT_MAX_STEP_ROWS = 50_000
+RL_ATTEMPT_MAX_PROCESS_ROWS = 10_000
+RL_ATTEMPT_MAX_RESULT_ROWS = 200_000
 MEGATRON_DETAIL_ROWS = 5_000
 GIB = 1073741824
 FINITE_VALUE_LIMIT_SQL = "1e308"
@@ -45,7 +45,7 @@ _LIFECYCLE_NAMES = ("lifecycle", "terminal")
 _EXPORTER_NAMES = ("telemetry_lost_records", "telemetry_rejected_records", "training_nonfinite_values")
 _PERCENTILE_NAMES = ("rollout_buffer_dwell_seconds", "rollout_staleness_steps")
 
-_REWARD_METRICS = ("reward/avg_raw_reward", "reward/avg_pass_at_4", "reward/informative_group_fraction")
+_REWARD_METRICS = ("reward/avg_raw_reward", "reward/informative_group_fraction")
 _LENGTH_STOP_METRICS = ("consumed/length_stop_fraction", "consumed/stop_reason_coverage")
 _OPTIMIZER_METRICS = (
     "policy/policy_entropy",
@@ -255,39 +255,40 @@ ORDER BY 1
 """.strip()
 
 
-def async_rl_overview_dataset(
+def rl_attempt_dataset(
     clusters: tuple[str, ...],
     run: str,
     job: str,
     executions: tuple[str, ...],
     start_ms: int,
     end_ms: int,
-    requested_bucket_ms: int = ASYNC_RL_MIN_BUCKET_MS,
+    requested_bucket_ms: int = RL_ATTEMPT_MIN_BUCKET_MS,
 ) -> DashboardDataset:
-    """Build the bounded sources behind every panel of the asynchronous RL dashboard."""
-    validate_values("clusters", clusters, max_values=ASYNC_RL_MAX_CLUSTERS, max_length=128)
-    validate_value("run", run, max_length=ASYNC_RL_MAX_IDENTITY_LENGTH)
-    validate_value("job", job, max_length=ASYNC_RL_MAX_IDENTITY_LENGTH)
-    validate_values(
-        "executions",
-        executions,
-        max_values=ASYNC_RL_MAX_EXECUTIONS,
-        max_length=ASYNC_RL_MAX_IDENTITY_LENGTH,
-    )
+    """Build bounded sources for a job and selected attempts of either training type."""
+    validate_values("clusters", clusters, max_values=RL_ATTEMPT_MAX_CLUSTERS, max_length=128)
+    validate_value("run", run, max_length=RL_ATTEMPT_MAX_IDENTITY_LENGTH)
+    validate_value("job", job, max_length=RL_ATTEMPT_MAX_IDENTITY_LENGTH)
+    if executions == ("__all",):
+        execution_filter = "AND execution_uid IS NOT NULL"
+    else:
+        validate_values(
+            "executions", executions, max_values=RL_ATTEMPT_MAX_EXECUTIONS, max_length=RL_ATTEMPT_MAX_IDENTITY_LENGTH
+        )
+        execution_filter = f"AND execution_uid IN ({sql_values(executions)})"
     bucket_ms = bounded_bucket_ms(
         start_ms,
         end_ms,
         requested_bucket_ms,
-        max_window_ms=ASYNC_RL_MAX_WINDOW_MS,
-        max_window_error="async RL overview range must not exceed 7 days",
-        min_bucket_ms=ASYNC_RL_MIN_BUCKET_MS,
-        max_points=ASYNC_RL_MAX_POINTS,
+        max_window_ms=RL_ATTEMPT_MAX_WINDOW_MS,
+        max_window_error="RL attempt range must not exceed 7 days",
+        min_bucket_ms=RL_ATTEMPT_MIN_BUCKET_MS,
+        max_points=RL_ATTEMPT_MAX_POINTS,
     )
     bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
     identity = f"""service = 'marinskyrl'
       AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({sql_values(clusters)})
       AND run_id = {sql_string(run)} AND job_id = {sql_string(job)}
-      AND execution_uid IN ({sql_values(executions)})
+      {execution_filter}
       AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
     core_sql = f"""
 WITH selected AS (
@@ -305,14 +306,20 @@ WITH selected AS (
            json_get(attributes_json, 'wait') AS wait,
            json_get(attributes_json, 'stat') AS stat,
            json_get(attributes_json, 'disposition') AS disposition,
-           CAST(json_get(body_json, 'model_version_step') AS DOUBLE) AS weights_step,
+           json_get(attributes_json, 'clock_domain') AS clock_domain,
+           json_get(attributes_json, 'parent') AS parent,
+           json_get(attributes_json, 'root') AS root,
+           COALESCE(CAST(json_get(body_json, 'model_version_step') AS DOUBLE),
+                    CAST(json_get(attributes_json, 'weights_step') AS DOUBLE)) AS weights_step,
            value
     FROM {MARINSKYRL_TABLE}
     WHERE {identity}
       AND name IN ({sql_values(_CORE_NAMES)})
+      AND COALESCE(json_get(attributes_json, 'backend'), '') <> 'megatron'
 ), aggregates AS (
     SELECT 'aggregate' AS statistic,
            t, name, execution_uid, work_kind, phase, outcome, role, rank, wait, stat, disposition,
+           clock_domain, parent, root,
            MAX(weights_step) AS weights_step,
            SUM(value) AS sum_value,
            COUNT(value) AS sample_count,
@@ -322,7 +329,7 @@ WITH selected AS (
            CAST(NULL AS DOUBLE) AS p95
     FROM selected
     WHERE name NOT IN ({sql_values(_GAUGE_NAMES + _PERCENTILE_NAMES)})
-    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 ), latest AS (
     SELECT 'latest' AS statistic,
            t, name, execution_uid,
@@ -334,6 +341,9 @@ WITH selected AS (
            CAST(NULL AS VARCHAR) AS wait,
            CAST(NULL AS VARCHAR) AS stat,
            CAST(NULL AS VARCHAR) AS disposition,
+           CAST(NULL AS VARCHAR) AS clock_domain,
+           CAST(NULL AS VARCHAR) AS parent,
+           CAST(NULL AS VARCHAR) AS root,
            CAST(NULL AS DOUBLE) AS weights_step,
            value AS sum_value,
            CAST(1 AS BIGINT) AS sample_count,
@@ -360,6 +370,9 @@ WITH selected AS (
            CAST(NULL AS VARCHAR) AS wait,
            CAST(NULL AS VARCHAR) AS stat,
            CAST(NULL AS VARCHAR) AS disposition,
+           CAST(NULL AS VARCHAR) AS clock_domain,
+           CAST(NULL AS VARCHAR) AS parent,
+           CAST(NULL AS VARCHAR) AS root,
            CAST(NULL AS DOUBLE) AS weights_step,
            SUM(value) AS sum_value,
            COUNT(value) AS sample_count,
@@ -377,7 +390,7 @@ SELECT * FROM aggregates
 UNION ALL SELECT * FROM latest
 UNION ALL SELECT * FROM percentiles
 ORDER BY t, name, execution_uid
-LIMIT {ASYNC_RL_MAX_CORE_ROWS + 1}
+LIMIT {RL_ATTEMPT_MAX_CORE_ROWS + 1}
 """.strip()
     metrics_sql = f"""
 SELECT timestamp_ms, seq, job_id, execution_uid,
@@ -390,9 +403,10 @@ FROM {MARINSKYRL_TABLE}
 WHERE {identity}
   AND name = 'training_metric_value'
   AND (json_get(attributes_json, 'metric') IN ({sql_values(_METRIC_NAMES)})
-       OR json_get(attributes_json, 'metric') LIKE 'eval/%')
+       OR json_get(attributes_json, 'metric') LIKE 'eval/%'
+       OR json_get(attributes_json, 'metric') LIKE 'reward/avg_pass_at_%')
 ORDER BY timestamp_ms, seq
-LIMIT {ASYNC_RL_MAX_METRIC_ROWS + 1}
+LIMIT {RL_ATTEMPT_MAX_METRIC_ROWS + 1}
 """.strip()
     staleness_sql = f"""
 SELECT job_id, execution_uid, name, step, staleness,
@@ -412,7 +426,7 @@ FROM (
 )
 GROUP BY 1, 2, 3, 4, 5
 ORDER BY observed_ms, execution_uid, name, staleness
-LIMIT {ASYNC_RL_MAX_STEP_ROWS + 1}
+LIMIT {RL_ATTEMPT_MAX_STEP_ROWS + 1}
 """.strip()
     process = (
         "COALESCE(json_get(resource_attributes_json, 'actor_uid'), json_get(resource_attributes_json, 'ray_task_id'), "
@@ -436,6 +450,8 @@ WITH events AS (
            COALESCE(json_get(body_json, 'status'), json_get(body_json, 'state')) AS status,
            json_get(body_json, 'reason') AS reason,
            CAST(NULL AS DOUBLE) AS observed_value,
+           TRY_CAST(json_get(body_json, 'export_lost_records') AS BIGINT) AS export_lost_records,
+           TRY_CAST(json_get(body_json, 'export_queued_records') AS BIGINT) AS export_queued_records,
            timestamp_ms AS last_record_ms
     FROM events WHERE newest = 1
 ), exporter AS (
@@ -446,6 +462,8 @@ WITH events AS (
            CAST(NULL AS VARCHAR) AS status,
            CAST(NULL AS VARCHAR) AS reason,
            CASE WHEN name = 'training_nonfinite_values' THEN SUM(value) ELSE MAX(value) END AS observed_value,
+           CAST(NULL AS BIGINT) AS export_lost_records,
+           CAST(NULL AS BIGINT) AS export_queued_records,
            MAX(timestamp_ms) AS last_record_ms
     FROM {MARINSKYRL_TABLE}
     WHERE {identity}
@@ -455,7 +473,7 @@ WITH events AS (
 SELECT * FROM lifecycle
 UNION ALL SELECT * FROM exporter
 ORDER BY last_record_ms DESC, execution_uid, name
-LIMIT {ASYNC_RL_MAX_PROCESS_ROWS + 1}
+LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
 """.strip()
     memory_sql = f"""
 WITH m AS (
@@ -481,22 +499,59 @@ SELECT execution_uid AS execution,
 FROM m
 GROUP BY execution_uid, resource_attributes_json, rank, gpu, phase
 ORDER BY execution, rank, phase
-LIMIT {ASYNC_RL_MAX_PROCESS_ROWS + 1}
+LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
 """.strip()
     megatron_sql = f"""
-SELECT execution_uid, timestamp_ms, seq,
-       CAST(json_get(attributes_json, 'step') AS BIGINT) AS step,
-       json_get(attributes_json, 'rank') AS rank,
-       json_get(attributes_json, 'phase') AS phase,
-       json_get(attributes_json, 'outcome') AS outcome,
-       json_get(attributes_json, 'backend') AS backend,
-       value AS seconds
+WITH selected AS (
+    SELECT {bucket} AS t, execution_uid, timestamp_ms,
+           CAST(json_get(attributes_json, 'step') AS BIGINT) AS step,
+           json_get(attributes_json, 'rank') AS rank,
+           json_get(attributes_json, 'phase') AS phase,
+           json_get(attributes_json, 'outcome') AS outcome,
+           value AS seconds
+    FROM {MARINSKYRL_TABLE}
+    WHERE {identity}
+      AND name = 'phase_duration_seconds'
+      AND (json_get(attributes_json, 'backend') = 'megatron' OR json_get(attributes_json, 'phase') = 'ppo_train')
+), steps AS (
+    SELECT rank, execution_uid, step, MAX(timestamp_ms) AS observed_ms
+    FROM selected GROUP BY rank, execution_uid, step
+), newest AS (
+    SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY rank ORDER BY observed_ms DESC NULLS LAST, execution_uid DESC, step DESC NULLS LAST
+    ) AS recency
+    FROM steps
+), ranks AS (
+    SELECT 'ranks' AS statistic, t,
+           CAST(NULL AS VARCHAR) AS execution_uid, CAST(NULL AS BIGINT) AS step,
+           CAST(NULL AS VARCHAR) AS rank, phase, outcome,
+           MAX(timestamp_ms) AS timestamp_ms, COUNT(seconds) AS samples,
+           MIN(seconds) AS min_seconds, AVG(seconds) AS mean_seconds, MAX(seconds) AS max_seconds
+    FROM selected GROUP BY t, phase, outcome
+), detail AS (
+    SELECT 'detail' AS statistic, MAX(s.t) AS t, s.execution_uid, s.step, s.rank, s.phase, s.outcome,
+           MAX(s.timestamp_ms) AS timestamp_ms, COUNT(s.seconds) AS samples,
+           MIN(s.seconds) AS min_seconds, AVG(s.seconds) AS mean_seconds, MAX(s.seconds) AS max_seconds
+    FROM selected s JOIN newest n ON s.rank = n.rank AND s.execution_uid = n.execution_uid AND s.step = n.step
+    WHERE n.recency <= 8
+    GROUP BY s.execution_uid, s.step, s.rank, s.phase, s.outcome
+)
+SELECT * FROM ranks
+UNION ALL SELECT * FROM detail
+ORDER BY statistic, timestamp_ms DESC NULLS LAST, rank, execution_uid, step DESC NULLS LAST, phase
+LIMIT {RL_ATTEMPT_MAX_SPAN_ROWS + 1}
+""".strip()
+    coverage_sql = f"""
+SELECT COALESCE(json_get(attributes_json, 'role'), json_get(resource_attributes_json, 'role')) AS role,
+       json_get(attributes_json, 'clock_domain') AS clock_domain,
+       COUNT(DISTINCT execution_uid || ' ' || json_get(attributes_json, 'step')) AS steps,
+       CASE WHEN COUNT(json_get(attributes_json, 'outcome')) = 0 THEN NULL
+            ELSE COUNT(DISTINCT CASE WHEN json_get(attributes_json, 'outcome') = 'failure'
+                 THEN execution_uid || ' ' || json_get(attributes_json, 'step') END) END AS failed_steps
 FROM {MARINSKYRL_TABLE}
-WHERE {identity}
-  AND name = 'phase_duration_seconds'
-  AND (json_get(attributes_json, 'backend') = 'megatron' OR json_get(attributes_json, 'phase') = 'ppo_train')
-ORDER BY timestamp_ms, seq
-LIMIT {ASYNC_RL_MAX_SPAN_ROWS + 1}
+WHERE {identity} AND name = 'phase_duration_seconds'
+GROUP BY 1, 2 ORDER BY 1, 2
+LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
 """.strip()
     windows_sql = f"""
 SELECT execution_uid, name,
@@ -510,7 +565,7 @@ WHERE {identity}
   AND name IN ('async_phase_window', 'weight_sync_completed')
   AND (name = 'weight_sync_completed' OR json_get(attributes_json, 'phase') IN ('training', 'weight_sync'))
 ORDER BY start_ms, execution_uid
-LIMIT {ASYNC_RL_MAX_SPAN_ROWS + 1}
+LIMIT {RL_ATTEMPT_MAX_SPAN_ROWS + 1}
 """.strip()
     overlap_sql = f"""
 WITH r AS (
@@ -550,7 +605,7 @@ LEFT JOIN c ON p.execution_uid = c.execution_uid
            AND c.started < p.finished AND c.finished >= p.started AND c.finished < p.finished
 GROUP BY p.execution_uid, p.step
 ORDER BY p.step, p.execution_uid
-LIMIT {ASYNC_RL_MAX_STEP_ROWS + 1}
+LIMIT {RL_ATTEMPT_MAX_STEP_ROWS + 1}
 """.strip()
     service_sql = f"""
 WITH r AS (
@@ -617,7 +672,7 @@ SELECT execution_uid AS execution,
 FROM per_window
 GROUP BY execution_uid, resource_attributes_json, phase, engine, model, name
 ORDER BY execution, phase, engine, counter
-LIMIT {ASYNC_RL_MAX_PROCESS_ROWS + 1}
+LIMIT {RL_ATTEMPT_MAX_PROCESS_ROWS + 1}
 """.strip()
     views = {
         "policy_step": (
@@ -626,7 +681,43 @@ SELECT t, name || ' · ' || execution_uid AS series,
        MAX(CASE WHEN name = 'policy_step' THEN max_value ELSE weights_step END) AS value
 FROM core
 WHERE statistic = 'aggregate' AND name IN ('policy_step', 'weight_sync_completed')
+GROUP BY 1, 2
+UNION ALL
+SELECT t, 'producing policy · ' || execution_uid AS series, MAX(weights_step) AS value
+FROM core WHERE statistic = 'aggregate' AND name = 'work_completed' AND weights_step IS NOT NULL
 GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+        "rollout_progress": (
+            """
+SELECT t,
+       SUM(CASE WHEN work_kind = 'rollout' THEN sum_value END) AS rollouts,
+       SUM(CASE WHEN work_kind = 'sample' THEN sum_value END) AS samples
+FROM core WHERE statistic = 'aggregate' AND name = 'work_completed'
+GROUP BY 1 ORDER BY 1
+""".strip()
+        ),
+        "span_coverage": "SELECT role, clock_domain, steps, failed_steps FROM coverage ORDER BY 1, 2",
+        "step_composition": (
+            """
+WITH driver AS (
+    SELECT * FROM core WHERE statistic = 'aggregate' AND name = 'phase_duration_seconds'
+      AND role = 'trainer' AND clock_domain = 'inclusive_wall' AND root = 'step'
+), phases AS (
+    SELECT t, execution_uid, phase, SUM(sum_value) AS sum_value, SUM(sample_count) AS sample_count
+    FROM driver GROUP BY 1, 2, 3
+), contained AS (
+    SELECT t, execution_uid, parent AS phase, SUM(sum_value) AS child_seconds
+    FROM driver WHERE parent IS NOT NULL AND parent <> '' GROUP BY 1, 2, 3
+), steps AS (
+    SELECT t, execution_uid, SUM(sample_count) AS step_count FROM phases WHERE phase = 'step' GROUP BY 1, 2
+)
+SELECT phases.t, phases.phase || ' · ' || phases.execution_uid AS series,
+       (phases.sum_value - COALESCE(contained.child_seconds, 0)) / steps.step_count AS value
+FROM phases JOIN steps ON steps.t = phases.t AND steps.execution_uid = phases.execution_uid
+LEFT JOIN contained ON contained.t = phases.t AND contained.execution_uid = phases.execution_uid
+                   AND contained.phase = phases.phase
+ORDER BY 1, 2
 """.strip()
         ),
         "token_rates": (
@@ -640,7 +731,8 @@ GROUP BY 1, 2 ORDER BY 1
         ),
         "lifecycle": (
             f"""
-SELECT execution_uid, role, process, name AS event, status, reason, last_record_ms
+SELECT execution_uid, role, process, name AS event, status, reason, export_lost_records, export_queued_records,
+       last_record_ms
 FROM processes WHERE name IN ({sql_values(_LIFECYCLE_NAMES)}) ORDER BY last_record_ms DESC
 """.strip()
         ),
@@ -705,8 +797,12 @@ SELECT t, phase || ' rank ' || COALESCE(rank, 'driver') || ' · ' || execution_u
        MIN(min_value) AS value
 FROM core
 WHERE statistic = 'aggregate' AND name = 'phase_duration_seconds'
-  AND phase IN ('rollout_call_residual', 'ppo_train_residual') AND outcome = 'success'
-GROUP BY 1, 2 ORDER BY 1
+  AND phase = 'rollout_call_residual' AND outcome = 'success'
+GROUP BY 1, 2
+UNION ALL
+SELECT t, 'ppo_train_residual · all ranks' AS series, min_seconds AS value
+FROM megatron WHERE statistic = 'ranks' AND phase = 'ppo_train_residual' AND outcome = 'success'
+ORDER BY 1, 2
 """.strip()
         ),
         "training_overlap": (
@@ -720,7 +816,9 @@ GROUP BY 1, 2 ORDER BY 1
             "SELECT t, disposition || ' · ' || execution_uid AS series, SUM(sum_value) AS value "
             "FROM core WHERE statistic = 'aggregate' AND name = 'rollout_group_tokens' GROUP BY 1, 2 ORDER BY 1"
         ),
-        "reward": _payload_metric_points(f"metric IN ({sql_values(_REWARD_METRICS)})"),
+        "reward": _payload_metric_points(
+            f"metric IN ({sql_values(_REWARD_METRICS)}) OR metric LIKE 'reward/avg_pass_at_%'"
+        ),
         "evaluation": _payload_metric_points("metric LIKE 'eval/%'"),
         "length_stops": (
             f"""
@@ -742,14 +840,19 @@ ORDER BY t, series
         "optimizer": _payload_metric_points(f"metric IN ({sql_values(_OPTIMIZER_METRICS)})"),
         "megatron_policy_wall": (
             """
-SELECT timestamp_ms AS t, 'rank ' || rank || ' ' || outcome || ' · ' || execution_uid AS series, seconds AS value
-FROM megatron WHERE phase = 'ppo_train' ORDER BY timestamp_ms, seq
+SELECT t, 'ppo_train ' || summary || ' · all ranks' AS series,
+       CASE summary WHEN 'min' THEN min_seconds WHEN 'mean' THEN mean_seconds ELSE max_seconds END AS value
+FROM megatron CROSS JOIN (VALUES ('min'), ('mean'), ('max')) AS summaries(summary)
+WHERE statistic = 'ranks' AND phase = 'ppo_train' AND outcome = 'success'
+ORDER BY t, series
 """.strip()
         ),
         "megatron_phases": (
             f"""
-SELECT execution_uid, step, rank, phase, outcome, seconds
-FROM megatron WHERE backend = 'megatron' ORDER BY step DESC, rank, phase LIMIT {MEGATRON_DETAIL_ROWS}
+SELECT execution_uid, step, rank, phase, outcome, mean_seconds AS seconds
+FROM megatron WHERE statistic = 'detail'
+ORDER BY timestamp_ms DESC NULLS LAST, rank, execution_uid, step DESC NULLS LAST, seconds DESC NULLS LAST, phase
+LIMIT {MEGATRON_DETAIL_ROWS}
 """.strip()
         ),
         "exporter": (
@@ -872,20 +975,21 @@ FROM windows ORDER BY start, execution
         "corrections": _train_metric_points(_CORRECTION_METRICS),
     }
     return DashboardDataset(
-        name="async RL overview",
+        name="RL attempt",
         cache_key=(clusters, run, job, executions, start_ms, end_ms, bucket_ms),
         sources=(
-            SourceQuery("core", core_sql, ASYNC_RL_MAX_CORE_ROWS),
-            SourceQuery("metrics", metrics_sql, ASYNC_RL_MAX_METRIC_ROWS),
-            SourceQuery("staleness", staleness_sql, ASYNC_RL_MAX_STEP_ROWS),
-            SourceQuery("processes", processes_sql, ASYNC_RL_MAX_PROCESS_ROWS),
-            SourceQuery("memory", memory_sql, ASYNC_RL_MAX_PROCESS_ROWS),
-            SourceQuery("megatron", megatron_sql, ASYNC_RL_MAX_SPAN_ROWS),
-            SourceQuery("windows", windows_sql, ASYNC_RL_MAX_SPAN_ROWS),
-            SourceQuery("overlap", overlap_sql, ASYNC_RL_MAX_STEP_ROWS),
-            SourceQuery("service", service_sql, ASYNC_RL_MAX_PROCESS_ROWS),
+            SourceQuery("core", core_sql, RL_ATTEMPT_MAX_CORE_ROWS),
+            SourceQuery("metrics", metrics_sql, RL_ATTEMPT_MAX_METRIC_ROWS),
+            SourceQuery("staleness", staleness_sql, RL_ATTEMPT_MAX_STEP_ROWS),
+            SourceQuery("processes", processes_sql, RL_ATTEMPT_MAX_PROCESS_ROWS),
+            SourceQuery("memory", memory_sql, RL_ATTEMPT_MAX_PROCESS_ROWS),
+            SourceQuery("megatron", megatron_sql, RL_ATTEMPT_MAX_SPAN_ROWS),
+            SourceQuery("windows", windows_sql, RL_ATTEMPT_MAX_SPAN_ROWS),
+            SourceQuery("overlap", overlap_sql, RL_ATTEMPT_MAX_STEP_ROWS),
+            SourceQuery("service", service_sql, RL_ATTEMPT_MAX_PROCESS_ROWS),
+            SourceQuery("coverage", coverage_sql, RL_ATTEMPT_MAX_PROCESS_ROWS),
         ),
         setup_sql=(),
         views=views,
-        max_result_rows=ASYNC_RL_MAX_RESULT_ROWS,
+        max_result_rows=RL_ATTEMPT_MAX_RESULT_ROWS,
     )
