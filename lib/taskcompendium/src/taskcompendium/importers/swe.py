@@ -30,6 +30,8 @@ from taskcompendium.models import (
 
 PATCH_PATH = "/tmp/taskcompendium/model.patch"
 GRADER_PATH = "/tmp/taskcompendium/evaluate.sh"
+BASE_REF = "refs/taskcompendium/base"
+BASE_REF_TIMEOUT = 30
 
 
 class SWEInstance(BaseModel):
@@ -61,6 +63,14 @@ def swe_task(
     """Keep the evaluation script private and grade only the submitted Git patch."""
     if environment.kind == EnvironmentKind.NULL or environment.interaction is not None:
         raise ValueError("SWE tasks require an executable shell environment")
+    task_environment = environment.model_copy(
+        update={
+            "setup": (
+                *environment.setup,
+                EnvironmentCommand(argv=("git", "update-ref", BASE_REF, "HEAD"), timeout=BASE_REF_TIMEOUT),
+            )
+        }
+    )
     verifier = ShellVerifierSpec(
         environment=environment,
         collect=(
@@ -68,7 +78,7 @@ def swe_task(
                 argv=(
                     "sh",
                     "-c",
-                    'mkdir -p "$(dirname "$1")" && git add -A && git diff --cached --binary > "$1"',
+                    f'mkdir -p "$(dirname "$1")" && git add -A && git diff --cached --binary {BASE_REF} > "$1"',
                     "collect-patch",
                     PATCH_PATH,
                 ),
@@ -97,7 +107,7 @@ def swe_task(
         ),
         environment_requirements=EnvironmentRequirements(capabilities=(SHELL_CAPABILITY, FILESYSTEM_CAPABILITY)),
         answer_type=AnswerType.STATE,
-        environment=environment,
+        environment=task_environment,
         verifier=VerifierSpec(kind=VerifierKind.SHELL, parameters_json=verifier.model_dump_json()),
         source=source,
     )
