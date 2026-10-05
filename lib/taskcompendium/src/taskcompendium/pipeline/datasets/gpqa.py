@@ -41,7 +41,7 @@ def normalize(row: RawRow) -> TaskSpec | ImportRejection:
         context=ConversationInput(events=(TextMessage(role="user", content=prompt),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
-        verifier=grader_package(McqSpec(expected, options=len(texts))).verifier,
+        verifier=grader_package(McqSpec(expected, options=len(texts))),
         source=row.source,
     )
 

@@ -40,16 +40,14 @@ from verifyit.spec import (
 )
 from verifyit.spec import FunctionCall as CandidateCall
 
-from taskcompendium.environment import ExternalVerifierSpec, ShellVerifierSpec
+from taskcompendium.environment import EnvironmentFile, ExternalVerifierSpec, ShellVerifierSpec
 from taskcompendium.grader import grader_package
-from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationTrace,
-    EnvironmentRequirements,
     FunctionCall,
-    TaskResource,
     SkippedVerifierSpec,
     StageVerifierSpec,
     TaskSpec,
@@ -59,7 +57,6 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.grading import grade_submission
 from taskcompendium.runtime.models import RuntimeEvidence
-from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import AnswerFormat, FinalAction, Submission, extract_answer
 
 
@@ -79,7 +76,9 @@ def resolve_verifier(specification: VerifierSpec) -> Spec:
 def validate_verifier(specification: VerifierSpec) -> None:
     """Validate the payload for each supported verifier kind."""
     if specification.kind == VerifierKind.SHELL:
-        ShellVerifierSpec.model_validate_json(specification.parameters_json)
+        verifier = ShellVerifierSpec.model_validate_json(specification.parameters_json)
+        if verifier.artifacts and specification.environment is None:
+            raise ValueError("Grading artifacts require a separate private environment")
     elif specification.kind == VerifierKind.EXTERNAL:
         ExternalVerifierSpec.model_validate_json(specification.parameters_json)
     elif specification.kind == VerifierKind.STAGED:
@@ -91,7 +90,7 @@ def validate_verifier(specification: VerifierSpec) -> None:
 
 
 def supports_verifier(specification: VerifierSpec) -> bool:
-    if specification.environment_requirements != EnvironmentRequirements():
+    if specification.environment_requirements.capabilities or specification.environment is not None:
         return False
     if specification.kind not in {mode.value for mode in Mode}:
         return False
@@ -115,11 +114,14 @@ def grade_task(
     """Score terminal evidence and return its grading status and reward."""
     verifier = resolve_verifier(specification.verifier)
     requirements = specification.verifier.environment_requirements
+    environment = specification.verifier.environment
     executable = isinstance(verifier, StdioSpec | PytestSpec | JunitSpec | GotestSpec)
-    if requirements != EnvironmentRequirements() and requirements.docker_image is None:
+    if (requirements.capabilities or environment is not None) and isinstance(
+        verifier, PredictedActionSpec | ExactSpec | NumericSpec | McqSpec
+    ):
+        return GradeResult(Outcome.INVALID_TASK, None, "Direct candidate modes cannot declare a private runtime")
+    if requirements.capabilities and environment is None:
         return GradeResult(Outcome.INFRA_ERROR, None, "Private grading environment is unavailable")
-    if requirements.docker_image and isinstance(verifier, PredictedActionSpec | ExactSpec | NumericSpec | McqSpec):
-        return GradeResult(Outcome.INVALID_TASK, None, "Direct candidate modes cannot declare an isolated grader")
     final = conversation.events[-1]
     if isinstance(convention, FinalAction):
         try:
@@ -148,7 +150,7 @@ def grade_task(
                 return GradeResult(Outcome.EXTRACTION_ERROR, None, "MCQA response requires one option letter")
         return _grade_result(grade_text_candidate(verifier, candidate))
 
-    if requirements.docker_image:
+    if environment is not None:
         if evidence is None:
             return GradeResult(Outcome.INFRA_ERROR, None, "Missing captured submission files")
         files = dict(evidence.files)
@@ -203,12 +205,11 @@ def _answer_output(verifier: Spec) -> Path:
     return Path(verifier.output)
 
 
-def _write_resource(root: Path, resource: TaskResource) -> None:
-    path = root / resource.path
+def _write_resource(root: Path, resource: EnvironmentFile) -> None:
+    path = root / resource.path.removeprefix("/")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(resource_bytes(resource))
-    if resource.mode is not None:
-        path.chmod(int(resource.mode, 8))
+    path.write_bytes(resource.content)
+    path.chmod(resource.mode)
     if resource.mtime_ns is not None:
         os.utime(path, ns=(resource.mtime_ns, resource.mtime_ns))
 
@@ -220,10 +221,8 @@ def _grade_files(task: TaskSpec, verifier: Spec, candidate: str | None, evidence
         workspace = root / "app"
         tests.mkdir()
         workspace.mkdir()
-        for resource in task.resources.all:
-            _write_resource(workspace, resource)
-        for resource in task.resources.verifier:
-            _write_resource(tests, resource)
+        for resource in task.environment.files:
+            _write_resource(root, resource)
         if evidence is not None:
             for path, data in evidence.files.items():
                 source = Path(path)
@@ -247,6 +246,8 @@ def _grade_files(task: TaskSpec, verifier: Spec, candidate: str | None, evidence
             target = workspace / output.relative_to(DEFAULT_WORKSPACE)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(candidate)
+        for resource in task.verifier.files:
+            _write_resource(root, resource)
         if isinstance(verifier, ScriptSpec):
             if verifier.verdict_file is None:
                 return GradeResult(Outcome.INVALID_TASK, None, "Script graders require a structured verdict file")
@@ -276,7 +277,7 @@ def _grade_files(task: TaskSpec, verifier: Spec, candidate: str | None, evidence
 
 def verifier_descriptor(spec: Spec) -> VerifierSpec:
     """Store a conversion-selected shared verifier contract in the private task slot."""
-    descriptor = grader_package(spec).verifier
+    descriptor = grader_package(spec)
     validate_verifier(descriptor)
     return descriptor
 

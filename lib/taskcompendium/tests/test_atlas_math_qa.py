@@ -13,7 +13,6 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ConversationTrace, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.datasets import atlas_math_qa
 from taskcompendium.pipeline.models import ImportRejection, RawRow
-from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
@@ -60,9 +59,9 @@ def test_typed_math_grades_equivalent_expressions_without_losing_answer_type(mat
     assert (grade(task, equivalent).status, grade(task, equivalent).reward) == (Outcome.GRADED, 1.0)
     assert grade(task, wrong).reward == 0.0
     source_evidence = next(
-        resource for resource in task.resources.verifier if resource.path == "source/tests/verifier_data.json"
+        resource for resource in task.verifier.files if resource.path == "/tests/source/tests/verifier_data.json"
     )
-    assert json.loads(resource_bytes(source_evidence)) == {
+    assert json.loads(source_evidence.content) == {
         "answer_type": math_type,
         "expected_answer": reference,
     }
@@ -100,7 +99,7 @@ def test_mcqa_keeps_choices_public_and_key_private_after_replacing_submission_wr
     assert grade(task, "B").reward == 1.0
     assert grade(task, "A").reward == 0.0
     assert grade(task, "Answer: B").status == Outcome.EXTRACTION_ERROR
-    assert not task.resources.worker and not task.resources.all
+    assert not task.environment.files
 
 
 def test_abstention_is_zero_while_paraphrases_remain_ungraded():

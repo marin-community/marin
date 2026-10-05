@@ -34,7 +34,6 @@ from taskcompendium.pipeline.rewriting import (
 )
 from taskcompendium.pipeline.stages import rewrite_audit_source
 from taskcompendium.pipeline.verification import verify_witness
-from taskcompendium.runtime.resources import resource_bytes
 
 from .pipeline_stages import fixture_recipe
 
@@ -236,9 +235,7 @@ def test_rewrite_cannot_pass_public_schema_changes_with_an_unchanged_private_gra
     candidate = TaskSpec.model_validate_json((tmp_path / "candidates.jsonl").read_text())
     assert all(check.status.value == "pass" for check in verify_witness(candidate, '{"count": 2}', '{"count": 0}'))
     original_schema = next(
-        resource_bytes(resource).decode()
-        for resource in structured_task.resources.verifier
-        if resource.path == "schema.json"
+        resource.content.decode() for resource in structured_task.verifier.files if resource.path == "/tests/schema.json"
     )
     checks = protected_text_checks(candidate, {"public_schema": original_schema})
     assert [(check.check, check.status.value) for check in checks] == [("preserve:public_schema", "fail")]

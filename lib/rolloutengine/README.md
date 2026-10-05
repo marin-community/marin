@@ -8,7 +8,8 @@ Machine factories create isolated execution machines. Session factories supply t
 The default session handles shell tools.
 The engine owns model calls, conversation and token accumulation, stage progression, and resource cleanup.
 
-`ShellboxRolloutEngine.run(TaskSpec)` asynchronously returns one rollout.
+`ShellboxRolloutEngine.run(task, execution=...)` accepts a `TaskSpec` and separate
+`TaskExecution` settings, then asynchronously returns one rollout.
 See the [task rollout reference](../../docs/references/task-rollouts.md)
 for the session lifecycle, exact-token contract, failure handling, and backend configuration.
 

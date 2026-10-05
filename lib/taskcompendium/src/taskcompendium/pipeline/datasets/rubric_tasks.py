@@ -13,7 +13,6 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ResourceGroups,
     TaskSpec,
     TextMessage,
 )
@@ -91,8 +90,7 @@ def normalized_task(row: RawRow, contract: dict) -> NormalizedTask | ImportRejec
             context=ConversationInput(events=(TextMessage(role="user", content=replacement),)),
             environment_requirements=EnvironmentRequirements(),
             answer_type=AnswerType.TEXT,
-            verifier=package.verifier,
-            resources=ResourceGroups(verifier=package.resources),
+            verifier=package,
         ),
         changes,
     )
