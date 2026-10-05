@@ -366,6 +366,25 @@ class ValueEmbeds(StrEnum):
     """``w = lambda2``, a learned scalar per layer (``lambda1`` init 1, ``lambda2`` init 0)."""
     GATED = "gated"
     """``w = sigmoid(x W_ve_gate)`` per head, ``W_ve_gate`` zero-initialized (0.5 at init)."""
+    GATED_LAMBDA = "gated_lambda"
+    """``w = lambda2 * sigmoid(x W_ve_gate)``: the gate times a learned scalar per layer (``lambda2`` init 1)."""
+
+
+_GATED_VALUE_EMBEDS = (ValueEmbeds.GATED, ValueEmbeds.GATED_LAMBDA)
+
+
+def _ve_lambda_init(mode: "ValueEmbeds") -> jax.Array | None:
+    if mode == ValueEmbeds.NONE:
+        return None
+    return jnp.array([1.0, 1.0 if mode == ValueEmbeds.GATED_LAMBDA else 0.0])
+
+
+def _value_embed_weight(mode: "ValueEmbeds", x: jax.Array, gate: jax.Array | None, lam: jax.Array) -> jax.Array:
+    """The value-embedding weight ``w`` of ``v = lambda1 * v + w * value_embed[token]`` (see ``ValueEmbeds``)."""
+    if gate is None:
+        return lam[1]
+    weight = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, gate.astype(x.dtype)))[..., None]
+    return lam[1] * weight if mode == ValueEmbeds.GATED_LAMBDA else weight
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -1926,8 +1945,8 @@ class CausalSelfAttention(eqx.Module):
                 value_embed=(
                     reshard(_init_weight(k_ve, (cfg.vocab_size, n * h), std), P(None, None)) if use_ve else None
                 ),
-                ve_lambda=jnp.array([1.0, 0.0]) if use_ve else None,
-                ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds == ValueEmbeds.GATED else None),
+                ve_lambda=_ve_lambda_init(cfg.value_embeds),
+                ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds in _GATED_VALUE_EMBEDS else None),
                 qk_mult=_qk_mult_init(cfg, n),
                 xsa_scale=(
                     jnp.full((n,), 1.0 if cfg.xsa_mode == "learned" else 0.0, jnp.float32)
@@ -2082,10 +2101,7 @@ class CausalSelfAttention(eqx.Module):
             ve = _embedding_gather(self.value_embed.astype(x.dtype), token_ids)
             ve = rearrange(ve, "... (n d) -> ... n d", d=head_dim)
             lam = self.ve_lambda.astype(x.dtype)
-            if self.ve_gate is not None:
-                ve_weight = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.ve_gate.astype(x.dtype)))[..., None]
-            else:
-                ve_weight = lam[1]
+            ve_weight = _value_embed_weight(self.cfg.value_embeds, x, self.ve_gate, lam)
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
         return q, k, v, second_qk
 
@@ -2781,8 +2797,8 @@ class KimiDeltaAttention(eqx.Module):
                 if cfg.kda_value_embeds != ValueEmbeds.NONE
                 else None
             ),
-            ve_lambda=jnp.array([1.0, 0.0]) if cfg.kda_value_embeds != ValueEmbeds.NONE else None,
-            ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.kda_value_embeds == ValueEmbeds.GATED else None),
+            ve_lambda=_ve_lambda_init(cfg.kda_value_embeds),
+            ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.kda_value_embeds in _GATED_VALUE_EMBEDS else None),
             cfg=cfg,
         )
 
@@ -2829,10 +2845,7 @@ class KimiDeltaAttention(eqx.Module):
                 _embedding_gather(self.value_embed.astype(x.dtype), token_ids), "... (n d) -> ... n d", d=head_dim
             )
             lam = self.ve_lambda.astype(x.dtype)
-            if self.ve_gate is not None:
-                ve_weight = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.ve_gate.astype(x.dtype)))[..., None]
-            else:
-                ve_weight = lam[1]
+            ve_weight = _value_embed_weight(cfg.kda_value_embeds, x, self.ve_gate, lam)
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
         if self.comba_d is not None:
             # Comba output correction on the L2-normalized q / k; the kernel re-normalizes q - d k.
