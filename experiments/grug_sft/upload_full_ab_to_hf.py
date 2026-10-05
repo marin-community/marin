@@ -136,7 +136,7 @@ def main() -> None:
         repo_type="model",
         commit_message="Record verified export",
     )
-    api.update_repo_visibility(repo, private=False, repo_type="model")
+    api.update_repo_settings(repo, private=False, repo_type="model")
     logger.info("Published %s with %d shards (%d bytes)", repo, len(shards), uploaded_bytes)
 
 
