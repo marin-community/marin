@@ -39,6 +39,8 @@ UPLOAD_CHUNK_BYTES = 48 * 1024
 TRANSFER_LIMIT_BYTES = 128 * 1024 * 1024
 BOOT_DIAGNOSTIC_BYTES = 8192
 PROCESS_STOP_TIMEOUT = 5
+GUEST_RESPONSE_TIMEOUT = 10
+DEFAULT_COMMAND_TIMEOUT = 120
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
@@ -336,6 +338,8 @@ class QemuMachine:
         async with self._lock:
             encoded = base64.b64encode(script.encode())
             process.stdin.write(b"BEGIN\n")
+            timeout = command.timeout or DEFAULT_COMMAND_TIMEOUT
+            process.stdin.write(f"TIMEOUT|{timeout}\n".encode())
             for offset in range(0, len(encoded), REQUEST_CHUNK_BYTES):
                 process.stdin.write(b"DATA|" + encoded[offset : offset + REQUEST_CHUNK_BYTES] + b"\n")
             encoded_stdin = base64.b64encode(command.stdin or b"")
@@ -349,7 +353,8 @@ class QemuMachine:
                 stderr = bytearray()
                 stdout_truncated = False
                 stderr_truncated = False
-                deadline = asyncio.get_running_loop().time() + (command.timeout or 120)
+                reason = ExitReason.EXITED
+                deadline = asyncio.get_running_loop().time() + timeout + GUEST_RESPONSE_TIMEOUT
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     line = await asyncio.wait_for(process.stdout.readline(), timeout=max(remaining, 0.001))
@@ -357,7 +362,12 @@ class QemuMachine:
                         raise RuntimeError("QEMU guest stopped during command")
                     if line.startswith(b"RESULT|"):
                         exit_code = int(line.strip().split(b"|", 1)[1])
+                        deadline = asyncio.get_running_loop().time() + GUEST_RESPONSE_TIMEOUT
+                    elif line.strip() == b"TIMED_OUT":
+                        reason = ExitReason.TIMED_OUT
                     elif line.startswith((b"OUT|", b"ERR|")):
+                        if exit_code is not None:
+                            deadline = asyncio.get_running_loop().time() + GUEST_RESPONSE_TIMEOUT
                         chunk = base64.b64decode(line[4:].strip())
                         output = stdout if line.startswith(b"OUT|") else stderr
                         available = max(0, command.output_limit_bytes - len(output))
@@ -370,16 +380,16 @@ class QemuMachine:
                         if exit_code is None:
                             raise RuntimeError("QEMU guest ended result without exit code")
                         return Result(
-                            exit_code,
+                            None if reason == ExitReason.TIMED_OUT else exit_code,
                             bytes(stdout),
                             bytes(stderr),
                             stdout_truncated,
                             stderr_truncated,
-                            ExitReason.EXITED,
+                            reason,
                         )
-            except TimeoutError:
+            except TimeoutError as error:
                 await self.close()
-                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                raise TimeoutError("QEMU guest did not return a command result after its deadline") from error
             except asyncio.CancelledError:
                 await self.close()
                 raise

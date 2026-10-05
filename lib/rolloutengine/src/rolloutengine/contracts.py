@@ -83,7 +83,7 @@ class RolloutOperation(StrEnum):
 
 
 class RolloutInterrupted(RuntimeError):
-    """An execution failure with the last completed rollout and original exception cause."""
+    """An execution failure with retained rollout evidence and its original exception cause."""
 
     def __init__(self, rollout: RolloutData, operation: RolloutOperation):
         self.rollout = rollout

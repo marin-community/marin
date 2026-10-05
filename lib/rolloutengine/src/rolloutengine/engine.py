@@ -7,7 +7,7 @@ import asyncio
 import math
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.environment import EnvironmentKind
@@ -23,6 +23,7 @@ from rolloutengine.contracts import (
     ModelTurn,
     RolloutContractError,
     RolloutData,
+    RolloutFailure,
     RolloutInterrupted,
     RolloutOperation,
     RolloutStep,
@@ -261,6 +262,24 @@ class ShellboxRolloutEngine:
             except RolloutContractError:
                 raise
             except Exception as error:
+                retained_mask = list(prefix.loss_mask if prefix is not None else ())
+                retained_mask.extend((0,) * (len(tokens) - len(prompt) - len(retained_mask)))
+                for step in completed.steps:
+                    if step.transition.grade is not None and step.transition.grade.status == Outcome.GRADED:
+                        start_token = step.response_end + 1 - len(step.turn.response_token_ids)
+                        retained_mask[start_token : step.response_end + 1] = completed.loss_mask[
+                            start_token : step.response_end + 1
+                        ]
+                completed = replace(
+                    completed,
+                    messages=tuple(messages),
+                    prompt_token_ids=prompt,
+                    response_token_ids=tokens[len(prompt) :],
+                    loss_mask=tuple(retained_mask),
+                    logprobs=logprobs,
+                    stop_reason="error",
+                    failure=RolloutFailure(type(error).__name__, {"pending_turn": asdict(turn)}),
+                )
                 raise RolloutInterrupted(completed, RolloutOperation.ADVANCE) from error
             for values in (transition.token_rewards, transition.token_credit):
                 if values is not None and len(values) != len(turn.response_token_ids):

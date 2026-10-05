@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -35,7 +35,10 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     FunctionDefinition,
     Source,
+    StageRewardStrategy,
+    StageVerifierSpec,
     TaskSpec,
+    TaskStage,
     TextMessage,
     VerifierKind,
     VerifierSpec,
@@ -50,6 +53,8 @@ from rolloutengine.contracts import (
     ModelTurn,
     RolloutInterrupted,
     RolloutOperation,
+    SessionStart,
+    Transition,
 )
 from rolloutengine.engine import ShellboxRolloutEngine
 
@@ -369,6 +374,133 @@ async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine(
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(("true",)))
+
+
+@pytest.mark.parametrize("completed_turns", [0, 1])
+async def test_advance_failure_retains_pending_turn_without_training_data(completed_turns):
+    class Session:
+        def __init__(self):
+            self.calls = 0
+
+        async def prepare(self):
+            return SessionStart(({"role": "user", "content": "Do the task."},), {})
+
+        async def advance(self, _turn):
+            if self.calls == completed_turns:
+                raise OSError("Guest failed during command")
+            self.calls += 1
+            return Transition(False, ({"role": "user", "content": "Continue."},))
+
+        async def close(self):
+            pass
+
+    class Model(ReplayModel):
+        async def complete(self, request):
+            turn = await super().complete(request)
+            return ModelTurn(
+                turn.message,
+                turn.prompt_token_ids,
+                turn.response_token_ids,
+                turn.logprobs,
+                turn.stop_reason,
+                text="exact model text",
+                metadata={"request_id": "transport-evidence"},
+            )
+
+    model = Model([{"role": "assistant", "content": str(index)} for index in range(2)])
+    session = Session()
+    task = arithmetic_task().model_copy(
+        update={"environment": EnvironmentSpec(kind=EnvironmentKind.NULL, interaction="failure")}
+    )
+    runner = ShellboxRolloutEngine(
+        model.complete,
+        {},
+        max_turns=3,
+        command_timeout=5,
+        convention=SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        sessions={"failure": lambda _task: session},
+    )
+    with pytest.raises(RolloutInterrupted) as failure:
+        await runner.run(task)
+    rollout = failure.value.rollout
+    assert failure.value.operation == RolloutOperation.ADVANCE
+    assert isinstance(failure.value.__cause__, OSError)
+    assert rollout.messages[-1] == model.messages[completed_turns]
+    assert rollout.prompt_token_ids == (10, 11)
+    assert rollout.response_token_ids == ((20,) if completed_turns == 0 else (20, 90, 91, 21))
+    assert rollout.logprobs == ((-0.5,) if completed_turns == 0 else (-0.5, 0.0, 0.0, -0.5))
+    assert rollout.loss_mask == (0,) * len(rollout.response_token_ids)
+    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.UNAVAILABLE, None)
+    assert len(rollout.steps) == completed_turns
+    assert rollout.failure is not None
+    pending = rollout.failure.diagnostics["pending_turn"]
+    assert pending["text"] == "exact model text"
+    assert pending["metadata"] == {"request_id": "transport-evidence"}
+    assert pending["response_token_ids"] == (20 + completed_turns,)
+    serialized = json.loads(json.dumps(asdict(rollout)))
+    assert serialized["failure"]["diagnostics"]["pending_turn"]["response_token_ids"] == [20 + completed_turns]
+
+
+async def test_later_stage_advance_failure_preserves_graded_prefix_only():
+    class Machine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def run(self, command):
+            if command.argv == ("sh", "-c", "fail-advance"):
+                raise OSError("Guest unavailable")
+            return await self.machine.run(command)
+
+        async def upload(self, source, target):
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            await self.machine.download(source, target)
+
+        async def close(self):
+            await self.machine.close()
+
+    class Factory:
+        async def create(self, spec):
+            return Machine(await ShellSimMachineFactory().create(spec))
+
+    first = file_task()
+    task = first.model_copy(
+        update={
+            "verifier": VerifierSpec(
+                kind=VerifierKind.STAGED,
+                parameters_json=StageVerifierSpec(strategy=StageRewardStrategy.MEAN).model_dump_json(),
+            ),
+            "stages": (
+                TaskStage(name="first", verifier=first.verifier),
+                TaskStage(name="second", verifier=first.verifier),
+            ),
+        }
+    )
+    replies = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": str(index),
+                    "type": "function",
+                    "function": {"name": "shell", "arguments": json.dumps({"command": command})},
+                }
+            ],
+        }
+        for index, command in enumerate(("echo 12 > /workspace/answer", "fail-advance"))
+    ]
+    model = ReplayModel([replies[0], {"role": "assistant", "content": "Done."}, replies[1]])
+    with pytest.raises(RolloutInterrupted) as failure:
+        await engine(model, {EnvironmentKind.SHELLSIM: Factory()}).run(task)
+    rollout = failure.value.rollout
+    assert failure.value.operation == RolloutOperation.ADVANCE
+    assert rollout.response_token_ids == (20, 90, 91, 21, 90, 91, 22)
+    assert rollout.loss_mask == (1, 0, 0, 1, 0, 0, 0)
+    assert len(rollout.steps) == 2
+    assert rollout.steps[0].transition.grade.status == Outcome.GRADED
+    assert rollout.grade.diagnostics["stages"][1]["status"] == Outcome.UNAVAILABLE
+    assert rollout.failure.diagnostics["pending_turn"]["response_token_ids"] == (22,)
 
 
 @pytest.mark.parametrize(
