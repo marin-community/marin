@@ -11,6 +11,7 @@ from marin.execution.lazy import StepContext, artifact_identity
 from marin.experiment.cli import graph_handles
 from marin.training.training import LevanterCheckpoint
 
+from experiments.post_training.russell_rsi import test_rsi_continuation
 from experiments.post_training.russell_rsi.bootstrap_loop import CheckpointScore, QualifiedTask
 from experiments.post_training.russell_rsi.feedback import SKILL_DESCRIPTIONS, CodingSkill
 from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
@@ -34,7 +35,7 @@ from experiments.post_training.russell_rsi.teacher_four_pass import (
     run_four_pass_collection,
 )
 
-pytest_plugins = ["experiments.post_training.russell_rsi.test_rsi_continuation"]
+continuation_inputs = test_rsi_continuation.continuation_inputs
 
 
 @pytest.fixture
