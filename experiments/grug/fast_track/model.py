@@ -1208,6 +1208,9 @@ class GrugModelConfig:
     """Rank ``r`` of a learned token-identity bias on the router logits, ``A[token_id] @ B_l``: ``A`` is one
     shared ``[vocab, r]`` table (random, like an embedding) and ``B_l`` a zero-init ``[r, E]`` per layer, so
     the model is unchanged at init. Added before QB, which then balances it. 0: off."""
+    router_on_latent: bool = False
+    """The router reads the expert input (the RMS-normed MoE latent, ``latent_dim`` wide) instead of the full
+    MLP input ``x``: its weight is ``[latent_dim, E]`` and routing gradients reach the latent projection."""
     router_embed_tie: tuple[str, ...] = ()
     """Router-embedding ties ``"L:E:V"`` (``L`` a layer index or ``*`` for every layer): layer ``L``'s router
     column for expert ``E`` is ``alpha * token_embed[V]``, so its logit is ``alpha * token_embed[V] . x`` on
@@ -1590,6 +1593,20 @@ class GrugModelConfig:
             raise ValueError(f"sigmoid_gain_norms: unknown norms {sorted(unknown)}; choose from {SIGMOID_GAIN_ROLES}")
         if self.moe_compress_norm_weight > 0 and self.moe_compress != MoeCompress.TRANSFER:
             raise ValueError("moe_compress_norm_weight is the counter force for moe_compress=transfer")
+        if self.router_on_latent and (
+            self.dense_mlp
+            or self.latent_dim is None
+            or self.router_rank
+            or self.latent_select
+            or self.expert_router_orthogonal != "off"
+            or self.erc_loss_weight > 0
+            or self.router_embed_tie
+            or self.attn_res_sum_inputs
+        ):
+            raise ValueError(
+                "router_on_latent needs a MoE latent (latent_dim, no latent_select) and a plain full-rank router: "
+                "no router_rank, expert_router_orthogonal, erc_loss_weight, router_embed_tie or attn_res_sum_inputs"
+            )
         if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
             raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
 
@@ -3193,7 +3210,12 @@ class MoEMLP(eqx.Module):
         )
         return MoEMLP(
             router=(
-                None if cfg.router_rank else reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None))
+                None
+                if cfg.router_rank
+                else reshard(
+                    _init_weight(k_router, (latent if cfg.router_on_latent else d, e), cfg.initializer_std),
+                    P(None, None),
+                )
             ),
             router_down=(
                 reshard(_init_weight(k_router, (d, cfg.router_rank), cfg.initializer_std), P(None, None))
@@ -3271,10 +3293,13 @@ class MoEMLP(eqx.Module):
         )
 
     def input_projection_weights(self, dtype: jnp.dtype) -> list[jax.Array]:
-        """The ``[D, *]`` projections this MLP applies to its input: the router, then the latent down."""
-        router_in = self.router if self.router is not None else self.router_down
-        assert router_in is not None
-        weights = [reshard(router_in, P(None, None))]
+        """The ``[D, *]`` projections this MLP applies to its input: the router (unless ``router_on_latent``), then
+        the latent down."""
+        weights = []
+        if not self.cfg.router_on_latent:
+            router_in = self.router if self.router is not None else self.router_down
+            assert router_in is not None
+            weights.append(reshard(router_in, P(None, None)))
         if self.w_latent_down is not None:
             weights.append(reshard(self.w_latent_down.astype(dtype), P(None, None)))
         return weights
@@ -3507,8 +3532,21 @@ class MoEMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
             projected = [jnp.einsum("td,de->te", x_flat, w) for w in self.input_projection_weights(x_flat.dtype)]
+        latent_input = None
+        if self.cfg.router_on_latent:
+            # The router reads the expert input: the latent projection is the only fused projection here.
+            assert self.latent_norm is not None and self.router is not None
+            latent_input = self.latent_norm(reshard(projected[0], _batch_spec()))
+            projected = [None, projected[0]]
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        if self.router_up is not None:
+        if latent_input is not None:
+            router_logits = jnp.einsum(
+                "tl,le->te",
+                latent_input.astype(jnp.float32),
+                reshard(self.router, P(None, None)).astype(jnp.float32),
+                out_sharding=_batch_spec(),
+            )
+        elif self.router_up is not None:
             z = projected[0]
             if self.router_norm is not None:
                 z = self.router_norm(z)
@@ -3644,7 +3682,9 @@ class MoEMLP(eqx.Module):
             router_stats.update(self._qb_churn_stats(router_logits, beta, banks, mesh))
 
         routed_input = x_flat
-        if self.latent_selects:
+        if latent_input is not None:
+            routed_input = latent_input
+        elif self.latent_selects:
             assert self.cfg.latent_dim is not None and self.latent_norm is not None
             if self.latent_select_mask is None:
                 selected = x_flat[..., : self.cfg.latent_dim]
@@ -3859,7 +3899,8 @@ def moe_and_shared_fused(
         parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1)
     else:
         # Some projections read another stream (attn_res_sum_inputs): one GEMM per projection.
-        names = ["router", "latent"][: len(moe_weights)] + ["shared"] * (len(weights) - len(moe_weights))
+        moe_names = ["latent"] if mlp.cfg.router_on_latent else ["router", "latent"]
+        names = moe_names[: len(moe_weights)] + ["shared"] * (len(weights) - len(moe_weights))
         flats = {k: rearrange(v, "b s d -> (b s) d") for k, v in part_inputs.items()}
         parts = [
             jnp.einsum("td,de->te", flats.get(n, x_flat), w, out_sharding=_batch_spec())
