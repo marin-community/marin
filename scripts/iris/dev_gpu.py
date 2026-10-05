@@ -393,6 +393,7 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
     show_default=True,
     help="Ephemeral disk for the dev pod (e.g. 100GB). Enforced as a hard k8s limit.",
 )
+@click.option("--task-image", help="Task image reference to pin for runtime validation; defaults to the cluster image.")
 @click.option("--timeout", default=900, show_default=True, help="Seconds to wait for the task to run.")
 @click.option("--pod-timeout", default=120, show_default=True, help="Seconds to wait for the pod to run.")
 @click.pass_context
@@ -406,6 +407,7 @@ def allocate(
     cpu: float,
     memory: str,
     disk: str,
+    task_image: str | None,
     timeout: int,
     pod_timeout: int,
 ) -> None:
@@ -438,6 +440,7 @@ def allocate(
                 entrypoint=Entrypoint.from_command("python", "-c", HOLDER_COMMAND),
                 name=f"dev-gpu-{session_name}",
                 resources=resources,
+                task_image=task_image,
                 priority_band=PRIORITY_BANDS[resolved_priority],
                 submit_argv=redact_submit_argv(list(sys.argv)),
                 replicas=node_count,
