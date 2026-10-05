@@ -64,11 +64,13 @@ config:
       githubRepositories:
         - marin-community/marin
       allowedTools:
-        - loom/messaging/watch@v1
+        - loom/messaging/post@v1
+        - loom/watches/state@v1
       mcpAccess:
         mode: groups
         groups:
           - messaging
+          - watch
     default:
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
@@ -96,6 +98,7 @@ config:
           - messaging
           - permissions
           - session
+          - watch
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs
