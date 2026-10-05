@@ -11,9 +11,11 @@ from pathlib import Path
 
 import click
 import yaml
+from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
+from marin.execution.remote import remote
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import IRIS_HUB_CLUSTER_CONFIG, IrisSkyRLExecution, SkyRLRun
@@ -435,7 +437,11 @@ def dose_workflow(config: dict, plan: RoundPlan, schedule: dict, panel: CodingPa
         artifact_type=Artifact,
         deps=(bank, gate),
         build_config=lambda ctx: ReplayDatasetConfig(ctx.artifact_path(bank), ctx.output_path, plan.task_bank, schedule),
-        run=freeze_dose_dataset,
+        run=remote(
+            freeze_dose_dataset,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16GB", disk="64GB"),
+            pip_packages=["./lib/taskcompendium"],
+        ),
     )
     trained = train_step(
         data,
