@@ -59,9 +59,23 @@ def teacher_request(request: ModelRequest, config: TeacherModelConfig) -> dict:
     """Build a native chat request from the public session interface."""
     if request.options.keys() - PUBLIC_MODEL_OPTIONS:
         raise ValueError("Teacher session contains unsupported public model options")
+    messages = []
+    for original in request.messages:
+        message = dict(original)
+        if message.get("role") == "assistant":
+            reasoning = message.get("reasoning")
+            canonical = message.get("reasoning_content")
+            if any(value is not None and not isinstance(value, str) for value in (reasoning, canonical)):
+                raise RolloutContractError("Teacher assistant reasoning fields must be strings or null")
+            if reasoning and canonical and canonical != reasoning:
+                raise RolloutContractError("Teacher assistant has conflicting reasoning fields")
+            if "reasoning" in message:
+                del message["reasoning"]
+                message["reasoning_content"] = canonical or reasoning
+        messages.append(message)
     return {
         "model": GLM_MODEL,
-        "messages": list(request.messages),
+        "messages": messages,
         **request.options,
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,

@@ -51,7 +51,8 @@ def student_tokenizer(tmp_path):
     return load_tokenizer(str(stage_gpt2_tokenizer(source, destination)))
 
 
-def test_teacher_native_tools_keep_tokens_and_private_task_fields_off_wire(tmp_path):
+@pytest.mark.parametrize("rewrite_prefix", [False, True])
+def test_teacher_native_tools_keep_tokens_and_private_task_fields_off_wire(tmp_path, rewrite_prefix):
     requests = []
 
     async def send(request):
@@ -66,7 +67,7 @@ def test_teacher_native_tools_keep_tokens_and_private_task_fields_off_wire(tmp_p
             message = {
                 "role": "assistant",
                 "content": None,
-                "reasoning_content": "Read the public workspace file.",
+                "reasoning": "Read the public workspace file.",
                 "tool_calls": [
                     {
                         "id": "native-glm-call",
@@ -79,9 +80,12 @@ def test_teacher_native_tools_keep_tokens_and_private_task_fields_off_wire(tmp_p
                 ],
             }
             return httpx.Response(200, json=model_response([100], [101], message, "tool_calls"))
-        return httpx.Response(
-            200, json=model_response([100, 101, 102], [103], {"role": "assistant", "content": "48213"})
+        prior = body["messages"][-2]
+        preserves_reasoning = (
+            prior.get("reasoning_content") == "Read the public workspace file." and "reasoning" not in prior
         )
+        prompt = [100, 101, 102] if preserves_reasoning and not rewrite_prefix else [100, 999, 102]
+        return httpx.Response(200, json=model_response(prompt, [103], {"role": "assistant", "content": "48213"}))
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(send)) as client:
@@ -97,7 +101,13 @@ def test_teacher_native_tools_keep_tokens_and_private_task_fields_off_wire(tmp_p
             )
             return await engine.run(preflight_task(1, PREFLIGHT_INSTRUCTION, 48213))
 
+    if rewrite_prefix:
+        with pytest.raises(RolloutContractError, match="changed the served token prefix"):
+            asyncio.run(run())
+        return
     rollout = asyncio.run(run())
+    assert rollout.steps[0].turn.message["reasoning"] == "Read the public workspace file."
+    assert "reasoning_content" not in rollout.steps[0].turn.message
     assert rollout.grade.reward == 1
     assert rollout.prompt_token_ids == (100,)
     assert rollout.response_token_ids == (101, 102, 103)
@@ -106,6 +116,39 @@ def test_teacher_native_tools_keep_tokens_and_private_task_fields_off_wire(tmp_p
     assert requests[1]["messages"][-2]["reasoning_content"] == "Read the public workspace file."
     saved = json.loads((tmp_path / "turns/001/model-turn.json").read_text())
     assert saved == json.loads(json.dumps(asdict(rollout.steps[-1].turn)))
+
+
+@pytest.mark.parametrize("alias", ["original reasoning", None, "", "different reasoning", 123])
+def test_teacher_dual_reasoning_preserves_prefix_or_rejects_before_issuance(tmp_path, alias):
+    sent = []
+    message = {
+        "role": "assistant",
+        "content": "",
+        "reasoning": alias,
+        "reasoning_content": "original reasoning",
+    }
+
+    async def send(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json=model_response([100, 101], [102], {"role": "assistant", "content": "done"}))
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(send)) as client:
+            provider = TeacherTurnProvider(
+                client, lambda: "https://teacher.test/v1", config(), StoragePath(str(tmp_path))
+            )
+            return await provider(ModelRequest((message,), {}, (100, 101), None))
+
+    if alias in ("different reasoning", 123):
+        with pytest.raises(RolloutContractError, match="reasoning fields"):
+            asyncio.run(run())
+        assert sent == []
+        assert not (tmp_path / "turns/000/issued.json").exists()
+    else:
+        turn = asyncio.run(run())
+        assert turn.prompt_token_ids == (100, 101)
+        assert sent[0]["messages"][0]["reasoning_content"] == "original reasoning"
+    assert message["reasoning"] == alias
 
 
 @pytest.mark.parametrize("status,error", [(200, UnicodeDecodeError), (503, httpx.HTTPStatusError)])
