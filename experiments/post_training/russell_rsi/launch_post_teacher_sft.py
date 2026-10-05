@@ -27,6 +27,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     QualifiedTask,
     RoundPlan,
     calibration_measurements,
+    checkpoint_score,
     restored_round,
     write_once,
 )
@@ -64,7 +65,13 @@ RETENTION_TASKS = 3
 
 def qualified_sft(record: dict, *, identity: str, root: str) -> str:
     """Return the attested export of exactly one qualified SFT update."""
-    export = prefix_join(root, "hf/step-0")
+    return _qualified_sft(
+        record, identity=identity, root=root, updates=1, protocol="teacher-sft-one-update-qualification-v1"
+    )
+
+
+def _qualified_sft(record: dict, *, identity: str, root: str, updates: int, protocol: str) -> str:
+    export = prefix_join(root, f"hf/step-{updates - 1}")
     shards = record["hf_shards"]
     shard_paths = {item["path"] for item in shards}
     if (
@@ -75,11 +82,11 @@ def qualified_sft(record: dict, *, identity: str, root: str) -> str:
     ):
         raise ValueError("SFT shard inventory does not match its index weight map")
     if (
-        record["protocol"] != "teacher-sft-one-update-qualification-v1"
+        record["protocol"] != protocol
         or record["sft_identity"] != identity
         or record["sft_root"] != root
         or record["hf_export_uri"] != export
-        or record["optimizer_updates"] != 1
+        or record["optimizer_updates"] != updates
         or record["learning_rate"] != 1e-6
         or any(not math.isfinite(record[key]) for key in ("loss", "gradient_norm", "update_norm"))
         or any(record[key] <= 0 for key in ("gradient_norm", "update_norm"))
@@ -93,14 +100,14 @@ def qualified_sft(record: dict, *, identity: str, root: str) -> str:
         or any(not item["path"] or len(item["sha256"]) != 64 for item in record["hf_files"])
         or not all(record["hf_verified"][key] is True for key in ("shards", "config", "tokenizer", "eos"))
     ):
-        raise ValueError("Post-SFT requires the pinned one-update export and serving qualification")
+        raise ValueError(f"Post-SFT requires the pinned {updates}-update export and serving qualification")
     return export
 
 
-def post_sft_plan(source: RoundPlan, *, model: str, calibration: str) -> RoundPlan:
+def post_sft_plan(source: RoundPlan, *, model: str, calibration: str, protocol: str = PROTOCOL) -> RoundPlan:
     return replace(
         source,
-        name=PROTOCOL,
+        name=protocol,
         current_checkpoint=model,
         champion_checkpoint=model,
         calibration_identity=calibration,
@@ -115,12 +122,12 @@ def post_sft_plan(source: RoundPlan, *, model: str, calibration: str) -> RoundPl
     )
 
 
-def post_sft_schedule(summary: dict, plan: RoundPlan, source: dict) -> dict:
+def post_sft_schedule(summary: dict, plan: RoundPlan, source: dict, protocol: str = PROTOCOL) -> dict:
     """Keep the legacy family sampler, with a fresh trial namespace and limits."""
     measurements = calibration_measurements(summary, plan.task_bank, plan.current_checkpoint, plan.bank_identity)
     failure = calibration_signal_failure(measurements)
     if failure is not None:
-        return {"protocol": PROTOCOL, "signal_gate_passed": False, "reason": failure, "schedule": None}
+        return {"protocol": protocol, "signal_gate_passed": False, "reason": failure, "schedule": None}
     by_id = {task.task_id: task for task in plan.task_bank}
     schedule = sampled_replay_plan(
         plan,
@@ -129,7 +136,7 @@ def post_sft_schedule(summary: dict, plan: RoundPlan, source: dict) -> dict:
         pilot_number=2,
         bank_identity=plan.bank_identity,
         calibration_identity=plan.calibration_identity,
-        frozen_identity=f"{PROTOCOL}-replay",
+        frozen_identity=f"{protocol}-replay",
         parent_identity=plan.current_checkpoint,
         model_identity=plan.current_checkpoint,
         family_by_task=source["family_by_task"],
@@ -138,21 +145,21 @@ def post_sft_schedule(summary: dict, plan: RoundPlan, source: dict) -> dict:
     )
     if not schedule["signal_gate_passed"]:
         return {
-            "protocol": PROTOCOL,
+            "protocol": protocol,
             "signal_gate_passed": False,
             "reason": "weighted_q4_below_threshold",
             "schedule": None,
         }
     schedule = bounded_schedule(
         schedule,
-        PROTOCOL,
+        protocol,
         [
             "Replay repeats existing contracts and creates no independent evidence.",
             "Calibration estimates do not establish a causal benefit of teacher SFT.",
         ],
         source["schedule_sha256"],
     )
-    return {"protocol": PROTOCOL, "signal_gate_passed": True, "reason": None, "schedule": schedule}
+    return {"protocol": protocol, "signal_gate_passed": True, "reason": None, "schedule": schedule}
 
 
 @dataclass(frozen=True)
@@ -165,8 +172,12 @@ class CalibrationRecordConfig:
 
 
 def seal_calibration(config: CalibrationRecordConfig) -> None:
+    _seal_calibration(config, PROTOCOL)
+
+
+def _seal_calibration(config: CalibrationRecordConfig, protocol: str) -> None:
     raw = StoragePath(prefix_join(config.summary_path, "failure_summary.json")).read_bytes()
-    result = post_sft_schedule(json.loads(raw), config.plan, config.source_replay)
+    result = post_sft_schedule(json.loads(raw), config.plan, config.source_replay, protocol)
     write_once(
         StoragePath(prefix_join(config.output_path, "calibration-decision.json")),
         {
@@ -210,7 +221,7 @@ def evaluated_score(
     return CheckpointScore(identity, scores, sum(group[0] for group in rewards.values()) / RETENTION_TASKS)
 
 
-def seal_selection(config: SelectionConfig) -> None:
+def selection_scores(config: SelectionConfig) -> list[CheckpointScore]:
     if len(config.model_identities) not in (1, 2):
         raise ValueError("Post-SFT selection requires SFT alone or SFT and its one RL trial")
     scores = []
@@ -224,19 +235,24 @@ def seal_selection(config: SelectionConfig) -> None:
                 coding, retention, identity, config.panel_sha256, config.retention_identity, config.retention_task_ids
             )
         )
+    return scores
+
+
+def selection_record(config: SelectionConfig) -> dict:
+    scores = selection_scores(config)
     selected = scores[0] if len(scores) == 1 else selected_dose(*scores)
-    promoted = selected_dose(config.parent, selected)
-    write_once(
-        StoragePath(prefix_join(config.output_path, "post-sft-selection.json")),
-        {
-            "protocol": PROTOCOL,
-            "parent": asdict(config.parent),
-            "sft": asdict(scores[0]),
-            "sft_rl": asdict(scores[1]) if len(scores) == 2 else None,
-            "selected": asdict(selected),
-            "promoted": asdict(promoted),
-        },
-    )
+    return {
+        "protocol": PROTOCOL,
+        "parent": asdict(config.parent),
+        "sft": asdict(scores[0]),
+        "sft_rl": asdict(scores[1]) if len(scores) == 2 else None,
+        "selected": asdict(selected),
+        "promoted": asdict(selected_dose(config.parent, selected)),
+    }
+
+
+def seal_selection(config: SelectionConfig) -> None:
+    write_once(StoragePath(prefix_join(config.output_path, "post-sft-selection.json")), selection_record(config))
 
 
 def adopted(value: dict, kind: type = Artifact) -> ArtifactStep:
@@ -301,36 +317,78 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
         or len(source["sampling_spec"]["targeted_task_ids"]) != 2
     ):
         raise ValueError("Post-SFT requires the unchanged 26-task bank and two targeted source contracts")
+    return post_sft_stages(
+        config,
+        stage,
+        model=model,
+        bank=bank,
+        retention=retention,
+        source_plan=completed.plan,
+        source=source,
+        export_uri=export_uri,
+    )
+
+
+@dataclass(frozen=True)
+class StudyBaseline:
+    protocol: str
+    incumbent: CheckpointScore
+    original_parent: CheckpointScore
+    retention_task_ids: tuple[str, ...]
+
+
+def post_sft_stages(
+    config: dict,
+    stage: str,
+    *,
+    model: ArtifactStep,
+    bank: ArtifactStep,
+    retention: ArtifactStep,
+    source_plan: RoundPlan,
+    source: dict,
+    export_uri: str,
+    study: StudyBaseline | None = None,
+) -> dict[str, ArtifactStep]:
+    """Use the already qualified model and validated bank, replay and baseline."""
+    protocol = PROTOCOL if study is None else study.protocol
+    version = config["version"]
     runtime = RuntimeBundle(**config["runtime_bundle"])
     calibration = development_step(
         bank,
         model,
         version,
         runtime,
-        f"{PROTOCOL}-calibration",
+        f"{protocol}-calibration",
         relative_path="train.parquet",
         samples_per_task=8,
         temperature=CALIBRATION_TEMPERATURE,
         require_reward_variation=False,
-        limit=BANK_TASKS,
+        limit=len(source_plan.task_bank),
         startup_attempts=3,
     )
-    plan = post_sft_plan(completed.plan, model=artifact_identity(model), calibration=artifact_identity(calibration))
+    plan = post_sft_plan(
+        source_plan, model=artifact_identity(model), calibration=artifact_identity(calibration), protocol=protocol
+    )
+
+    def calibration_config(ctx: StepContext):
+        record = CalibrationRecordConfig(
+            ctx.artifact_path(calibration), plan, source, config["qualification_sha256"], ctx.output_path
+        )
+        return record if study is None else StudyCalibrationConfig(record, protocol)
+
     decision = ArtifactStep(
-        name=f"documents/russell-rsi-{PROTOCOL}-calibration-decision",
+        name=f"documents/russell-rsi-{protocol}-calibration-decision",
         version=version,
         artifact_type=Artifact,
         deps=(calibration, bank, model),
-        build_config=lambda ctx: CalibrationRecordConfig(
-            ctx.artifact_path(calibration), plan, source, config["qualification_sha256"], ctx.output_path
-        ),
-        run=seal_calibration,
+        build_config=calibration_config,
+        run=seal_calibration if study is None else seal_study_calibration,
     )
     if stage == "calibrate":
         return {"calibration": calibration, "decision": decision, "terminal": decision}
     record = json.loads(pinned_bytes(config["calibration_decision_uri"], config["calibration_decision_sha256"]))
     summary = json.loads(pinned_bytes(config["calibration_summary_uri"], record["summary_sha256"]))
-    expected = post_sft_schedule(summary, plan, source)
+    expected = post_sft_schedule(summary, plan, source, protocol)
     if compact_json_sha256(record) != compact_json_sha256(
         {
             **expected,
@@ -341,7 +399,7 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
     ):
         raise ValueError("Post-SFT calibration decision does not match its complete evidence")
     saved_decision = ArtifactStep.adopt(
-        f"documents/russell-rsi-{PROTOCOL}-pinned-decision",
+        f"documents/russell-rsi-{protocol}-pinned-decision",
         version,
         str(StoragePath(config["calibration_decision_uri"]).parent),
         config={"decision_sha256": config["calibration_decision_sha256"]},
@@ -351,7 +409,7 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
     barriers = ()
     if record["signal_gate_passed"]:
         data = ArtifactStep(
-            name=f"documents/russell-rsi-{PROTOCOL}-replay",
+            name=f"documents/russell-rsi-{protocol}-replay",
             version=version,
             artifact_type=Artifact,
             deps=(bank, model, saved_decision),
@@ -364,7 +422,7 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
                 pip_packages=["./lib/taskcompendium"],
             ),
         )
-        trial = four_update_trial(data, model, version, retention, config["machine_config"], PROTOCOL)
+        trial = four_update_trial(data, model, version, retention, config["machine_config"], protocol)
         trained, updates, reload = trial["rl"], trial["updates"], trial["reload"]
         outputs.update({"rl": trained, "reload": reload})
         checkpoints.append(("sft-rl", trained))
@@ -373,23 +431,27 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
         return {**outputs, "terminal": outputs["reload"] if outputs else saved_decision}
     panel_value = json.loads(pinned_bytes(config["panel_uri"], config["panel_sha256"]))
     panel = CodingPanel(tuple(PanelItem(**item) for item in panel_value["items"]), panel_value["protocols"])
-    parent_coding = json.loads(pinned_bytes(config["parent_coding_uri"], config["parent_coding_sha256"]))
-    parent_retention = json.loads(pinned_bytes(config["parent_retention_uri"], config["parent_retention_sha256"]))
-    parent = adopted(config["parent"], LevanterCheckpoint)
     panel_digest = compact_json_sha256(asdict(panel))
-    rewards = parent_retention["task_rewards"]
-    parent_score = evaluated_score(
-        parent_coding,
-        parent_retention,
-        artifact_identity(parent),
-        panel_digest,
-        artifact_identity(retention),
-        tuple(sorted(rewards)),
-    )
+    if study is None:
+        parent_retention = json.loads(pinned_bytes(config["parent_retention_uri"], config["parent_retention_sha256"]))
+        retention_task_ids = tuple(sorted(parent_retention["task_rewards"]))
+        parent_coding = json.loads(pinned_bytes(config["parent_coding_uri"], config["parent_coding_sha256"]))
+        parent = adopted(config["parent"], LevanterCheckpoint)
+        parent_score = evaluated_score(
+            parent_coding,
+            parent_retention,
+            artifact_identity(parent),
+            panel_digest,
+            artifact_identity(retention),
+            retention_task_ids,
+        )
+    else:
+        parent_score = study.incumbent
+        retention_task_ids = study.retention_task_ids
     # Both checkpoints wait for the same completed RL export and reload when RL is eligible.
     for label, checkpoint in checkpoints:
         evaluation = evaluation_model(
-            f"russell-rsi-{PROTOCOL}-{label}", export_uri if label == "sft" else SKYRL_POLICY_LOCATION, None
+            f"russell-rsi-{protocol}-{label}", export_uri if label == "sft" else SKYRL_POLICY_LOCATION, None
         )
 
         def resolver(ctx: StepContext, item=checkpoint, selected=evaluation):
@@ -423,7 +485,7 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
             )
 
         evidence = ArtifactStep(
-            name=f"documents/russell-rsi-{PROTOCOL}-{label}-coding",
+            name=f"documents/russell-rsi-{protocol}-{label}-coding",
             version=version,
             artifact_type=Artifact,
             deps=(coding, checkpoint),
@@ -431,27 +493,32 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
             run=collect_coding_eval_evidence,
         )
         retained = development_step(
-            retention, checkpoint, version, runtime, f"{PROTOCOL}-{label}-retention", limit=RETENTION_TASKS
+            retention, checkpoint, version, runtime, f"{protocol}-{label}-retention", limit=RETENTION_TASKS
         )
         retained = replace(retained, deps=tuple(dict.fromkeys((*retained.deps, *barriers))))
         outputs.update({f"coding-{label}": evidence, f"retention-{label}": retained})
     labels = tuple(label for label, _ in checkpoints)
-    outputs["selection"] = ArtifactStep(
-        name=f"documents/russell-rsi-{PROTOCOL}-selection",
-        version=version,
-        artifact_type=Artifact,
-        deps=tuple(outputs[f"{kind}-{label}"] for label in labels for kind in ("coding", "retention")),
-        build_config=lambda ctx: SelectionConfig(
+
+    def selection_config(ctx: StepContext):
+        record = SelectionConfig(
             tuple(ctx.artifact_path(outputs[f"coding-{label}"]) for label in labels),
             tuple(ctx.artifact_path(outputs[f"retention-{label}"]) for label in labels),
             tuple(artifact_identity(item) for _, item in checkpoints),
             panel_digest,
             artifact_identity(retention),
-            tuple(sorted(rewards)),
+            retention_task_ids,
             parent_score,
             ctx.output_path,
-        ),
-        run=seal_selection,
+        )
+        return record if study is None else StudySelectionConfig(record, protocol, study.original_parent)
+
+    outputs["selection"] = ArtifactStep(
+        name=f"documents/russell-rsi-{protocol}-selection",
+        version=version,
+        artifact_type=Artifact,
+        deps=tuple(outputs[f"{kind}-{label}"] for label in labels for kind in ("coding", "retention")),
+        build_config=selection_config,
+        run=seal_selection if study is None else seal_study_selection,
     )
     return {**outputs, "terminal": outputs["selection"]}
 
@@ -470,6 +537,57 @@ def main(config_uri: str, config_sha256: str, stage: str) -> list[ArtifactStep]:
         raise click.UsageError("Post-SFT config version or runtime pin differs")
     outputs = post_sft_workflow(config, stage)
     return [outputs["terminal"]]
+
+
+# Separate wrappers preserve the serialized configs of the old one-update artifacts.
+@dataclass(frozen=True)
+class StudyCalibrationConfig:
+    record: CalibrationRecordConfig
+    protocol: str
+
+
+def seal_study_calibration(config: StudyCalibrationConfig) -> None:
+    _seal_calibration(config.record, config.protocol)
+
+
+@dataclass(frozen=True)
+class StudySelectionConfig:
+    record: SelectionConfig
+    protocol: str
+    original_parent: CheckpointScore
+
+
+def seal_study_selection(config: StudySelectionConfig) -> None:
+    result = selection_record(config.record)
+    result["incumbent"] = result.pop("parent")
+    result.update(
+        {
+            "protocol": config.protocol,
+            "original_parent": asdict(config.original_parent),
+            "original_parent_comparison": asdict(
+                selected_dose(config.original_parent, checkpoint_score(result["selected"]))
+            ),
+        }
+    )
+    write_once(StoragePath(prefix_join(config.record.output_path, "post-sft-selection.json")), result)
+
+
+def qualified_four_update_sft(record: dict, *, identity: str, root: str) -> str:
+    """Require four real finite updates and their post-update export."""
+    export = _qualified_sft(
+        record, identity=identity, root=root, updates=4, protocol="teacher-sft-four-update-qualification-v1"
+    )
+    steps = record["optimizer_steps"]
+    if record["serving_reload"]["model_identity"] != identity:
+        raise ValueError("Four-pass serving reload identifies a different SFT model")
+    if (
+        [step["step"] for step in steps] != list(range(4))
+        or any(step["skipped"] is not False or step["learning_rate"] != 1e-6 for step in steps)
+        or any(not math.isfinite(step[key]) for step in steps for key in ("loss", "gradient_norm", "update_norm"))
+        or any(step[key] <= 0 for step in steps for key in ("gradient_norm", "update_norm"))
+    ):
+        raise ValueError("Four-pass SFT requires four complete finite optimizer updates")
+    return export
 
 
 if __name__ == "__main__":

@@ -8,9 +8,10 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import cast
+from typing import Generic, TypeVar, cast
 
 import click
 import httpx
@@ -53,6 +54,7 @@ from experiments.sft.launcher import ArtifactDatasetSpec, PreparedModel, SFTSpec
 
 SFT_NODES = 4
 SFT_LEARNING_RATE = 1e-6
+CollectionConfig = TypeVar("CollectionConfig")
 
 
 @dataclass(frozen=True)
@@ -84,7 +86,22 @@ def require_teacher_condition(config: TeacherCollectionConfig) -> dict:
 
 def run_teacher_collection(config: TeacherCollectionConfig) -> None:
     """Verify frozen inputs before the first teacher request and emit eight JSONL rows."""
-    decision = require_teacher_condition(config)
+    collect_teacher_dataset(config, require_teacher_condition(config))
+
+
+@dataclass(frozen=True)
+class StudentTrainingTemplate:
+    uri: str
+    sha256: str
+
+
+def collect_teacher_dataset(
+    config: TeacherCollectionConfig,
+    decision: dict,
+    training_template: StudentTrainingTemplate | None = None,
+    condition_hash_field: str = "dose_decision_sha256",
+) -> None:
+    """Collect the frozen dataset after the caller verifies its study condition."""
     selection = config.selection
     bank_path = StoragePath(config.bank_path)
     bank = json.loads(pinned_bytes(str(bank_path / "bank.json"), selection["bank_sha256"]))
@@ -101,18 +118,28 @@ def run_teacher_collection(config: TeacherCollectionConfig) -> None:
             if Path(name).name != name:
                 raise ValueError("Tokenizer inputs must be files at the parent export root")
             (root / name).write_bytes(pinned_bytes(str(StoragePath(config.parent_path) / name), digest))
+        if training_template is not None:
+            if "training_chat_template.jinja" in config.tokenizer_files:
+                raise ValueError("The external student template cannot also be a parent tokenizer input")
+            (root / "training_chat_template.jinja").write_bytes(
+                pinned_bytes(training_template.uri, training_template.sha256)
+            )
         tokenizer = load_tokenizer(str(root))
         if (root / "training_chat_template.jinja").read_text() != MARIN_CHAT_TEMPLATE:
             raise ValueError("Student template differs from the pinned parent training template")
         runtime = install_runtime_bundle(config.runtime_bundle)
-        tokenizer_identity = compact_json_sha256(
-            {"parent_identity": config.parent_identity, "files": config.tokenizer_files}
-        )
+        tokenizer_inputs = {"parent_identity": config.parent_identity, "files": config.tokenizer_files}
+        if training_template is not None:
+            tokenizer_inputs["student_training_template"] = {
+                "uri": training_template.uri,
+                "sha256": training_template.sha256,
+            }
+        tokenizer_identity = compact_json_sha256(tokenizer_inputs)
         write_once(
             output / "inputs.json",
             {
                 "selection_sha256": compact_json_sha256(selection),
-                "dose_decision_sha256": compact_json_sha256(decision),
+                condition_hash_field: compact_json_sha256(decision),
                 "tokenizer_files": config.tokenizer_files,
                 "parent_identity": config.parent_identity,
                 "student_tokenizer_identity": tokenizer_identity,
@@ -178,6 +205,21 @@ def run_teacher_collection_remote(config: TeacherCollectionConfig) -> None:
 
 def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
     """Bind verified conversations and the pinned parent to one standard SFT update."""
+    return teacher_sft_steps(config, CollectionBinding(lambda base: base, run_teacher_collection_remote), 1, "teacher")
+
+
+@dataclass(frozen=True)
+class CollectionBinding(Generic[CollectionConfig]):
+    build: Callable[[TeacherCollectionConfig], CollectionConfig]
+    run: Callable[[CollectionConfig], None]
+
+
+def teacher_sft_steps(
+    config: dict,
+    collection: CollectionBinding[CollectionConfig],
+    updates: int,
+    namespace: str,
+) -> dict[str, ArtifactStep]:
     version = config["version"]
     parent_spec = config["parent"]
     parent = ArtifactStep.adopt(
@@ -192,8 +234,8 @@ def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
         bank_spec["name"], bank_spec["version"], bank_spec["uri"], config=bank_spec["identity_config"]
     )
 
-    def collection_config(ctx: StepContext) -> TeacherCollectionConfig:
-        return TeacherCollectionConfig(
+    def collection_config(ctx: StepContext) -> CollectionConfig:
+        base = TeacherCollectionConfig(
             config["selection"],
             config["dose_decision_uri"],
             config["dose_decision_sha256"],
@@ -205,17 +247,18 @@ def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
             config["relay_job"],
             ctx.output_path,
         )
+        return collection.build(base)
 
     collected = ArtifactStep(
-        name="documents/russell-rsi-teacher-conversations",
+        name=f"documents/russell-rsi-{namespace}-conversations",
         version=version,
         artifact_type=Artifact,
         deps=(parent, bank),
         build_config=collection_config,
-        run=run_teacher_collection_remote,
+        run=collection.run,
     )
     spec = SFTSpec(
-        name="checkpoints/russell-rsi-teacher-sft",
+        name=f"checkpoints/russell-rsi-{namespace}-sft",
         version=version,
         model=PreparedModel(parent, model_type="snowball"),
         chat_template=MARIN_CHAT_TEMPLATE,
@@ -238,7 +281,7 @@ def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
         seq_len=STUDENT_CONTEXT_TOKENS,
         pack=False,
         batch_size=STUDENT_ROWS,
-        num_train_steps=1,
+        num_train_steps=updates,
         hf_save_dtype="bfloat16",
         wandb_project="russell-rsi",
     )
@@ -265,12 +308,12 @@ def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
             train_config=replace(
                 train,
                 data=replace(train.data, mixture_block_size=STUDENT_ROWS),
-                trainer=replace(train.trainer, id=f"russell-rsi-teacher-sft-{version}", watch=watch),
+                trainer=replace(train.trainer, id=f"russell-rsi-{namespace}-sft-{version}", watch=watch),
             ),
         )
 
     trained = replace(trained, build_config=training_config)
-    reload_model = evaluation_model("russell-rsi-teacher-sft-reload", "<completed-sft-export>", None)
+    reload_model = evaluation_model(f"russell-rsi-{namespace}-sft-reload", "<completed-sft-export>", None)
     reload = eval_step(
         reload_model,
         "mmlu-smoke",
@@ -278,7 +321,7 @@ def teacher_sft_workflow(config: dict) -> dict[str, ArtifactStep]:
         deps=(trained,),
         resolve_model=lambda ctx: replace(
             reload_model,
-            location=prefix_join(ctx.artifact_path(trained), "hf/step-0"),
+            location=prefix_join(ctx.artifact_path(trained), f"hf/step-{updates - 1}"),
             identity=artifact_identity(trained),
         ),
         limit=1,
