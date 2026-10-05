@@ -41,7 +41,7 @@ from taskforge.build.step import (
     step,
 )
 from taskforge.canonical import canonical_json, digest
-from taskforge.ledger.records import EntryKind, Ledger, span
+from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.llm.agent import AgentLedger, AgentRun, AgentTool, run_agent
 from taskforge.llm.agent import shell_tool as agent_shell_tool
 from taskforge.llm.client import Completion, GlmClient
@@ -121,6 +121,15 @@ class BuildServices:
     web_tools: tuple[AgentTool, ...] = ()
 
 
+def record_completions(fields: SpanFields, completions: Sequence[Completion]) -> None:
+    """Fill an ``LLM_CALL`` span with the summed token usage, last finish reason and request count."""
+    fields.tokens_in = sum(c.usage.prompt_tokens for c in completions)
+    fields.tokens_out = sum(c.usage.completion_tokens for c in completions)
+    fields.tokens_reasoning = sum(c.usage.reasoning_tokens for c in completions)
+    fields.finish_reason = completions[-1].finish_reason
+    fields.attrs["requests"] = str(len(completions))
+
+
 class BuildLLM:
     """GLM access for steps. Every call is recorded in the ledger under the running step."""
 
@@ -145,10 +154,7 @@ class BuildLLM:
         with span(self._ledger, EntryKind.LLM_CALL, item_id=self._item_id, round=self._round, step=self._step()) as f:
             completion = await self.client.complete(messages, self.policy)
             f.model = self.client.endpoint.model
-            f.tokens_in = completion.usage.prompt_tokens
-            f.tokens_out = completion.usage.completion_tokens
-            f.tokens_reasoning = completion.usage.reasoning_tokens
-            f.finish_reason = completion.finish_reason
+            record_completions(f, (completion,))
         return completion
 
     async def structured[T: BaseModel](self, messages: Sequence[Message], output_type: type[T], name: str) -> T:
@@ -162,11 +168,7 @@ class BuildLLM:
             f.model = self.client.endpoint.model
             f.attrs["tool"] = name
             result = await complete_structured(self.client, messages, self.policy, tool)
-            f.tokens_in = sum(c.usage.prompt_tokens for c in result.completions)
-            f.tokens_out = sum(c.usage.completion_tokens for c in result.completions)
-            f.tokens_reasoning = sum(c.usage.reasoning_tokens for c in result.completions)
-            f.finish_reason = result.completions[-1].finish_reason
-            f.attrs["requests"] = str(len(result.completions))
+            record_completions(f, result.completions)
         return result.value
 
     async def agent(self, messages: Sequence[Message], tools: Sequence[AgentTool], max_turns: int) -> AgentRun:
