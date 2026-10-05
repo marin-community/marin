@@ -297,9 +297,16 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     content = skyrl_lock.read_text()
     package = next(entry for entry in tomllib.loads(content)["package"] if entry["name"] == "marinskyrl")
     skyrl_lock.write_text(content.replace(package["source"]["git"].rsplit("#", 1)[1], original_schema_commit))
+    git_environment = {
+        **os.environ,
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": f"url.{upstream.as_uri()}.insteadOf",
+        "GIT_CONFIG_VALUE_0": "https://github.com/marin-community/MarinSkyRL.git",
+    }
     subprocess.run(
-        [sys.executable, "config/update-external.py", "vllm", "--schema-source", str(upstream)],
+        [sys.executable, "config/update-external.py", "vllm"],
         cwd=repository,
+        env=git_environment,
         check=True,
         capture_output=True,
         text=True,
@@ -325,17 +332,10 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     resolver = fake_bin / "uv"
-    cache = tmp_path / "uv-cache"
-    cached_source = cache / "git-v1/checkouts/marinskyrl/pinned"
-    cached_source.parent.mkdir(parents=True)
-    subprocess.run(["git", "clone", str(upstream), str(cached_source)], check=True, capture_output=True)
     resolver.write_text(
         f"#!{sys.executable}\n"
         "import sys, tomllib\n"
         "from pathlib import Path\n"
-        "if sys.argv[1:] == ['cache', 'dir']:\n"
-        f"    print({str(cache)!r})\n"
-        "    sys.exit(0)\n"
         "directory = Path(sys.argv[sys.argv.index('--project') + 1])\n"
         "distribution = sys.argv[sys.argv.index('--upgrade-package') + 1]\n"
         "path = directory / 'uv.lock'\n"
@@ -359,7 +359,7 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
     )
     resolver.chmod(0o755)
     github.chmod(0o755)
-    environment = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "PYTHONPATH": ""}
+    environment = {**git_environment, "PATH": f"{fake_bin}:{os.environ['PATH']}", "PYTHONPATH": ""}
     workflow = yaml.safe_load((source / ".github/workflows/ops-external-dependencies.yaml").read_text())
     select_projects = next(step for step in workflow["jobs"]["projects"]["steps"] if step.get("id") == "projects")
     matrix_output = tmp_path / "projects-output"
@@ -451,30 +451,34 @@ def test_external_update_cli_resolves_one_project_from_main_and_rejects_other_pr
             provenance = copied.with_suffix(".provenance.json")
             original_copy = {path: path.read_bytes() for path in copied.iterdir()}
             original_provenance = provenance.read_bytes()
+            manifest = json.loads(original_provenance)
+            digest = hashlib.sha256()
+            for path, content in sorted(original_copy.items()):
+                digest.update(path.name.encode() + b"\0" + content + b"\0")
+            assert manifest["commit"] == new_commit
+            assert manifest["sha256"] == digest.hexdigest()
             check_command = [sys.executable, "config/update-external.py", "--check"]
+            offline_bin = tmp_path / "offline-bin"
+            offline_bin.mkdir()
+            for tool in ("git", "uv"):
+                executable = offline_bin / tool
+                executable.write_text("#!/bin/sh\nexit 99\n")
+                executable.chmod(0o755)
+            offline_environment = {**environment, "PATH": f"{offline_bin}:{environment['PATH']}"}
             clean = subprocess.run(
-                check_command, cwd=repository, env=environment, capture_output=True, text=True, timeout=30
+                check_command, cwd=repository, env=offline_environment, capture_output=True, text=True, timeout=30
             )
             assert clean.returncode == 0, clean.stderr
-            for drift in ("content", "content-and-hash", "extra", "missing"):
+            for drift in ("content", "extra", "missing"):
                 if drift.startswith("content"):
                     (copied / "new.py").write_text("VALUE = 3\n")
-                    if drift == "content-and-hash":
-                        manifest = json.loads(original_provenance)
-                        digest = hashlib.sha256()
-                        for path in sorted(copied.iterdir()):
-                            content = path.read_bytes()
-                            manifest["files"][path.name] = hashlib.sha256(content).hexdigest()
-                            digest.update(path.name.encode() + b"\0" + content + b"\0")
-                        manifest["sha256"] = digest.hexdigest()
-                        provenance.write_text(json.dumps(manifest, indent=2) + "\n")
                 elif drift == "extra":
                     (copied / "extra.py").write_text("VALUE = 4\n")
                 else:
                     (copied / "new.py").unlink()
                 before = {path: path.read_bytes() for path in (*copied.iterdir(), provenance, pins)}
                 rejected_copy = subprocess.run(
-                    check_command, cwd=repository, env=environment, capture_output=True, text=True, timeout=30
+                    check_command, cwd=repository, env=offline_environment, capture_output=True, text=True, timeout=30
                 )
                 assert rejected_copy.returncode != 0, drift
                 assert {path: path.read_bytes() for path in (*copied.iterdir(), provenance, pins)} == before

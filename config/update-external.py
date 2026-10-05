@@ -11,7 +11,6 @@
 import argparse
 import hashlib
 import json
-import os
 import re
 import subprocess
 import tempfile
@@ -562,55 +561,16 @@ def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, che
     )
 
 
-def recipe_schema_source(dependency: LockedDependency, source: Path | None) -> Path:
-    """Locate a local Git source containing the pinned MarinSkyRL commit."""
-    if source is not None:
-        candidates = (source,)
-    else:
-        cache = Path(subprocess.check_output(["uv", "cache", "dir"], text=True).strip())
-        candidates = tuple(cache.glob("git-v*/checkouts/*/*"))
-    for candidate in candidates:
-        result = subprocess.run(
-            ["git", "-C", str(candidate), "cat-file", "-e", f"{dependency.commit}^{{commit}}"],
-            env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            return candidate
-    raise ValueError("pinned MarinSkyRL source is unavailable locally; resolve its lock or supply --schema-source")
-
-
-def synchronize_recipe_schema(dependency: LockedDependency, *, check: bool, source: Path | None = None) -> bool:
-    """Return copy equality in check mode, or synchronize the copy and return True."""
-    source = recipe_schema_source(dependency, source)
-    environment = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
-    inventory = subprocess.check_output(
-        ["git", "-C", str(source), "ls-tree", "-r", "-z", dependency.commit, UPSTREAM_RECIPE_SCHEMA],
-        env=environment,
-    )
-    files = {}
-    for entry in inventory.split(b"\0"):
-        if not entry:
-            continue
-        metadata, path = entry.decode().split("\t", 1)
-        mode, kind, blob = metadata.split()
-        name = Path(path).relative_to(UPSTREAM_RECIPE_SCHEMA)
-        if mode != "100644" or kind != "blob" or len(name.parts) != 1:
-            raise ValueError(f"recipe schema must contain flat regular files: {path}")
-        files[str(name)] = subprocess.check_output(["git", "-C", str(source), "cat-file", "blob", blob], env=environment)
-    if "__init__.py" not in files:
-        raise ValueError("pinned MarinSkyRL source has no public recipe schema")
+def recipe_schema_hash(files: dict[str, bytes]) -> str:
+    """Hash the sorted file names and contents of a flat recipe schema."""
     digest = hashlib.sha256()
     for name, content in sorted(files.items()):
         digest.update(name.encode() + b"\0" + content + b"\0")
-    provenance = {
-        "repository": dependency.repository,
-        "commit": dependency.commit,
-        "source_path": UPSTREAM_RECIPE_SCHEMA,
-        "sha256": digest.hexdigest(),
-        "files": {name: hashlib.sha256(content).hexdigest() for name, content in sorted(files.items())},
-    }
-    rendered = json.dumps(provenance, indent=2) + "\n"
+    return digest.hexdigest()
+
+
+def synchronize_recipe_schema(dependency: LockedDependency, *, check: bool) -> bool:
+    """Return copy equality in check mode, or synchronize the copy and return True."""
     if RECIPE_SCHEMA.is_symlink() or RECIPE_PROVENANCE.is_symlink():
         raise ValueError("recipe schema and provenance must be local regular paths")
     actual = (
@@ -618,6 +578,47 @@ def synchronize_recipe_schema(dependency: LockedDependency, *, check: bool, sour
         if RECIPE_SCHEMA.exists()
         else set()
     )
+    if check:
+        if not RECIPE_PROVENANCE.is_file() or any(
+            (RECIPE_SCHEMA / name).is_symlink() or not (RECIPE_SCHEMA / name).is_file() for name in actual
+        ):
+            return False
+        files = {name: (RECIPE_SCHEMA / name).read_bytes() for name in actual}
+        return recipe_schema_hash(files) == json.loads(RECIPE_PROVENANCE.read_text())["sha256"]
+
+    with tempfile.TemporaryDirectory(prefix="marinskyrl-schema-") as directory:
+        source = Path(directory)
+        subprocess.run(["git", "init", "--quiet", str(source)], check=True)
+        subprocess.run(
+            ["git", "-C", str(source), "fetch", "--quiet", "--depth=1", dependency.repository, dependency.commit],
+            check=True,
+        )
+        commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "FETCH_HEAD"], text=True).strip()
+        if commit != dependency.commit:
+            raise ValueError(f"fetched MarinSkyRL commit {commit} does not match the pin {dependency.commit}")
+        inventory = subprocess.check_output(
+            ["git", "-C", str(source), "ls-tree", "-r", "-z", commit, UPSTREAM_RECIPE_SCHEMA]
+        )
+        files = {}
+        for entry in inventory.split(b"\0"):
+            if not entry:
+                continue
+            metadata, path = entry.decode().split("\t", 1)
+            mode, kind, blob = metadata.split()
+            name = Path(path).relative_to(UPSTREAM_RECIPE_SCHEMA)
+            if mode != "100644" or kind != "blob" or len(name.parts) != 1:
+                raise ValueError(f"recipe schema must contain flat regular files: {path}")
+            files[str(name)] = subprocess.check_output(["git", "-C", str(source), "cat-file", "blob", blob])
+    if "__init__.py" not in files:
+        raise ValueError("pinned MarinSkyRL source has no public recipe schema")
+    provenance = {
+        "repository": dependency.repository,
+        "commit": dependency.commit,
+        "source_path": UPSTREAM_RECIPE_SCHEMA,
+        "sha256": recipe_schema_hash(files),
+        "files": {name: hashlib.sha256(content).hexdigest() for name, content in sorted(files.items())},
+    }
+    rendered = json.dumps(provenance, indent=2) + "\n"
     matches = actual == files.keys() and all(
         not (RECIPE_SCHEMA / name).is_symlink()
         and (RECIPE_SCHEMA / name).is_file()
@@ -625,8 +626,8 @@ def synchronize_recipe_schema(dependency: LockedDependency, *, check: bool, sour
         for name, content in files.items()
     )
     matches = matches and RECIPE_PROVENANCE.exists() and RECIPE_PROVENANCE.read_text() == rendered
-    if check or matches:
-        return matches
+    if matches:
+        return True
     previous = json.loads(RECIPE_PROVENANCE.read_text())["files"] if RECIPE_PROVENANCE.exists() else {}
     unknown = actual - files.keys() - previous.keys()
     if unknown:
@@ -690,7 +691,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="write a Markdown summary of the resolved versions and revisions",
     )
-    parser.add_argument("--schema-source", type=Path, help="local Git source for the pinned MarinSkyRL schema")
     parser.add_argument(
         "--promote-gpu-release",
         type=Path,
@@ -750,7 +750,7 @@ def main() -> None:
     if args.check and not pins_match:
         raise SystemExit("external dependency pins are stale; run `uv run config/update-external.py`")
     skyrl = next(dependency for dependency in dependencies if dependency.project.config_name == "MarinSkyRL")
-    if not synchronize_recipe_schema(skyrl, check=args.check, source=args.schema_source):
+    if not synchronize_recipe_schema(skyrl, check=args.check):
         raise SystemExit("copied recipe schema is stale; run `uv run config/update-external.py`")
 
 

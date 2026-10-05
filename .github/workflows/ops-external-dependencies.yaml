@@ -87,7 +87,6 @@ jobs:
           UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
         run: |
           set -euo pipefail
-          uv lock --project config/external/MarinSkyRL --locked --refresh-package marinskyrl
           uv run config/update-external.py "${{ matrix.project }}" --summary-file "$PR_BODY"
           cat "$PR_BODY" >> "$GITHUB_STEP_SUMMARY"
 
