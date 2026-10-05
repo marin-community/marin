@@ -21,14 +21,14 @@ def source_task(
 ) -> TaskSpec:
     """Convert a source row to a self-contained task with private grading inputs."""
     verifier = ExternalVerifierSpec(parameters={"extras": extras, "config": config})
-    machine = EnvironmentSpec(kind=EnvironmentKind.NULL) if environment is None else environment
+    resolved_environment = EnvironmentSpec(kind=EnvironmentKind.NULL) if environment is None else environment
     return TaskSpec(
         id=f"{source.dataset}:{source.row}",
         context=chat_input(prompt),
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.TEXT,
         verifier=VerifierSpec(kind=VerifierKind.EXTERNAL, parameters_json=verifier.model_dump_json()),
-        environment=machine.model_copy(update={"interaction": session}),
+        environment=resolved_environment.model_copy(update={"interaction": session}),
         source=source,
         metadata={"teacher_route": extras["teacher_route"]} if "teacher_route" in extras else {},
     )
