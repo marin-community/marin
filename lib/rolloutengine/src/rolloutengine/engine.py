@@ -33,6 +33,8 @@ from rolloutengine.grading import _combined_stage_grade, _remove_stage_grader, _
 from rolloutengine.machines import _task_machine
 from rolloutengine.task_session import _ShellboxTaskSession
 
+ERROR_STOP_REASON = "error"
+
 
 def _empty_rollout(task: TaskSpec) -> RolloutData:
     return RolloutData(
@@ -43,7 +45,7 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
         (),
         (),
         GradeResult(Outcome.UNAVAILABLE, None, "Execution has no final grade"),
-        "error",
+        ERROR_STOP_REASON,
     )
 
 
@@ -277,7 +279,7 @@ class ShellboxRolloutEngine:
                     response_token_ids=tokens[len(prompt) :],
                     loss_mask=tuple(retained_mask),
                     logprobs=logprobs,
-                    stop_reason="error",
+                    stop_reason=ERROR_STOP_REASON,
                     failure=RolloutFailure(type(error).__name__, {"pending_turn": asdict(turn)}),
                 )
                 raise RolloutInterrupted(completed, RolloutOperation.ADVANCE) from error

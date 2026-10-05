@@ -473,7 +473,11 @@ async def test_later_stage_advance_failure_preserves_graded_prefix_only():
             ),
             "stages": (
                 TaskStage(name="first", verifier=first.verifier),
-                TaskStage(name="second", verifier=first.verifier),
+                TaskStage(
+                    name="second",
+                    verifier=first.verifier,
+                    context=ConversationInput(events=(TextMessage(role="user", content="Continue."),)),
+                ),
             ),
         }
     )
