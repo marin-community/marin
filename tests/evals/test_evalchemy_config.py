@@ -188,7 +188,8 @@ def test_financebench_rejects_inline_judge_credentials(judge):
         EvalchemyConfig(tasks=("FinanceBench",), judge=judge)
 
 
-def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch):
+@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench"])
+def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch, task):
     submitted = []
 
     class FakeJob:
@@ -199,14 +200,18 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
 
     client = SimpleNamespace(submit=lambda **kwargs: submitted.append(kwargs) or FakeJob())
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
-    config = _config(
-        name="financebench",
-        tasks=(EvalTaskConfig("FinanceBench", 0, generation=True),),
+    source = EvalchemyConfig(
+        tasks=(task,),
         judge=EvalchemyJudgeConfig(
             base_url="https://judge.example/v1",
             model="judge-model",
             api_key=("env:TOGETHER_API_KEY",),
         ),
+    )
+    config = _config(
+        name=task.lower(),
+        tasks=(EvalTaskConfig(task, 0, generation=True),),
+        judge=source.judge,
     )
 
     _run_evalchemy_child(

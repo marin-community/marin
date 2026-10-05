@@ -287,7 +287,7 @@ def _run_evalchemy_child(
         try:
             judge_api_key = env_vars["JUDGE_API_KEY"]
         except KeyError as exc:
-            raise ValueError("FinanceBench judge configuration requires JUDGE_API_KEY") from exc
+            raise ValueError("External judge configuration requires JUDGE_API_KEY") from exc
         judge_env = {
             "JUDGE_API_KEY": judge_api_key,
             "JUDGE_BASE_URL": config.judge.base_url,

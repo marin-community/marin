@@ -11,3 +11,9 @@ seed: 42
 gen_kwargs: do_sample=true,temperature=0.7
 chat_template_kwargs:
   enable_thinking: true
+judge:
+  base_url: https://api.together.xyz/v1
+  model: openai/gpt-oss-120b
+  api_key:
+    - env:TOGETHER_API_KEY
+    - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
