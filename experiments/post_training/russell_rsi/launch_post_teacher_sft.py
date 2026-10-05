@@ -30,6 +30,7 @@ from experiments.post_training.russell_rsi.bootstrap_loop import (
     restored_round,
     write_once,
 )
+from experiments.post_training.russell_rsi.calibrated_trial import bounded_schedule, four_update_trial
 from experiments.post_training.russell_rsi.coding_eval_feedback import (
     CodingEvidenceConfig,
     CodingPanel,
@@ -39,19 +40,13 @@ from experiments.post_training.russell_rsi.coding_eval_feedback import (
 from experiments.post_training.russell_rsi.launch import (
     CALIBRATION_TEMPERATURE,
     CLUSTER,
-    OptimizerStepConfig,
-    SamplingMode,
     development_step,
     evaluation_model,
-    require_optimizer_updates,
-    train_step,
 )
 from experiments.post_training.russell_rsi.launch_dose_comparison import selected_dose
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.replay import (
-    GROUPS_PER_UPDATE,
     REPLAY_SEED,
-    ROLLOUTS_PER_GROUP,
     ReplayDatasetConfig,
     calibration_signal_failure,
     freeze_replay_dataset,
@@ -148,25 +143,15 @@ def post_sft_schedule(summary: dict, plan: RoundPlan, source: dict) -> dict:
             "reason": "weighted_q4_below_threshold",
             "schedule": None,
         }
-    schedule.pop("schedule_sha256")
-    schedule["legacy_sampler"] = {"protocol": schedule["protocol"], "pilot_number": schedule.pop("pilot_number")}
-    schedule["source_schedule_sha256"] = source["schedule_sha256"]
-    schedule["replay_namespace"] = schedule.pop("frozen_identity")
-    schedule["protocol"] = PROTOCOL
-    for entry in schedule["schedule"]:
-        entry["occurrence_id"] = f"{PROTOCOL}-update-{entry['update']}-group-{entry['group']}"
-    schedule["experiment_limits"] = {
-        "runs": 1,
-        "updates": UPDATES,
-        "groups": GROUPS_PER_UPDATE * UPDATES,
-        "rollouts": GROUPS_PER_UPDATE * UPDATES * ROLLOUTS_PER_GROUP,
-        "additional_seeds": 0,
-    }
-    schedule["limits"] = [
-        "Replay repeats existing contracts and creates no independent evidence.",
-        "Calibration estimates do not establish a causal benefit of teacher SFT.",
-    ]
-    schedule["schedule_sha256"] = compact_json_sha256(schedule)
+    schedule = bounded_schedule(
+        schedule,
+        PROTOCOL,
+        [
+            "Replay repeats existing contracts and creates no independent evidence.",
+            "Calibration estimates do not establish a causal benefit of teacher SFT.",
+        ],
+        source["schedule_sha256"],
+    )
     return {"protocol": PROTOCOL, "signal_gate_passed": True, "reason": None, "schedule": schedule}
 
 
@@ -379,43 +364,8 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
                 pip_packages=["./lib/taskcompendium"],
             ),
         )
-        trained = train_step(
-            data,
-            model,
-            "pilot",
-            version,
-            retention,
-            config["machine_config"],
-            PROTOCOL,
-            sampling_mode=SamplingMode.CALIBRATED_REPLAY,
-        )
-
-        def update_config(ctx: StepContext):
-            if ctx.is_fingerprint:
-                return {"trained": artifact_identity(trained), "updates": UPDATES}
-            result = ctx.resolved(trained)
-            return OptimizerStepConfig(UPDATES, result.global_step, result.hf_model_uri)
-
-        updates = ArtifactStep(
-            name=f"documents/russell-rsi-{PROTOCOL}-optimizer-gate",
-            version=version,
-            artifact_type=Artifact,
-            deps=(trained,),
-            build_config=update_config,
-            run=require_optimizer_updates,
-        )
-        reload_model = evaluation_model(f"russell-rsi-{PROTOCOL}-reload", SKYRL_POLICY_LOCATION, None)
-        reload = eval_step(
-            reload_model,
-            "mmlu-smoke",
-            version=version,
-            deps=(trained, updates),
-            resolve_model=lambda ctx: resolve_skyrl_model(ctx, trained, reload_model),
-            limit=1,
-            accelerator="H100x8",
-            submission_cluster=CLUSTER,
-            federated_cluster=CLUSTER,
-        )
+        trial = four_update_trial(data, model, version, retention, config["machine_config"], PROTOCOL)
+        trained, updates, reload = trial["rl"], trial["updates"], trial["reload"]
         outputs.update({"rl": trained, "reload": reload})
         checkpoints.append(("sft-rl", trained))
         barriers = (trained, updates, reload)
