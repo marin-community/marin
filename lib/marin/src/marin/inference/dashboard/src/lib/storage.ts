@@ -7,7 +7,7 @@ const MAX_CONVERSATIONS = 100
 
 export const DEFAULT_PARAMS: SamplingParams = {
   temperature: 0.7,
-  maxTokens: 1024,
+  maxTokens: 16384,
   topP: 1.0,
   maxToolRounds: 0,
 }

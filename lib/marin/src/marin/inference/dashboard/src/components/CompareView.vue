@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { fetchHealth, fetchInfo } from '../lib/api'
-import { comparisonBaseUrl, comparisonTurns } from '../lib/comparison'
+import { comparisonBaseUrl, comparisonTurns, comparisonUrl } from '../lib/comparison'
 import type { PreferenceChoice } from '../lib/comparison'
 import { loadComparison, newComparison, saveComparison } from '../lib/comparison_storage'
 import type { SamplingParams, ServingInfo } from '../lib/types'
@@ -9,6 +9,7 @@ import type { ThinkingMode } from '../lib/chat_template'
 import ChatView from './ChatView.vue'
 
 const props = defineProps<{
+  initialUrl: string
   model: string
   info: ServingInfo | null
   params: SamplingParams
@@ -21,17 +22,22 @@ const initial = loadComparison() ?? newComparison(props.model, '')
 const left = ref(initial.left)
 const right = ref(initial.right)
 const votes = ref(initial.votes)
-const rightUrl = ref('')
+const rightUrl = ref(props.initialUrl)
 const rightBase = ref('')
 const rightInfo = ref<ServingInfo | null>(null)
 const connectionError = ref('')
 const connecting = ref(false)
+const shareState = ref<'idle' | 'copied' | 'failed'>('idle')
 const sending = ref(false)
 const draft = ref('')
 const selectedTurn = ref<number | null>(null)
 const leftView = ref<InstanceType<typeof ChatView> | null>(null)
 const rightView = ref<InstanceType<typeof ChatView> | null>(null)
 const completedTurns = computed(() => comparisonTurns(left.value, right.value))
+
+onMounted(() => {
+  if (rightUrl.value) connect()
+})
 
 watch(completedTurns, (turns) => {
   selectedTurn.value = turns.length ? turns[turns.length - 1].index : null
@@ -75,11 +81,21 @@ async function connect() {
     right.value.model = info.model
     rightInfo.value = info
     rightBase.value = base
+    shareState.value = 'idle'
     persist()
   } catch (error) {
     connectionError.value = error instanceof Error ? error.message : String(error)
   } finally {
     connecting.value = false
+  }
+}
+
+async function share() {
+  try {
+    await navigator.clipboard.writeText(comparisonUrl(window.location.href, rightBase.value))
+    shareState.value = 'copied'
+  } catch {
+    shareState.value = 'failed'
   }
 }
 
@@ -143,6 +159,9 @@ function onKeydown(event: KeyboardEvent) {
       <button class="rounded-lg border border-surface-border px-3 py-1.5 text-sm text-text-secondary hover:text-text" :disabled="sending" @click="resetComparison()">
         New comparison
       </button>
+      <button class="rounded-lg border border-surface-border px-3 py-1.5 text-sm text-text-secondary disabled:opacity-40" :disabled="!rightBase || connecting" title="Copy a link granting access to both models; transcripts and votes are not included" @click="share">
+        {{ shareState === 'copied' ? 'Link copied' : shareState === 'failed' ? 'Copy failed' : 'Copy comparison link' }}
+      </button>
       <p v-if="connectionError" role="alert" class="w-full text-xs text-status-danger">{{ connectionError }}</p>
     </div>
     <div class="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-2 lg:overflow-hidden">
@@ -153,6 +172,7 @@ function onKeydown(event: KeyboardEvent) {
         <ChatView
           ref="leftView"
           :conversation="left"
+          :context-length="info?.backend === 'vllm' ? info.max_model_len : null"
           :params="params"
           :model="model"
           :has-chat-template="info?.has_chat_template ?? true"
@@ -170,6 +190,7 @@ function onKeydown(event: KeyboardEvent) {
           v-if="rightInfo"
           ref="rightView"
           :conversation="right"
+          :context-length="rightInfo.backend === 'vllm' ? rightInfo.max_model_len : null"
           :params="params"
           :model="rightInfo.model"
           :has-chat-template="rightInfo.has_chat_template"

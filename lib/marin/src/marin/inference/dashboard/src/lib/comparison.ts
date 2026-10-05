@@ -37,11 +37,18 @@ export function comparisonTurns(left: Conversation, right: Conversation): Compar
 
 /** Accept a Marin serve dashboard URL on this browser origin. */
 export function comparisonBaseUrl(input: string, currentUrl: string): string {
-  const url = new URL(input.trim())
+  const url = new URL(input.trim(), currentUrl)
   if (url.origin !== new URL(currentUrl).origin) throw new Error('Use a dashboard URL on this Iris origin')
   url.hash = ''
   url.search = ''
   url.pathname = url.pathname.replace(/\/(dashboard|v1)\/?$/, '/')
   if (!url.pathname.endsWith('/')) url.pathname += '/'
+  return url.toString()
+}
+
+/** Encode both endpoints in one link that opens the comparison automatically. */
+export function comparisonUrl(currentUrl: string, secondUrl: string): string {
+  const url = new URL(currentUrl)
+  url.hash = `compare=${encodeURIComponent(comparisonBaseUrl(secondUrl, currentUrl))}`
   return url.toString()
 }
