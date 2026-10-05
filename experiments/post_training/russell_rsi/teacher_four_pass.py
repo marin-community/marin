@@ -27,9 +27,12 @@ from experiments.post_training.russell_rsi.launch_post_teacher_sft import (
     evaluated_score,
     post_sft_stages,
     qualified_four_update_sft,
+    validate_source_replay,
 )
+from experiments.post_training.russell_rsi.launch_rsi_continuation import PROTOCOL as CONTINUATION_PROTOCOL
 from experiments.post_training.russell_rsi.launch_rsi_continuation import qualified_champion
 from experiments.post_training.russell_rsi.launch_teacher_sft import (
+    TEACHER_PIP_PACKAGES,
     CollectionBinding,
     StudentTrainingTemplate,
     TeacherCollectionConfig,
@@ -37,7 +40,6 @@ from experiments.post_training.russell_rsi.launch_teacher_sft import (
     teacher_sft_steps,
 )
 from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
-from experiments.post_training.russell_rsi.replay import validate_replay_plan
 from experiments.post_training.russell_rsi.settings import GLM_TOKEN_ENV
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
 from experiments.post_training.russell_rsi.teacher_collection import (
@@ -61,7 +63,7 @@ def require_four_pass_condition(config: dict) -> dict:
     """Reject stale labels and promoted continuations before any teacher request."""
     decision = pinned_record(config, "continuation_selection")
     source = pinned_record(config, "continuation_config")
-    if config["protocol"] != PROTOCOL or decision["protocol"] != "champion-rsi-r1":
+    if config["protocol"] != PROTOCOL or decision["protocol"] != CONTINUATION_PROTOCOL:
         raise ValueError("Four-pass study requires its separate continuation protocol")
     incumbent = checkpoint_score(decision["incumbent"])
     candidate = checkpoint_score(decision["candidate"])
@@ -221,7 +223,7 @@ def run_four_pass_collection_remote(config: FourPassCollectionConfig) -> None:
     remote(
         run_four_pass_collection,
         resources=ResourceConfig.with_cpu(cpu=8, ram="64GB", disk="64GB"),
-        pip_packages=["./lib/rolloutengine", "./lib/taskcompendium", "./lib/shellbox"],
+        pip_packages=list(TEACHER_PIP_PACKAGES),
         env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
     )(config)
 
@@ -256,22 +258,7 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
     source = pinned_record(source_config, "source_replay")
     if source != completed.replay_plan:
         raise ValueError("Four-pass replay differs from its sealed source round")
-    validate_replay_plan(
-        source,
-        completed.plan,
-        **{
-            key: source[key]
-            for key in (
-                "pilot_number",
-                "bank_identity",
-                "calibration_identity",
-                "frozen_identity",
-                "parent_identity",
-                "model_identity",
-            )
-        },
-        family_by_task=source["family_by_task"],
-    )
+    validate_source_replay(source, completed.plan)
     bank_record = expanded_study_bank(study, source_config)
     retained_record = pinned_record(source_config, "bank_record")
     tasks = tuple(QualifiedTask(**item) for item in bank_record["tasks"])
@@ -283,7 +270,7 @@ def four_pass_post_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]
     calibrated = pinned_record(source_config, "calibration_decision")
     schedule = calibrated["schedule"]
     if (
-        calibrated["protocol"] != "champion-rsi-r1"
+        calibrated["protocol"] != CONTINUATION_PROTOCOL
         or calibrated["signal_gate_passed"] is not True
         or calibrated["qualification_sha256"] != source_config["qualification_sha256"]
         or calibrated["plan"]["task_bank"] != retained_record["tasks"]

@@ -259,6 +259,26 @@ def adopted(value: dict, kind: type = Artifact) -> ArtifactStep:
     return ArtifactStep.adopt(value["name"], value["version"], value["uri"], kind=kind, config=value["identity_config"])
 
 
+def validate_source_replay(source: dict, plan: RoundPlan) -> None:
+    """Check a pinned replay against its sealed source plan."""
+    validate_replay_plan(
+        source,
+        plan,
+        **{
+            key: source[key]
+            for key in (
+                "pilot_number",
+                "bank_identity",
+                "calibration_identity",
+                "frozen_identity",
+                "parent_identity",
+                "model_identity",
+            )
+        },
+        family_by_task=source["family_by_task"],
+    )
+
+
 def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
     """Build only the requested stage from qualified, immutable inputs."""
     version = config["version"]
@@ -288,22 +308,7 @@ def post_sft_workflow(config: dict, stage: str) -> dict[str, ArtifactStep]:
     sealed_replay = completed.replay_plan
     if sealed_replay is None or source != sealed_replay:
         raise ValueError("Post-SFT source replay differs from its sealed pilot-two round")
-    validate_replay_plan(
-        source,
-        completed.plan,
-        **{
-            key: sealed_replay[key]
-            for key in (
-                "pilot_number",
-                "bank_identity",
-                "calibration_identity",
-                "frozen_identity",
-                "parent_identity",
-                "model_identity",
-            )
-        },
-        family_by_task=source["family_by_task"],
-    )
+    validate_source_replay(source, completed.plan)
     if config["bank_record_sha256"] != config["bank"]["identity_config"]["bank_sha256"]:
         raise ValueError("Post-SFT bank metadata is not the adopted bank manifest")
     bank_record = json.loads(pinned_bytes(config["bank_record_uri"], config["bank_record_sha256"]))

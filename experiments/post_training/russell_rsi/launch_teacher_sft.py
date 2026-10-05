@@ -54,6 +54,7 @@ from experiments.sft.launcher import ArtifactDatasetSpec, PreparedModel, SFTSpec
 
 SFT_NODES = 4
 SFT_LEARNING_RATE = 1e-6
+TEACHER_PIP_PACKAGES = ("./lib/rolloutengine", "./lib/taskcompendium", "./lib/shellbox")
 CollectionConfig = TypeVar("CollectionConfig")
 
 
@@ -198,7 +199,7 @@ def run_teacher_collection_remote(config: TeacherCollectionConfig) -> None:
     remote(
         run_teacher_collection,
         resources=ResourceConfig.with_cpu(cpu=8, ram="64GB", disk="64GB"),
-        pip_packages=["./lib/rolloutengine", "./lib/taskcompendium", "./lib/shellbox"],
+        pip_packages=list(TEACHER_PIP_PACKAGES),
         env_vars={GLM_TOKEN_ENV: os.environ[GLM_TOKEN_ENV]},
     )(config)
 
