@@ -1,0 +1,235 @@
+diff -ruN a/lib/shellbox/README.md b/lib/shellbox/README.md
+--- a/lib/shellbox/README.md	2026-10-05 15:22:45
++++ b/lib/shellbox/README.md	2026-10-05 15:23:00
+@@ -28,9 +28,9 @@
+ | --- | --- | --- | --- |
+ | Local gVisor | Docker image, registry image, Dockerfile, prepared OCI image | allow or deny | Docker daemon with `runsc` registered; Skopeo for image preparation |
+ | Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
+-| Iris | Registry image reference | allow only | Iris controller and workers with gVisor profile support |
++| Iris | Registry image reference | the cluster's, declared on the factory | Iris controller and workers with gVisor profile support |
+
+-The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead. Iris uses its existing `CONTAINER_PROFILE_GVISOR` job profile and `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor. The Iris job network is not configurable per job, so `NetworkPolicy.DENY` fails at creation. Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer. Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them.
++The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead. Iris uses its existing `CONTAINER_PROFILE_GVISOR` job profile and `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor. The Iris job network is not configurable per job, so `IrisMachineFactory(network=...)` declares the policy the cluster's gVisor profile provides and creation refuses any other policy. On the `marin` GCP workers, gVisor sandboxes have no network interface or DNS (`NetworkPolicy.DENY`). The factory blanks the submitter's `HF_TOKEN` and `WANDB_API_KEY`, which Iris otherwise copies into every job; cluster-level `task_env` values still reach the sandbox. Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer. Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them.
+
+ ```python
+ from shellbox.backends.daytona.machine import DaytonaMachineFactory
+@@ -44,7 +44,7 @@
+     await machine.close()
+ ```
+
+-Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="marin")` with `MachineSpec(..., network=NetworkPolicy.ALLOW)` for an Iris job. These backends provide one-shot commands and shared files. The current Harbor `BashAgent` needs a persistent `ShellSession`; it cannot use these backends directly until a session adapter is implemented.
++Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="marin", network=NetworkPolicy.DENY)` with `MachineSpec(..., network=NetworkPolicy.DENY)` for an Iris job. These backends provide one-shot commands and shared files. The current Harbor `BashAgent` needs a persistent `ShellSession`; it cannot use these backends directly until a session adapter is implemented.
+
+ For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
+ Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
+diff -ruN a/lib/shellbox/src/shellbox/backends/iris/machine.py b/lib/shellbox/src/shellbox/backends/iris/machine.py
+--- a/lib/shellbox/src/shellbox/backends/iris/machine.py	2026-10-05 15:22:45
++++ b/lib/shellbox/src/shellbox/backends/iris/machine.py	2026-10-05 15:42:16
+@@ -16,6 +16,7 @@
+
+ from iris.cli.connect import ControllerEndpoint, connect_controller
+ from iris.client import IrisClient, Job
++from iris.client.workload import TaskState
+ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+ from iris.rpc import controller_pb2, job_pb2
+ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
+@@ -25,12 +26,17 @@
+ from shellbox.image import RegistryImage
+ from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
+
+-TRANSFER_CHUNK_BYTES = 128 * 1024
++# Each chunk travels base64-encoded inside one exec argument; Linux caps one argument at 128 KiB
++# (MAX_ARG_STRLEN), so 64 KiB of data (about 87 KiB encoded) leaves room for the command around it.
++TRANSFER_CHUNK_BYTES = 64 * 1024
+ DEFAULT_MEMORY_MB = 2048
+ DEFAULT_DISK_MB = 10240
+ DEFAULT_SCHEDULING_TIMEOUT = 600
+ DEFAULT_JOB_TTL = 6 * 60 * 60
+ RPC_PADDING_SECONDS = 60
++STARTING_STATES = (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED)
++# Iris copies these from the submitter's environment into every job unless the job overrides them.
++SUBMITTER_SECRETS_ENV = {"HF_TOKEN": "", "WANDB_API_KEY": ""}
+
+
+ class IrisMachine:
+@@ -187,11 +193,18 @@
+
+
+ class IrisMachineFactory:
+-    """Submit a CPU-only gVisor job from a registry image."""
++    """Submit a CPU-only gVisor job from a registry image.
+
++    Iris cannot set a job's network, so ``network`` declares what the target cluster's gVisor
++    profile gives every sandbox, and ``create`` accepts only specs that ask for that policy. On the
++    ``marin`` GCP workers, gVisor sandboxes have no network interface or DNS, which satisfies
++    ``NetworkPolicy.DENY``.
++    """
++
+     def __init__(
+         self,
+         *,
++        network: NetworkPolicy,
+         cluster: str | None = None,
+         controller_url: str | None = None,
+         scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
+@@ -200,6 +213,7 @@
+     ):
+         if (cluster is None) == (controller_url is None):
+             raise ValueError("Specify exactly one Iris cluster or controller URL")
++        self.network = network
+         self.cluster = cluster
+         self.controller_url = controller_url
+         self.scheduling_timeout = scheduling_timeout
+@@ -211,8 +225,10 @@
+             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
+         if not isinstance(spec.source, RegistryImage):
+             raise UnsupportedMachineSpec("Iris requires a registry image reference")
+-        if spec.network is NetworkPolicy.DENY:
+-            raise UnsupportedMachineSpec("Iris does not provide per-job network denial; select NetworkPolicy.ALLOW")
++        if spec.network is not self.network:
++            raise UnsupportedMachineSpec(
++                f"This Iris cluster's sandboxes have network policy {self.network}; Iris cannot set it per job"
++            )
+         return await asyncio.to_thread(self._create_sync, spec)
+
+     def _create_sync(self, spec: MachineSpec) -> IrisMachine:
+@@ -232,7 +248,7 @@
+             job = client.submit(
+                 entrypoint=Entrypoint.from_command("sleep", "infinity"),
+                 name=f"shellbox-{uuid.uuid4().hex}",
+-                environment=EnvironmentSpec(setup_scripts=[]),
++                environment=EnvironmentSpec(setup_scripts=[], env_vars=SUBMITTER_SECRETS_ENV),
+                 resources=ResourceSpec(
+                     cpu=spec.cpus or 1,
+                     memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
+@@ -250,18 +266,14 @@
+                 tasks = job.tasks()
+                 if tasks:
+                     status = tasks[0].status()
+-                    if status.state == job_pb2.TASK_STATE_RUNNING:
++                    if status.state == TaskState.RUNNING:
+                         machine = IrisMachine(endpoint, client, rpc, job, tasks[0].task_id.to_wire(), spec)
+                         created = machine._exec_sync(["mkdir", "-p", spec.workdir])
+                         if created.exit_code:
+                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
+                         return machine
+-                    if status.state not in (
+-                        job_pb2.TASK_STATE_PENDING,
+-                        job_pb2.TASK_STATE_BUILDING,
+-                        job_pb2.TASK_STATE_ASSIGNED,
+-                    ):
+-                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error}")
++                    if status.state not in STARTING_STATES:
++                        raise RuntimeError(f"Iris sandbox task {status.state} before running: {status.error_message}")
+                 time.sleep(2)
+             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
+         except BaseException:
+diff -ruN a/lib/shellbox/tests/test_iris_machine.py b/lib/shellbox/tests/test_iris_machine.py
+--- a/lib/shellbox/tests/test_iris_machine.py	2026-10-05 15:22:45
++++ b/lib/shellbox/tests/test_iris_machine.py	2026-10-05 15:42:16
+@@ -9,9 +9,11 @@
+ from types import SimpleNamespace
+
+ import pytest
++from iris.client.workload import TaskState
++from shellbox.backends.iris import machine as iris_backend
+ from shellbox.backends.iris.machine import IrisMachine
+ from shellbox.image import RegistryImage
+-from shellbox.machine import Command, MachineSpec, NetworkPolicy
++from shellbox.machine import Command, MachineSpec, NetworkPolicy, UnsupportedMachineSpec
+
+
+ class LocalRpc:
+@@ -74,5 +76,92 @@
+         finally:
+             await machine.close()
+         assert job.cancelled
++
++    asyncio.run(scenario())
++
++
++class StartedTask:
++    def __init__(self, states):
++        self.states = list(states)
++        self.task_id = SimpleNamespace(to_wire=lambda: "/user/shellbox/0")
++
++    def status(self):
++        state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
++        return SimpleNamespace(state=state, error_message="container exited")
++
++
++class SubmittingClient(LocalClient):
++    def __init__(self, task):
++        self.task = task
++        self.job = LocalJob()
++        self.submitted = {}
++
++    def submit(self, **kwargs):
++        self.submitted = kwargs
++        self.job.tasks = lambda: [self.task]
++        return self.job
++
++
++def factory_with(monkeypatch, states):
++    client = SubmittingClient(StartedTask(states))
++    monkeypatch.setattr(
++        iris_backend,
++        "connect_controller",
++        lambda **_: SimpleNamespace(url="http://c", credentials=None, close=lambda: None),
++    )
++    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
++    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
++    monkeypatch.setattr(iris_backend.time, "sleep", lambda _: None)
++    return iris_backend.IrisMachineFactory(controller_url="http://c", network=NetworkPolicy.DENY), client
++
++
++def test_create_waits_for_the_task_to_run_and_keeps_submitter_secrets_out(monkeypatch, tmp_path: Path) -> None:
++    factory, client = factory_with(monkeypatch, [TaskState.PENDING, TaskState.BUILDING, TaskState.RUNNING])
++    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "work"), network=NetworkPolicy.DENY)
++    monkeypatch.setenv("WANDB_API_KEY", "submitter-key")
++
++    machine = asyncio.run(factory.create(spec))
++
++    assert (tmp_path / "work").is_dir()
++    assert client.submitted["environment"].to_proto().env_vars["WANDB_API_KEY"] == ""
++    asyncio.run(machine.close())
++
++
++def test_create_reports_a_task_that_fails_before_running(monkeypatch) -> None:
++    factory, client = factory_with(monkeypatch, [TaskState.PENDING, TaskState.FAILED])
++    with pytest.raises(RuntimeError, match="failed before running: container exited"):
++        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), network=NetworkPolicy.DENY)))
++    assert client.job.cancelled
++
++
++def test_create_refuses_a_network_policy_the_cluster_does_not_provide() -> None:
++    factory = iris_backend.IrisMachineFactory(controller_url="http://c", network=NetworkPolicy.DENY)
++    with pytest.raises(UnsupportedMachineSpec, match="network policy deny"):
++        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"), network=NetworkPolicy.ALLOW)))
++
++
++LINUX_MAX_ARG_STRLEN = 128 * 1024
++
++
++class ArgumentLimitedRpc(LocalRpc):
++    """Reject an exec whose single argument exceeds Linux's MAX_ARG_STRLEN, as docker exec does."""
++
++    def exec_in_container(self, request, timeout_ms):
++        if max(len(argument.encode()) for argument in request.command) > LINUX_MAX_ARG_STRLEN:
++            return SimpleNamespace(exit_code=None, stdout="", stderr="", error="[Errno 7] Argument list too long")
++        return super().exec_in_container(request, timeout_ms)
++
++
++def test_upload_and_download_of_a_file_larger_than_one_exec_argument(tmp_path: Path) -> None:
++    async def scenario() -> None:
++        spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path), network=NetworkPolicy.DENY)
++        machine = IrisMachine(LocalEndpoint(), LocalClient(), ArgumentLimitedRpc(), LocalJob(), "task", spec)  # type: ignore[arg-type]
++        payload = bytes(range(256)) * 2048
++        source = tmp_path / "large.bin"
++        source.write_bytes(payload)
++        await machine.upload(source, str(tmp_path / "remote.bin"))
++        await machine.download(str(tmp_path / "remote.bin"), tmp_path / "back.bin")
++        assert (tmp_path / "back.bin").read_bytes() == payload
++        await machine.close()
+
+     asyncio.run(scenario())

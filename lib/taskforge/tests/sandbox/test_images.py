@@ -1,0 +1,72 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import gzip
+import io
+import tarfile
+from pathlib import Path
+
+import pytest
+from taskcompendium.environment import DockerBuild, EnvironmentFile
+
+from taskforge.sandbox.images import (
+    BuildLimits,
+    BuildTooLarge,
+    build_context_archive,
+    build_digest,
+    docker_build_from_directory,
+)
+
+LIMITS = BuildLimits(max_files=16, max_file_bytes=1024, max_total_bytes=2048)
+
+
+def write_context(root: Path) -> None:
+    (root / "bin").mkdir(parents=True)
+    (root / "Dockerfile").write_text("FROM busybox\nCOPY bin /opt/bin\n")
+    (root / "bin" / "run.sh").write_text("#!/bin/sh\necho ok\n")
+    (root / "bin" / "run.sh").chmod(0o755)
+
+
+def test_directory_round_trips_through_the_build_archive(tmp_path):
+    write_context(tmp_path / "ctx")
+    build = docker_build_from_directory(tmp_path / "ctx", LIMITS)
+
+    assert {f.path: f.mode for f in build.files} == {"/Dockerfile": 0o644, "/bin/run.sh": 0o755}
+    archive = build_context_archive(build)
+    assert archive == build_context_archive(DockerBuild(files=tuple(reversed(build.files))))
+    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(archive))) as tar:
+        tar.extractall(tmp_path / "out", filter="data")
+    assert (tmp_path / "out" / "bin" / "run.sh").read_text() == "#!/bin/sh\necho ok\n"
+    assert (tmp_path / "out" / "bin" / "run.sh").stat().st_mode & 0o777 == 0o755
+    assert build_digest(docker_build_from_directory(tmp_path / "out", LIMITS)) == build_digest(build)
+
+
+def test_build_digest_tracks_content_mode_path_and_dockerfile():
+    dockerfile = EnvironmentFile(path="/Dockerfile", content=b"FROM x\n")
+    script = EnvironmentFile(path="/a.sh", content=b"a", mode=0o755)
+    other = EnvironmentFile(path="/x/Dockerfile", content=b"FROM y\n")
+    base = DockerBuild(files=(dockerfile, script))
+    assert build_digest(base) == build_digest(DockerBuild(files=(script, dockerfile)))
+    variants = [
+        DockerBuild(files=(dockerfile, EnvironmentFile(path="/a.sh", content=b"b", mode=0o755))),
+        DockerBuild(files=(dockerfile, EnvironmentFile(path="/a.sh", content=b"a", mode=0o644))),
+        DockerBuild(files=(dockerfile, EnvironmentFile(path="/b.sh", content=b"a", mode=0o755))),
+        DockerBuild(files=(dockerfile, script, other)),
+        DockerBuild(files=(dockerfile, script, other), dockerfile="/x/Dockerfile"),
+    ]
+    assert len({build_digest(base), *(build_digest(v) for v in variants)}) == 1 + len(variants)
+
+
+def test_context_over_the_total_limit_is_refused(tmp_path):
+    write_context(tmp_path)
+    (tmp_path / "blob.bin").write_bytes(b"x" * 1024)
+    (tmp_path / "blob2.bin").write_bytes(b"x" * 1024)
+    with pytest.raises(BuildTooLarge, match="limit is 2048"):
+        docker_build_from_directory(tmp_path, LIMITS)
+
+
+def test_symlinks_are_refused(tmp_path):
+    write_context(tmp_path)
+    (tmp_path / "link").symlink_to(tmp_path / "Dockerfile")
+    with pytest.raises(ValueError, match="regular files"):
+        docker_build_from_directory(tmp_path, LIMITS)
