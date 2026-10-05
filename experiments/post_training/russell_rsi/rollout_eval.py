@@ -4,10 +4,12 @@
 """Evaluate a bounded development cohort with the shared Shellbox engine."""
 
 import asyncio
+import hashlib
 import json
 import traceback
 from collections import Counter
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from itertools import islice
 from pathlib import Path
@@ -19,6 +21,10 @@ from marin.inference.serve import local_inference
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.runtime_bundle import RuntimeBundle, install_runtime_bundle
 
+from experiments.post_training.russell_rsi.bootstrap_loop import write_once
+from experiments.post_training.russell_rsi.contract_tasks import digest
+from experiments.post_training.russell_rsi.evaluation_journal import ACTIVE_ATTEMPT, EvaluationJournal
+from experiments.post_training.russell_rsi.repair_tasks import pinned_bytes
 from experiments.post_training.russell_rsi.settings import (
     CHAT_TEMPLATE_KWARGS,
     CONTEXT_TOKENS,
@@ -28,6 +34,9 @@ from experiments.post_training.russell_rsi.settings import (
     STOP_TOKEN_IDS,
 )
 from experiments.post_training.russell_rsi.sources import compact_json_sha256
+
+DEVELOPMENT_MAX_TURNS = 16
+DEVELOPMENT_COMMAND_TIMEOUT = 120
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,91 @@ class DevelopmentEvaluationConfig:
     temperature: float = 0.0
     require_reward_variation: bool = False
     startup_attempts: int = 1
+
+
+@dataclass(frozen=True)
+class SupplementaryEvaluationConfig:
+    evaluation: DevelopmentEvaluationConfig
+    journal_path: str
+    checkpoint_index: int
+    model_identities: tuple[str, str]
+    panel_manifest_path: str
+    panel_manifest_sha256: str
+
+
+def supplementary_evaluation_journal(config: SupplementaryEvaluationConfig) -> EvaluationJournal:
+    """Bind one owner per checkpoint to the fixed two-checkpoint comparison."""
+    from taskcompendium.parquet import read_tasks  # noqa: PLC0415
+
+    from experiments.post_training.russell_rsi.token_preflight import (  # noqa: PLC0415
+        PREFLIGHT_PROBES,
+        preflight_task,
+    )
+
+    evaluation = config.evaluation
+    manifest = json.loads(pinned_bytes(config.panel_manifest_path, config.panel_manifest_sha256))
+    parquet = StoragePath(evaluation.tasks_path).read_bytes()
+    tasks = list(read_tasks(evaluation.tasks_path))
+    if (
+        config.checkpoint_index not in (0, 1)
+        or len(config.model_identities) != 2
+        or evaluation.model_identity != config.model_identities[config.checkpoint_index]
+        or len({task.id for task in tasks}) != 4
+        or evaluation.require_reward_variation
+        or evaluation.limit != 4
+        or len(tasks) != 4
+        or evaluation.samples_per_task != 1
+        or evaluation.temperature != 0.0
+        or evaluation.startup_attempts != 3
+        or manifest["parquet_sha256"] != hashlib.sha256(parquet).hexdigest()
+        or [row["task_sha256"] for row in manifest["tasks"]] != [digest(task.model_dump(mode="json")) for task in tasks]
+        or manifest["runtime_bundle"] != asdict(evaluation.runtime_bundle)
+    ):
+        raise ValueError("Supplementary evaluation differs from the frozen panel or matched attempt protocol")
+    root = StoragePath(config.journal_path)
+    comparison = {
+        "model_identities": list(config.model_identities),
+        "panel_manifest_sha256": config.panel_manifest_sha256,
+        "tasks_identity": evaluation.tasks_identity,
+        "parquet_sha256": manifest["parquet_sha256"],
+        "runtime_bundle": asdict(evaluation.runtime_bundle),
+        "samples_per_task": 1,
+        "temperature": 0.0,
+        "startup_attempts": 3,
+        "context_tokens": CONTEXT_TOKENS,
+        "prompt_tokens": PROMPT_TOKENS,
+        "response_tokens": RESPONSE_TOKENS,
+        "stop_token_ids": list(STOP_TOKEN_IDS),
+        "chat_template_kwargs": CHAT_TEMPLATE_KWARGS,
+        "max_turns": DEVELOPMENT_MAX_TURNS,
+        "command_timeout": DEVELOPMENT_COMMAND_TIMEOUT,
+        "tokenizer": evaluation.tokenizer,
+        "tokenizer_revision": evaluation.tokenizer_revision,
+    }
+    write_once(root / "comparison.json", comparison)
+    probes = [
+        preflight_task(index, instruction, value) for index, (instruction, value) in enumerate(PREFLIGHT_PROBES, 1)
+    ]
+    journal = EvaluationJournal(
+        root / str(config.checkpoint_index),
+        {
+            "comparison": comparison,
+            "config": asdict(evaluation),
+            "attempts": {
+                "task": {f"{task.id}/0": digest(task.model_dump(mode="json")) for task in tasks},
+                "preflight": {
+                    str(index): compact_json_sha256(task.model_dump(mode="json")) for index, task in enumerate(probes, 1)
+                },
+            },
+        },
+    )
+    journal.seal()
+    return journal
+
+
+def run_supplementary_evaluation(config: SupplementaryEvaluationConfig) -> None:
+    journal = supplementary_evaluation_journal(config)
+    run_development_evaluation(config.evaluation, journal=journal)
 
 
 def completion_message(text: str, tools: list[dict], message_index: int) -> dict:
@@ -120,7 +214,13 @@ async def rollout_evidence(
 
 
 async def evaluate_development(
-    config: DevelopmentEvaluationConfig, base_url: str, model: str, runtime_manifest: dict
+    config: DevelopmentEvaluationConfig,
+    base_url: str,
+    model: str,
+    runtime_manifest: dict,
+    *,
+    journal: EvaluationJournal | None = None,
+    http_transport: httpx.AsyncBaseTransport | None = None,
 ) -> None:
     from rolloutengine.contracts import (  # noqa: PLC0415
         GenerationLimitReached,
@@ -150,7 +250,7 @@ async def evaluate_development(
     startup_counts: Counter[str] = Counter()
     failed_ids: set[str] = set()
     group_rewards: dict[str, list[float]] = {}
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with httpx.AsyncClient(timeout=600, transport=http_transport or httpx.AsyncHTTPTransport(retries=0)) as client:
 
         async def tokenize(request: dict) -> dict:
             response = await client.post(base_url.removesuffix("/v1") + "/tokenize", json=request["json"])
@@ -189,7 +289,12 @@ async def evaluate_development(
                 "stop_token_ids": list(STOP_TOKEN_IDS),
                 "include_stop_str_in_output": False,
             }
-            response = await client.post(base_url + "/completions", json=completion)
+            attempt = ACTIVE_ATTEMPT.get()
+            response = (
+                await client.post(base_url + "/completions", json=completion)
+                if attempt is None
+                else await attempt.post(client, base_url + "/completions", completion)
+            )
             response.raise_for_status()
             payload = response.json()
             choice = payload["choices"][0]
@@ -205,22 +310,30 @@ async def evaluate_development(
                 text=choice["text"],
             )
 
-        await run_token_preflight(lambda request: turn(request, temperature=0.0), client, config.output_path)
+        await run_token_preflight(
+            lambda request: turn(request, temperature=0.0), client, config.output_path, journal=journal
+        )
         engine = ShellboxRolloutEngine(
             turn,
             {
                 EnvironmentKind.DOCKER: qemu_factory(runtime_manifest, config.runtime_bundle),
                 EnvironmentKind.SHELLSIM: ShellSimMachineFactory(),
             },
-            max_turns=16,
-            command_timeout=120,
+            max_turns=DEVELOPMENT_MAX_TURNS,
+            command_timeout=DEVELOPMENT_COMMAND_TIMEOUT,
             convention=SubmissionConvention(id="russell-dev", answer_format=AnswerFormat.PLAIN),
         )
         semaphore = asyncio.Semaphore(ROLLOUT_CONCURRENCY)
-        with StoragePath(prefix_join(config.output_path, "traces.jsonl")).open("w") as traces:
+        records = {}
+        with (
+            nullcontext(None)
+            if journal is not None
+            else StoragePath(prefix_join(config.output_path, "traces.jsonl")).open("w")
+        ) as traces:
 
             async def run_task(task, sample_index: int) -> None:
                 async with semaphore:
+                    slot_counts: Counter[str] = Counter()
 
                     def record_startup_failure(attempt: int, evidence: dict) -> None:
                         task_sha256 = compact_json_sha256(task.model_dump(mode="json"))
@@ -241,28 +354,42 @@ async def evaluate_development(
                             )
                             + "\n"
                         )
-                        startup_counts["failed_starts"] += 1
+                        slot_counts["failed_starts"] += 1
                         if attempt == config.startup_attempts:
-                            startup_counts["exhausted_samples"] += 1
+                            slot_counts["exhausted_samples"] += 1
 
-                    rollout, record = await rollout_evidence(
-                        engine,
-                        task,
-                        startup_attempts=config.startup_attempts,
-                        record_startup_failure=record_startup_failure,
-                    )
-                    startup_counts["retries"] += record["startup_attempt"] - 1
-                    traces.write(json.dumps({**record, "sample_index": sample_index}) + "\n")
+                    async def rollout_attempt() -> dict:
+                        _, record = await rollout_evidence(
+                            engine,
+                            task,
+                            startup_attempts=config.startup_attempts,
+                            record_startup_failure=record_startup_failure,
+                        )
+                        slot_counts["retries"] += record["startup_attempt"] - 1
+                        return {"record": record, "startup_counts": dict(slot_counts)}
+
+                    if journal is None:
+                        saved = await rollout_attempt()
+                    else:
+                        saved = await journal.attempt(
+                            "task", f"{task.id}/{sample_index}", digest(task.model_dump(mode="json"))
+                        ).run(rollout_attempt)
+                    record = saved["record"]
+                    startup_counts.update(saved["startup_counts"])
+                    record = {**record, "sample_index": sample_index}
+                    records[(task.id, sample_index)] = record
+                    if traces is not None:
+                        traces.write(json.dumps(record) + "\n")
                     operation = record["interrupted_operation"]
-                    if rollout.grade.status != Outcome.GRADED:
+                    if record["grade"]["status"] != Outcome.GRADED:
                         category = f"execution_{operation or 'ungraded'}"
-                    elif rollout.grade.reward is not None and rollout.grade.reward > 0:
+                    elif record["grade"]["reward"] is not None and record["grade"]["reward"] > 0:
                         category = "passed"
                     else:
                         category = "incorrect"
                     categories[category] += 1
-                    if rollout.grade.status == Outcome.GRADED and rollout.grade.reward is not None:
-                        group_rewards.setdefault(task.id, []).append(rollout.grade.reward)
+                    if record["grade"]["status"] == Outcome.GRADED and record["grade"]["reward"] is not None:
+                        group_rewards.setdefault(task.id, []).append(record["grade"]["reward"])
                     if category != "passed":
                         failed_ids.add(task.id)
 
@@ -271,6 +398,17 @@ async def evaluate_development(
                     for sample_index in range(config.samples_per_task):
                         group.create_task(run_task(task, sample_index))
 
+    if journal is not None:
+        path = StoragePath(prefix_join(config.output_path, "traces.jsonl"))
+        content = "".join(
+            json.dumps(records[(task.id, index)], sort_keys=True) + "\n"
+            for task in tasks
+            for index in range(config.samples_per_task)
+        )
+        if path.exists() and path.read_text() != content:
+            raise ValueError("Completed supplementary traces differ from their saved records")
+        if not path.exists():
+            path.write_text(content)
     informative_groups = sum(len(set(rewards)) > 1 for rewards in group_rewards.values())
     summary = {
         "model_identity": config.model_identity,
@@ -285,14 +423,33 @@ async def evaluate_development(
         "categories": dict(categories),
         "failed_task_ids": sorted(failed_ids),
     }
-    StoragePath(prefix_join(config.output_path, "failure_summary.json")).write_text(json.dumps(summary) + "\n")
+    if journal is None:
+        StoragePath(prefix_join(config.output_path, "failure_summary.json")).write_text(json.dumps(summary) + "\n")
+    else:
+        write_once(StoragePath(prefix_join(config.output_path, "failure_summary.json")), summary)
     if config.require_reward_variation and informative_groups == 0:
         raise ValueError("No sampled task group has reward variation; do not allocate the policy")
 
 
-def run_development_evaluation(config: DevelopmentEvaluationConfig) -> None:
+def run_development_evaluation(config: DevelopmentEvaluationConfig, *, journal: EvaluationJournal | None = None) -> None:
     """Own the model server for one fixed development evaluation."""
     runtime_manifest = install_runtime_bundle(config.runtime_bundle)
+    if journal is not None and journal.complete():
+
+        def reject_saved_request(request: httpx.Request) -> httpx.Response:
+            raise RuntimeError("Completed supplementary replay must not make HTTP requests")
+
+        asyncio.run(
+            evaluate_development(
+                config,
+                "https://saved.invalid/v1",
+                "russell-dev",
+                runtime_manifest,
+                journal=journal,
+                http_transport=httpx.MockTransport(reject_saved_request),
+            )
+        )
+        return
     with local_inference(
         ServedModelConfig(
             weights=config.model_uri,
@@ -318,5 +475,7 @@ def run_development_evaluation(config: DevelopmentEvaluationConfig) -> None:
         num_chips=8,
     ) as server:
         asyncio.run(
-            evaluate_development(config, server.model.endpoint.base_url, server.model.endpoint.model, runtime_manifest)
+            evaluate_development(
+                config, server.model.endpoint.base_url, server.model.endpoint.model, runtime_manifest, journal=journal
+            )
         )

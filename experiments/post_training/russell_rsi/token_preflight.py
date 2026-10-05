@@ -19,6 +19,10 @@ from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
+from experiments.post_training.russell_rsi.bootstrap_loop import write_once
+from experiments.post_training.russell_rsi.evaluation_journal import EvaluationJournal
+from experiments.post_training.russell_rsi.sources import compact_json_sha256
+
 logger = logging.getLogger(__name__)
 
 PREFLIGHT_INSTRUCTION = (
@@ -127,7 +131,10 @@ async def run_preflight_probe(
 
 
 async def run_token_preflight(
-    turn: Callable[[ModelRequest], Awaitable[ModelTurn]], client: httpx.AsyncClient, output_path: str
+    turn: Callable[[ModelRequest], Awaitable[ModelTurn]],
+    client: httpx.AsyncClient,
+    output_path: str,
+    journal: EvaluationJournal | None = None,
 ) -> None:
     """Run both fixed probes and preserve evidence before applying the suite gate."""
     tasks = [preflight_task(index, instruction, value) for index, (instruction, value) in enumerate(PREFLIGHT_PROBES, 1)]
@@ -135,14 +142,36 @@ async def run_token_preflight(
         "claim": "tool transport under explicit instruction; ordinary tool adherence remains untested",
         "fixtures": [task.model_dump(mode="json") for task in tasks],
     }
-    StoragePath(prefix_join(output_path, "token-preflight-suite.json")).write_text(json.dumps(manifest) + "\n")
+    if journal is None:
+        StoragePath(prefix_join(output_path, "token-preflight-suite.json")).write_text(json.dumps(manifest) + "\n")
+    else:
+        write_once(StoragePath(prefix_join(output_path, "token-preflight-suite.json")), manifest)
     attempts: list[dict] = []
     contract_error: RolloutContractError | None = None
     last_error: Exception | None = None
     for index, task in enumerate(tasks, 1):
-        evidence, error = await run_preflight_probe(
-            turn, client, task, prefix_join(output_path, f"token-preflight-probe-{index}.json")
-        )
+
+        fresh_error: Exception | None = None
+
+        async def probe(task=task, index=index) -> dict:
+            nonlocal fresh_error
+            evidence, fresh_error = await run_preflight_probe(
+                turn, client, task, prefix_join(output_path, f"token-preflight-probe-{index}.json")
+            )
+            return evidence
+
+        if journal is None:
+            evidence = await probe()
+        else:
+            attempt = journal.attempt("preflight", str(index), compact_json_sha256(task.model_dump(mode="json")))
+            evidence = await attempt.run(probe)
+        error = fresh_error
+        if error is None and evidence["status"] == "failed":
+            error = (
+                RolloutContractError(evidence["error"])
+                if evidence.get("contract_failure")
+                else ValueError(evidence["error"])
+            )
         if error is not None:
             last_error = error
             logger.warning("Token preflight probe %d failed: %s", index, evidence["error"])
@@ -152,7 +181,10 @@ async def run_token_preflight(
 
     passed = any(attempt["status"] == "passed" for attempt in attempts) and contract_error is None
     result = {**manifest, "attempts": attempts, "status": "passed" if passed else "failed"}
-    StoragePath(prefix_join(output_path, "token-preflight.json")).write_text(json.dumps(result) + "\n")
+    if journal is None:
+        StoragePath(prefix_join(output_path, "token-preflight.json")).write_text(json.dumps(result) + "\n")
+    else:
+        write_once(StoragePath(prefix_join(output_path, "token-preflight.json")), result)
     if contract_error is not None:
         raise RolloutContractError(
             "The preflight suite observed a token or adapter contract failure"
